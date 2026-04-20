@@ -1,0 +1,96 @@
+---
+title: "File Systems"
+course: "operating-systems"
+order: 5
+module: "Foundations"
+description: "How the OS organizes bits on a disk into meaningful files and folders. Exploring inodes, allocation methods, and data integrity."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# File Systems
+
+A disk drive is essentially a massive array of addressable blocks (traditionally 512 bytes or 4 KB each). To a human, this raw data is useless. The **File System** is the component of the operating system that provides the abstraction we know and love: organized files and nested directories.
+
+## The File Abstraction
+
+A "File" is a named collection of related information that is recorded on secondary storage. To the user, a file is a single object. To the OS, a file is a collection of logical blocks mapped to physical disk sectors.
+
+### File Metadata
+Every file has metadata, which is "data about data." This includes:
+-   Name and extension.
+-   Size.
+-   Creation, modification, and access timestamps.
+-   Permissions (Who can read/write/execute?).
+-   Location (Where on the disk do the blocks start?).
+
+## How Files are Stored: Allocation Methods
+
+How does the OS keep track of which blocks belong to "vacation-photo.jpg"?
+
+### 1. Contiguous Allocation
+The file is stored in a single, unbroken sequence of blocks.
+-   **Pro**: Extremely fast for sequential reading.
+-   **Con**: External fragmentation. If you delete a middle file, the "hole" left behind might be too small for a new, larger file.
+
+### 2. Linked Allocation
+Each block contains a "pointer" to the next block in the file (like a linked list).
+-   **Pro**: No fragmentation; every block can be used.
+-   **Con**: Slow for random access. To read the last block of a 1GB file, you have to read every single block before it to find the pointers.
+
+### 3. Indexed Allocation (The UNIX approach)
+The OS creates an **Index Block** (called an **inode** in Unix) that contains a list of all the block addresses for that file.
+-   **Pro**: Fast random access and no fragmentation.
+-   **Con**: The index block itself takes up space.
+
+<PlantUML theme="none" code={`
+@startuml
+object "Inode (File Index)" as inode {
+  Owner: User1
+  Permissions: RW-
+  Size: 12KB
+  Block 0 -> 102
+  Block 1 -> 405
+  Block 2 -> 11
+  Indirect Pointer -> [Table of more blocks]
+}
+object "Disk Block 102" as b1
+object "Disk Block 405" as b2
+object "Disk Block 11" as b3
+
+inode ..> b1
+inode ..> b2
+inode ..> b3
+@enduml
+`} />
+
+## Directories: Just Special Files
+
+A directory (folder) is actually just a special type of file. Instead of containing user data, it contains a list of filenames and their corresponding inode numbers. When you type `cd Documents`, the OS reads the "Documents" file, looks for the entry you want, and finds its inode.
+
+## Data Integrity: Journaling
+
+What happens if the power goes out while the OS is in the middle of writing a large file? In older systems, this would lead to "corrupted" disks where the directory list said a file existed, but the blocks themselves contained garbage.
+
+Modern file systems use **Journaling** (e.g., **NTFS**, **Ext4**, **APFS**).
+1.  **The Log**: Before making any changes, the OS writes a small "log" or "journal" entry saying: "I am about to move Block A to Location B."
+2.  **The Write**: The OS performs the actual write.
+3.  **The Commit**: The OS marks the journal entry as completed.
+
+If the system crashes, upon reboot, the OS checks the journal. If it finds a "Fixing" entry that wasn't "Committed," it can either complete the task or safely undo it, ensuring the disk is never in an inconsistent state.
+
+## Comparison of Major File Systems
+
+| Name | Primary OS | Key Features |
+| :--- | :--- | :--- |
+| **FAT32** | Windows/Legacy | Universal compatibility, but no security and 4GB file size limit. |
+| **NTFS** | Windows | Journaling, compression, encryption, and granular permissions. |
+| **Ext4** | Linux | Extremely stable, handles massive files, very performant. |
+| **APFS** | macOS/iOS | Designed for SSDs, features "snapshots" and fast directory sizing. |
+| **ZFS** | BSD/Solaris | "The God File System": protects against data rot (silent corruption). |
+
+## The Virtual File System (VFS)
+
+In many OSs, there is a layer called the **VFS**. This allows the OS to support many different types of file systems simultaneously. An application just tells the VFS "open file X," and the VFS figures out whether that file is on a USB drive (FAT32), a Linux partition (Ext4), or even a network drive (NFS/SMB).
+
+In the next section, we will leave the abstract theory behind and look at the real-world history and "family tree" of the operating systems we use every day.

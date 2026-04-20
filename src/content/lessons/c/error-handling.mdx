@@ -1,0 +1,83 @@
+---
+title: "Error Handling and Defensive Programming"
+course: c
+order: 19
+module: "Robust Code"
+description: "Managing failures in a world without exceptions: return codes, errno, and setjmp."
+---
+
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# The Philosophy of Failure
+
+C has no `try-catch` blocks or native exception handling. In the C model, **errors are ordinary values**. They are not exceptional events that interrupt the flow; they are expected outcomes that must be checked and handled explicitly by the programmer.
+
+# Patterns of Error Signaling
+
+There are three main ways a C function signals failure:
+
+### 1. Integer Return Codes
+Functions return an `int`. Typically, `0` means success, and negative values relate to specific error types.
+```c
+if (calculate_physics() != 0) {
+    handle_error();
+}
+```
+
+### 2. Sentinel Values (NULL)
+Functions that return pointers return `NULL` to signify failure (e.g., `malloc`, `fopen`).
+
+### 3. The Global `errno`
+Found in `<errno.h>`. When a system level function fails, it sets a global integer variable `errno`. You can translate this number into a human-readable string using `strerror()`.
+
+**Warning**: `errno` is only valid immediately after a failed call. Many functions do **not** clear `errno` on success, so a successful call won't overwrite a previous error.
+
+# The `goto` for Cleanup
+
+While generally discouraged, the `goto` statement is widely considered "the right way" to handle cleanup in complex functions with multiple failure points. This prevents the "Arrow Anti-pattern" of nested `if` statements.
+
+```c
+int process_file() {
+    int cleanup_needed = 0;
+    if (open_file() != 0) goto fail;
+    cleanup_needed = 1;
+
+    if (allocate_buffer() != 0) goto fail;
+    
+    // ... logic ...
+    return 0;
+
+fail:
+    if (cleanup_needed) close_file();
+    return -1;
+}
+```
+
+# Advanced: `setjmp` and `longjmp`
+
+Found in `<setjmp.h>`, this is C's version of a "Non-local Goto." It allows you to jump directly from a deeply nested function back up to a previous state in the call stack.
+- `setjmp(env)`: Saves the current CPU state (registers, stack pointer).
+- `longjmp(env, val)`: Restores that state, making it look like `setjmp` just returned `val`.
+
+**Use Case**: This is how basic exception handling is implemented in low-level frameworks.
+
+<CodeExercise client:load
+  title="Error Conversion"
+  code={`#include <string.h>\n#include <errno.h>\n// How to get a string for the current error?\nchar *msg = [!blank!](errno);`}
+  answers={["strerror"]}
+  explanation="strerror() takes the numeric errno and returns a descriptive string like 'Permission denied'."
+/>
+
+# Defensive Programming
+
+Robust C code assumes inputs are malicious and functions will fail.
+- **Asserts**: Use `assert(ptr != NULL);` from `<assert.h>` to catch logic errors during development.
+- **Bounds Checking**: Always verify array indices before access.
+- **Sanitizers**: Use tools like AddressSanitizer (ASan) to find memory errors that don't immediately crash the program.
+
+<CodeRunner client:load
+  language="c" 
+  code={`#include <stdio.h>\n#include <stdlib.h>\n#include <errno.h>\n\nint main() {\n    // Intentional error: dividing by zero isn't caught by errno,\n    // but we can catch it with logic.\n    int a = 10, b = 0;\n    if (b == 0) {\n        fprintf(stderr, "Fatal Error: Division by zero avoided.\\n");\n        return EXIT_FAILURE;\n    }\n    printf("Result: %d\\n", a / b);\n    return EXIT_SUCCESS;\n}`}
+  output="Fatal Error: Division by zero avoided."
+/>

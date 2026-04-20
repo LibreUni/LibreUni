@@ -1,0 +1,89 @@
+---
+title: "Bootloaders and the Kernel Entry"
+course: "operating-systems"
+order: 7
+module: "System Initialization & Booting"
+description: "Diving into GRUB, the Multiboot specification, and the critical transition from bootloader control to kernel execution."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Bootloaders and the Kernel Entry
+
+If the BIOS/UEFI is the "ignition," the **Bootloader** is the "starter motor." Its job is to find the Operating System kernel on the disk, load it into memory, and jump to its starting address.
+
+## 1. Why do we need a Bootloader?
+
+You might wonder: *Why doesn't the BIOS just load the kernel directly?*
+1. **Size**: Kernels are Megabytes in size; the MBR is only 512 bytes.
+2. **File Systems**: The firmware doesn't understand complex file systems (like NTFS, ext4, or APFS). The bootloader provides the "drivers" to read these.
+3. **Multi-Boot**: A bootloader allows the user to choose between different operating systems (e.g., Linux vs. Windows).
+
+## 2. The Grand Unified Bootloader (GRUB)
+
+On Linux and many hobbyist OSs, **GRUB 2** is the standard. It works in stages:
+- **Stage 1 (boot.img)**: Stored in the MBR or the first sector of a partition. Its only job is to load Stage 1.5.
+- **Stage 1.5 (core.img)**: Contains file system drivers. It is stored in the "gap" between the MBR and the first partition.
+- **Stage 2**: Loads the full GRUB interface, reads `/boot/grub/grub.cfg`, and allows you to select a kernel.
+
+## 3. The Multiboot Specification
+
+To prevent every OS from needing its own custom bootloader, the **Multiboot Specification** was created. It provides a standard way for a bootloader to talk to a kernel.
+
+A Multiboot-compliant kernel has a "Header" in its first 8KB that contains:
+- **Magic Number**: `0x1BADB002` (for Multiboot 1).
+- **Flags**: Telling the bootloader what it needs (e.g., page alignment, memory maps).
+- **Checksum**: Ensures the header is valid.
+
+### The Handover State
+When the bootloader jumps to the kernel, it provides critical information in CPU registers:
+- `EAX`: Contains the magic value `0x2BADB002` (confirming a Multiboot boot).
+- `EBX`: A pointer to a **Multiboot Information Structure** (containing the memory map, command line, and list of loaded modules).
+
+<PlantUML theme="none" code={`
+@startuml
+participant "Bootloader (GRUB)" as boot
+participant "CPU Registers" as regs
+participant "Kernel Entry (_start)" as kernel
+
+boot -> boot : Load Kernel File to RAM
+boot -> boot : Setup GDT (Global Descriptor Table)
+boot -> regs : EAX = 0x2BADB002
+boot -> regs : EBX = &multiboot_info
+boot -> kernel : Jump to Kernel Code
+activate kernel
+kernel -> kernel : Disable Interrupts
+kernel -> kernel : Setup Stack
+kernel -> kernel : Call kmain()
+@enduml
+`} />
+
+## 4. Kernel Initialization: PID 1
+
+Once the kernel has control, it performs its own initialization:
+1. **Memory Setup**: Sets up the final Page Tables and Memory Management.
+2. **Interrupts**: Sets up the IDT (Interrupt Descriptor Table).
+3. **Drivers**: Initializes basic hardware (Timers, Keyboard, VGA/GOP).
+4. **The First Process**: The kernel finally spawns the first user-space process, known as **init** (or `systemd`, `launchd`). This process has a Process ID (PID) of **1**.
+
+### Exercise: The Multiboot Magic
+
+When writing a kernel entry point in assembly, you must ensure the bootloader recognizes it. What magic number must be in the `EAX` register when the kernel starts?
+
+<CodeExercise client:load
+  title="Multiboot Verification"
+  code={"/* The bootloader places this magic value in EAX */\\n0x[!blank!]BAD[!blank!]002"}
+  answers={["2", "B"]}
+  explanation="The value 0x2BADB002 is passed by the bootloader to let the kernel know it was booted by a Multiboot-compliant loader."
+/>
+
+## Summary: The Chain of Trust
+
+1. **Hardware** -> **Firmware** (BIOS/UEFI)
+2. **Firmware** -> **Bootloader** (GRUB/BOOTMGR)
+3. **Bootloader** -> **Kernel** (Linux/XNU/NT)
+4. **Kernel** -> **Init** (PID 1)
+5. **Init** -> **User Space** (Login screen, Shell)
+
+By understanding this chain, you now have the conceptual blueprint to write your own \"Hello World\" kernel—a journey that begins with a few bytes of assembly and ends with a fully functioning operating system.

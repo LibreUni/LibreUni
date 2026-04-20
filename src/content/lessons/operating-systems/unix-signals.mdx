@@ -1,0 +1,87 @@
+---
+title: "UNIX Signals and Process Control"
+course: "operating-systems"
+order: 27
+module: "Advanced Topics & UNIX Deep Dive"
+description: "A deep dive into asynchronous event notification in POSIX systems, exploring signals, handlers, and the kill command."
+---
+
+import CaseStudy from '../../../components/CaseStudy';
+
+# UNIX Signals and Process Control
+
+In POSIX-compliant operating systems, a signal is a limited form of inter-process communication (IPC) typically used in asynchronous environments. It is essentially a software interrupt delivered to a process by the OS or another process. Signals inform a process that a specific event has occurred.
+
+## Signal Delivery and Handlers
+
+When a signal is sent to a process, the OS interrupts the process's normal flow of execution. Depending on the specific signal, the process can:
+
+1.  **Ignore the signal:** Do nothing. Some signals, however, cannot be ignored.
+2.  **Perform the default action:** This usually means terminating the process, ignoring the signal, or stopping/suspending execution.
+3.  **Catch the signal:** The process registers a custom function called a signal handler that executes when the signal is received.
+
+Here is a common subset of the POSIX standard signals:
+- `SIGINT` (2): Interrupt from the keyboard (typically `Ctrl+C`). Default action is termination.
+- `SIGKILL` (9): Forced termination ("kill -9"). Cannot be caught, blocked, or ignored.
+- `SIGSEGV` (11): Invalid memory reference (Segmentation fault). Usually terminates and optionally drops a core dump.
+- `SIGTERM` (15): Polled termination signal. Typically instructs a process to shut down gracefully. This is the default signal sent by the `kill` command.
+
+## Implementing Signal Handling in C
+
+A developer can use the POSIX `sigaction` API to define custom signal handlers.
+
+```c
+#include <stdio.h>
+#include <unistd.h>
+#include <signal.h>
+#include <stdlib.h>
+
+void graceful_shutdown(int signum) {
+    printf("\nReceived signal %d, cleaning up resources...\n", signum);
+    // Perform cleanup like closing databases or temporary files
+    exit(0);
+}
+
+int main() {
+    struct sigaction sa;
+    sa.sa_handler = graceful_shutdown;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    // Register handler for SIGINT (Ctrl+C) and SIGTERM
+    if (sigaction(SIGINT, &sa, NULL) == -1 || sigaction(SIGTERM, &sa, NULL) == -1) {
+        perror("Error binding signal handler");
+        exit(1);
+    }
+
+    printf("Running daemon. Waiting for signals (Ctrl+C to exit)...\n");
+    while (1) {
+        // Main program loop
+        sleep(1); 
+    }
+    return 0;
+}
+```
+
+This ensures the application performs necessary teardown operations rather than terminating abruptly, preventing corrupted data or lingering lock files.
+
+## Signal Safety (Async-Signal-Safe Functions)
+
+Writing robust signal handlers requires extreme care. Because signals are asynchronous, a handler can interrupt the main program *at any point*, even in the middle of executing standard library functions like `printf()` or `malloc()`.
+
+If a main program is halfway through modifying a shared data structure inside `malloc()`, and a signal handler also calls `malloc()`, the heap structure can become irreparably corrupted. POSIX guarantees only a specific set of functions (like `write()`, `_exit()`, and `fsync()`) as "async-signal-safe," meaning they can be called safely within handlers.
+
+## Exercise: Signal Handling Operations
+
+<CaseStudy client:load
+  scenario="A developer is writing a high-performance custom data-processing application in C. To ensure data isn't lost if the user presses Ctrl+C, they register a custom `SIGINT` software interrupt handler using `sigaction`. Inside this handler, the developer attempts to gracefully allocate a new block of memory using `malloc()` to store a final crash dump structure."
+  question="Why is calling `malloc()` inside a signal handler an extremely dangerous practice that can lead to catastrophic application failure?"
+  options={[
+    "Because signals operate purely in kernel space, and `malloc()` is a user-space library function that cannot bridge that gap.",
+    "`malloc()` execution takes too long, potentially causing the operating system to forcefully kill the process for ignoring subsequent interrupts.",
+    "Because the signal is asynchronous, it could interrupt the main program while it was already modifying internal `malloc()` heap structures, leading to instantaneous corruption if the handler also calls it.",
+    "The C standard libraries restrict memory allocation strictly to the main execution thread by checking the process state."
+  ]}
+  correctIndex={2}
+  explanation="Signals are fully asynchronous interrupts. If the main program execution halts exactly inside a `malloc()` operation when a signal arrives, internal heap data structures (like mutex locks or free lists) are in an intermediate, unstable state. Calling non-async-signal-safe functions like `malloc()` or `printf()` directly causes race conditions, lockups, and irreparable heap corruption."
+/>

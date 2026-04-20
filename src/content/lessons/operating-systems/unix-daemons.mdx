@@ -1,0 +1,93 @@
+---
+title: "UNIX Daemons and Services"
+course: "operating-systems"
+order: 25
+module: "Advanced Topics & UNIX Deep Dive"
+description: "Creating background persistent processes in UNIX environments, managing daemons, and understanding the init system role."
+---
+
+import CaseStudy from '../../../components/CaseStudy';
+
+# UNIX Daemons and Services
+
+A daemon is a computer program that runs as a background process, rather than being under the direct control of an interactive user. In UNIX systems, they are essential for long-running services like web servers, database engines, and network monitors. They are typically designated by appending a 'd' at the end of their name (e.g., `sshd` for SSH daemon, `httpd` for HTTP daemon).
+
+## Characteristics of Daemons
+
+To function properly across the lifetime of an operating system session, daemons must establish a specific environmental state:
+
+1.  **Orphan Status:** The daemon process must detach itself from the terminal session that started it. This is typically achieved by forking a child process and instantly exiting the parent. The child becomes an orphan and is adopted by the init process (PID 1).
+2.  **Session Disconnection:** It calls `setsid()` to become the leader of a new process group and session. This severs its connection to the controlling terminal (TTY), making it immune to terminal-generated signals.
+3.  **File Descriptors:** Standard input (STDIN), output (STDOUT), and error (STDERR) are closed or redirected to `/dev/null` or dedicated log files, as the daemon has no terminal to interact with.
+4.  **Working Directory:** The root directory `/` is set as the working directory to prevent the daemon from blocking the unmounting of file systems where it was started.
+
+```c
+#include <unistd.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
+void daemonize() {
+    pid_t pid = fork();
+    if (pid < 0) exit(EXIT_FAILURE);
+    if (pid > 0) exit(EXIT_SUCCESS); // Parent exits
+
+    if (setsid() < 0) exit(EXIT_FAILURE);
+
+    // Default permissions
+    umask(0);
+
+    // Change to root directory
+    chdir("/");
+    
+    // Close standard file descriptors (FD)
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+    
+    // Proceed to core daemon loop
+    while(1) {
+        // Core service logic
+        sleep(60);
+    }
+}
+```
+
+This snippet illustrates the standard POSIX pattern executed by traditional C programs transforming into daemon background services.
+
+## Init Systems and Service Management
+
+Modern UNIX variants handle daemons through init systems like SysVinit, systemd, or launchd (macOS). These managers abstract the "daemonization" process, allowing developers to write software as standard, foreground-running programs.
+
+Under systemd, developers define a unit service file:
+```ini
+[Unit]
+Description=My Custom Web Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/my_web_service
+Restart=always
+User=nobody
+Group=nogroup
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Here, systemd inherently executes the application and manages the STDOUT redirection, user execution context, and backgrounding mechanics on behalf of the application developer, removing the necessity of the manual `fork()` and `setsid()` code pattern.
+
+## Exercise: Daemon Lifecycles
+
+<CaseStudy client:load
+  scenario="A junior system administrator is writing a custom C daemon to monitor disk usage continuously. They successfully use `fork()` to create a background child process and exit the parent. However, the administrator notices that whenever they close the SSH terminal session they used to launch the program, the monitoring daemon unexpectedly terminates."
+  question="Based on the required characteristics of a daemon, which crucial step did the administrator forget to implement?"
+  options={[
+    "Setting the working directory to `/` to avoid blocking unmounts.",
+    "Calling `setsid()` to disconnect from the controlling terminal (TTY).",
+    "Closing the standard input and output file descriptors (STDIN_FILENO, STDOUT_FILENO).",
+    "Changing the file creation mask using `umask(0)`."
+  ]}
+  correctIndex={1}
+  explanation="When a process is tied to a controlling terminal (like an SSH session), closing that terminal sends a SIGHUP (hangup) signal to all processes attached to it, terminating them. Calling `setsid()` creates a new session where the process becomes the leader without a controlling terminal, thus immunizing it from terminal-generated signals."
+/>

@@ -1,0 +1,114 @@
+---
+title: Mocking and Stubbing
+course: software-engineering
+order: 25
+module: Testing
+description: Mastering Test Doubles to isolate units under test using Mocks, Stubs, and Fakes.
+---
+
+# Mocking and Stubbing
+
+In modular software systems, components rarely exist in a vacuum. They depend on database connections, external APIs, file systems, or other complex services. When writing **unit tests**, we want to test a single unit in isolation. If that unit calls a real database, it's no longer a unit test—it's an integration test.
+
+To maintain isolation, speed, and reliability, we use **Test Doubles**.
+
+## Types of Test Doubles
+
+Gerard Meszaros defined several types of test doubles in his book *xUnit Test Patterns*:
+
+1.  **Dummy:** Objects that are passed around but never actually used. Usually, they are just used to fill parameter lists.
+2.  **Fake:** Objects that have working implementations, but usually take some shortcut which makes them not suitable for production (e.g., an in-memory database).
+3.  **Stub:** Provide canned answers to calls made during the test, usually not responding at all to anything outside what's programmed in for the test.
+4.  **Mock:** Objects pre-programmed with expectations which form a specification of the calls they are expected to receive. They can verify that a specific method was called with specific arguments.
+5.  **Spy:** Stubs that also record some information based on how they were called (e.g., a service that records how many messages it sent).
+
+## Stubbing vs. Mocking
+
+While often used interchangeably, there is a fundamental difference in their **verification** style:
+*   **Stubs** use **state-based verification**. You provide the stub with data, run your code, and then check the state of the object under test.
+*   **Mocks** use **behavior-based verification**. You tell the mock what to expect, run your code, and then ask the mock if it received the expected calls.
+
+## Example: Mocking in Java with Mockito
+
+Mockito is the most popular framework for mocking in the Java ecosystem.
+
+```java
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+class OrderServiceTest {
+    @Test
+    void testCheckoutProcessesPayment() {
+        // 1. Arrange (Create Mocks)
+        PaymentProcessor mockPayment = mock(PaymentProcessor.class);
+        InventoryService mockInventory = mock(InventoryService.class);
+        
+        // Stubbing: Define behavior
+        when(mockInventory.isAvailable("SKU-123")).thenReturn(true);
+        
+        OrderService service = new OrderService(mockPayment, mockInventory);
+        Order order = new Order("SKU-123", 100.00);
+
+        // 2. Act
+        service.checkout(order);
+
+        // 3. Assert / Verify
+        // Verify behavior: Was the payment processed exactly once?
+        verify(mockPayment, times(1)).process(100.00);
+        
+        // Verify with Argument Captor
+        ArgumentCaptor<Double> captor = ArgumentCaptor.forClass(Double.class);
+        verify(mockPayment).process(captor.capture());
+        assertEquals(100.00, captor.getValue());
+    }
+}
+```
+
+## Example: Mocking in Python with `unittest.mock`
+
+Python includes a powerful mocking library in the standard library.
+
+```python
+from unittest.mock import MagicMock, patch
+import unittest
+
+class TestUserService(unittest.TestCase):
+    def test_get_user_name_from_db(self):
+        # Create a mock database connection
+        mock_db = MagicMock()
+        
+        # Stub the return value of a method
+        mock_db.get_user.return_value = {"id": 1, "name": "Alice"}
+        
+        # Inject the mock
+        user_service = UserService(database=mock_db)
+        name = user_service.get_user_primary_name(1)
+        
+        # Assertions
+        self.assertEqual(name, "Alice")
+        
+        # Verification: Check if get_user was called with correct ID
+        mock_db.get_user.assert_called_once_with(1)
+
+    @patch('requests.get')
+    def test_api_call(self, mock_get):
+        # Setup mock response
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"status": "ok"}
+        
+        client = MyApiClient()
+        response = client.fetch_data()
+        
+        self.assertEqual(response["status"], "ok")
+        mock_get.assert_called_once()
+```
+
+## Best Practices for Mocking
+
+1.  **Don't Mock Everything:** If a class is a simple data holder (POJO/DTO), don't mock it. Use the real object.
+2.  **Only Mock Types You Own:** Mocking 3rd party libraries can lead to brittle tests if the library's internal behavior changes. It's often better to wrap the library in an interface you control, then mock that interface.
+3.  **One Mock Verification Per Test:** Try to focus each test on verifying one specific interaction.
+4.  **Avoid "Over-Mocking":** If your test setup is 50 lines of `when(...).thenReturn(...)` just to test a 2-line function, your code might be too tightly coupled or the unit too large.
+5.  **Don't Mock Logic:** A stub should return data, not perform complex logic to calculate what to return. If you need logic, you might need a **Fake**.

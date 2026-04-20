@@ -1,0 +1,138 @@
+---
+import plantumlEncoder from 'plantuml-encoder';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
+
+interface Props {
+  code: string;
+  theme?: string;
+}
+
+const { code, theme } = Astro.props;
+
+// Add theme custom by default if not specified
+let processedCode = code.trim()
+    .replace(/^@startuml\s*/i, '')
+    .replace(/\s*@enduml$/i, '');
+
+// Create a cache directory if it doesn't exist
+const CACHE_DIR = path.resolve('./src/puml-cache');
+if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+const ERROR_LOG = path.resolve('./puml-errors.log');
+
+const hash = crypto.createHash('md5').update(processedCode + (theme || '')).digest('hex');
+const cacheFile = path.join(CACHE_DIR, `${hash}.svg`);
+
+const skinParams = `
+ skinparam backgroundColor transparent
+ skinparam shadowing false
+ skinparam DefaultFontName "Inter", "system-ui", sans-serif
+ skinparam DefaultFontSize 12
+ skinparam Padding 8
+ skinparam RoundCorner 12
+ skinparam MaxMessageSize 150
+ skinparam wrapWidth 200
+ skinparam nodesep 50
+ skinparam ranksep 50
+`;
+
+let finalCode = `@startuml\n`;
+if (!processedCode.includes('!theme') && theme !== 'none') {
+    finalCode += `!theme plain\n`;
+}
+finalCode += `${skinParams}\n${processedCode}\n@enduml`;
+
+const encoded = plantumlEncoder.encode(finalCode);
+const primaryUrl = `https://www.plantuml.com/plantuml/svg/${encoded}`;
+const secondaryUrl = `https://plantuml-service.fly.dev/svg/${encoded}`; 
+
+let svgContent = '';
+
+// Try to load from cache first
+if (fs.existsSync(cacheFile)) {
+  svgContent = fs.readFileSync(cacheFile, 'utf-8');
+} else {
+  console.log(`[PlantUML] Attempt remote render first: ${hash.substring(0, 8)}...`);
+  let remoteSucceeded = false;
+  try {
+    // Use global fetch if available; otherwise skip remote attempt
+    let res;
+    if (typeof fetch === 'function') {
+      res = await fetch(primaryUrl);
+    } else {
+      throw new Error('global fetch unavailable');
+    }
+
+    if (res.ok) {
+      const txt = await res.text();
+      if (txt && txt.trim().startsWith('<svg')) {
+        svgContent = txt;
+        // normalize background and cache
+        svgContent = svgContent.replace(/(<rect[^>]*?)fill\s*=\s*["'](?:#FFFFFF|white|#ffffff)["']([^>]*\/>)/i, '$1fill="transparent"$2');
+        fs.writeFileSync(cacheFile, svgContent);
+        console.log(`[PlantUML] Remote cached: ${hash.substring(0, 8)}`);
+        remoteSucceeded = true;
+      } else {
+        throw new Error('Remote returned non-SVG');
+      }
+    } else {
+      throw new Error(`Remote HTTP ${res.status}`);
+    }
+  } catch (remoteErr: any) {
+    console.log(`[PlantUML] Remote render failed for ${hash.substring(0,8)}: ${remoteErr.message}. Falling back to local.`);
+  }
+
+  if (!remoteSucceeded) {
+    console.log(`[PlantUML] Generating diagram locally: ${hash.substring(0, 8)}...`);
+    try {
+      svgContent = execSync('java -jar /home/edf/puml.jar -pipe -tsvg', {
+      input: finalCode,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024
+      });
+          
+      // Clean up background and save to cache
+      svgContent = svgContent.replace(/(<rect[^>]*?)fill\s*=\s*["'](?:#FFFFFF|white|#ffffff)["']([^>]*\/>)/i, '$1fill="transparent"$2');
+      fs.writeFileSync(cacheFile, svgContent);
+      console.log(`[PlantUML] Cached: ${hash.substring(0, 8)}`);
+
+    } catch (e: any) {
+      console.error(`[PlantUML] ERROR rendering diagram ${hash.substring(0, 8)} locally: ${e.message}`);
+          
+      const pageUrl = Astro.url.pathname;
+      const errorMsg = `\n[${new Date().toISOString()}] PAGE: ${pageUrl}\nHASH: ${hash}\nERROR: ${e.message}\nCODE:\n@startuml\n${processedCode}\n@enduml\n----------------------------------------\n`;
+      fs.appendFileSync(ERROR_LOG, errorMsg);
+
+      svgContent = `
+      <div class="w-full text-center py-10 bg-rose-50/50 dark:bg-rose-900/10 rounded-3xl border border-rose-200 dark:border-rose-900/30">
+        <div class="inline-flex p-3 bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 rounded-2xl mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <h4 class="font-black text-rose-900 dark:text-rose-100 uppercase tracking-tighter text-sm mb-1">Diagram Rendering Error</h4>
+        <p class="text-[10px] font-bold text-rose-400/80 uppercase tracking-widest leading-relaxed px-4">The PlantUML generation failed (remote + local).</p>
+                
+        <div class="mt-8 mx-auto max-w-[90%] text-left">
+          <div class="flex items-center justify-between mb-2 px-4">
+            <div class="text-[9px] font-black text-light-muted dark:text-dark-muted uppercase tracking-[0.2em] opacity-50">Source Definition</div>
+            <a href="${primaryUrl.replace('/svg/', '/uml/')}" target="_blank" class="text-[9px] font-black text-primary uppercase tracking-[0.2em] hover:underline">Open in Editor ↗</a>
+          </div>
+          <pre class="bg-white/50 dark:bg-black/20 p-6 rounded-2xl border border-rose-100 dark:border-rose-900/20 font-mono text-xs overflow-x-auto text-light-text dark:text-dark-text opacity-70">@startuml\n${processedCode}\n@enduml</pre>
+        </div>
+      </div>
+      `;
+      // We purposefully DO NOT cache the error content so it retries and logs again on next build
+    }
+  }
+}
+---
+
+<div class="my-12 flex flex-col items-center bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2.5rem] overflow-hidden shadow-xl p-8 transition-colors">
+  <div class="w-full flex justify-center overflow-x-auto dark:invert dark:hue-rotate-180 dark:brightness-110">
+    <Fragment set:html={svgContent} />
+  </div>
+</div>

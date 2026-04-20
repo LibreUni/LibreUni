@@ -1,0 +1,130 @@
+---
+title: "Regularization Theory: Combating Overfitting"
+course: machine-learning
+order: 4
+module: "Basics"
+description: "Advanced techniques for controlling model complexity and improving generalization thru weight penalties, dropout, and normalization."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+
+# The Problem of Overfitting
+
+In machine learning, we don't just care about minimizing error on our training data; we care about **generalization**—the performance on unseen data. A model that fits the training set perfectly but fails on new data is said to be **Overfitting**. This occurs when the model (the hypothesis $h$) is too complex relative to the amount and noise of the data, essentially "memorizing" individual samples rather than learning the underlying function.
+
+## 1. The Bias-Variance Trade-off
+
+Regularization is the mathematical tool used to navigate the **Bias-Variance trade-off**.
+- **Variance**: The error from sensitivity to small fluctuations in the training set. High variance leads to a model that captures random noise as if it were signal.
+- **Bias**: The error from erroneous assumptions in the learning algorithm. High bias leads to a model that misses the relevant relations between features and targets (**Underfitting**).
+
+Total Expected Error can be decomposed as:
+$$ \text{Total Error} = \text{Bias}^2 + \text{Variance} + \sigma_{noise}^2 $$
+
+Regularization intentionally increases the bias slightly to achieve a significantly larger reduction in variance, leading to lower total error on the test set.
+
+## 2. Weight Penalties: L1 vs. L2
+
+Weight regularization adds a penalty term $\Omega(\theta)$ to the cost function $J(\theta)$ to discourage large coefficients.
+
+### Ridge Regularization (L2)
+L2 regularization adds the sum of the squares of the weights. The augmented cost function becomes:
+$$ J_{reg}(\theta) = \frac{1}{2m} \sum_{i=1}^{m} (h_\theta(x^{(i)}) - y^{(i)})^2 + \frac{\lambda}{2m} \sum_{j=1}^{n} \theta_j^2 $$
+$\lambda$ is the **regularization parameter**. As $\lambda \to \infty$, weights $\theta \to 0$. L2 is effective at handling multicollinearity (correlated features).
+
+### Lasso Regularization (L1)
+Lasso (Least Absolute Shrinkage and Selection Operator) uses the sum of absolute magnitudes:
+$$ J_{reg}(\theta) = \frac{1}{2m} \sum_{i=1}^{m} (h_\theta(x^{(i)}) - y^{(i)})^2 + \frac{\lambda}{m} \sum_{j=1}^{n} |\theta_j| $$
+L1 is unique because it produces **sparse models**. It acts as a built-in feature selection tool by forcing redundant or irrelevant feature weights to be exactly zero.
+
+<CodeRunner client:load 
+  code={`import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import Ridge, Lasso, LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+
+# Create noisy data
+np.random.seed(42)
+X = np.sort(np.random.rand(20, 1) * 3, axis=0)
+y = 0.5 * X**3 - 2 * X**2 + X + np.random.normal(0, 0.5, X.shape)
+
+# Transform to high-degree polynomial (prone to overfitting)
+degree = 10
+X_test = np.linspace(0, 3, 100).reshape(-1, 1)
+
+# Compare No Reg, L1, and L2
+models = [
+    ("Linear (No Reg)", make_pipeline(PolynomialFeatures(degree), LinearRegression())),
+    ("Ridge (L2)", make_pipeline(PolynomialFeatures(degree), Ridge(alpha=10))),
+    ("Lasso (L1)", make_pipeline(PolynomialFeatures(degree), Lasso(alpha=0.1)))
+]
+
+plt.figure(figsize=(12, 6))
+plt.scatter(X, y, color='black', label="Samples")
+for name, model in models:
+    model.fit(X, y)
+    plt.plot(X_test, model.predict(X_test), label=name, linewidth=2)
+
+plt.ylim(-5, 5)
+plt.legend()
+plt.title("L1 vs L2 vs No Regularization (High Degree Polynomial)")
+plt.show()
+
+lasso_coefs = models[2][1].named_steps['lasso'].coef_
+print(f"Lasso non-zero coefficients: {np.sum(lasso_coefs != 0)} out of {len(lasso_coefs)}")
+`}
+/>
+
+## 3. Regularization in Deep Learning
+
+While L1/L2 weights are still used in neural networks (often called "Weight Decay"), deep learning architectures require specialized techniques.
+
+### Dropout
+Dropout is a stochastic regularization technique where, during training, each neuron in a layer is "dropped" (set to zero) with a probability $p$ (e.g., 0.5).
+- **Intuition**: This prevents "co-adaptation" of neurons. A neuron cannot rely on the presence of specific other neurons to correct its mistakes, forcing it to learn more robust, independent features.
+- **At Inference**: Dropout is turned off, and weights are scaled by $(1-p)$ to account for the increased number of active neurons.
+
+### Batch Normalization
+Although often viewed as an optimization accelerator, Batch Norm acts as a powerful regularizer. By normalizing the inputs to each layer (subtracting mean, dividing by variance), it reduces "Internal Covariate Shift" and adds a small amount of noise, reducing the need for Dropout.
+
+### Early Stopping
+Early stopping is a simple yet effective strategy: monitor the model's performance on a validation set during training. When validation loss stops decreasing (or starts increasing) while training loss continues to fall, terminate training. This "free" regularization prevents the model from fitting the noise that appears late in the training process.
+
+## 4. Normalization and Scaling
+
+Regularization is highly sensitive to the scale of features. Since $J_{reg}$ treats all $\theta_j$ equally in the penalty term, a feature with a large range (e.g., House Price in millions) would have a disproportionately large weight compared to a feature with a small range (e.g., Number of Bathrooms), even if the latter is more important.
+
+**Crucial Step**: Always apply **Standardization** (Z-score normalization) or **Min-Max Scaling** before applying L1 or L2 regularization.
+
+$$ z = \frac{x - \mu}{\sigma} $$
+
+<Quiz client:load
+  question="Why is regularization almost always paired with feature scaling?"
+  options={[
+    "To make the cost function look like a perfectly round bowl, ensuring the penalty term treats all features fairly regardless of their original magnitude.",
+    "Because regularization only works on features between 0 and 1.",
+    "To ensure that Dropout can turn off the correct neurons.",
+    "To prevent categorical variables from being ignored."
+  ]}
+  correctIndex={0}
+  explanation="The penalty term $\lambda \sum \theta^2$ does not distinguish between feature units. If one feature is 1000x larger than another, its coefficient will naturally be 1000x smaller. Without scaling, the regularization penalty would unfairly target features with large scales, possibly ignoring smaller but more predictive features."
+/>
+
+## 5. Elastic Net: The Best of Both Worlds
+
+When you have a dataset with many correlated features, Lasso (L1) tends to arbitrarily pick one feature and zero out the others. Ridge (L2) tends to keep all of them. **Elastic Net** combines both penalties:
+
+$$ J_{reg}(\theta) = J(\theta) + \lambda_1 \sum |\theta_j| + \lambda_2 \sum \theta_j^2 $$
+
+This allows for sparse selection (like Lasso) while maintaining the stability and group-selection properties of Ridge.
+
+## Summary Checklist
+- **Symptoms of Overfitting**: Large gap between training and validation accuracy; extremely large weight magnitudes.
+- **Solution Strategy**: 
+  1. Add more data (if possible).
+  2. Simplify the model (fewer parameters/layers).
+  3. Apply **L2 Regularization** for general stabilization.
+  4. Apply **L1 Regularization** if you suspect many features are irrelevant.
+  5. Use **Dropout** and **Early Stopping** for neural networks.

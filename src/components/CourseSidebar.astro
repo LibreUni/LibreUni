@@ -1,0 +1,169 @@
+---
+import { getCollection } from 'astro:content';
+
+interface Props {
+  courseId: string;
+  currentSlug: string;
+  lessons?: any[];
+}
+
+const { courseId, currentSlug, lessons } = Astro.props;
+
+let allLessons = lessons;
+if (!allLessons) {
+  allLessons = (await getCollection('lessons'))
+    .filter(l => l.data.course === courseId)
+    .sort((a, b) => a.data.order - b.data.order);
+}
+
+// We will render items in order and show headers when the module changes
+const items: { type: 'header' | 'lesson', title?: string, lesson?: typeof allLessons[0] }[] = [];
+let lastModule = '';
+
+allLessons.forEach(lesson => {
+  const moduleName = lesson.data.module || 'Overview';
+  if (moduleName !== lastModule) {
+    items.push({ type: 'header', title: moduleName });
+    lastModule = moduleName;
+  }
+  items.push({ type: 'lesson', lesson });
+});
+
+import { List, X } from './Icons';
+---
+
+<button 
+  id="sidebar-toggle"
+  class="fixed bottom-6 right-6 z-[60] p-4 btn-primary !rounded-2xl md:hidden flex items-center gap-2 font-bold text-sm tracking-tight shadow-2xl"
+>
+  <List size={20} />
+  Contents
+</button>
+
+<aside id="course-sidebar" class="fixed inset-y-0 left-0 w-80 md:w-72 md:h-[calc(100vh-4rem)] md:sticky md:top-16 bg-light-surface dark:bg-dark-surface overflow-y-auto border-r border-light-border dark:border-dark-border transition-all duration-500 z-[50] -translate-x-full md:translate-x-0">
+  <div class="py-8 flex flex-col px-6 md:px-4">
+    <div class="md:hidden flex items-center justify-between mb-8">
+        <h2 class="text-2xl font-black text-light-text dark:text-dark-text mt-4">Module Plan</h2>
+        <button id="sidebar-close" class="p-2 mt-4"><X size={24} /></button>
+    </div>
+
+    <!-- Export PDF Button (Sticky at Top) -->
+    <div class="mb-8 pb-4 sticky top-0 bg-light-surface dark:bg-dark-surface z-10 pt-2 border-b border-light-border dark:border-dark-border">
+      <a 
+        href={`${import.meta.env.BASE_URL}courses/${courseId}/export`}
+        class="flex items-center gap-3 px-4 py-4 bg-primary hover:bg-primary-dark text-white !rounded-2xl group shadow-lg shadow-primary/25 transition-all"
+      >
+        <div class="p-2 bg-white/20 text-white rounded-lg group-hover:scale-110 transition-transform">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+        </div>
+        <span class="text-[10px] uppercase tracking-widest font-black">Export Course PDF</span>
+      </a>
+    </div>
+
+    {items.map((item) => (
+      item.type === 'header' ? (
+        <h3 class="px-4 py-3 label-caps mt-8 first:mt-0 mb-2 leading-none border-b border-light-border/50 dark:border-dark-border/50">{item.title}</h3>
+      ) : (
+        <a 
+          href={`${import.meta.env.BASE_URL}lessons/${item.lesson!.slug}`}
+          data-slug={item.lesson!.slug}
+          class={`sidebar-lesson-link px-4 py-3 text-sm font-bold transition-all rounded-xl mb-1 flex items-center gap-3 group ${
+            currentSlug === item.lesson!.slug 
+              ? 'bg-primary text-white shadow-lg shadow-primary/10 scale-[1.02]' 
+              : 'text-light-muted dark:text-dark-muted hover:bg-primary/5 hover:text-light-text dark:hover:text-dark-text'
+          }`}
+        >
+          <div class={`status-dot w-1.5 h-1.5 rounded-full transition-colors ${currentSlug === item.lesson!.slug ? 'bg-white' : 'bg-transparent group-hover:bg-primary/20'}`}></div>
+          <span class="flex-1 truncate">{item.lesson!.data.title}</span>
+          <div class="completion-indicator hidden ml-auto p-1 bg-emerald-500/10 rounded-lg text-emerald-500">
+             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          {currentSlug === item.lesson!.slug && <div class="w-1 h-4 bg-white/30 rounded-full"></div>}
+        </a>
+      )
+    ))}
+  </div>
+</aside>
+
+<script is:inline>
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    const sidebarClose = document.getElementById('sidebar-close');
+    const courseSidebar = document.getElementById('course-sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+
+    function toggleSidebar(open) {
+        if (open) {
+            courseSidebar?.classList.remove('-translate-x-full');
+            backdrop?.classList.remove('hidden');
+            setTimeout(() => backdrop?.classList.add('opacity-100'), 10);
+            document.body.style.overflow = 'hidden';
+        } else {
+            courseSidebar?.classList.add('-translate-x-full');
+            backdrop?.classList.remove('opacity-100');
+            setTimeout(() => backdrop?.classList.add('hidden'), 300);
+            document.body.style.overflow = '';
+        }
+    }
+
+    sidebarToggle?.addEventListener('click', () => toggleSidebar(true));
+    sidebarClose?.addEventListener('click', () => toggleSidebar(false));
+    backdrop?.addEventListener('click', () => toggleSidebar(false));
+
+    // Close on link click on mobile
+    courseSidebar?.querySelectorAll('a').forEach(link => {
+        link.addEventListener('click', () => {
+            if (window.innerWidth < 768) toggleSidebar(false);
+        });
+    });
+</script>
+
+<script is:inline>
+  // Preservation of scroll position
+  const sidebar = document.getElementById('course-sidebar');
+  if (sidebar) {
+    // Restore scroll position
+    const scrollPos = sessionStorage.getItem('sidebar-scroll');
+    if (scrollPos) {
+      sidebar.scrollTop = parseInt(scrollPos, 10);
+    }
+
+    // Save scroll position on click or before unload
+    sidebar.addEventListener('scroll', () => {
+      sessionStorage.setItem('sidebar-scroll', sidebar.scrollTop);
+    });
+  }
+</script>
+
+<script is:inline>
+  // Updated progress tracking script
+  function refreshProgress() {
+    document.querySelectorAll('.sidebar-lesson-link').forEach(link => {
+      const slug = link.getAttribute('data-slug');
+      const indicator = link.querySelector('.completion-indicator');
+      const dot = link.querySelector('.status-dot');
+      
+      if (localStorage.getItem(`completed-${slug}`) === 'true') {
+        indicator?.classList.remove('hidden');
+        if (!link.classList.contains('bg-primary')) {
+          dot?.classList.add('bg-emerald-500');
+          dot?.classList.remove('bg-transparent');
+          link.classList.add('completed-lesson');
+        }
+      } else {
+        indicator?.classList.add('hidden');
+        dot?.classList.remove('bg-emerald-500');
+        if (!link.classList.contains('bg-primary')) {
+          dot?.classList.add('bg-transparent');
+        }
+        link.classList.remove('completed-lesson');
+      }
+    });
+  }
+
+  refreshProgress();
+  window.addEventListener('lesson-completed', refreshProgress);
+  // Also listen for storage changes in other tabs
+  window.addEventListener('storage', (e) => {
+    if (e.key && e.key.startsWith('completed-')) refreshProgress();
+  });
+</script>

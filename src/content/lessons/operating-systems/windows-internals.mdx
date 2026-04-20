@@ -1,0 +1,80 @@
+---
+title: "Windows Internals: The NT Architecture"
+course: "operating-systems"
+order: 13
+module: "Major Systems Deep Dive"
+description: "A deep dive into the Windows NT Executive, the Object Manager, and how the Registry and Win32 subsystem really work."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Windows Internals
+
+Windows is often misunderstood as just a "GUI OS." In reality, the **Windows NT Executive** is one of the most sophisticated pieces of engineering ever created. While Linux follows the Unix "Everything is a File" philosophy, Windows follows an **Object-Based** philosophy.
+
+## The Executive and the Kernel
+
+In the NT architecture, there is a clear distinction between the "Kernel" and the "Executive."
+-   **The Kernel**: Handles the absolute lowest-level tasks: thread scheduling, interrupt handling, and multiprocessor synchronization. It is intentionally small.
+-   **The Executive**: This is a collection of "Managers" that sit on top of the kernel. Each manager handles a specific resource.
+
+### Key Executive Managers:
+1.  **Object Manager**: The most important component. It creates, manages, and deletes "objects" (which represent processes, threads, files, registry keys, and sync primitives).
+2.  **I/O Manager**: Implements device-independent I/O. It uses **IRPs (I/O Request Packets)** to communicate with drivers.
+3.  **Process Manager**: Manages the lifecycle of processes and threads.
+4.  **Security Reference Monitor (SRM)**: Enforces the security policies on the local machine. It checks every time an object is accessed to see if the user has the right permissions (Access Control Lists).
+
+## The Object Manager and Handles
+
+When a Windows program wants to open a file, it doesn't just get a file descriptor (like in Unix). It asks the Object Manager to create a **Handle**.
+-   **Ref Counting**: The OS keeps track of how many handles are open for each object. The object is only destroyed when the last handle is closed.
+-   **Namespaces**: Objects can be named (e.g., `\Device\HarddiskVolume1\Windows\System32`) or unnamed.
+
+<PlantUML theme="none" code={`
+@startuml
+rectangle "User Application" as app
+rectangle "Object Manager" as om
+rectangle "Specific Object (e.g. File)" as obj
+
+app -> om : "Open File 'data.txt'"
+om -> om : "Check Permissions"
+om -> obj : "Create Reference"
+om --> app : "Return Handle (e.g. 0x4A2)"
+@enduml
+`} />
+
+## The Registry: The Braindead Database?
+
+The Registry is the central database that stores all configuration data for the hardware, software, and users.
+-   **Hives**: The registry is divided into "Hives" (stored in files like `SYSTEM`, `SOFTWARE`, and `SAM`).
+-   **Structure**: 
+    -   **Keys**: Similar to folders.
+    -   **Values**: Similar to files (contain the actual data).
+-   **Performance**: Accessing the registry is extremely fast compared to reading thousands of individual text files, as the OS keeps most of the registry "mounted" in a high-performance in-memory structure.
+
+## Win32 and the Subsystem Model
+
+Windows NT was originally designed to run multiple types of apps: OS/2 apps, POSIX apps, and **Win32** apps. Each had its own "Subsystem."
+Today, only the Win32 subsystem remains (and technically the Linux subsystem, WSL).
+-   **Kernel32.dll**: The core Win32 API (managing files, processes, and memory).
+-   **User32.dll**: Handles the user interface (windows, menus, mouse input).
+-   **GDI32.dll / Direct2D**: Handles the drawing of shapes and text.
+
+When you call a function like `CreateFile()`, it's actually just a "wrapper." The DLL translates `CreateFile()` into a native kernel system call (like `NtCreateFile()`) and traps into the Executive.
+
+## Windows Drivers: The WDM and WDF
+
+Writing drivers for Windows is notoriously difficult.
+-   **WDM (Windows Driver Model)**: The old way. Very complex, required handling of low-level power states and PnP (Plug and Play) manually.
+-   **WDF (Windows Driver Frameworks)**: The modern way. It provides a safer, higher-level abstraction that handles much of the complexity for the developer.
+
+### User-Mode Drivers (UMDF)
+One of Microsoft's smartest moves was the creation of **User-Mode Drivers**. For devices that aren't critical (like a USB lamp or a simple sensor), the driver runs in User Mode. If it crashes, it doesn't BSOD the whole system; the OS just restarts the driver process.
+
+## Security: Tokens and ACLs
+
+Windows security is based on **Tokens**. When you log in, the OS creates an **Access Token** for you. Every process you start inherits a copy of this token.
+When you try to access an object, the **SRM** compares your Token to the **DACL (Discretionary Access Control List)** on that object.
+-   **Allow/Deny**: Windows security is very granular. You can say "User A can read this file, but only on Tuesdays," or "User B can see the file exists but cannot read its size."
+
+Understanding these internals is why "Task Manager" in Windows looks and behaves so differently from "Top" in Linux. Windows is a system of managers and objects, while Unix is a system of streams and files.

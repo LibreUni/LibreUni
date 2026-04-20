@@ -1,0 +1,387 @@
+---
+import { getCollection, getEntry } from 'astro:content';
+import 'katex/dist/katex.min.css';
+import Quiz from '../../../components/Quiz';
+import Math from '../../../components/Math.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import { BookOpen } from '../../../components/Icons';
+
+export async function getStaticPaths() {
+  const courses = await getCollection('courses');
+  const lessons = await getCollection('lessons');
+
+  return courses.map(course => {
+    const courseLessons = lessons
+      .filter(l => l.data.course === course.id)
+      .sort((a, b) => a.data.order - b.data.order);
+
+    return {
+      params: { courseId: course.id },
+      props: { lessons: courseLessons }
+    };
+  });
+}
+
+const { courseId } = Astro.params;
+const { lessons: allLessons } = Astro.props;
+const course = await getEntry('courses', courseId as any);
+
+// Render all lessons in parallel
+const lessonsWithContent = await Promise.all(allLessons.map(async (lesson) => {
+  const rendered = await lesson.render();
+  return {
+    data: lesson.data,
+    id: lesson.id,
+    Content: rendered.Content
+  };
+}));
+
+interface Module {
+  name: string;
+  lessons: any[];
+}
+
+const modules: Module[] = [];
+let currentModuleName = '';
+let currentModule: Module | null = null;
+
+for (const lesson of lessonsWithContent) {
+  const moduleName = lesson.data.module || 'Overview';
+  if (moduleName !== currentModuleName || !currentModule) {
+    currentModuleName = moduleName;
+    currentModule = { name: moduleName, lessons: [] };
+    modules.push(currentModule);
+  }
+  currentModule.lessons.push(lesson);
+}
+
+const components = {
+  Quiz: Quiz,
+  Math: Math,
+  PlantUML: PlantUML,
+};
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{course.data.title} - Full Course Export</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <style is:global>
+      @page {
+        size: A4;
+        margin: 0 !important;
+      }
+      
+      :root {
+        --primary: #3b82f6;
+      }
+
+      body {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        background-color: #f8fafc;
+        margin: 0;
+        padding: 0;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      #export-root {
+        background-color: white;
+        color: #0f172a;
+        transition: none !important;
+      }
+
+      #pdf-content {
+        background-color: white !important;
+        color: #0f172a !important;
+        position: relative !important;
+        z-index: 1 !important;
+        width: 100% !important;
+        padding: 20mm !important; 
+      }
+
+      /* Hide Quizzes, CodeRunners, and Exercises in Export */
+      .quiz-container, .Quiz, .code-runner, .code-exercise,
+      [id*="exercise"], [id*="quiz"],
+      [id*="knowledge-check"],
+      /* Brute force hide by text content for common headers */
+      .content-article h2:empty,
+      .content-article h3:empty,
+      /* Case 1: Header is immediately before */
+      .content-article h3:has(+ .quiz-container),
+      .content-article h2:has(+ .quiz-container),
+      .content-article p:has(+ .quiz-container),
+      .content-article h3:has(+ .Quiz),
+      .content-article h2:has(+ .Quiz),
+      .content-article p:has(+ .Quiz),
+      .content-article h3:has(+ .code-runner),
+      .content-article h2:has(+ .code-runner),
+      .content-article p:has(+ .code-runner),
+      .content-article h3:has(+ .code-exercise),
+      .content-article h2:has(+ .code-exercise),
+      .content-article p:has(+ .code-exercise),
+      /* Case 2: Header is 1 element before (e.g. an empty MDX node or import between them) */
+      .content-article h3:has(+ * + .quiz-container),
+      .content-article h2:has(+ * + .quiz-container),
+      .content-article p:has(+ * + .quiz-container),
+      .content-article h3:has(+ * + .Quiz),
+      .content-article h2:has(+ * + .Quiz),
+      .content-article p:has(+ * + .Quiz),
+      .content-article h3:has(+ * + .code-runner),
+      .content-article h2:has(+ * + .code-runner),
+      .content-article p:has(+ * + .code-runner),
+      .content-article h3:has(+ * + .code-exercise),
+      .content-article h2:has(+ * + .code-exercise),
+      .content-article p:has(+ * + .code-exercise),
+      /* Case 3: The element itself is marked by our script or contains the quiz */
+      .content-article *:has(> .quiz-container),
+      .content-article *:has(> .Quiz),
+      .content-article *:has(> .code-runner),
+      .content-article *:has(> .code-exercise),
+      [data-quiz-header] {
+        display: none !important;
+      }
+
+      /* Fallback for browsers with limited :has support */
+      [data-quiz-header] {
+        display: none !important;
+      }
+
+      /* Code Highlighting Fixes */
+      #pdf-content * {
+        max-width: 100%;
+        overflow-wrap: break-word;
+      }
+
+      .page-break-after { page-break-after: always; break-after: page; }
+      .page-break-before { page-break-before: always; break-before: page; }
+      .avoid-break { page-break-inside: avoid; break-inside: avoid; }
+
+      /* Prose Styles */
+      .content-article {
+        font-size: 1.1rem;
+        line-height: 1.7;
+      }
+      .content-article h1 { font-size: 2.25rem; font-weight: 900; text-transform: uppercase; margin-top: 2.5rem; margin-bottom: 1.5rem; color: #0f172a; letter-spacing: -0.025em; }
+      .content-article h2 { font-size: 1.5rem; font-weight: 900; text-transform: uppercase; margin-top: 2rem; margin-bottom: 1rem; color: #0f172a; border-bottom: 2px solid #f1f5f9; padding-bottom: 0.5rem; }
+      .content-article h3 { font-size: 1.25rem; font-weight: 800; text-transform: uppercase; margin-top: 1.5rem; margin-bottom: 0.75rem; color: #1e293b; }
+      .content-article p { margin-bottom: 1.25rem; color: #334155; }
+      .content-article ul { list-style-type: disc; margin-left: 1.5rem; margin-bottom: 1.25rem; }
+      .content-article ol { list-style-type: decimal; margin-left: 1.5rem; margin-bottom: 1.25rem; }
+      .content-article li { margin-bottom: 0.5rem; padding-left: 0.5rem; }
+      .content-article strong { font-weight: 900; color: #0f172a; }
+      
+      /* Code Highlighting Fixes */
+      .content-article :not(pre) > code { 
+        font-family: monospace; 
+        background-color: #f1f5f9; 
+        padding: 0.2rem 0.4rem; 
+        border-radius: 0.25rem; 
+        color: var(--primary); 
+        font-weight: 700; 
+      }
+      .content-article pre { 
+        padding: 1.5rem; 
+        border-radius: 1rem; 
+        margin-bottom: 2rem; 
+        white-space: pre-wrap !important;
+        word-break: break-all !important;
+        overflow-x: visible !important;
+        font-size: 0.85rem;
+        border: 1px solid #e2e8f0;
+        background-color: #f8fafc !important;
+      }
+      .content-article pre code {
+        background-color: transparent !important;
+        padding: 0 !important;
+        color: inherit !important;
+        font-weight: 400 !important;
+      }
+
+      .content-article blockquote { border-left: 4px solid var(--primary); padding-left: 1.5rem; font-style: italic; color: #475569; margin-bottom: 2rem; }
+      .content-article img { border-radius: 1.5rem; max-width: 100%; height: auto !important; margin: 2rem auto; display: block; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1); }
+
+      /* KaTeX display fix */
+      .katex-display {
+        margin: 1.5em 0 !important;
+        overflow-x: visible !important;
+        overflow-y: hidden !important;
+      }
+      
+      .no-print {
+        display: flex;
+      }
+
+      @media print {
+        body * { visibility: hidden; }
+        #export-root, #export-root * { visibility: visible; }
+        #export-root { 
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          box-shadow: none !important;
+        }
+        #pdf-content {
+          padding: 20mm !important;
+        }
+        .no-print { display: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Floating UI Controls -->
+    <div id="controls" class="fixed top-6 right-6 z-[100] flex gap-4 no-print">
+      <div class="bg-white/90 backdrop-blur-xl p-2 rounded-2xl shadow-2xl border border-slate-200 flex gap-2">
+        <a href={import.meta.env.BASE_URL + `courses/${courseId}`} class="px-5 py-3 text-sm font-black text-slate-600 hover:text-slate-900 transition-all flex items-center gap-2 hover:bg-slate-50 rounded-xl">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          BACK
+        </a>
+        <button id="print-btn" class="bg-primary hover:bg-primary-dark text-white font-black px-10 py-3 rounded-xl shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-4"/><rect x="6" y="14" width="12" height="8"/></svg>
+          SAVE AS PDF
+        </button>
+      </div>
+    </div>
+
+    <!-- The Export Content -->
+    <div class="max-w-[210mm] mx-auto my-12 shadow-2xl transition-all" id="export-root">
+      <div id="pdf-content" class="bg-white p-[25mm]">
+        
+        <!-- Cover Page -->
+        <div class="h-[247mm] flex flex-col justify-center items-center text-center page-break-after">
+          <div class="w-32 h-32 bg-primary/5 text-primary rounded-[3rem] flex items-center justify-center mb-16 shadow-inner">
+             <BookOpen size={64} strokeWidth={1.5} /> 
+          </div>
+          <h1 class="text-7xl font-black uppercase tracking-tighter mb-8 text-slate-900 leading-[0.9]">{course.data.title}</h1>
+          <p class="text-2xl text-slate-400 max-w-2xl mx-auto mb-20 font-medium leading-relaxed tracking-tight italic">{course.data.description}</p>
+          <div class="h-3 w-40 bg-primary rounded-full mb-20 shadow-lg shadow-primary/20"></div>
+          
+          <div class="mt-auto pt-20">
+            <div class="inline-block px-6 py-2 bg-slate-100 rounded-full font-black text-slate-400 uppercase tracking-[0.3em] text-[10px] mb-4">Official Documentation</div>
+            <p class="text-slate-900 font-extrabold text-lg">{new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}</p>
+          </div>
+        </div>
+
+        <!-- Table of Contents -->
+        <div class="min-h-[247mm] page-break-after py-12">
+          <h2 class="text-5xl font-black uppercase mb-16 tracking-tighter text-slate-900 border-b-8 border-slate-900 pb-6">Contents</h2>
+          <div class="space-y-12">
+            {modules.map((mod) => (
+              <div>
+                <h3 class="font-black text-primary uppercase tracking-[0.25em] text-xs mb-6 bg-blue-50 inline-block px-4 py-1 rounded-md">{mod.name}</h3>
+                <ul class="space-y-6">
+                  {mod.lessons.map((les) => (
+                    <li class="flex items-baseline gap-4 group">
+                      <span class="font-bold text-slate-800 text-xl tracking-tight">{les.data.title}</span>
+                      <div class="flex-1 border-b-2 border-dotted border-slate-100"></div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <!-- Content -->
+        {modules.map((mod) => (
+          <div class="module-group">
+            <div class="page-break-before h-64 flex items-end pb-12 border-b-[12px] border-slate-900 mb-20">
+              <h2 class="text-6xl font-black uppercase tracking-tighter text-slate-900 leading-none">{mod.name}</h2>
+            </div>
+            
+            {mod.lessons.map(({ data, Content }) => (
+              <div class="lesson-container mb-32 last:mb-0">
+                <header class="mb-16">
+                   <div class="flex items-center gap-3 mb-6">
+                     <div class="h-px w-8 bg-primary"></div>
+                     <div class="text-[10px] font-black text-primary uppercase tracking-[0.4em]">Section Detail</div>
+                   </div>
+                   <h3 class="text-5xl font-black uppercase tracking-tighter text-slate-900 mb-8 leading-[0.95]">{data.title}</h3>
+                   <div class="h-2 w-24 bg-primary rounded-full shadow-lg shadow-primary/10"></div>
+                </header>
+                <div class="content-article">
+                  <Content components={components} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <!-- Background Decoration for Screen View -->
+    <div class="fixed inset-0 -z-10 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:24px_24px] opacity-40 no-print"></div>
+
+    <script is:inline>
+      // Ultimate Brute Force Quiz Header Removal
+      function zapQuizHeaders() {
+        // 1. Target by common IDs generated by MDX
+        const idsToHide = ['exercise', 'quiz', 'knowledge-check', 'practice', 'check-your-knowledge'];
+        idsToHide.forEach(id => {
+          document.querySelectorAll(`[id*="${id}" i]`).forEach(el => {
+            el.style.setProperty('display', 'none', 'important');
+          });
+        });
+
+        // 2. Target by Text Content for Headings
+        const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        headings.forEach(h => {
+          const text = h.textContent.toLowerCase().trim();
+          if (text === 'exercise' || text === 'quiz' || text === 'knowledge check' || text === 'practice') {
+            h.style.setProperty('display', 'none', 'important');
+          }
+        });
+
+        // 3. Look back from interactive elements
+        const interactiveElements = document.querySelectorAll('.quiz-container, .Quiz, .code-runner, .code-exercise');
+        interactiveElements.forEach(el => {
+          el.style.setProperty('display', 'none', 'important');
+          let prev = el.previousElementSibling;
+          let count = 0;
+          while (prev && count < 3) {
+            const tag = prev.tagName;
+            const text = prev.textContent.toLowerCase();
+            if (tag.startsWith('H') || (tag === 'P' && text.length < 50)) {
+               prev.style.setProperty('display', 'none', 'important');
+            }
+            prev = prev.previousElementSibling;
+            count++;
+          }
+        });
+      }
+
+      // Run multiple times to handle hydration/React rendering
+      zapQuizHeaders();
+      window.addEventListener('DOMContentLoaded', zapQuizHeaders);
+      window.addEventListener('load', zapQuizHeaders);
+      setInterval(zapQuizHeaders, 500);
+    </script>
+
+    <script>
+      const printBtn = document.getElementById('print-btn');
+
+      if (printBtn) {
+        printBtn.addEventListener('click', () => {
+          // Instruct user to disable headers/footers
+          const note = document.createElement('div');
+          note.innerHTML = '<div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm no-print"><div class="bg-white p-8 rounded-2xl shadow-2xl max-w-md text-center"><h3 class="text-xl font-bold mb-4">Print optimization</h3><p class="mb-6 text-slate-600">For a clean PDF, please ensure <b>"Headers and Footers"</b> is UNCHECKED in your browser print settings.</p><button id="close-note" class="bg-primary text-white font-bold px-6 py-2 rounded-lg">OK, SAVE AS PDF</button></div></div>';
+          document.body.appendChild(note);
+          document.getElementById('close-note')?.addEventListener('click', () => {
+            note.remove();
+            window.focus();
+            window.print();
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

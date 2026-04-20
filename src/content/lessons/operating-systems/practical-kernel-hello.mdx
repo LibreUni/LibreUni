@@ -1,0 +1,104 @@
+---
+title: "The 'Hello World' Kernel: Writing the Code"
+course: "operating-systems"
+order: 33
+module: "Laboratory: OS Development"
+description: "Transitioning from theory to practice. Writing the assembly entry point and a C kernel that directly manipulates video memory."
+---
+
+import CodeExercise from '../../../components/CodeExercise';
+
+# The 'Hello World' Kernel: Writing the Code
+
+To build an operating system, you cannot use standard libraries like `stdio.h` because they rely on an underlying OS that doesn't exist yet. Instead, we must talk directly to the hardware. In this laboratory, we will create a minimal **Multiboot-compliant** kernel.
+
+## 1. The Assembly Entry Point (`boot.s`)
+
+The bootloader (like GRUB) needs a specific "header" to recognize our binary as a kernel. We use x86 assembly to define this header and set up a basic execution environment.
+
+```nasm
+; Declare constants for the Multiboot header.
+MAGIC    equ  0x1BADB002
+FLAGS    equ  0x00
+CHECKSUM equ -(MAGIC + FLAGS)
+
+; The Multiboot header must be within the first 8KB of the file.
+section .multiboot
+    dd MAGIC
+    dd FLAGS
+    dd CHECKSUM
+
+section .text
+extern kmain
+global _start
+
+_start:
+    ; Set up a stack (the kernel needs one for C functions)
+    mov esp, stack_top
+
+    ; Call the C kernel entry point
+    call kmain
+
+    ; If kmain returns, just halt the CPU
+    cli
+.hang:
+    hlt
+    jmp .hang
+
+section .bss
+align 16
+stack_bottom:
+    resb 16384 ; 16 KB for the stack
+stack_top:
+```
+
+## 2. The C Kernel (`kernel.c`)
+
+In a "bare metal" environment, we print to the screen by writing directly to **VGA Text Buffer** at memory address `0xB8000`. Each character on the screen is represented by two bytes: one for the ASCII character and one for the color attribute.
+
+```c
+// The VGA text buffer starts at 0xB8000.
+volatile char* vga_buffer = (volatile char*)0xB8000;
+
+void kmain(void) {
+    const char* str = "Hello, OS World!";
+    int i = 0;
+    int j = 0;
+
+    // Clear the screen (filling with black background)
+    for (i = 0; i < 80 * 25 * 2; i += 2) {
+        vga_buffer[i] = ' ';
+        vga_buffer[i+1] = 0x07; // Light grey on black
+    }
+
+    // Write "Hello, OS World!" to the top-left corner
+    i = 0;
+    while (str[i] != '\0') {
+        vga_buffer[j] = str[i];     // ASCII character
+        vga_buffer[j+1] = 0x0F;     // Color: White on Black
+        i++;
+        j += 2;
+    }
+}
+```
+
+## Key Concepts Explained
+
+### Volatile Keyword
+In `kernel.c`, we use the `volatile` keyword. This tells the C compiler that the value at `0xB8000` can change outside of the program's control (it's hardware memory). Without `volatile`, an aggressive optimizer might skip writing to that memory because it doesn't see any "read" operation.
+
+### The Stack
+C functions rely on a **Stack** to store return addresses and local variables. Since the hardware doesn't provide a stack automatically, our assembly code (`boot.s`) must manually allocate 16KB of space and point the `esp` (Stack Pointer) register to the top of it before calling `kmain`.
+
+## Exercise: Hardware Address
+
+What is the magic memory address where we must write data to see text on an x86 PC in text mode?
+
+<CodeExercise client:load
+  title="VGA Memory Mapping"
+  code={"/* The base address for VGA text memory */\\n0x[!blank!]80[!blank!]0"}
+  answers={["B", "0"]}
+  explanation="Address 0xB8000 is the standard starting point for the video memory in VGA text mode (80x25 characters)."
+/>
+
+In the next lesson, we will see how to link these two files together and run them in a virtual machine.

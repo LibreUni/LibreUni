@@ -1,0 +1,170 @@
+---
+title: "Ensemble Learning: Theory and Implementation"
+course: machine-learning
+order: 7
+module: "Algorithms"
+description: "Combining multiple weak learners to create a strong, robust predictive model through Bagging, Boosting, and Stacking."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+
+# The Ensemble Principle
+
+Ensemble learning is a meta-algorithmic framework that combines predictions from multiple models (base learners) to improve overall stability and performance. The fundamental hypothesis is that a collection of models will likely compensate for the individual weaknesses of its members, leading to a "wisdom of the crowd" effect.
+
+Mathematically, if we have $M$ independent models each with an error rate $\epsilon < 0.5$, the probability of the majority vote being wrong follows a binomial distribution. As $M \rightarrow \infty$, the probability of error approaches 0. In practice, however, learners are rarely independent, as they are trained on the same or similar datasets. Therefore, ensemble methods focus on two primary objectives: reducing **Variance** (Bagging) and reducing **Bias** (Boosting).
+
+## Bias-Variance Decomposition in Ensembles
+
+The expected prediction error of a model can be decomposed into:
+$$E[(y - \hat{f}(x))^2] = \text{Bias}[\hat{f}(x)]^2 + \text{Var}[\hat{f}(x)] + \sigma^2$$
+Where $\sigma^2$ is the irreducible noise. 
+- **Bagging** reduces error primarily by decreasing the **Variance** term. By averaging multiple models trained on slightly different data, the fluctuations of individual models are smoothed out.
+- **Boosting** reduces error primarily by decreasing the **Bias** term. By sequentially focusing on samples that the previous models struggled with, the ensemble gradually approximates the true target function more closely.
+
+## Bagging (Bootstrap Aggregating)
+
+Bagging involves training multiple models in parallel on different subsets of the data. 
+
+### Implementation: The Bootstrapping Process
+1. **Bootstrapping**: Given a dataset of size $N$, we create $M$ new datasets of size $N$ by sampling with replacement. On average, each bootstrap sample contains approximately 63.2% of the unique original data points; the remaining 36.8% are referred to as **Out-of-Bag (OOB)** samples, which can be used for internal validation.
+2. **Parallel Training**: $M$ independent base learners (usually of the same type) are trained.
+3. **Aggregation**: 
+   - For **Regression**: $\hat{y} = \frac{1}{M} \sum_{m=1}^M \hat{f}_m(x)$
+   - For **Classification**: $\hat{y} = \text{mode}\{\hat{f}_1(x), \dots, \hat{f}_M(x)\}$
+
+### Random Forests: Feature Randomness
+A Random Forest improves upon Bagging by introducing **feature randomness**. When splitting a node in a decision tree, instead of searching for the best feature among all available features, it searches among a random subset of size $k$ (typically $k = \sqrt{p}$ where $p$ is the total number of features). This "feature bagging" ensures that the trees are highly decorrelated.
+
+<CodeRunner client:load 
+  code={`import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import DecisionTreeRegressor
+
+# Generate non-linear data with noise
+np.random.seed(42)
+X = np.sort(5 * np.random.rand(80, 1), axis=0)
+y = np.sin(X).ravel() + np.random.normal(0, 0.1, X.shape[0])
+
+# Train a single Decision Tree vs Random Forest
+tree = DecisionTreeRegressor(max_depth=5)
+rf = RandomForestRegressor(n_estimators=100, max_depth=5)
+
+tree.fit(X, y)
+rf.fit(X, y)
+
+# Predict
+X_test = np.linspace(0, 5, 500)[:, np.newaxis]
+y_tree = tree.predict(X_test)
+y_rf = rf.predict(X_test)
+
+plt.figure(figsize=(10, 6))
+plt.scatter(X, y, s=20, edgecolor="black", c="darkorange", label="data")
+plt.plot(X_test, y_tree, color="cornflowerblue", label="Decision Tree", linewidth=2)
+plt.plot(X_test, y_rf, color="red", label="Random Forest", linewidth=2)
+plt.xlabel("data")
+plt.ylabel("target")
+plt.title("Decision Tree vs. Random Forest (Smoothing Effect)")
+plt.legend()
+plt.show()
+
+print(f"RF Variance (MSE on test): {np.mean((y_rf - np.sin(X_test).ravel())**2):.4f}")
+`}
+/>
+
+## Boosting: Sequential Optimization
+
+Boosting is a sequential method where each model $f_m(x)$ attempts to correct the errors of the preceding ensemble $F_{m-1}(x)$.
+
+### AdaBoost (Adaptive Boosting)
+AdaBoost focuses on sample weights. Let $w_i^{(1)} = 1/N$ for all $i$. At each step $m$:
+1. Fit a weak learner $h_m(x)$ to the weighted data.
+2. Calculate the weighted error: $\epsilon_m = \sum_{i=1}^N w_i^{(m)} I(y_i \neq h_m(x_i)) / \sum w_i^{(m)}$.
+3. Compute the model weight: $\alpha_m = \eta \ln \left(\frac{1-\epsilon_m}{\epsilon_m}\right)$, where $\eta$ is a learning rate.
+4. Update weights: $w_i^{(m+1)} = w_i^{(m)} \exp(\alpha_m \cdot I(y_i \neq h_m(x_i)))$.
+
+The final classifier is $H(x) = \text{sign}\left(\sum_m \alpha_m h_m(x)\right)$.
+
+### Gradient Boosting Machines (GBM)
+Instead of reweighting samples, GBM treats the problem as a gradient descent in the functional space. We want to find a function $F(x)$ that minimizes $L(y, F(x))$. At each step $m$:
+1. Compute pseudo-residuals: $r_{im} = -\left[ \frac{\partial L(y_i, F(x_i))}{\partial F(x_i)} \right]_{F(x)=F_{m-1}(x)}$.
+2. Fit a weak learner $h_m(x)$ to the residuals $r_{im}$.
+3. Update the model: $F_m(x) = F_{m-1}(x) + \nu \gamma_m h_m(x)$, where $\nu$ is the shrinkage (learning rate).
+
+For regression with Mean Squared Error, the pseudo-residual is simply $r_i = y_i - F_{m-1}(x_i)$.
+
+## Stacking (Stacked Generalization)
+
+Stacking is distinct from Bagging and Boosting as it typically involves heterogeneous base learners (e.g., Logistic Regression, KNN, and SVM combined).
+
+1. **Layer 0**: Train $K$ different base models on the training set.
+2. **Cross-Validation**: To avoid overfitting, use K-fold cross-validation to generate "out-of-fold" predictions for the training set.
+3. **Layer 1 (Meta-learner)**: Use the predictions from Layer 0 as features to train a final model (the meta-learner) that outputs the final prediction.
+
+The meta-learner effectively learns *how* to best combine the signals from the base learners based on their specific strengths.
+
+## Comparison of Ensemble Strategies
+
+| Feature | Bagging (e.g., Random Forest) | Boosting (e.g., XGBoost) | Stacking |
+| :--- | :--- | :--- | :--- |
+| **Primary Goal** | Variance Reduction | Bias Reduction | Improved Generalization |
+| **Model Dependency** | Independent (Parallel) | Dependent (Sequential) | Mixed |
+| **Base Learners** | Homogeneous (Usually Deep Trees) | Homogeneous (Usually Shallow Trees) | Heterogeneous |
+| **Overfitting Risk** | Low (Self-regularizing) | High (Requires tuning) | Moderate |
+
+<CodeRunner client:load 
+  code={`from sklearn.ensemble import AdaBoostClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import make_moons
+from sklearn.model_selection import train_test_split
+
+X, y = make_moons(n_samples=500, noise=0.3, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=42)
+
+# AdaBoost with Decision Stumps
+ada_clf = AdaBoostClassifier(
+    DecisionTreeClassifier(max_depth=1), n_estimators=200,
+    algorithm="SAMME.R", learning_rate=0.5, random_state=42
+)
+ada_clf.fit(X_train, y_train)
+
+print(f"AdaBoost Test Accuracy: {ada_clf.score(X_test, y_test):.4f}")
+
+# Visualize step-wise weight updates (conceptual implementation)
+def plot_decision_boundary(clf, X, y, axes):
+    x1s = np.linspace(axes[0], axes[1], 100)
+    x2s = np.linspace(axes[2], axes[3], 100)
+    x1, x2 = np.meshgrid(x1s, x2s)
+    X_new = np.c_[x1.ravel(), x2.ravel()]
+    y_pred = clf.predict(X_new).reshape(x1.shape)
+    plt.contourf(x1, x2, y_pred, alpha=0.3, cmap=plt.cm.brg)
+    plt.scatter(X[:, 0], X[:, 1], c=y, cmap=plt.cm.brg, s=10)
+
+plt.figure(figsize=(8, 4))
+plot_decision_boundary(ada_clf, X, y, [-1.5, 2.5, -1, 1.5])
+plt.title("AdaBoost Decision Boundary (Moons Dataset)")
+plt.show()
+`}
+/>
+
+<Quiz client:load
+  question="In Gradient Boosting, what is the role of the 'learning rate' (shrinkage) parameter?"
+  options={[
+    "It determines how many trees are added to the ensemble.",
+    "It scales the contribution of each new tree to prevent overfitting and ensure gradual optimization.",
+    "It controls the maximum depth of the individual decision trees.",
+    "It defines the ratio of features used in each split."
+  ]}
+  correctIndex={1}
+  explanation="By scaling each tree's contribution (usually by a small value like 0.01 or 0.1), the model is forced to learn slowly and rely on the collective sum of many trees, which significantly improves generalization and reduces the risk of overshooting the minimum of the loss function."
+/>
+
+## Advanced Concept: Out-of-Bag (OOB) Estimation
+In Bagging, since each tree is trained on a bootstrap sample, approximately 37% of the data is never seen by that specific tree. We can use this "unseen" data to estimate the generalization error of the ensemble without a separate validation set. For each observation $x_i$, we average the predictions of only those trees where $x_i$ was in the OOB set. The resulting OOB score is a reliable proxy for test accuracy.
+
+## Summary Checklist
+- **Use Bagging** when you have a high-variance, complex model (like deep decision trees) and want to make it robust.
+- **Use Boosting** when you have high-bias models or want to squeeze the maximum possible performance out of a dataset by learning from errors.
+- **Use Stacking** when you have diverse models that capture different patterns in the data and a clear meta-logic for combining them.

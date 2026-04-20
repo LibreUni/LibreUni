@@ -1,0 +1,87 @@
+---
+title: "UNIX Interprocess Communication (IPC)"
+course: "operating-systems"
+order: 24
+module: "Advanced Topics & UNIX Deep Dive"
+description: "Exploring mechanisms for interprocess communication (IPC) in UNIX systems, including pipes, sockets, and memory sharing."
+---
+
+import CaseStudy from '../../../components/CaseStudy';
+
+# UNIX Interprocess Communication (IPC)
+
+Interprocess Communication (IPC) is the mechanism provided by an operating system that allows processes to manage shared data and synchronize actions. In UNIX and POSIX-compliant systems, processes operate in isolated memory spaces, necessitating structured methods to exchange information securely and efficiently.
+
+## Core IPC Mechanisms
+
+UNIX provides several distinct methodologies for communication between processes, each tailored for different use cases regarding data structures, synchronization, and scope.
+
+### Anonymous Pipes
+
+Pipes (`|`) provide a unidirectional data flow from one process to another, typically forming pipelines on the command line. They are accessed via file descriptors returned by the `pipe()` system call in C.
+
+```c
+#include <unistd.h>
+#include <stdio.h>
+
+int main() {
+    int fd[2];
+    pipe(fd); // fd[0] is read end, fd[1] is write end
+
+    if (fork() == 0) {
+        close(fd[0]);
+        write(fd[1], "Hello from child", 16);
+        close(fd[1]);
+    } else {
+        close(fd[1]);
+        char buffer[20];
+        read(fd[0], buffer, 16);
+        printf("Parent read: %s\n", buffer);
+        close(fd[0]);
+    }
+    return 0;
+}
+```
+Pipes are highly efficient and are fundamental to the UNIX philosophy of creating modular programs that compose elegantly (e.g., `ls -la | grep "txt"`).
+
+### Named Pipes (FIFOs)
+
+While anonymous pipes only connect related processes (parent and child), named pipes allow communication between unrelated processes. They exist as physical files in the filesystem, created using `mkfifo`. Processes open them like standard files, though the kernel handles the data transit in memory.
+
+### Unix Domain Sockets
+
+UNIX domain sockets (UDS) are data communications endpoints for exchanging data between processes executing on the same host operating system. Unlike pipes, sockets are bidirectional. They use the file system as their address space (e.g., `/tmp/mysocket.sock`), allowing access control through POSIX file permissions.
+
+This is fundamentally the mechanism utilized by background services and daemons connecting components locally, like X Server (X11) connecting graphical applications with the display server.
+
+### Shared Memory
+
+Shared memory is the fastest form of IPC available in UNIX. The kernel designates a block of memory accessible by multiple independent processes. Since data does not have to be copied between process memory and kernel memory buffers, the overhead is minimal.
+
+```c
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+// Example setup of shared memory object mapping
+int fd = shm_open("/my_shm", O_CREAT | O_RDWR, 0666);
+ftruncate(fd, 4096);
+void *ptr = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+```
+
+While blazingly fast, shared memory lacks implicit synchronization. Developers must employ semaphores, mutexes, or similar constructs to prevent race conditions during concurrent accesses.
+
+## Exercise: Selecting the Right IPC
+
+<CaseStudy client:load
+  scenario="A backend system architect is designing an architecture where a web server process and a specialized background database-logging process must constantly exchange highly structured data. Both processes run on the exact same physical server machine. The security team mandates that interaction must be securely restricted using standard file-system user permissions. The development team wants to avoid dealing with manual memory synchronization (like mutexes) to prevent race conditions."
+  question="Given these constraints, which IPC mechanism should the architect select?"
+  options={[
+    "Anonymous Pipes",
+    "Shared Memory",
+    "Unix Domain Sockets",
+    "Named Pipes (FIFOs)"
+  ]}
+  correctIndex={2}
+  explanation="Unix Domain Sockets provide bidirectional data exchange, reside in the file system allowing standard POSIX permissions for access control, and do not require the intense manual synchronization overhead that writing directly to Shared Memory necessitates."
+/>

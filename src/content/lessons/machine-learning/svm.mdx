@@ -1,0 +1,187 @@
+---
+title: "Support Vector Machines: Maximum Margin Classifiers"
+course: machine-learning
+order: 5
+module: "Algorithms"
+description: "Exploring the geometry of classification, the primal and dual formulations, and the power of non-linear kernels."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Geometric Logic of Support Vector Machines
+
+Support Vector Machines (SVMs) represent one of the most mathematically rigorous approaches to classification. While algorithms like Logistic Regression focus on minimizing probability errors, SVM is fundamentally geometric. It seeks to find the hyperplane that separates classes with the **Maximum Margin**.
+
+<PlantUML theme="none" code={`
+@startuml
+skinparam monochrome true
+
+rectangle "Class A" as A
+rectangle "Class B" as B
+
+note left of A
+Examples: p1 (2,8)\np2 (3,7)
+end note
+
+note right of B
+Examples: n1 (7,3)\nn2 (8,4)
+end note
+
+A -[hidden]-> B
+
+note bottom: Decision Boundary (schematic)
+@enduml
+`} />
+
+## The Maximum Margin Hyperplane
+
+In a binary classification task, multiple hyperplanes could technically separate the data. However, a hyperplane that passes too close to the data points of either class is "brittle"—a small amount of noise in new data could easily lead to a misclassification.
+
+SVM identifies the **Support Vectors**: the data points from each class that are closest to the boundary. The distance between the parallel hyperplanes passing through these support vectors is the **Margin**. SVM optimizes to find the boundary that maximizes this distance.
+
+## Mathematical Formulation: The Primal Problem
+
+A hyperplane in $n$-dimensional space is defined by the equation:
+$$ w^T x + b = 0 $$
+
+For a dataset $(x^{(i)}, y^{(i)})$ where $y \in \{-1, 1\}$, we want to satisfy:
+- $w^T x^{(i)} + b \geq 1$ for $y^{(i)} = 1$
+- $w^T x^{(i)} + b \leq -1$ for $y^{(i)} = -1$
+
+This simplifies to the constraint:
+$$ y^{(i)}(w^T x^{(i)} + b) \geq 1 $$
+
+The distance from a point to the hyperplane is $\frac{|w^T x + b|}{||w||}$. By setting the functional margin to 1 for the support vectors, the geometric margin becomes $\frac{2}{||w||}$. Maximizing $\frac{2}{||w||}$ is equivalent to minimizing $\frac{1}{2}||w||^2$.
+
+This is a **Quadratic Programming (QP)** problem:
+$$ \min_{w, b} \frac{1}{2}||w||^2 \quad \text{s.t.} \quad y^{(i)}(w^T x^{(i)} + b) \geq 1 $$
+
+## Handling Non-Linearity: Soft Margin SVM
+
+Real-world datasets are rarely linearly separable. They contain noise, outliers, and overlapping distributions. To address this, we introduce **Slack Variables** $\xi_i \geq 0$. These allow certain points to "violate" the margin.
+
+The new objective function becomes:
+$$ \min_{w, b, \xi} \frac{1}{2}||w||^2 + C \sum_{i=1}^{m} \xi_i $$
+
+### The C Hyperparameter
+The parameter $C$ acts as a regularization weight:
+- **Large $C$ (Hard Margin)**: The model is heavily penalized for any misclassification. This leads to a narrow margin and high sensitivity to outliers (High Variance/Overfitting).
+- **Small $C$ (Soft Margin)**: The model is more "forgiving", allowing more points to be inside the margin or misclassified in exchange for a wider boundary (High Bias/Better Generalization).
+
+<CodeRunner client:load
+  code={`import numpy as np
+import matplotlib.pyplot as plt
+from sklearn import svm
+
+# Generate un-separable data
+X = np.r_[np.random.randn(20, 2) - [2, 2], np.random.randn(20, 2) + [2, 2]]
+Y = [0] * 20 + [1] * 20
+
+# Fit models with different C values
+clf_soft = svm.SVC(kernel='linear', C=0.01)
+clf_hard = svm.SVC(kernel='linear', C=100)
+
+clf_soft.fit(X, Y)
+clf_hard.fit(X, Y)
+
+print(f"Soft Margin (C=0.01) Support Vectors: {len(clf_soft.support_vectors_)}")
+print(f"Hard Margin (C=100) Support Vectors: {len(clf_hard.support_vectors_)}")`}
+  output="Soft Margin (C=0.01) Support Vectors: 25-30
+Hard Margin (C=100) Support Vectors: 2-5"
+/>
+
+## The Dual Problem and Lagrange Multipliers
+
+The Primal optimization is dependent on the dimensionality of the features. By converting it to its **Dual Form** using Lagrange multipliers $\alpha_i$, the problem becomes dependent on the number of training samples $m$:
+
+$$ \max_{\alpha} \sum_{i=1}^{m} \alpha_i - \frac{1}{2} \sum_{i,j=1}^{m} y^{(i)} y^{(j)} \alpha_i \alpha_j (x^{(i)} \cdot x^{(j)}) $$
+
+Subject to $0 \leq \alpha_i \leq C$ and $\sum \alpha_i y_i = 0$.
+
+Crucially, the data points $x$ only appear as **dot products**. This observation leads to the most famous feature of SVMs: the Kernel Trick.
+
+## The Kernel Trick
+
+If a dataset is not linearly separable in its original space, we can map it to a higher-dimensional feature space $\phi(x)$ where a linear separator might exist. However, computing high-dimensional mappings is computationally expensive.
+
+A **Kernel function** $K(x, z)$ computes the dot product in the high-dimensional space directly from the original vectors:
+$$ K(x, z) = \phi(x) \cdot \phi(z) $$
+
+### Common Kernels
+1. **Linear**: $K(x, z) = x^T z$. Standard linear boundary.
+2. **Polynomial**: $K(x, z) = (\gamma x^T z + r)^d$. Useful for data with curved boundaries.
+3. **Radial Basis Function (RBF)**: $K(x, z) = \exp(-\gamma ||x - z||^2)$. This implicitly maps data into an **infinite-dimensional** space. It is the most robust and widely used kernel.
+
+<CodeRunner client:load
+  code={`from sklearn import datasets
+from sklearn.svm import SVC
+
+# Load XOR-like data
+X, y = datasets.make_moons(n_samples=100, noise=0.1, random_state=42)
+
+# Linear kernel (will fail on moons)
+clf_lin = SVC(kernel='linear').fit(X, y)
+# RBF kernel (will succeed)
+clf_rbf = SVC(kernel='rbf', gamma='auto').fit(X, y)
+
+print(f"Linear Accuracy: {clf_lin.score(X, y):.2f}")
+print(f"RBF Accuracy: {clf_rbf.score(X, y):.2f}")`}
+  output="Linear Accuracy: 0.86
+RBF Accuracy: 0.98"
+/>
+
+## Support Vectors: The Sparesness of the Solution
+
+In the Dual formulation, most $\alpha_i$ will be zero. Only the points where $\alpha_i > 0$ contribute to the final decision function. These are the **Support Vectors**. 
+
+This means SVM is a "sparse" model. Once the model is trained, we can throw away most of the training data; we only need to store the support vectors to make future predictions. This contrast with algorithms like $k$-Nearest Neighbors, which require storing the entire dataset.
+
+## SVM for Regression (SVR)
+
+SVM can be adapted for regression by flipping the logic. In classification, we want to keep points *out* of the margin. In **Support Vector Regression (SVR)**, we want to fit as many points as possible *inside* a tube of width $\epsilon$ around the prediction line, while minimizing the weights.
+
+<Quiz client:load
+  question="How does the RBF kernel handle data that is not linearly separable?"
+  options={[
+    "It ignores the outliers to find a straight line.",
+    "It maps the data into a higher-dimensional space where a linear hyperplane can separate the classes.",
+    "It converts the classification problem into a regression problem.",
+    "It uses a voting system between multiple linear models."
+  ]}
+  correctIndex={1}
+  explanation="The RBF kernel projects data into a higher (potentially infinite) dimensional space where points that are clustered together in the original space become linearly separable from other clusters."
+/>
+
+## Training SVMs in Python with Scikit-Learn
+
+When using SVM in practice, three hyperparameters are critical:
+1. **C**: Penalty for misclassification.
+2. **kernel**: The type of boundary (linear, poly, rbf).
+3. **gamma**: Specific to RBF. It defines how far the influence of a single training example reaches. Low gamma means 'far' (smooth boundary), high gamma means 'close' (wiggly boundary).
+
+<CodeRunner client:load
+  code={`from sklearn.svm import SVC
+from sklearn.model_selection import GridSearchCV
+
+# Simulating hyperparameter tuning
+param_grid = {'C': [0.1, 1, 10], 'gamma': [1, 0.1, 0.01], 'kernel': ['rbf']}
+grid = GridSearchCV(SVC(), param_grid, refit=True, verbose=0)
+# grid.fit(X, y) # In real usage
+print("GridSearchCV identifies the optimal C and Gamma to balance Bias and Variance.")`}
+  output="GridSearchCV identifies the optimal C and Gamma to balance Bias and Variance."
+/>
+
+## Comparison: SVM vs. Logistic Regression
+
+| Feature | SVM | Logistic Regression |
+| :--- | :--- | :--- |
+| **Objective** | Maximize Margin | Maximize Likelihood / Minimize Log-Loss |
+| **Sensitivity** | Only Support Vectors matter | All points influence the boundary |
+| **Output** | Class label (hard) | Probability (soft) |
+| **Complexity** | Handles non-linearity via Kernels | Requires manual feature engineering for non-linearity |
+
+## Conclusion
+
+Support Vector Machines offer a robust framework for classification, especially when dealing with high-dimensional data where the number of features exceeds the number of samples. By understanding the geometric trade-offs between margin width and classification error, and leveraging the power of kernels, one can build models that generalize exceptionally well to unseen data.
