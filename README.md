@@ -112,8 +112,10 @@ The runtime includes:
 - Health endpoint at `/healthz`.
 
 1. **Build and run with Compose:**
+   Run base + local override to publish on localhost:8080:
+   
    ```bash
-   docker compose up -d --build
+   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
    ```
 
 2. **Open the site:**
@@ -128,8 +130,10 @@ If you deploy with Coolify and want automatic builds from source:
 1. Use **Build Pack: Dockerfile**.
 2. Leave **Pre-deployment** and **Post-deployment** commands empty.
 3. Keep repository root as the build context.
-4. Expose port **80** (the container serves static files through Nginx).
+4. Set service internal port to **80** (the container serves static files through Nginx).
 5. Set healthcheck path to `/healthz`.
+
+Note: the base [docker-compose.yml](docker-compose.yml) intentionally does not bind a host port to avoid collisions on shared servers. Local host binding is defined in [docker-compose.local.yml](docker-compose.local.yml).
 
 This avoids the `npm: not found` error from helper-container hooks and lets Docker handle the Node build stage correctly.
 
