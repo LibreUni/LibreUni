@@ -23,6 +23,7 @@
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
 - [Getting Started](#-getting-started)
+- [Deployment](#-deployment)
 - [Contributing](#-contributing)
 - [License](#-license)
 
@@ -96,6 +97,41 @@ Follow these steps to set up the project locally for development.
    ```bash
    npm run build
    ```
+
+## 🚢 Deployment
+
+### Docker (recommended)
+
+This repository includes a production-ready multi-stage [Dockerfile](Dockerfile) that builds the Astro site and serves the generated files with Nginx.
+The runtime includes:
+
+- Static route handling for Astro's extensionless URLs.
+- Long-lived immutable caching for fingerprinted assets.
+- Gzip compression for text assets.
+- Basic security headers.
+- Health endpoint at `/healthz`.
+
+1. **Build and run with Compose:**
+   ```bash
+   docker compose up -d --build
+   ```
+
+2. **Open the site:**
+   ```text
+   http://localhost:8080
+   ```
+
+### Coolify setup (source-based)
+
+If you deploy with Coolify and want automatic builds from source:
+
+1. Use **Build Pack: Dockerfile**.
+2. Leave **Pre-deployment** and **Post-deployment** commands empty.
+3. Keep repository root as the build context.
+4. Expose port **80** (the container serves static files through Nginx).
+5. Set healthcheck path to `/healthz`.
+
+This avoids the `npm: not found` error from helper-container hooks and lets Docker handle the Node build stage correctly.
 
 ## 🤝 Contributing
 
