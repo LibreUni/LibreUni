@@ -10,9 +10,9 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 
 **Key directories:**
 
-- `src/content/lessons/` — MDX lesson files, organized by course slug
-- `src/content/courses/` — JSON course metadata
-- `src/components/` — Interactive React components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`, etc.)
+- `apps/main/src/content/lessons/` — MDX lesson files, organized by course slug
+- `apps/main/src/content/courses/` — JSON course metadata
+- `apps/main/src/components/` — Interactive React components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`, etc.)
 - `scripts/course_stats.py` — content validation (character count, headings, etc.)
 - `docs/` — technical references (UX, PlantUML)
 
@@ -62,7 +62,7 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
 **Before submitting:**
 
 1. Run `python3 scripts/course_stats.py` — check mean lesson length and heading metrics.
-2. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams.
+2. Run `npm run build` (or `npm run build:main`) — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams.
 
 ---
 

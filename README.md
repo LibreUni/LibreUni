@@ -53,17 +53,18 @@ LibreUni is built on the belief that high-quality, university-level education sh
 
 ```text
 LibreUni/
+├── apps/
+│   ├── main/                  # Main LibreUni Astro application
+│   │   ├── src/               # Astro pages, components, and course content
+│   │   ├── astro.config.mjs
+│   │   └── package.json
+│   ├── lang/                  # Language-focused static app (non-Astro for now)
+│   └── history/               # History-focused static app (non-Astro for now)
 ├── docs/                      # Technical references (UX vision, PlantUML guide, Rules)
-├── scripts/                   # Utility scripts (e.g., course_stats.py for content validation)
-├── src/
-│   ├── components/            # Interactive React components (<Quiz />, <CodeRunner />, etc.)
-│   ├── content/
-│   │   ├── courses/           # JSON metadata for each course
-│   │   ├── lessons/           # MDX lesson files organized by course
-│   │   └── careers/           # Career paths metadata
-│   ├── pages/                 # Astro page routing
-│   └── styles/                # Global CSS and Tailwind directives
-└── astro.config.mjs           # Astro configuration
+├── scripts/                   # Content and maintenance utilities
+├── tools/                     # Shared monorepo build/dev helpers
+├── Dockerfile                 # Generic static app builder/runner
+└── package.json               # Workspace entrypoint
 ```
 
 ## 🚀 Getting Started
@@ -82,40 +83,56 @@ Follow these steps to set up the project locally for development.
    npm install
    ```
 
-2. **Run the development server:**
+2. **Run the main Astro site locally:**
    ```bash
    npm run dev
    ```
    The site will be available at `http://localhost:4321`.
 
-3. **Validate content (Optional but recommended):**
+3. **Run a section app locally:**
+   ```bash
+   npm run dev:lang
+   npm run dev:history
+   ```
+
+4. **Validate content (Optional but recommended):**
    ```bash
    python3 scripts/course_stats.py
    ```
 
-4. **Build for production:**
+5. **Build for production:**
    ```bash
-   npm run build
-   ```
+    npm run build
+    npm run build:lang
+    npm run build:history
+    ```
+
+`npm run build` defaults to the main site. For source-based deployments you can also select an app with:
+
+```bash
+APP=main npm run build
+APP=lang npm run build
+APP=history npm run build
+```
 
 ## 🚢 Deployment
 
 ### Docker (recommended)
 
-This repository includes a production-ready multi-stage [Dockerfile](Dockerfile) that builds the Astro site and serves the generated files with Nginx.
+This repository includes a production-ready multi-stage [Dockerfile](Dockerfile) that builds one selected app from the monorepo and serves its generated static files with Nginx.
 The runtime includes:
 
-- Static route handling for Astro's extensionless URLs.
+- Static route handling for extensionless HTML routes.
 - Long-lived immutable caching for fingerprinted assets.
 - Gzip compression for text assets.
 - Basic security headers.
 - Health endpoint at `/healthz`.
 
 1. **Build and run with Compose:**
-   Run base + local override to publish on localhost:8080:
+   Run base + local override to publish on localhost:8080. By default it serves `apps/main`; override with `APP=lang` or `APP=history` as needed:
    
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+   APP=main docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
    ```
 
 2. **Open the site:**
@@ -125,17 +142,26 @@ The runtime includes:
 
 ### Coolify setup (source-based)
 
-If you deploy with Coolify and want automatic builds from source:
+If you deploy with Coolify and want automatic builds from source, create one service per subdomain and point all of them at the same repository.
+
+Recommended setup:
 
 1. Use **Build Pack: Dockerfile**.
-2. Leave **Pre-deployment** and **Post-deployment** commands empty.
-3. Keep repository root as the build context.
-4. Set service internal port to **80** (the container serves static files through Nginx).
-5. Set healthcheck path to `/healthz`.
+2. Keep repository root as the build context.
+3. Set a Docker build arg named `APP`.
+4. Use `APP=main` for the main site, `APP=lang` for `lang.libreuni`, and `APP=history` for `history.libreuni`.
+5. Set service internal port to **80**.
+6. Set healthcheck path to `/healthz`.
+
+If you prefer Coolify's source/static flow instead of Docker:
+
+1. Keep the repository root as the base directory.
+2. Use `npm install` as the install command.
+3. Use `APP=<app-name> npm run build` as the build command.
+4. Publish `apps/<app-name>/dist` as the static output directory.
 
 Note: the base [docker-compose.yml](docker-compose.yml) intentionally does not bind a host port to avoid collisions on shared servers. Local host binding is defined in [docker-compose.local.yml](docker-compose.local.yml).
-
-This avoids the `npm: not found` error from helper-container hooks and lets Docker handle the Node build stage correctly.
+This keeps all LibreUni sections in one repository while letting each app choose its own frontend stack as long as it outputs a static `dist/`.
 
 ## 🤝 Contributing
 

@@ -14,7 +14,7 @@ Quick reference for fixing PlantUML diagrams. Update this file when new error pa
 
 ## Fix Workflow
 
-1. Run `npm run build` — populates `puml-errors.log` with failing snippets.
+1. Run `npm run build` (or `npm run build:main`) — populates `puml-errors.log` with failing snippets.
 2. For each failure: `grep` for a unique substring from the code block to locate the source MDX.
 3. Apply minimal edits: replace named colors with hex, remove unsupported pseudo-commands, convert bracketed IDs to `component` or `note`, ensure valid block boundaries (`@startuml` / `@enduml`).
 4. Re-run build and iterate until `puml-errors.log` is empty.
@@ -23,7 +23,7 @@ Quick reference for fixing PlantUML diagrams. Update this file when new error pa
 
 - Prefer simple shapes (`rectangle`, `component`, `note`) over complex `state`/`activity` syntax unless necessary.
 - When in doubt, convert visual elements to `rectangle` + `note` text — these are robust across PlantUML versions.
-- Keep generated SVGs cached under `src/puml-cache/`; failures should be logged, not cached.
+- Keep generated SVGs cached under `apps/main/src/puml-cache/`; failures should be logged, not cached.
 
 ## Examples
 

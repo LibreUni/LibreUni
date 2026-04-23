@@ -67,7 +67,7 @@ def fix_plantuml(content):
     new_content = re.sub(pattern, replace_block, content, flags=re.DOTALL)
     return new_content
 
-directory = 'src/content/lessons/programming-languages/'
+directory = 'apps/main/src/content/lessons/programming-languages/'
 for filename in os.listdir(directory):
     if filename.endswith('.mdx'):
         path = os.path.join(directory, filename)

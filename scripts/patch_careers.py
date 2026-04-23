@@ -1,7 +1,7 @@
 import json
 import os
 
-careers_dir = "src/content/careers"
+careers_dir = "apps/main/src/content/careers"
 
 details_map = {
     "ai-specialist.json": {

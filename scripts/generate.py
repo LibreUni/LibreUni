@@ -160,5 +160,5 @@ The analysis, simulation, and integration of SDEs form the bedrock of continuous
 />
 """
 
-with open("/home/edf/Documents/GitSynced/EdLearning/src/content/lessons/math-stats/stochastic.mdx", 'w') as f:
+with open("apps/main/src/content/lessons/math-stats/stochastic.mdx", 'w') as f:
     f.write(content)

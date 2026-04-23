@@ -4,7 +4,7 @@ import sys
 
 def get_course_stats(course_id):
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    base_dir = os.path.join(script_dir, '..', 'src', 'content', 'lessons')
+    base_dir = os.path.join(script_dir, '..', 'apps', 'main', 'src', 'content', 'lessons')
     course_dir = os.path.join(base_dir, course_id)
     
     if not os.path.exists(course_dir):
@@ -97,7 +97,7 @@ if __name__ == "__main__":
     # Get the directory of the script
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # Go up one level to the workspace root and then to the lessons directory
-    base_dir = os.path.join(script_dir, '..', 'src', 'content', 'lessons')
+    base_dir = os.path.join(script_dir, '..', 'apps', 'main', 'src', 'content', 'lessons')
     
     if len(sys.argv) < 2:
         if os.path.exists(base_dir):
