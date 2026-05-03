@@ -85,3 +85,9 @@ Tracks which modules meet the LibreUni Standard: academic rigor + interactive Py
 2. **Clean Python**: no `\"\"\"` escapes, proper docstrings.
 3. **No Fluff**: no "Welcome" or "In this lesson" phrases.
 4. **University Level**: formal definitions maintained alongside code.
+
+---
+
+# Use of AI
+
+AI was and remains an important factor during prototyping and overall early development of the platform. Although the ultimate goal is to have everything thoroughly verified and hand-crafted, AI will remain being of utility for working on the project. For ensuring proper use of AI, docs are expanded to be able to give better instructions to AI.
