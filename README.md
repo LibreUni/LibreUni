@@ -31,7 +31,7 @@
 
 **Equality of opportunity.**
 
-LibreUni is built on the belief that high-quality, university-level education should be accessible to everyone, everywhere, for free. We prioritize serious content and rigorous learning over gamification, featuring a clean, minimalistic, and professional design.
+LibreUni is built on the belief that high-quality, university-level education should be accessible to everyone, everywhere, for free. We prioritize dense content rather than unnecessary bloat.
 
 ## ✨ Features
 
@@ -168,7 +168,7 @@ This keeps all LibreUni sections in one repository while letting each app choose
 We welcome contributions from the community! Whether it's fixing a typo, adding a new lesson, or improving the platform's features, your help is appreciated.
 
 **Before you start:**
-Please read our [RULES.md](docs/RULES.md) carefully. It contains the complete set of rules for lesson structure, writing style, and quality standards that ensure LibreUni maintains its rigorous, professional tone.
+Please read our [RULES.md](docs/RULES.md) carefully. It contains the complete set of rules for lesson structure, writing style, and quality standards that ensure LibreUni maintains its tone.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
