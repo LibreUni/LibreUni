@@ -67,6 +67,7 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
                       type="text"
                       value={userInputs[index] || ''}
                       onChange={(e) => handleInputChange(index, e.target.value)}
+                      aria-label={`Code blank ${index + 1}`}
                       disabled={submitted}
                       placeholder="?"
                       size={Math.max((actualAnswers[index] || '').length, 2)}

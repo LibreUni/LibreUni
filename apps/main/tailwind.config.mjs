@@ -5,17 +5,17 @@ export default {
   theme: {
     extend: {
       colors: {
-        primary: '#3b82f6', // Professional blue
+        primary: '#2563eb', // Professional blue with AA contrast against white text
         'primary-dark': '#2563eb',
         secondary: '#6366f1', // Indigo
         'secondary-dark': '#4f46e5',
         accent: '#f43f5e', // Rose
         'accent-dark': '#e11d48',
         dark: {
-          bg: '#0f1115',
-          surface: '#1e2128',
-          border: '#2d333f',
-          text: '#f8fafc',
+          bg: '#030712',
+          surface: '#0f172a',
+          border: '#1e293b',
+          text: '#f1f5f9',
           muted: '#94a3b8',
           accent: '#3b82f6'
         },

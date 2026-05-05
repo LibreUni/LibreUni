@@ -23,6 +23,7 @@
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
 - [Getting Started](#-getting-started)
+- [Testing](#-testing)
 - [Deployment](#-deployment)
 - [Contributing](#-contributing)
 - [License](#-license)
@@ -114,6 +115,17 @@ APP=main npm run build
 APP=lang npm run build
 APP=history npm run build
 ```
+
+## ✅ Testing
+
+Run the local quality pipeline with:
+
+```bash
+npm run test:install
+npm test
+```
+
+The pipeline builds all apps, runs Playwright smoke and accessibility tests on desktop/mobile, generates a UX report with color-blind contrast and element spacing analysis, and runs Lighthouse CI budgets. See [docs/TESTING.md](docs/TESTING.md) for the full command list and report locations.
 
 ## 🚢 Deployment
 

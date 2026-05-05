@@ -237,6 +237,7 @@ img_str = base64.b64encode(buf.read()).decode('utf-8')
           <div className="flex gap-1.5">
             <button
                onClick={runCode}
+               aria-label="Run code"
                disabled={isRunning || isInitializing}
                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 active:scale-95 disabled:opacity-50"
             >
@@ -245,6 +246,7 @@ img_str = base64.b64encode(buf.read()).decode('utf-8')
             </button>
             <button
               onClick={copyCode}
+              aria-label="Copy code"
               title="Copy Code"
               className="p-2.5 hover:bg-white dark:hover:bg-dark-bg rounded-lg transition-all text-light-muted dark:text-dark-muted hover:text-primary border border-transparent hover:border-light-border dark:hover:border-dark-border"
             >
@@ -252,6 +254,7 @@ img_str = base64.b64encode(buf.read()).decode('utf-8')
             </button>
             <button
               onClick={resetCode}
+              aria-label="Reset code"
               title="Reset Code"
               className="p-2.5 hover:bg-white dark:hover:bg-dark-bg rounded-lg transition-all text-light-muted dark:text-dark-muted hover:text-rose-500 border border-transparent hover:border-light-border dark:hover:border-dark-border"
             >
@@ -266,6 +269,7 @@ img_str = base64.b64encode(buf.read()).decode('utf-8')
                 <textarea
                   value={currentCode}
                   onChange={(e) => setCurrentCode(e.target.value)}
+                  aria-label={`${title} code editor`}
                   className="absolute inset-0 w-full h-full pt-[30px] pb-[30px] pr-[30px] pl-[64px] font-mono text-[14.5px] leading-[24px] bg-transparent text-transparent caret-primary resize-none focus:outline-none z-10 selection:bg-primary/30 overflow-hidden whitespace-pre"
                   spellCheck="false"
                   style={{ fontVariantLigatures: 'none', caretColor: 'var(--primary)' }}
@@ -286,7 +290,7 @@ img_str = base64.b64encode(buf.read()).decode('utf-8')
                 <div className="w-2.5 h-2.5 rounded-full bg-rose-500" />
                 <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
                 <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                <span className="ml-2 text-[10px] font-black text-light-text/40 dark:text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                <span className="ml-2 text-[10px] font-black text-light-muted dark:text-slate-300 uppercase tracking-[0.2em] flex items-center gap-2">
                     <Terminal size={12} />
                     Terminal Output
                 </span>
@@ -317,4 +321,3 @@ img_str = base64.b64encode(buf.read()).decode('utf-8')
     </div>
   );
 }
-
