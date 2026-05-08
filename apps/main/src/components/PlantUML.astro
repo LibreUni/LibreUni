@@ -28,6 +28,18 @@ const ERROR_LOG = path.resolve('./puml-errors.log');
 const hash = crypto.createHash('md5').update(processedCode + (theme || '')).digest('hex');
 const cacheFile = path.join(CACHE_DIR, `${hash}.svg`);
 
+const normalizeSvg = (svg: string) => {
+  let normalized = svg.replace(/(<rect[^>]*?)fill\s*=\s*["'](?:#FFFFFF|white|#ffffff)["']([^>]*\/>)/i, '$1fill="transparent"$2');
+
+  if (/\spreserveAspectRatio\s*=/.test(normalized)) {
+    normalized = normalized.replace(/\spreserveAspectRatio\s*=\s*["'][^"']*["']/i, ' preserveAspectRatio="xMidYMid meet"');
+  } else {
+    normalized = normalized.replace(/<svg\b/i, '<svg preserveAspectRatio="xMidYMid meet"');
+  }
+
+  return normalized;
+};
+
 const skinParams = `
  skinparam backgroundColor transparent
  skinparam shadowing false
@@ -55,7 +67,7 @@ let svgContent = '';
 
 // Try to load from cache first
 if (fs.existsSync(cacheFile)) {
-  svgContent = fs.readFileSync(cacheFile, 'utf-8');
+  svgContent = normalizeSvg(fs.readFileSync(cacheFile, 'utf-8'));
 } else {
   console.log(`[PlantUML] Attempt remote render first: ${hash.substring(0, 8)}...`);
   let remoteSucceeded = false;
@@ -71,9 +83,7 @@ if (fs.existsSync(cacheFile)) {
     if (res.ok) {
       const txt = await res.text();
       if (txt && txt.trim().startsWith('<svg')) {
-        svgContent = txt;
-        // normalize background and cache
-        svgContent = svgContent.replace(/(<rect[^>]*?)fill\s*=\s*["'](?:#FFFFFF|white|#ffffff)["']([^>]*\/>)/i, '$1fill="transparent"$2');
+        svgContent = normalizeSvg(txt);
         fs.writeFileSync(cacheFile, svgContent);
         console.log(`[PlantUML] Remote cached: ${hash.substring(0, 8)}`);
         remoteSucceeded = true;
@@ -96,8 +106,8 @@ if (fs.existsSync(cacheFile)) {
       maxBuffer: 10 * 1024 * 1024
       });
           
-      // Clean up background and save to cache
-      svgContent = svgContent.replace(/(<rect[^>]*?)fill\s*=\s*["'](?:#FFFFFF|white|#ffffff)["']([^>]*\/>)/i, '$1fill="transparent"$2');
+      // Clean up background, preserve aspect ratio, and save to cache.
+      svgContent = normalizeSvg(svgContent);
       fs.writeFileSync(cacheFile, svgContent);
       console.log(`[PlantUML] Cached: ${hash.substring(0, 8)}`);
 
@@ -131,8 +141,11 @@ if (fs.existsSync(cacheFile)) {
 }
 ---
 
-<div class="my-12 flex flex-col items-center bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2.5rem] overflow-hidden shadow-xl p-8 transition-colors">
-  <div class="w-full flex justify-center overflow-x-auto dark:invert dark:hue-rotate-180 dark:brightness-110">
+<div class="diagram-frame my-12 flex flex-col items-center bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2rem] shadow-xl p-6 md:p-8 transition-colors" data-diagram-kind="PlantUML">
+  <button type="button" class="diagram-open-button" aria-label="Open PlantUML diagram" title="Open diagram">
+    <span>Open</span>
+  </button>
+  <div class="diagram-render w-full flex justify-center dark:invert dark:hue-rotate-180 dark:brightness-110">
     <Fragment set:html={svgContent} />
   </div>
 </div>

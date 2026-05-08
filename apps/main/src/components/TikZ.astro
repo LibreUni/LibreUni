@@ -1,0 +1,112 @@
+---
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+
+interface Props {
+  code: string;
+  packages?: string[];
+}
+
+const { code, packages = [] } = Astro.props;
+
+const escapeHtml = (value: string) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
+const normalizeSvg = (svg: string) => {
+  if (/\spreserveAspectRatio\s*=/.test(svg)) {
+    return svg.replace(/\spreserveAspectRatio\s*=\s*["'][^"']*["']/i, ' preserveAspectRatio="xMidYMid meet"');
+  }
+
+  return svg.replace(/<svg\b/i, '<svg preserveAspectRatio="xMidYMid meet"');
+};
+
+const processedCode = code.trim()
+  .replace(/^\\begin\{tikzpicture\}\s*/i, '')
+  .replace(/\s*\\end\{tikzpicture\}$/i, '');
+
+const CACHE_DIR = path.resolve('./src/tikz-cache');
+if (!fs.existsSync(CACHE_DIR)) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+const ERROR_LOG = path.resolve('./tikz-errors.log');
+const hash = crypto.createHash('md5').update(processedCode + packages.join(',')).digest('hex');
+const cacheFile = path.join(CACHE_DIR, `${hash}.svg`);
+const workDir = path.join(CACHE_DIR, hash);
+
+const packageLines = [
+  '\\usepackage{tikz}',
+  '\\usepackage{amsmath}',
+  '\\usepackage{amssymb}',
+  ...packages.map((pkg) => `\\usepackage{${pkg}}`),
+].join('\n');
+
+const texSource = `\\documentclass[tikz,border=6pt]{standalone}
+${packageLines}
+\\begin{document}
+\\begin{tikzpicture}
+${processedCode}
+\\end{tikzpicture}
+\\end{document}
+`;
+
+let svgContent = '';
+
+if (fs.existsSync(cacheFile)) {
+  svgContent = normalizeSvg(fs.readFileSync(cacheFile, 'utf-8'));
+} else {
+  try {
+    fs.mkdirSync(workDir, { recursive: true });
+    const texFile = path.join(workDir, 'diagram.tex');
+    const dviFile = path.join(workDir, 'diagram.dvi');
+    const svgFile = path.join(workDir, 'diagram.svg');
+
+    fs.writeFileSync(texFile, texSource);
+    execFileSync('latex', ['-interaction=nonstopmode', '-halt-on-error', 'diagram.tex'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    execFileSync('dvisvgm', ['--no-fonts', '--exact', dviFile, '-o', svgFile], {
+      cwd: workDir,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    svgContent = normalizeSvg(fs.readFileSync(svgFile, 'utf-8'));
+    fs.writeFileSync(cacheFile, svgContent);
+  } catch (e: any) {
+    const pageUrl = Astro.url.pathname;
+    const errorMsg = `\n[${new Date().toISOString()}] PAGE: ${pageUrl}\nHASH: ${hash}\nERROR: ${e.message}\nCODE:\n${texSource}\n----------------------------------------\n`;
+    fs.appendFileSync(ERROR_LOG, errorMsg);
+
+    svgContent = `
+      <div class="w-full text-center py-10 bg-rose-50/50 dark:bg-rose-900/10 rounded-3xl border border-rose-200 dark:border-rose-900/30">
+        <div class="inline-flex p-3 bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 rounded-2xl mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <h4 class="font-black text-rose-900 dark:text-rose-100 uppercase tracking-tighter text-sm mb-1">TikZ Rendering Error</h4>
+        <p class="text-[10px] font-bold text-rose-400/80 uppercase tracking-widest leading-relaxed px-4">The TikZ generation failed during build.</p>
+        <div class="mt-8 mx-auto max-w-[90%] text-left">
+          <div class="text-[9px] font-black text-light-muted dark:text-dark-muted uppercase tracking-[0.2em] opacity-50 mb-2 px-4">Source Definition</div>
+          <pre class="bg-white/50 dark:bg-black/20 p-6 rounded-2xl border border-rose-100 dark:border-rose-900/20 font-mono text-xs overflow-x-auto text-light-text dark:text-dark-text opacity-70">${escapeHtml(processedCode)}</pre>
+        </div>
+      </div>
+    `;
+  }
+}
+---
+
+<div class="diagram-frame my-12 flex flex-col items-center bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2rem] shadow-xl p-6 md:p-8 transition-colors" data-diagram-kind="TikZ">
+  <button type="button" class="diagram-open-button" aria-label="Open TikZ diagram" title="Open diagram">
+    <span>Open</span>
+  </button>
+  <div class="diagram-render w-full flex justify-center">
+    <Fragment set:html={svgContent} />
+  </div>
+</div>

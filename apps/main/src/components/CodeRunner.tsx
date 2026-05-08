@@ -54,19 +54,21 @@ export default function CodeRunner({ code, output: initialOutput, title = "Inter
       if (currentCode.includes('sympy')) libsToLoad.push('sympy');
       if (currentCode.includes('sklearn')) libsToLoad.push('scikit-learn');
       if (currentCode.includes('scipy')) libsToLoad.push('scipy');
+      if (currentCode.includes('PIL') || currentCode.includes('pillow')) libsToLoad.push('pillow');
 
       if (libsToLoad.length > 0) {
         setConsoleOutput(prev => [...prev, `Loading packages: ${libsToLoad.join(', ')}...`]);
         await pyodide.loadPackage(libsToLoad);
       }
 
-      // Seaborn is often a pure python package and might need micropip in some Pyodide versions
-      if (currentCode.includes('seaborn') || currentCode.includes('load_dataset')) {
-        setConsoleOutput(prev => [...prev, "Installing Seaborn & Network Patches..."]);
+      // Some visualization helpers are pure Python and are best installed with micropip.
+      if (currentCode.includes('seaborn') || currentCode.includes('load_dataset') || currentCode.includes('networkx')) {
+        setConsoleOutput(prev => [...prev, "Installing browser Python packages..."]);
         await pyodide.loadPackage("micropip");
         await pyodide.runPythonAsync(`
 import micropip
-await micropip.install('seaborn')
+${currentCode.includes('seaborn') || currentCode.includes('load_dataset') ? "await micropip.install('seaborn')" : ""}
+${currentCode.includes('networkx') ? "await micropip.install('networkx')" : ""}
 await micropip.install('pyodide-http')
 import pyodide_http
 pyodide_http.patch_all()
@@ -155,9 +157,13 @@ pyodide_http.patch_all()
     setShowTerminal(true);
     setPlotImage(null);
     setConsoleOutput(["Running..."]);
+    const usesPythonVisuals = /matplotlib|seaborn|pyplot|plt\.|networkx|libreuni_visual|savefig|\.svg|\.png|\.jpg|\.jpeg/i.test(currentCode);
 
     try {
       const pyodide = pyodideRef.current || await initPyodide();
+      if (usesPythonVisuals) {
+        await pyodide.loadPackage(['matplotlib']);
+      }
       
       // Setup stdout capture
       let outputLogs: string[] = [];
@@ -167,28 +173,62 @@ pyodide_http.patch_all()
         }
       });
 
-      // Handle Matplotlib/Seaborn Plotting
-      if (currentCode.includes('matplotlib') || currentCode.includes('seaborn')) {
+      await pyodide.runPythonAsync(`
+import os
+for _path in [
+    "/tmp/libreuni-visual.svg",
+    "/tmp/libreuni-visual.png",
+    "/tmp/libreuni-visual.jpg",
+    "/tmp/libreuni-visual.jpeg",
+]:
+    try:
+        os.remove(_path)
+    except FileNotFoundError:
+        pass
+      `);
+
+      // Handle Python visual output, including Matplotlib/Seaborn/NetworkX diagrams.
+      if (usesPythonVisuals) {
         await pyodide.runPythonAsync(`
 import matplotlib
-import matplotlib.pyplot as plt
-import io
-import base64
 matplotlib.use('Agg')
-plt.clf() # Clear previous
+import matplotlib.pyplot as plt
+plt.close('all')
         `);
       }
 
       await pyodide.runPythonAsync(currentCode);
       
-      // Capture plot if any
-      if (currentCode.includes('matplotlib') || currentCode.includes('seaborn')) {
+      // Capture a generated visual if the code produced one. Authors can either
+      // draw with matplotlib or write /tmp/libreuni-visual.{svg,png,jpg}.
+      if (usesPythonVisuals) {
         const plotB64 = await pyodide.runPythonAsync(`
-buf = io.BytesIO()
-plt.savefig(buf, format='png', bbox_inches='tight')
-buf.seek(0)
-img_str = base64.b64encode(buf.read()).decode('utf-8')
-"data:image/png;base64," + img_str if plt.get_fignums() else ""
+import os
+import io
+import base64
+_visual = ""
+for _path, _mime in [
+    ("/tmp/libreuni-visual.svg", "image/svg+xml"),
+    ("/tmp/libreuni-visual.png", "image/png"),
+    ("/tmp/libreuni-visual.jpg", "image/jpeg"),
+    ("/tmp/libreuni-visual.jpeg", "image/jpeg"),
+]:
+    if os.path.exists(_path):
+        with open(_path, "rb") as _file:
+            _visual = "data:" + _mime + ";base64," + base64.b64encode(_file.read()).decode("utf-8")
+        break
+if not _visual and "libreuni_visual" in globals():
+    _candidate = libreuni_visual
+    if isinstance(_candidate, bytes):
+        _visual = "data:image/png;base64," + base64.b64encode(_candidate).decode("utf-8")
+    elif isinstance(_candidate, str):
+        _visual = _candidate if _candidate.startswith("data:") else "data:image/svg+xml;base64," + base64.b64encode(_candidate.encode("utf-8")).decode("utf-8")
+if not _visual and plt.get_fignums():
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", dpi=144)
+    buf.seek(0)
+    _visual = "data:image/png;base64," + base64.b64encode(buf.read()).decode("utf-8")
+_visual
         `);
         if (plotB64) {
           setPlotImage(plotB64);
@@ -308,10 +348,10 @@ img_str = base64.b64encode(buf.read()).decode('utf-8')
                     <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2 text-[10px] font-black text-primary uppercase tracking-widest">
                             <ImageIcon size={12} />
-                            Generated Plot
+                            Generated Visual
                         </div>
                     </div>
-                    <img src={plotImage} alt="Python Plot" className="w-full h-auto rounded-lg shadow-2xl transition-transform group-hover:scale-[1.02]" />
+                    <img src={plotImage} alt="Python generated visual output" className="w-full h-auto rounded-lg shadow-2xl transition-transform group-hover:scale-[1.02]" />
                   </div>
                 )}
              </div>
