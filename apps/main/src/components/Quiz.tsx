@@ -70,6 +70,23 @@ export default function Quiz({
 
   const isCorrect = selected !== null && normalizedOptions.find(o => o.id === selected)?.isCorrect;
 
+  const getOptionClass = (option: Option) => {
+    const isSelected = selected === option.id;
+    const resultClass = submitted && option.isCorrect
+      ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10'
+      : submitted && isSelected
+        ? 'border-rose-500 bg-rose-50 dark:bg-rose-500/10'
+        : isSelected
+          ? 'border-primary bg-blue-50 dark:bg-primary/10'
+          : 'border-light-border dark:border-dark-border hover:border-primary/60 hover:bg-light-surface dark:hover:bg-dark-bg';
+
+    return [
+      'w-full rounded-2xl border-2 bg-transparent p-5 text-left transition-colors',
+      'flex items-center gap-4 disabled:cursor-default',
+      resultClass
+    ].join(' ');
+  };
+
   const handleNext = () => {
     if (currentQuestionIndex < quizQuestions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
@@ -85,23 +102,21 @@ export default function Quiz({
   };
 
   return (
-    <div className="quiz-container my-12 p-6 md:p-10 bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.05)] dark:shadow-none relative overflow-hidden">
-      <div className="absolute top-0 left-0 w-full h-1 bg-primary/20"></div>
-      
+    <div className="quiz-container my-12 rounded-3xl border border-light-border bg-white p-6 shadow-sm dark:border-dark-border dark:bg-dark-surface md:p-10">
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
-            <div className="px-3 py-1 rounded-xl bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border text-[9px] font-black uppercase tracking-[0.2em] text-light-muted dark:text-dark-muted shadow-sm">
+            <div className="rounded-xl border border-light-border bg-light-bg px-3 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-light-muted shadow-sm dark:border-dark-border dark:bg-dark-bg dark:text-dark-muted">
                 {title || 'Conceptual Check'}
             </div>
             {quizQuestions.length > 1 && (
-                <div className="text-[9px] font-bold text-primary px-2 py-0.5 bg-primary/10 rounded-lg">
+                <div className="rounded-lg bg-primary/10 px-2 py-0.5 text-[9px] font-bold text-primary">
                     {currentQuestionIndex + 1} / {quizQuestions.length}
                 </div>
             )}
         </div>
       </div>
 
-      <h3 className="text-2xl md:text-3xl font-black text-light-text dark:text-dark-text mb-10 tracking-tighter leading-[1.1]">{currentQuestion.question}</h3>
+      <h3 className="mb-10 text-2xl font-black leading-tight text-light-text dark:text-dark-text md:text-3xl">{currentQuestion.question}</h3>
       
       <div className="flex flex-col gap-4">
         {normalizedOptions.map((option) => (
@@ -109,16 +124,9 @@ export default function Quiz({
             key={option.id}
             onClick={() => handleOptionClick(option.id)}
             disabled={submitted}
-            className={`
-              w-full p-5 md:p-6 rounded-2xl border-2 text-left transition-all flex items-center gap-4 group relative overflow-hidden
-              ${selected === option.id 
-                ? 'border-primary bg-primary/5' 
-                : 'border-light-border dark:border-dark-border bg-transparent hover:border-light-text dark:hover:border-dark-text hover:bg-light-bg dark:hover:bg-dark-bg'}
-              ${submitted && option.isCorrect ? '!border-emerald-500 !bg-emerald-500/5' : ''}
-              ${submitted && selected === option.id && !option.isCorrect ? '!border-rose-500 !bg-rose-500/5' : ''}
-            `}
+            className={getOptionClass(option)}
           >
-            <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all shrink-0 ${selected === option.id ? 'border-primary bg-primary' : 'border-light-border dark:border-dark-border bg-transparent'}`}>
+            <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${selected === option.id ? 'border-primary bg-primary' : 'border-light-border bg-transparent dark:border-dark-border'}`}>
                 {selected === option.id && <div className="w-2 h-2 rounded-full bg-white" />}
             </div>
             <span className={`text-base font-bold transition-colors ${selected === option.id ? 'text-light-text dark:text-dark-text' : 'text-light-muted dark:text-dark-muted'}`}>{option.text}</span>

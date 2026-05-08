@@ -62,15 +62,30 @@ export default function CaseStudy(props: CaseStudyProps) {
 
   const isCorrect = selected !== null && normalizedOptions.find(o => o.id === selected)?.isCorrect;
 
+  const getOptionClass = (option: Option) => {
+    const isSelected = selected === option.id;
+    const resultClass = submitted && option.isCorrect
+      ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10'
+      : submitted && isSelected
+        ? 'border-rose-500 bg-rose-50 dark:bg-rose-500/10'
+        : isSelected
+          ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10'
+          : 'border-light-border dark:border-dark-border hover:border-indigo-300 dark:hover:border-indigo-700 hover:bg-light-bg dark:hover:bg-dark-bg';
+
+    return [
+      'w-full rounded-2xl border-2 bg-transparent p-4 text-left transition-colors md:p-6',
+      'flex items-start gap-4 break-words disabled:cursor-default',
+      resultClass
+    ].join(' ');
+  };
+
   const reset = () => {
     setSubmitted(false);
     setSelected(null);
   };
 
   return (
-    <div className="case-study-container my-12 p-6 md:p-10 bg-white dark:bg-dark-surface border border-indigo-200 dark:border-indigo-900/50 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.05)] dark:shadow-none relative">
-      <div className="absolute top-0 left-0 w-full h-1 rounded-t-3xl bg-indigo-500/30"></div>
-      
+    <div className="case-study-container my-12 rounded-3xl border border-light-border bg-white p-6 shadow-sm dark:border-dark-border dark:bg-dark-surface md:p-10">
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 px-4 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 text-[10px] font-black uppercase tracking-[0.2em] text-indigo-600 dark:text-indigo-400 shadow-sm">
@@ -99,14 +114,7 @@ export default function CaseStudy(props: CaseStudyProps) {
                 key={option.id}
                 onClick={() => handleOptionClick(option.id)}
                 disabled={submitted}
-                className={`
-                  w-full p-4 md:p-6 rounded-2xl border-2 text-left transition-all flex items-start gap-4 group relative overflow-hidden break-words
-                  ${selected === option.id 
-                    ? 'border-indigo-500 bg-indigo-500/5' 
-                    : 'border-light-border dark:border-dark-border bg-transparent hover:border-indigo-300 dark:hover:border-indigo-700 hover:bg-light-bg dark:hover:bg-dark-bg'}
-                  ${submitted && option.isCorrect ? '!border-emerald-500 !bg-emerald-500/5' : ''}
-                  ${submitted && selected === option.id && !option.isCorrect ? '!border-rose-500 !bg-rose-500/5' : ''}
-                `}
+                className={getOptionClass(option)}
               >
                 <div className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all shrink-0 ${selected === option.id ? 'border-indigo-500 bg-indigo-500' : 'border-light-border dark:border-dark-border bg-transparent'}`}>
                   {selected === option.id && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
