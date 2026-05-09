@@ -29,7 +29,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
   - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`
   - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title`
 - Write new custom components when existing ones don't fit.
-- Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/plantuml.md` for troubleshooting.
+- Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/PUML.md` for troubleshooting.
 - Lessons must be self-contained — no lesson should require reading another first.
 - No lesson numbers in filenames, headers, or text. Lessons can be taken in any order.
 - Everything must be university level or above.

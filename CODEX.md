@@ -1,6 +1,16 @@
 # Codex CLI - Workspace Configuration
 
-**Absolute Mandate:**
-When asked to research a topic, write a course lesson, explain a new concept, or find sources, you MUST refer to and strictly adhere to the AI Source Research & Integration skill defined in `docs/SKILLS/SOURCING.md`.
+Codex agents must treat `AGENTS.md` as the repository entrypoint and follow it before editing files.
 
-This ensures all AI-assisted content maintains LibreUni's standards for academic integrity and FOSS licensing requirements.
+## Required Reading
+
+1. Read `AGENTS.md`.
+2. Read `docs/RULES.md` before making any content or code change.
+3. When researching a topic, writing a course lesson, explaining a new concept, or finding sources, read and strictly follow `docs/SKILLS/SOURCING.md`.
+4. When changing layout, styling, interaction, accessibility, or visual design, read `docs/UX.md`.
+5. When adding or changing PlantUML, read `docs/PUML.md`.
+6. Use `docs/TESTING.md` to choose the validation command before finishing.
+
+## Absolute Mandate
+
+AI-assisted content must maintain LibreUni's academic integrity, FOSS licensing requirements, sourcing trail, and writing standards. Do not draft or modify lesson content until the relevant docs above have been read.
