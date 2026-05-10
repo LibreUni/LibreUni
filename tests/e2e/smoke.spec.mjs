@@ -58,15 +58,15 @@ test.describe('production smoke checks', () => {
     });
   }
 
-  test('main course search filters tracks', async ({ page }) => {
-    await page.goto('http://127.0.0.1:4321/', { waitUntil: 'domcontentloaded' });
+  test('main course search filters courses', async ({ page }) => {
+    await page.goto('http://127.0.0.1:4321/courses.html', { waitUntil: 'domcontentloaded' });
 
     const search = page.locator('#course-search');
     await expect(search).toBeVisible();
     await search.fill('python');
 
-    const pythonCard = page.locator('.course-card[href$="courses/python.html"]');
-    const machineLearningCard = page.locator('.course-card[href$="courses/machine-learning.html"]');
+    const pythonCard = page.locator('.course-card:has(a[href$="courses/python.html"])');
+    const machineLearningCard = page.locator('.course-card:has(a[href$="courses/machine-learning.html"])');
 
     await expect(pythonCard).toBeVisible();
     await expect(machineLearningCard).toBeHidden();
@@ -81,7 +81,9 @@ test.describe('production smoke checks', () => {
     await page.goto('http://127.0.0.1:4321/', { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: /toggle menu/i }).click();
 
-    await expect(page.getByRole('link', { name: /Home/i })).toBeVisible();
-    await expect(page.getByRole('link', { name: /Tracks/i })).toBeVisible();
+    const mobileMenu = page.locator('#mobile-menu');
+    await expect(mobileMenu.getByRole('link', { name: /Home/i })).toBeVisible();
+    await expect(mobileMenu.getByRole('link', { name: /Courses/i })).toBeVisible();
+    await expect(mobileMenu.getByRole('link', { name: /Career Paths/i })).toBeVisible();
   });
 });
