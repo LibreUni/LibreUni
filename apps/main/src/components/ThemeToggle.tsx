@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BookOpenText, Check, ChevronDown, Moon, Palette, Sun } from 'lucide-react';
+import { BookOpenText, Check, ChevronDown, Moon, Palette, Square, Sun } from 'lucide-react';
 import { DEFAULT_THEME_ID, THEMES, getThemeById, isThemeId, type ThemeId } from '../utils/themes';
 
 const themeIcons = {
   light: Sun,
   dark: Moon,
   scholar: BookOpenText,
+  monochrome: Square,
 } satisfies Record<ThemeId, typeof Sun>;
 
 export default function ThemeToggle() {

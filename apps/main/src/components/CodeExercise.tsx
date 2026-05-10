@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, X, RefreshCw, Code2 } from 'lucide-react';
+import { Check, X, RefreshCw } from 'lucide-react';
 import { highlightCode } from './SyntaxHighlighter';
 
 interface CodeExerciseProps {
@@ -43,53 +43,43 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
 
   return (
     <div className="code-exercise my-12 group">
-      <div className="bg-light-bg dark:bg-dark-surface rounded-3xl overflow-hidden border border-light-border dark:border-dark-border shadow-[0_30px_60px_-15px_rgba(0,0,0,0.05)] dark:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] transition-all duration-500 group-hover:border-primary/30">
-        <div className="bg-light-surface dark:bg-dark-bg/20 px-8 py-5 border-b border-light-border dark:border-dark-border flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-primary/10 rounded-xl">
-              <Code2 size={20} className="text-primary" />
-            </div>
-            <div className="flex flex-col justify-center">
-              <div className="text-[9px] font-black text-primary uppercase tracking-[0.25em] mb-1.5 leading-tight">Interactive Lab</div>
-              <h3 className="text-lg font-black text-light-text dark:text-dark-text uppercase tracking-tighter leading-tight">{title}</h3>
-            </div>
-          </div>
+      <div className="code-exercise-shell bg-light-bg dark:bg-dark-surface rounded-3xl overflow-hidden border border-light-border dark:border-dark-border shadow-[0_30px_60px_-15px_rgba(0,0,0,0.05)] dark:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] transition-all duration-500 group-hover:border-primary/30">
+        <div className="code-exercise-header bg-light-surface dark:bg-dark-bg/20 px-5 py-1 md:px-7 md:py-1.5 border-b border-light-border dark:border-dark-border flex items-center justify-start">
+          <h3 className="code-exercise-title text-[0.78rem] md:text-sm font-black text-light-text dark:text-dark-text tracking-[0.18em] uppercase leading-none">{title}</h3>
         </div>
 
-        <div className="p-3">
-          <div className="code-container-base hl-default !p-6 md:!p-10 overflow-auto">
-            <pre className="whitespace-pre m-0 p-0 font-mono text-[14.5px] leading-[24px]">
-              {parts.map((part, index) => (
-                <React.Fragment key={index}>
-                  <span dangerouslySetInnerHTML={{ __html: highlightCode(part) }} />
-                  {index < parts.length - 1 && (
-                    <input
-                      type="text"
-                      value={userInputs[index] || ''}
-                      onChange={(e) => handleInputChange(index, e.target.value)}
-                      aria-label={`Code blank ${index + 1}`}
-                      disabled={submitted}
-                      placeholder="?"
-                      size={Math.max((actualAnswers[index] || '').length, 2)}
-                      className={`
-                        mx-1.5 px-2 py-0 h-[22px] rounded border-2 font-black text-center focus:outline-none transition-all duration-300 text-sm
-                        ${submitted 
-                          ? (userInputs[index]?.trim() === (actualAnswers[index] || '').trim() ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 border-rose-500 text-rose-600 dark:text-rose-400') 
-                          : 'bg-light-surface dark:bg-dark-surface border-light-border dark:border-dark-border text-light-text dark:text-dark-text focus:border-primary focus:bg-light-bg dark:focus:bg-dark-surface'}
-                      `}
-                    />
-                  )}
-                </React.Fragment>
-              ))}
-            </pre>
-          </div>
+        <div className="code-exercise-body p-2 md:p-3">
+          <pre className="code-exercise-codeframe hl-default whitespace-pre m-0 overflow-auto p-4 md:p-6 font-mono text-[14.5px] leading-[24px]">
+            {parts.map((part, index) => (
+              <React.Fragment key={index}>
+                <span dangerouslySetInnerHTML={{ __html: highlightCode(part) }} />
+                {index < parts.length - 1 && (
+                  <input
+                    type="text"
+                    value={userInputs[index] || ''}
+                    onChange={(e) => handleInputChange(index, e.target.value)}
+                    aria-label={`Code blank ${index + 1}`}
+                    disabled={submitted}
+                    placeholder="?"
+                    size={Math.max((actualAnswers[index] || '').length, 2)}
+                    className={`code-exercise-blank
+                      mx-1.5 px-2 py-0 h-[22px] rounded border-2 font-black text-center focus:outline-none transition-all duration-300 text-sm
+                      ${submitted 
+                        ? (userInputs[index]?.trim() === (actualAnswers[index] || '').trim() ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 border-rose-500 text-rose-600 dark:text-rose-400') 
+                        : 'bg-light-surface dark:bg-dark-surface border-light-border dark:border-dark-border text-light-text dark:text-dark-text focus:border-primary focus:bg-light-bg dark:focus:bg-dark-surface'}
+                    `}
+                  />
+                )}
+              </React.Fragment>
+            ))}
+          </pre>
 
-          <div className="mt-8 flex flex-col gap-5">
+          <div className="mt-6 flex flex-col gap-5">
             {!submitted ? (
               <button
                 onClick={checkAnswers}
                 disabled={userInputs.some(inp => !inp.trim())}
-                className={`
+                className={`code-exercise-button
                     self-start px-10 py-4 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all shadow-xl
                     ${userInputs.every(inp => inp.trim()) 
                         ? 'bg-primary text-white hover:scale-105 active:scale-95 shadow-primary/20' 

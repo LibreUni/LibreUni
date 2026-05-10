@@ -17,6 +17,12 @@ export const THEMES = [
     description: 'Warm serif reading mode',
     prefersDark: false,
   },
+  {
+    id: 'monochrome',
+    label: 'Monochrome',
+    description: 'Black-and-white square minimalism',
+    prefersDark: false,
+  },
 ] as const;
 
 export type ThemeId = (typeof THEMES)[number]['id'];
