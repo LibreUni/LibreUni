@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, RotateCcw, Terminal, Copy, Check, Cpu, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Play, RotateCcw, Terminal, Copy, Check, Loader2, Image as ImageIcon, BookOpen, Code2 } from 'lucide-react';
 import { highlightCode } from './SyntaxHighlighter';
 
 interface CodeRunnerProps {
@@ -16,6 +16,8 @@ declare global {
   }
 }
 
+type RunnerTab = 'guide' | 'code' | 'output';
+
 export default function CodeRunner({ code, output: initialOutput, title = "Interactive Lab", language }: CodeRunnerProps) {
   const defaultCode = code || '';
   const [currentCode, setCurrentCode] = useState(defaultCode);
@@ -23,14 +25,41 @@ export default function CodeRunner({ code, output: initialOutput, title = "Inter
   const [isRunning, setIsRunning] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [activeTab, setActiveTab] = useState<RunnerTab>('guide');
+  const [loadingMessage, setLoadingMessage] = useState('');
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [copied, setCopied] = useState(false);
   const [plotImage, setPlotImage] = useState<string | null>(null);
+  const [lastRunCode, setLastRunCode] = useState<string | null>(null);
   
   const pyodideRef = useRef<any>(null);
 
+  const displayLanguage = language || 'python';
+  const isBusy = isRunning || isInitializing;
+  const outputIsStale = lastRunCode !== null && currentCode !== lastRunCode;
+  const shouldRunOnOutput = lastRunCode === null || outputIsStale;
+
+  const tabButtonClass = (tab: RunnerTab) =>
+    `flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold uppercase transition-all ${
+      activeTab === tab
+        ? 'bg-primary text-white shadow-sm shadow-primary/20'
+        : 'text-light-muted dark:text-dark-muted hover:bg-light-bg dark:hover:bg-dark-bg hover:text-light-text dark:hover:text-dark-text'
+    }`;
+
   useEffect(() => {
     setCurrentCode(defaultCode);
+    setLastRunCode(null);
   }, [defaultCode]);
+
+  const updateLoading = (message: string, progress: number) => {
+    setLoadingMessage(message);
+    setLoadingProgress(progress);
+  };
+
+  const clearLoading = () => {
+    setLoadingMessage('');
+    setLoadingProgress(0);
+  };
 
   const initPyodide = async () => {
     if (window.pyodideInstance) {
@@ -39,7 +68,7 @@ export default function CodeRunner({ code, output: initialOutput, title = "Inter
     }
 
     setIsInitializing(true);
-    setConsoleOutput(["Initializing Pyodide (Python in Browser)..."]);
+    updateLoading("Preparing Python runtime", 18);
     
     try {
       const pyodide = await window.loadPyodide({
@@ -57,13 +86,13 @@ export default function CodeRunner({ code, output: initialOutput, title = "Inter
       if (currentCode.includes('PIL') || currentCode.includes('pillow')) libsToLoad.push('pillow');
 
       if (libsToLoad.length > 0) {
-        setConsoleOutput(prev => [...prev, `Loading packages: ${libsToLoad.join(', ')}...`]);
+        updateLoading(`Loading packages: ${libsToLoad.join(', ')}`, 46);
         await pyodide.loadPackage(libsToLoad);
       }
 
       // Some visualization helpers are pure Python and are best installed with micropip.
       if (currentCode.includes('seaborn') || currentCode.includes('load_dataset') || currentCode.includes('networkx')) {
-        setConsoleOutput(prev => [...prev, "Installing browser Python packages..."]);
+        updateLoading("Installing browser Python packages", 68);
         await pyodide.loadPackage("micropip");
         await pyodide.runPythonAsync(`
 import micropip
@@ -80,7 +109,9 @@ pyodide_http.patch_all()
       setIsInitializing(false);
       return pyodide;
     } catch (err) {
-      setConsoleOutput(prev => [...prev, `Error: ${err}`]);
+      setConsoleOutput([`Error: ${err}`]);
+      setShowTerminal(true);
+      setActiveTab('output');
       setIsInitializing(false);
       throw err;
     }
@@ -88,13 +119,16 @@ pyodide_http.patch_all()
 
   const runCode = async () => {
     if (isRunning) return;
+    setLastRunCode(currentCode);
 
     // JavaScript/TypeScript execution
     if (language === 'javascript' || language === 'typescript') {
       setIsRunning(true);
       setShowTerminal(true);
+      setActiveTab('output');
       setPlotImage(null);
-      setConsoleOutput(["Running JavaScript..."]);
+      setConsoleOutput([]);
+      updateLoading("Running JavaScript", 60);
 
       const logs: string[] = [];
       const originalLog = console.log;
@@ -125,6 +159,7 @@ pyodide_http.patch_all()
         console.error = originalError;
         console.warn = originalWarn;
         setIsRunning(false);
+        clearLoading();
       }
       return;
     }
@@ -142,7 +177,9 @@ pyodide_http.patch_all()
 
     if (isLegacy) {
       setShowTerminal(true);
+      setActiveTab('output');
       setPlotImage(null);
+      setIsRunning(true);
       const out = (initialOutput || "Process exited successfully.").replace(/\\n/g, '\n');
       const lines = out.split('\n');
       setConsoleOutput([
@@ -150,18 +187,22 @@ pyodide_http.patch_all()
         "", 
         "Process exited with status 0"
       ]);
+      setIsRunning(false);
       return;
     }
 
     setIsRunning(true);
     setShowTerminal(true);
+    setActiveTab('output');
     setPlotImage(null);
-    setConsoleOutput(["Running..."]);
+    setConsoleOutput([]);
+    updateLoading("Running code", 30);
     const usesPythonVisuals = /matplotlib|seaborn|pyplot|plt\.|networkx|libreuni_visual|savefig|\.svg|\.png|\.jpg|\.jpeg/i.test(currentCode);
 
     try {
       const pyodide = pyodideRef.current || await initPyodide();
       if (usesPythonVisuals) {
+        updateLoading("Preparing visualization support", 74);
         await pyodide.loadPackage(['matplotlib']);
       }
       
@@ -202,6 +243,7 @@ plt.close('all')
       // Capture a generated visual if the code produced one. Authors can either
       // draw with matplotlib or write /tmp/libreuni-visual.{svg,png,jpg}.
       if (usesPythonVisuals) {
+        updateLoading("Rendering visual output", 88);
         const plotB64 = await pyodide.runPythonAsync(`
 import os
 import io
@@ -245,6 +287,8 @@ _visual
       setConsoleOutput(prev => [...prev, "", `Error: ${err.message}`]);
     } finally {
       setIsRunning(false);
+      setIsInitializing(false);
+      clearLoading();
     }
   };
 
@@ -252,7 +296,10 @@ _visual
     setCurrentCode(defaultCode);
     setConsoleOutput([]);
     setShowTerminal(false);
+    setActiveTab('guide');
     setPlotImage(null);
+    setLastRunCode(null);
+    clearLoading();
   };
 
   const copyCode = () => {
@@ -261,101 +308,187 @@ _visual
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const openOutput = () => {
+    setActiveTab('output');
+    if (!isBusy && shouldRunOnOutput) {
+      runCode();
+    }
+  };
+
   return (
     <div className="code-runner my-12 group">
-      <div className="bg-white dark:bg-dark-surface rounded-3xl overflow-hidden border border-light-border dark:border-dark-border shadow-xl transition-all duration-500 group-hover:border-primary/30">
-        <div className="bg-light-bg dark:bg-dark-bg/20 px-8 py-5 border-b border-light-border dark:border-dark-border flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-primary/10 rounded-xl">
-              <Cpu size={20} className="text-primary" />
-            </div>
-            <div className="flex flex-col justify-center">
-              <div className="text-[9px] font-black text-primary uppercase tracking-[0.25em] mb-1.5 leading-tight">Runtime Environment</div>
-              <h3 className="text-lg font-black text-light-text dark:text-dark-text uppercase tracking-tighter leading-tight">{title}</h3>
-            </div>
-          </div>
-          <div className="flex gap-1.5">
-            <button
-               onClick={runCode}
-               aria-label="Run code"
-               disabled={isRunning || isInitializing}
-               className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 active:scale-95 disabled:opacity-50"
-            >
-              {isRunning || isInitializing ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} fill="currentColor" />}
-              {isInitializing ? "Initializing..." : isRunning ? "Running..." : "Run"}
+      <div className="bg-white dark:bg-dark-surface rounded-lg overflow-hidden border border-light-border dark:border-dark-border shadow-xl transition-all duration-300 group-hover:border-primary/30">
+        <div className="border-b border-light-border dark:border-dark-border bg-white dark:bg-dark-surface px-4 py-3">
+          <div className="flex flex-wrap gap-2" role="tablist" aria-label={`${title} lab sections`}>
+            <button type="button" role="tab" aria-selected={activeTab === 'guide'} className={tabButtonClass('guide')} onClick={() => setActiveTab('guide')}>
+              <BookOpen size={14} />
+              Topic
             </button>
-            <button
-              onClick={copyCode}
-              aria-label="Copy code"
-              title="Copy Code"
-              className="p-2.5 hover:bg-white dark:hover:bg-dark-bg rounded-lg transition-all text-light-muted dark:text-dark-muted hover:text-primary border border-transparent hover:border-light-border dark:hover:border-dark-border"
-            >
-              {copied ? <Check size={16} /> : <Copy size={16} />}
+            <button type="button" role="tab" aria-selected={activeTab === 'code'} className={tabButtonClass('code')} onClick={() => setActiveTab('code')}>
+              <Code2 size={14} />
+              Code
             </button>
-            <button
-              onClick={resetCode}
-              aria-label="Reset code"
-              title="Reset Code"
-              className="p-2.5 hover:bg-white dark:hover:bg-dark-bg rounded-lg transition-all text-light-muted dark:text-dark-muted hover:text-rose-500 border border-transparent hover:border-light-border dark:hover:border-dark-border"
-            >
-              <RotateCcw size={16} />
+            <button type="button" role="tab" aria-selected={activeTab === 'output'} className={tabButtonClass('output')} onClick={openOutput}>
+              {isBusy ? <Loader2 size={14} className="animate-spin" /> : <Terminal size={14} />}
+              {outputIsStale ? "Output *" : "Output"}
             </button>
           </div>
         </div>
 
-        <div className="flex flex-col md:flex-row min-h-[400px]">
-          <div className="relative flex-1 border-r border-light-border dark:border-dark-border group/editor bg-white dark:bg-dark-surface/50 overflow-auto">
-            <div className="relative min-h-full" style={{ minWidth: 'max-content', width: '100%' }}>
+        {loadingMessage && (
+          <div className="border-b border-light-border dark:border-dark-border bg-primary/5 px-5 sm:px-6 py-3" role="status" aria-live="polite">
+            <div className="mb-2 flex items-center justify-between gap-4 text-xs font-bold text-primary">
+              <span>{loadingMessage}</span>
+              <span>{Math.max(10, Math.min(96, loadingProgress))}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-md bg-primary/15">
+              <div
+                className="h-full rounded-md bg-primary transition-all duration-500"
+                style={{ width: `${Math.max(10, Math.min(96, loadingProgress))}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="min-h-[460px]">
+          {activeTab === 'guide' && (
+            <section className="px-5 py-8 sm:px-8" role="tabpanel">
+              <div className="max-w-3xl">
+                <div className="mb-4 inline-flex items-center rounded-md border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-bold uppercase text-primary">
+                  {displayLanguage}
+                </div>
+                <h4 className="mb-3 text-xl font-black text-light-text dark:text-dark-text">{title}</h4>
+                <p className="mb-5 text-sm leading-7 text-light-muted dark:text-dark-muted">
+                  Read the code, make a small change, then run it and inspect the output. Runtime setup messages stay outside the terminal so the result remains focused on what the program prints.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {['Inspect the idea', 'Edit the program', 'Run and compare'].map((step, index) => (
+                    <div key={step} className="rounded-md border border-light-border dark:border-dark-border bg-light-surface dark:bg-dark-bg/40 p-4">
+                      <div className="mb-2 text-xs font-black uppercase text-primary">Step {index + 1}</div>
+                      <div className="text-sm font-bold text-light-text dark:text-dark-text">{step}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
+
+          {activeTab === 'code' && (
+          <div className="flex h-[600px] flex-col bg-white dark:bg-dark-surface/50" role="tabpanel">
+            <div className="flex items-center justify-between gap-3 border-b border-light-border bg-light-bg/70 px-4 py-2.5 dark:border-dark-border dark:bg-dark-bg/25">
+              <div className="font-mono text-xs font-bold uppercase text-light-muted dark:text-dark-muted">
+                {displayLanguage}
+              </div>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={copyCode}
+                  aria-label="Copy code"
+                  title="Copy Code"
+                  className="rounded-md border border-transparent p-2 text-light-muted transition-colors hover:border-light-border hover:bg-white hover:text-primary dark:text-dark-muted dark:hover:border-dark-border dark:hover:bg-dark-bg"
+                >
+                  {copied ? <Check size={15} /> : <Copy size={15} />}
+                </button>
+                <button
+                  onClick={resetCode}
+                  aria-label="Reset code"
+                  title="Reset Code"
+                  className="rounded-md border border-transparent p-2 text-light-muted transition-colors hover:border-light-border hover:bg-white hover:text-rose-500 dark:text-dark-muted dark:hover:border-dark-border dark:hover:bg-dark-bg"
+                >
+                  <RotateCcw size={15} />
+                </button>
+              </div>
+            </div>
+            <div className="relative flex-1 group/editor overflow-auto">
+              <div className="relative min-h-full" style={{ minWidth: 'max-content', width: '100%' }}>
                 <textarea
                   value={currentCode}
                   onChange={(e) => setCurrentCode(e.target.value)}
                   aria-label={`${title} code editor`}
-                  className="absolute inset-0 w-full h-full pt-[30px] pb-[30px] pr-[30px] pl-[64px] font-mono text-[14.5px] leading-[24px] bg-transparent text-transparent caret-primary resize-none focus:outline-none z-10 selection:bg-primary/30 overflow-hidden whitespace-pre"
+                  className="absolute inset-0 w-full h-full pt-[30px] pb-[30px] pr-[30px] pl-[64px] font-mono text-[15px] leading-[25px] bg-transparent text-transparent caret-primary resize-none focus:outline-none z-10 selection:bg-primary/30 overflow-hidden whitespace-pre"
                   spellCheck="false"
                   style={{ fontVariantLigatures: 'none', caretColor: 'var(--primary)' }}
                 />
-                <div className="p-[30px] font-mono text-[14.5px] leading-[24px] pointer-events-none hl-default">
+                <div className="p-[30px] font-mono text-[15px] leading-[25px] pointer-events-none hl-default">
                   {currentCode.split('\n').map((line, i) => (
-                      <div key={i} className="flex gap-[20px] group/line min-h-[24px]">
+                      <div key={i} className="flex gap-[20px] group/line min-h-[25px]">
                           <span className="text-light-muted dark:text-dark-muted select-none text-right w-[14px] opacity-25 inline-block font-mono text-xs">{i + 1}</span>
                           <span dangerouslySetInnerHTML={{ __html: highlightCode(line) || '&nbsp;' }} className="whitespace-pre" />
                       </div>
                   ))}
                 </div>
+              </div>
             </div>
           </div>
+          )}
 
-          <div className={`flex-1 flex flex-col bg-light-surface dark:bg-[#0d0d17] p-8 border-t md:border-t-0 border-light-border dark:border-dark-border transition-all duration-300 ${showTerminal ? 'opacity-100' : 'opacity-100 md:opacity-0 pointer-events-none'}`}>
-             <div className="flex items-center gap-3 mb-6">
-                <div className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-                <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                <span className="ml-2 text-[10px] font-black text-light-muted dark:text-slate-300 uppercase tracking-[0.2em] flex items-center gap-2">
-                    <Terminal size={12} />
-                    Terminal Output
-                </span>
-             </div>
-             
-             <div className="flex-1 font-mono text-sm overflow-auto">
-                {consoleOutput.map((line, i) => (
-                  <div key={i} className={`min-h-[20px] mb-1 whitespace-pre-wrap ${line.startsWith('Error') ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400/90'}`}>
-                    {line}
+          {activeTab === 'output' && (
+          <div className="min-h-[460px] bg-slate-100 p-4 dark:bg-[#10141d] sm:p-6" role="tabpanel">
+             <div className="overflow-hidden rounded-lg border border-slate-300/80 bg-slate-950 shadow-2xl shadow-slate-950/10 dark:border-slate-700">
+               <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-4 py-3">
+                 <div className="flex min-w-0 items-center gap-3">
+                   <div className="flex gap-1.5">
+                     <span className="h-2.5 w-2.5 rounded-full bg-rose-400" />
+                     <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
+                     <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                   </div>
+                   <span className="truncate font-mono text-[11px] font-bold uppercase text-slate-300">
+                     libreuni:{displayLanguage}:stdout
+                   </span>
+                 </div>
+                 <button
+                   onClick={runCode}
+                   disabled={isBusy}
+                   aria-label="Rerun code"
+                   title="Rerun Code"
+                   className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-800 px-3 py-1.5 font-mono text-[11px] font-bold uppercase text-slate-100 transition-colors hover:border-primary/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                 >
+                   {isBusy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} fill="currentColor" />}
+                   {isBusy ? "Running" : "Rerun"}
+                 </button>
+               </div>
+
+               <div className="border-b border-slate-800 bg-slate-900/70 px-4 py-2 font-mono text-[11px] text-slate-400">
+                 <span className="text-primary">$</span> run {displayLanguage}
+                 {outputIsStale && <span className="ml-3 text-amber-300">modified since last run</span>}
+               </div>
+
+               <div className="min-h-[330px] overflow-auto px-4 py-4 font-mono text-[13px] leading-6 text-slate-100 [font-variant-numeric:tabular-nums]">
+                {!showTerminal && !isBusy && (
+                  <div className="text-slate-400">
+                    Opening this tab runs the code and prints output here.
                   </div>
-                ))}
+                )}
+                {showTerminal && consoleOutput.length === 0 && !plotImage && isBusy && (
+                  <div className="text-slate-400">
+                    Waiting for program output...
+                  </div>
+                )}
+                {consoleOutput.map((line, i) => {
+                  const isError = line.startsWith('Error');
+                  const isExit = line.startsWith('Process exited');
+                  return (
+                    <div key={i} className={`grid min-h-[24px] grid-cols-[2.5rem_minmax(0,1fr)] gap-3 border-l border-transparent ${isError ? 'text-rose-300' : isExit ? 'text-sky-300' : 'text-emerald-200'}`}>
+                      <span className="select-none text-right text-[11px] text-slate-600">{line ? i + 1 : ""}</span>
+                      <span className="whitespace-pre-wrap break-words">{line || " "}</span>
+                    </div>
+                  );
+                })}
                 
                 {plotImage && (
-                  <div className="mt-6 rounded-2xl overflow-hidden border border-white/10 bg-white/5 p-4 group/plot">
+                  <div className="mt-6 rounded-md overflow-hidden border border-slate-700 bg-slate-900 p-4 group/plot">
                     <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-2 text-[10px] font-black text-primary uppercase tracking-widest">
+                        <div className="flex items-center gap-2 text-[10px] font-black text-primary uppercase">
                             <ImageIcon size={12} />
                             Generated Visual
                         </div>
                     </div>
-                    <img src={plotImage} alt="Python generated visual output" className="w-full h-auto rounded-lg shadow-2xl transition-transform group-hover:scale-[1.02]" />
+                    <img src={plotImage} alt="Python generated visual output" className="w-full h-auto rounded-md shadow-2xl transition-transform group-hover:scale-[1.02]" />
                   </div>
                 )}
+               </div>
              </div>
           </div>
+          )}
         </div>
       </div>
     </div>

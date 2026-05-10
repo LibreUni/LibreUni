@@ -61,20 +61,22 @@ export default function CaseStudy(props: CaseStudyProps) {
   };
 
   const isCorrect = selected !== null && normalizedOptions.find(o => o.id === selected)?.isCorrect;
+  const showFeedback = submitted && (!hasOptions || (isCorrect && Boolean(exp)));
+  const showSubmittedAction = !hasOptions || !isCorrect;
 
   const getOptionClass = (option: Option) => {
     const isSelected = selected === option.id;
-    const resultClass = submitted && option.isCorrect
+    const resultClass = submitted && isSelected && option.isCorrect
       ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10'
       : submitted && isSelected
         ? 'border-rose-500 bg-rose-50 dark:bg-rose-500/10'
         : isSelected
-          ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10'
-          : 'border-light-border dark:border-dark-border hover:border-indigo-300 dark:hover:border-indigo-700 hover:bg-light-bg dark:hover:bg-dark-bg';
+          ? 'border-primary bg-blue-50 dark:bg-primary/10'
+          : 'border-light-border dark:border-dark-border hover:border-primary/60 hover:bg-light-bg dark:hover:bg-dark-bg';
 
     return [
-      'w-full rounded-2xl border-2 bg-transparent p-4 text-left transition-colors md:p-6',
-      'flex items-start gap-4 break-words disabled:cursor-default',
+      'w-full rounded-lg border bg-transparent px-4 py-3 text-left transition-colors',
+      'flex items-start gap-3 break-words disabled:cursor-default',
       resultClass
     ].join(' ');
   };
@@ -85,30 +87,33 @@ export default function CaseStudy(props: CaseStudyProps) {
   };
 
   return (
-    <div className="case-study-container my-12 rounded-3xl border border-light-border bg-white p-6 shadow-sm dark:border-dark-border dark:bg-dark-surface md:p-10">
-      <div className="flex items-center justify-between mb-8">
+    <div className="case-study-container my-8 rounded-lg border border-primary/20 bg-primary/[0.03] p-4 dark:border-primary/25 dark:bg-primary/[0.06] md:p-5">
+      <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 px-4 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 text-[10px] font-black uppercase tracking-[0.2em] text-indigo-600 dark:text-indigo-400 shadow-sm">
-                <BookOpen size={14} strokeWidth={2.5} />
+            <div className="flex items-center gap-2 rounded-md border border-primary/20 bg-white px-2.5 py-1 text-xs font-semibold text-primary shadow-sm dark:bg-dark-surface">
+                <BookOpen size={13} strokeWidth={2.25} />
                 <span>{title || 'Case Study Setup'}</span>
             </div>
         </div>
       </div>
 
       {(scenario) && (
-        <div className="bg-light-bg dark:bg-dark-bg p-6 rounded-2xl border border-light-border dark:border-dark-border mb-8">
-          <p className="text-base md:text-lg font-medium text-light-text dark:text-dark-text leading-relaxed">
+        <div className="mb-4 rounded-lg border border-light-border bg-white p-4 dark:border-dark-border dark:bg-dark-surface">
+          <p className="text-sm leading-relaxed text-light-text dark:text-dark-text">
             {scenario}
           </p>
         </div>
       )}
 
       {qText && (
-        <h3 className="text-xl md:text-2xl font-black text-light-text dark:text-dark-text mb-8 tracking-tight break-words">{qText}</h3>
+        <h3 className="mb-4 break-words text-lg font-semibold leading-snug text-light-text dark:text-dark-text">{qText}</h3>
       )}
       
       {hasOptions ? (
-          <div className="grid grid-cols-1 gap-4">
+          <div
+            className="grid gap-2.5"
+            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 16rem), 1fr))' }}
+          >
             {normalizedOptions.map((option) => (
               <button
                 key={option.id}
@@ -116,20 +121,20 @@ export default function CaseStudy(props: CaseStudyProps) {
                 disabled={submitted}
                 className={getOptionClass(option)}
               >
-                <div className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all shrink-0 ${selected === option.id ? 'border-indigo-500 bg-indigo-500' : 'border-light-border dark:border-dark-border bg-transparent'}`}>
-                  {selected === option.id && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors ${selected === option.id ? 'border-primary bg-primary' : 'border-light-border bg-transparent dark:border-dark-border'}`}>
+                  {selected === option.id && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
                 </div>
-                <span className={`flex-1 text-sm md:text-base font-bold transition-colors leading-snug break-words ${selected === option.id ? 'text-light-text dark:text-dark-text' : 'text-light-muted dark:text-dark-muted'}`}>
+                <span className={`flex-1 break-words text-sm leading-relaxed transition-colors ${selected === option.id ? 'font-medium text-light-text dark:text-dark-text' : 'text-light-muted dark:text-dark-muted'}`}>
                   {option.text}
                 </span>
                 
-                {submitted && option.isCorrect && (
-                    <div className="ml-auto text-emerald-500 bg-emerald-500/10 p-1.5 rounded-lg shrink-0">
+                {submitted && selected === option.id && option.isCorrect && (
+                    <div className="ml-auto shrink-0 rounded-md bg-emerald-500/10 p-1 text-emerald-500">
                         <Check size={16} strokeWidth={3} />
                     </div>
                 )}
                 {submitted && selected === option.id && !option.isCorrect && (
-                     <div className="ml-auto text-rose-500 bg-rose-500/10 p-1.5 rounded-lg shrink-0">
+                     <div className="ml-auto shrink-0 rounded-md bg-rose-500/10 p-1 text-rose-500">
                         <X size={16} strokeWidth={3} />
                     </div>
                 )}
@@ -138,67 +143,56 @@ export default function CaseStudy(props: CaseStudyProps) {
           </div>
       ) : null}
 
-      <div className="mt-12 md:mt-16 flex flex-col gap-4 shrink-0">
+      {(!submitted || showFeedback || showSubmittedAction) && (
+      <div className="mt-5 flex shrink-0 flex-col gap-4">
         {!submitted ? (
           <button
             onClick={() => setSubmitted(true)}
             disabled={hasOptions && !selected}
             className={`
-                w-full sm:w-auto shrink-0 px-12 py-4 min-h-[56px] rounded-xl font-black transition-all uppercase tracking-[0.2em] text-xs
+                w-full shrink-0 rounded-md px-4 py-2.5 text-sm font-semibold transition-colors sm:w-auto
                 ${(!hasOptions || selected) 
-                    ? 'bg-primary hover:bg-primary-dark text-white dark:text-white flex items-center justify-center hover:-translate-y-1 active:translate-y-0 shadow-lg shadow-primary/20'
-                    : 'bg-primary/50 text-white/70 dark:text-white/50 cursor-not-allowed flex items-center justify-center'}
+                    ? 'bg-primary hover:bg-primary-dark text-white dark:text-white flex items-center justify-center'
+                    : 'bg-light-border text-light-muted dark:bg-dark-border dark:text-dark-muted cursor-not-allowed flex items-center justify-center'}
             `}
           >
-             {hasOptions ? 'Analyze Decision' : 'Reveal Solution'}
+             {hasOptions ? 'Check answer' : 'Reveal analysis'}
           </button>
         ) : (
-          <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <div className={`p-8 rounded-2xl border-2 transition-all shadow-xl ${hasOptions ? (isCorrect ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/5 border-rose-500/20 text-rose-600 dark:text-rose-400') : 'bg-indigo-500/5 border-indigo-500/20 text-indigo-600 dark:text-indigo-400'}`}>
-                {hasOptions && (
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className={`p-2 rounded-xl ${isCorrect ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'}`}>
-                            {isCorrect ? <Check size={20} strokeWidth={3} /> : <X size={20} strokeWidth={3} />}
-                        </div>
-                        <span className="font-black text-xl uppercase tracking-wider">{isCorrect ? 'Analysis Confirmed' : 'Divergent Analysis'}</span>
-                    </div>
-                )}
+          <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            {showFeedback && (
+              <div className={`rounded-lg border p-4 transition-colors ${hasOptions ? 'border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-primary/20 bg-primary/5 text-primary'}`}>
                 {!hasOptions && (
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="p-2 rounded-xl bg-indigo-500 text-white">
-                            <Eye size={20} strokeWidth={3} />
+                    <div className="mb-2 flex items-center gap-2">
+                        <div className="rounded-md bg-primary p-1.5 text-white">
+                            <Eye size={16} strokeWidth={3} />
                         </div>
-                        <span className="font-black text-xl uppercase tracking-wider">Analysis Breakdown</span>
+                        <span className="text-sm font-semibold">Analysis</span>
                     </div>
                 )}
-                {hasOptions && !isCorrect && (
-                    <div className="mt-4 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20">
-                        <p className="font-bold text-sm tracking-tight text-rose-700 dark:text-rose-300">
-                           <span className="uppercase text-[10px] tracking-widest opacity-80 block mb-1">Optimal Approach</span>
-                           {normalizedOptions.find(o => o.isCorrect)?.text}
-                        </p>
-                    </div>
-                )}
-                {hasOptions && isCorrect && <p className="font-bold text-sm opacity-80 italic tracking-tight underline decoration-emerald-500/30 underline-offset-8">Your structural reasoning aligns with established engineering principles.</p>}
                 
                 {exp && (
-                    <div className={`mt-6 pt-6 opacity-90 leading-relaxed font-medium break-words ${hasOptions ? 'border-t border-current/10' : ''}`}>
+                    <div className={`break-words leading-relaxed ${!hasOptions ? 'mt-3 pt-3' : ''}`}>
                         <div className="text-sm whitespace-pre-wrap">{exp}</div>
                     </div>
                 )}
-            </div>
+              </div>
+            )}
             
-            <div className="flex items-center justify-end">
+            {(!hasOptions || !isCorrect) && (
+              <div className="flex items-center justify-end">
                 <button
                     onClick={reset}
-                    className="flex items-center gap-2 text-[10px] font-black text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-dark-text transition-all uppercase tracking-[0.2em] px-6 py-3 rounded-xl border border-light-border dark:border-dark-border hover:bg-light-bg dark:hover:bg-dark-bg"
+                    className="flex items-center gap-2 rounded-md border border-light-border px-3 py-2 text-sm font-medium text-light-muted transition-colors hover:bg-light-bg hover:text-light-text dark:border-dark-border dark:text-dark-muted dark:hover:bg-dark-bg dark:hover:text-dark-text"
                 >
-                    <RefreshCw size={12} strokeWidth={3} /> Re-evaluate Scenario
+                    <RefreshCw size={14} strokeWidth={2.5} /> Try again
                 </button>
-            </div>
+              </div>
+            )}
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
