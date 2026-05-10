@@ -83,8 +83,8 @@ export default function Search({ baseUrl, variant = 'compact' }: { baseUrl: stri
                     type="text" 
                     placeholder="Search courses, modules, and topics" 
                     className={cn(
-                        "input-field dark:text-white dark:bg-dark-surface",
-                        variant === 'hero' ? "pl-16 pr-6 !py-5 text-base md:text-lg shadow-2xl shadow-blue-500/10 !rounded-2xl" : "pl-11 !py-2.5"
+                        "input-field",
+                        variant === 'hero' ? "pl-16 pr-6 !py-5 text-base md:text-lg shadow-2xl shadow-primary/10 !rounded-2xl" : "pl-11 !py-2.5"
                     )}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
@@ -93,7 +93,7 @@ export default function Search({ baseUrl, variant = 'compact' }: { baseUrl: stri
             </div>
 
             {isOpen && results.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-3 bg-white dark:bg-dark-bg !rounded-2xl shadow-2xl z-[100] overflow-hidden transition-all border border-light-border dark:border-dark-border">
+                <div className="absolute top-full left-0 right-0 mt-3 bg-light-bg dark:bg-dark-bg !rounded-2xl shadow-2xl z-[100] overflow-hidden transition-all border border-light-border dark:border-dark-border">
                     {results.map((res) => (
                         <a 
                             key={`${res.type}-${res.slug}`}
@@ -101,7 +101,7 @@ export default function Search({ baseUrl, variant = 'compact' }: { baseUrl: stri
                             className="flex flex-col px-5 py-4 hover:bg-primary/5 transition-all border-b border-light-border dark:border-dark-border last:border-none group"
                         >
                             <span className="flex items-center gap-3">
-                                <span className="font-bold text-light-text dark:text-white group-hover:text-primary transition-colors">{res.title}</span>
+                                <span className="font-bold text-light-text dark:text-dark-text group-hover:text-primary transition-colors">{res.title}</span>
                                 <span className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-primary">{res.type}</span>
                             </span>
                             <span className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/70">{res.type === 'course' ? 'Course' : res.course}</span>
@@ -114,7 +114,7 @@ export default function Search({ baseUrl, variant = 'compact' }: { baseUrl: stri
             )}
             
             {isOpen && query.length > 1 && results.length === 0 && (
-                <div className="absolute top-full left-0 right-0 mt-3 bg-white dark:bg-dark-bg !rounded-2xl shadow-2xl z-[100] p-6 text-center text-light-muted dark:text-dark-muted text-sm italic font-medium border border-light-border dark:border-dark-border">
+                <div className="absolute top-full left-0 right-0 mt-3 bg-light-bg dark:bg-dark-bg !rounded-2xl shadow-2xl z-[100] p-6 text-center text-light-muted dark:text-dark-muted text-sm italic font-medium border border-light-border dark:border-dark-border">
                     No matching courses or topics found.
                 </div>
             )}

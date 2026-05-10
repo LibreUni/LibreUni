@@ -78,7 +78,7 @@ export default function Quiz({
       : submitted && isSelected
         ? 'border-rose-500 bg-rose-50 dark:bg-rose-500/10'
         : isSelected
-          ? 'border-primary bg-blue-50 dark:bg-primary/10'
+          ? 'border-primary bg-primary/10 dark:bg-primary/10'
           : 'border-light-border dark:border-dark-border hover:border-primary/60 hover:bg-light-surface dark:hover:bg-dark-bg';
 
     return [

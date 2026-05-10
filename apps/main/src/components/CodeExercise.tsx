@@ -43,7 +43,7 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
 
   return (
     <div className="code-exercise my-12 group">
-      <div className="bg-white dark:bg-dark-surface rounded-3xl overflow-hidden border border-light-border dark:border-dark-border shadow-[0_30px_60px_-15px_rgba(0,0,0,0.05)] dark:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] transition-all duration-500 group-hover:border-primary/30">
+      <div className="bg-light-bg dark:bg-dark-surface rounded-3xl overflow-hidden border border-light-border dark:border-dark-border shadow-[0_30px_60px_-15px_rgba(0,0,0,0.05)] dark:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] transition-all duration-500 group-hover:border-primary/30">
         <div className="bg-light-surface dark:bg-dark-bg/20 px-8 py-5 border-b border-light-border dark:border-dark-border flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2.5 bg-primary/10 rounded-xl">
@@ -75,7 +75,7 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
                         mx-1.5 px-2 py-0 h-[22px] rounded border-2 font-black text-center focus:outline-none transition-all duration-300 text-sm
                         ${submitted 
                           ? (userInputs[index]?.trim() === (actualAnswers[index] || '').trim() ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 border-rose-500 text-rose-600 dark:text-rose-400') 
-                          : 'bg-light-surface dark:bg-dark-surface border-light-border dark:border-dark-border text-light-text dark:text-dark-text focus:border-primary focus:bg-white dark:focus:bg-dark-surface'}
+                          : 'bg-light-surface dark:bg-dark-surface border-light-border dark:border-dark-border text-light-text dark:text-dark-text focus:border-primary focus:bg-light-bg dark:focus:bg-dark-surface'}
                       `}
                     />
                   )}

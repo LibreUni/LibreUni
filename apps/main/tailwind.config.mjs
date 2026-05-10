@@ -5,28 +5,31 @@ export default {
   theme: {
     extend: {
       colors: {
-        primary: '#2563eb', // Professional blue with AA contrast against white text
-        'primary-dark': '#2563eb',
-        secondary: '#6366f1', // Indigo
-        'secondary-dark': '#4f46e5',
-        accent: '#f43f5e', // Rose
-        'accent-dark': '#e11d48',
+        primary: 'rgb(var(--primary-rgb) / <alpha-value>)',
+        'primary-dark': 'rgb(var(--primary-dark-rgb) / <alpha-value>)',
+        secondary: 'rgb(var(--secondary-rgb) / <alpha-value>)',
+        'secondary-dark': 'rgb(var(--secondary-dark-rgb) / <alpha-value>)',
+        accent: 'rgb(var(--accent-rgb) / <alpha-value>)',
+        'accent-dark': 'rgb(var(--accent-dark-rgb) / <alpha-value>)',
         dark: {
-          bg: '#030712',
-          surface: '#0f172a',
-          border: '#1e293b',
-          text: '#f1f5f9',
-          muted: '#94a3b8',
-          accent: '#3b82f6'
+          bg: 'rgb(var(--dark-bg-rgb) / <alpha-value>)',
+          surface: 'rgb(var(--dark-surface-rgb) / <alpha-value>)',
+          border: 'rgb(var(--dark-border-rgb) / <alpha-value>)',
+          text: 'rgb(var(--dark-text-rgb) / <alpha-value>)',
+          muted: 'rgb(var(--dark-muted-rgb) / <alpha-value>)',
+          accent: 'rgb(var(--dark-accent-rgb) / <alpha-value>)'
         },
         light: {
-          bg: '#ffffff',
-          surface: '#f9fafb',
-          border: '#e5e7eb',
-          text: '#111827',
-          muted: '#6b7280',
-          accent: '#2563eb'
+          bg: 'rgb(var(--light-bg-rgb) / <alpha-value>)',
+          surface: 'rgb(var(--light-surface-rgb) / <alpha-value>)',
+          border: 'rgb(var(--light-border-rgb) / <alpha-value>)',
+          text: 'rgb(var(--light-text-rgb) / <alpha-value>)',
+          muted: 'rgb(var(--light-muted-rgb) / <alpha-value>)',
+          accent: 'rgb(var(--light-accent-rgb) / <alpha-value>)'
         }
+      },
+      fontFamily: {
+        sans: ['var(--font-sans)', 'sans-serif'],
       },
       animation: {
         'gradient-x': 'gradient-x 15s ease infinite',

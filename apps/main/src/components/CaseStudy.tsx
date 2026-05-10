@@ -71,7 +71,7 @@ export default function CaseStudy(props: CaseStudyProps) {
       : submitted && isSelected
         ? 'border-rose-500 bg-rose-50 dark:bg-rose-500/10'
         : isSelected
-          ? 'border-primary bg-blue-50 dark:bg-primary/10'
+          ? 'border-primary bg-primary/10 dark:bg-primary/10'
           : 'border-light-border dark:border-dark-border hover:border-primary/60 hover:bg-light-bg dark:hover:bg-dark-bg';
 
     return [
@@ -90,7 +90,7 @@ export default function CaseStudy(props: CaseStudyProps) {
     <div className="case-study-container my-8 rounded-lg border border-primary/20 bg-primary/[0.03] p-4 dark:border-primary/25 dark:bg-primary/[0.06] md:p-5">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 rounded-md border border-primary/20 bg-white px-2.5 py-1 text-xs font-semibold text-primary shadow-sm dark:bg-dark-surface">
+            <div className="flex items-center gap-2 rounded-md border border-primary/20 bg-light-bg px-2.5 py-1 text-xs font-semibold text-primary shadow-sm dark:bg-dark-surface">
                 <BookOpen size={13} strokeWidth={2.25} />
                 <span>{title || 'Case Study Setup'}</span>
             </div>
@@ -98,7 +98,7 @@ export default function CaseStudy(props: CaseStudyProps) {
       </div>
 
       {(scenario) && (
-        <div className="mb-4 rounded-lg border border-light-border bg-white p-4 dark:border-dark-border dark:bg-dark-surface">
+        <div className="mb-4 rounded-lg border border-light-border bg-light-bg p-4 dark:border-dark-border dark:bg-dark-surface">
           <p className="text-sm leading-relaxed text-light-text dark:text-dark-text">
             {scenario}
           </p>
