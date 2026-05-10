@@ -96,9 +96,10 @@ Follow these steps to set up the project locally for development.
    npm run dev:history
    ```
 
-4. **Validate content (Optional but recommended):**
+4. **Validate content and refresh catalog quality data (Optional but recommended):**
    ```bash
    python3 scripts/course_stats.py
+   python3 scripts/course_stats.py --write-quality
    ```
 
 5. **Build for production:**

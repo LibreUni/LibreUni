@@ -42,6 +42,7 @@ npm run dev
 npm run build
 npm run build:all
 python3 scripts/course_stats.py
+python3 scripts/course_stats.py --write-quality
 npm test
 ```
 

@@ -1,110 +1,326 @@
-import os
+#!/usr/bin/env python3
+import argparse
+import json
 import re
-import sys
+from pathlib import Path
 
-def get_course_stats(course_id):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    base_dir = os.path.join(script_dir, '..', 'apps', 'main', 'src', 'content', 'lessons')
-    course_dir = os.path.join(base_dir, course_id)
-    
-    if not os.path.exists(course_dir):
-        print(f"Error: Course directory not found: {course_dir}")
-        return
 
-    lessons = []
-    files = [f for f in os.listdir(course_dir) if f.endswith('.mdx')]
-    
-    if not files:
-        print(f"No lessons found for course: {course_id}")
-        return
+ROOT = Path(__file__).resolve().parents[1]
+LESSONS_DIR = ROOT / "apps" / "main" / "src" / "content" / "lessons"
+QUALITY_OUTPUT_PATH = ROOT / "apps" / "main" / "src" / "data" / "course-quality.json"
+QUALITY_OVERRIDES_PATH = ROOT / "apps" / "main" / "src" / "data" / "course-quality-overrides.json"
 
-    for filename in files:
-        filepath = os.path.join(course_dir, filename)
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-            # Split frontmatter and body
-            parts = re.split(r'^---$', content, flags=re.MULTILINE)
-            if len(parts) >= 3:
-                body = "---".join(parts[2:]).strip()
-            else:
-                body = content.strip()
-            
-            # Statistics
-            length = len(body)
-            words = len(re.findall(r'\w+', body))
-            h1s = len(re.findall(r'^#\s', body, re.MULTILINE))
-            h2s = len(re.findall(r'^##\s', body, re.MULTILINE))
-            h3s = len(re.findall(r'^###\s', body, re.MULTILINE))
-            
-            # Components
-            quizzes = len(re.findall(r'<Quiz', body))
-            math_blocks = len(re.findall(r'<Math|(?<!\\)\$', body)) # Simple check for Math component or $
-            plots = len(re.findall(r'<PlantUML', body))
+FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+REFERENCE_HEADING_RE = re.compile(
+    r"^##+\s+(references|sources|bibliography|further reading|references\s*&\s*further reading)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+SOURCE_TRACKING_RE = re.compile(r"source tracking|source note|sources?:", re.IGNORECASE)
+LINK_RE = re.compile(r"https?://")
 
-            # Paragraphs: blocks separated by 2+ newlines
-            paragraphs = len([p for p in re.split(r'\n\s*\n', body) if p.strip()])
-            
-            lessons.append({
-                'name': filename,
-                'length': length,
-                'words': words,
-                'h1s': h1s,
-                'h2s': h2s,
-                'h3s': h3s,
-                'paragraphs': paragraphs,
-                'quizzes': quizzes,
-                'math_blocks': math_blocks,
-                'plots': plots
-            })
 
+def split_frontmatter(content):
+    match = FRONTMATTER_RE.match(content)
+    if not match:
+        return {}, content
+
+    frontmatter = {}
+    for line in match.group(1).splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        frontmatter[key.strip()] = value.strip().strip('"')
+
+    return frontmatter, content[match.end():]
+
+
+def level(value, thresholds):
+    score = 0
+    for threshold in thresholds:
+        if value >= threshold:
+            score += 1
+    return score
+
+
+def label_for(metric, level_value):
+    labels = {
+        "sources": [
+            "Unsourced draft",
+            "Source notes present",
+            "Properly sourced",
+            "Professionally checked",
+        ],
+        "content": [
+            "Brief overview",
+            "Course notes",
+            "Self-contained course",
+            "State-of-the-art reference",
+        ],
+        "practice": [
+            "Mostly prose",
+            "Some checks",
+            "Interactive practice",
+            "Practice-rich course",
+        ],
+        "review": [
+            "Not reviewed",
+            "Internal review",
+            "External review",
+            "Professional check",
+        ],
+    }
+    return labels[metric][level_value]
+
+
+def clamp_manual(value):
+    try:
+        return max(0, min(3, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def load_quality_overrides():
+    if not QUALITY_OVERRIDES_PATH.exists():
+        return {}
+    return json.loads(QUALITY_OVERRIDES_PATH.read_text(encoding="utf-8"))
+
+
+def analyze_lesson(path):
+    content = path.read_text(encoding="utf-8")
+    frontmatter, body = split_frontmatter(content)
+
+    quizzes = len(re.findall(r"<Quiz\b", body))
+    code_runners = len(re.findall(r"<CodeRunner\b", body))
+    code_exercises = len(re.findall(r"<CodeExercise\b", body))
+    case_studies = len(re.findall(r"<CaseStudy\b", body))
+    interactive_count = quizzes + code_runners + code_exercises + case_studies
+    has_reference_heading = bool(REFERENCE_HEADING_RE.search(body))
+    has_source_tracking = bool(SOURCE_TRACKING_RE.search(body))
+    source_links = len(LINK_RE.findall(body))
+
+    return {
+        "name": path.name,
+        "path": str(path.relative_to(ROOT)),
+        "courseId": frontmatter.get("course", "").strip() or path.parent.name,
+        "length": len(body),
+        "words": len(re.findall(r"\w+", body)),
+        "h1s": len(re.findall(r"^#\s", body, re.MULTILINE)),
+        "h2s": len(re.findall(r"^##\s+", body, re.MULTILINE)),
+        "h3s": len(re.findall(r"^###\s+", body, re.MULTILINE)),
+        "paragraphs": len([p for p in re.split(r"\n\s*\n", body) if p.strip()]),
+        "quizzes": quizzes,
+        "codeRunners": code_runners,
+        "codeExercises": code_exercises,
+        "caseStudies": case_studies,
+        "interactiveCount": interactive_count,
+        "mathBlocks": len(re.findall(r"<Math|(?<!\\)\$", body)),
+        "diagrams": len(re.findall(r"<PlantUML", body)),
+        "hasDescription": bool(frontmatter.get("description", "").strip()),
+        "hasSources": has_reference_heading or has_source_tracking,
+        "hasReferenceHeading": has_reference_heading,
+        "hasSourceTracking": has_source_tracking,
+        "sourceLinks": source_links,
+        "hasExampleSignal": bool(re.search(r"\b(example|case|demonstrat|scenario)\b", body, re.IGNORECASE)),
+        "hasExerciseSignal": bool(re.search(r"\b(exercise|practice|try|quiz|lab)\b", body, re.IGNORECASE)),
+    }
+
+
+def lessons_by_course():
+    grouped = {}
+    for path in sorted(LESSONS_DIR.glob("*/*.mdx")):
+        lesson = analyze_lesson(path)
+        grouped.setdefault(lesson["courseId"], []).append(lesson)
+    return grouped
+
+
+def course_stats(course_id, lessons):
     total_lessons = len(lessons)
     if total_lessons == 0:
-        return
+        return None
 
-    avg_len = sum(l['length'] for l in lessons) / total_lessons
-    avg_words = sum(l['words'] for l in lessons) / total_lessons
-    avg_h1 = sum(l['h1s'] for l in lessons) / total_lessons
-    avg_h2 = sum(l['h2s'] for l in lessons) / total_lessons
-    avg_h3 = sum(l['h3s'] for l in lessons) / total_lessons
-    avg_para = sum(l['paragraphs'] for l in lessons) / total_lessons
-    
-    total_quizzes = sum(l['quizzes'] for l in lessons)
-    total_math = sum(l['math_blocks'] for l in lessons)
-    total_plots = sum(l['plots'] for l in lessons)
+    longest = max(lessons, key=lambda lesson: lesson["length"])
+    shortest = min(lessons, key=lambda lesson: lesson["length"])
 
-    longest = max(lessons, key=lambda x: x['length'])
-    shortest = min(lessons, key=lambda x: x['length'])
+    return {
+        "courseId": course_id,
+        "totalLessons": total_lessons,
+        "averageLength": sum(lesson["length"] for lesson in lessons) / total_lessons,
+        "averageWords": sum(lesson["words"] for lesson in lessons) / total_lessons,
+        "averageH1": sum(lesson["h1s"] for lesson in lessons) / total_lessons,
+        "averageH2": sum(lesson["h2s"] for lesson in lessons) / total_lessons,
+        "averageH3": sum(lesson["h3s"] for lesson in lessons) / total_lessons,
+        "averageParagraphs": sum(lesson["paragraphs"] for lesson in lessons) / total_lessons,
+        "totalQuizzes": sum(lesson["quizzes"] for lesson in lessons),
+        "totalMath": sum(lesson["mathBlocks"] for lesson in lessons),
+        "totalDiagrams": sum(lesson["diagrams"] for lesson in lessons),
+        "longest": longest,
+        "shortest": shortest,
+    }
 
-    print(f"Course: {course_id}")
-    print(f"-------------------------")
-    print(f"Total lessons:  {total_lessons}")
-    print(f"Mean length:    {avg_len:.1f} characters")
-    print(f"Mean word count:{avg_words:.1f} words")
-    print(f"Avg H1 headers: {avg_h1:.2f}")
-    print(f"Avg H2 headers: {avg_h2:.2f}")
-    print(f"Avg H3 headers: {avg_h3:.2f}")
-    print(f"Avg Paragraphs: {avg_para:.2f}")
-    print(f"-------------------------")
-    print(f"Total Quizzes:  {total_quizzes}")
-    print(f"Total Math:     {total_math} (tags/blocks)")
-    print(f"Total Diagrams: {total_plots}")
-    print(f"-------------------------")
-    print(f"Longest lesson: {longest['name']} ({longest['length']} chars)")
-    print(f"Shortest lesson:{shortest['name']} ({shortest['length']} chars)")
+
+def course_quality(course_id, lessons, overrides):
+    lesson_count = len(lessons)
+    if lesson_count == 0:
+        return None
+
+    source_coverage = sum(lesson["hasSources"] for lesson in lessons) / lesson_count
+    reference_heading_coverage = sum(lesson["hasReferenceHeading"] for lesson in lessons) / lesson_count
+    linked_source_coverage = sum(lesson["sourceLinks"] > 0 for lesson in lessons) / lesson_count
+    avg_words = sum(lesson["words"] for lesson in lessons) / lesson_count
+    avg_h2 = sum(lesson["h2s"] for lesson in lessons) / lesson_count
+    description_coverage = sum(lesson["hasDescription"] for lesson in lessons) / lesson_count
+    example_coverage = sum(lesson["hasExampleSignal"] for lesson in lessons) / lesson_count
+    exercise_coverage = sum(lesson["hasExerciseSignal"] for lesson in lessons) / lesson_count
+    interactive_coverage = sum(lesson["interactiveCount"] > 0 for lesson in lessons) / lesson_count
+    avg_interactive = sum(lesson["interactiveCount"] for lesson in lessons) / lesson_count
+
+    source_level = level(source_coverage, [0.25, 0.75])
+    if reference_heading_coverage >= 0.75 and linked_source_coverage >= 0.75:
+        source_level = max(source_level, 2)
+
+    content_level = 0
+    if avg_words >= 550 and avg_h2 >= 1.5 and description_coverage >= 0.6:
+        content_level = 1
+    if avg_words >= 900 and avg_h2 >= 2 and example_coverage >= 0.5 and exercise_coverage >= 0.35:
+        content_level = 2
+
+    practice_level = level(interactive_coverage, [0.25, 0.6])
+    if interactive_coverage >= 0.75 and avg_interactive >= 1.5:
+        practice_level = 3
+
+    override = overrides.get(course_id, {})
+    manual_source_level = clamp_manual(override.get("sourcesLevel"))
+    manual_content_level = clamp_manual(override.get("contentLevel"))
+    manual_practice_level = clamp_manual(override.get("practiceLevel"))
+    review_level = clamp_manual(override.get("reviewLevel")) or 0
+
+    if manual_source_level is not None:
+        source_level = manual_source_level
+    if manual_content_level is not None:
+        content_level = manual_content_level
+    if manual_practice_level is not None:
+        practice_level = manual_practice_level
+
+    weighted_score = (source_level * 0.35) + (content_level * 0.4) + (practice_level * 0.2) + (review_level * 0.05)
+    overall_level = max(0, min(2, round(weighted_score / 3 * 2)))
+
+    return {
+        "courseId": course_id,
+        "lessonCount": lesson_count,
+        "overall": {
+            "level": overall_level,
+            "label": ["Needs work", "Developing", "Strong"][overall_level],
+            "score": round(weighted_score, 2),
+        },
+        "metrics": {
+            "sources": {
+                "level": source_level,
+                "label": label_for("sources", source_level),
+                "coverage": round(source_coverage, 3),
+                "referenceHeadingCoverage": round(reference_heading_coverage, 3),
+                "linkedSourceCoverage": round(linked_source_coverage, 3),
+            },
+            "content": {
+                "level": content_level,
+                "label": label_for("content", content_level),
+                "averageWords": round(avg_words),
+                "descriptionCoverage": round(description_coverage, 3),
+                "exampleCoverage": round(example_coverage, 3),
+                "exerciseCoverage": round(exercise_coverage, 3),
+            },
+            "practice": {
+                "level": practice_level,
+                "label": label_for("practice", practice_level),
+                "interactiveCoverage": round(interactive_coverage, 3),
+                "averageInteractiveComponents": round(avg_interactive, 2),
+            },
+            "review": {
+                "level": review_level,
+                "label": label_for("review", review_level),
+                "manual": True,
+            },
+        },
+        "notes": override.get("notes", ""),
+    }
+
+
+def print_course_stats(stats):
+    print(f"Course: {stats['courseId']}")
+    print("-------------------------")
+    print(f"Total lessons:  {stats['totalLessons']}")
+    print(f"Mean length:    {stats['averageLength']:.1f} characters")
+    print(f"Mean word count:{stats['averageWords']:.1f} words")
+    print(f"Avg H1 headers: {stats['averageH1']:.2f}")
+    print(f"Avg H2 headers: {stats['averageH2']:.2f}")
+    print(f"Avg H3 headers: {stats['averageH3']:.2f}")
+    print(f"Avg Paragraphs: {stats['averageParagraphs']:.2f}")
+    print("-------------------------")
+    print(f"Total Quizzes:  {stats['totalQuizzes']}")
+    print(f"Total Math:     {stats['totalMath']} (tags/blocks)")
+    print(f"Total Diagrams: {stats['totalDiagrams']}")
+    print("-------------------------")
+    print(f"Longest lesson: {stats['longest']['name']} ({stats['longest']['length']} chars)")
+    print(f"Shortest lesson:{stats['shortest']['name']} ({stats['shortest']['length']} chars)")
+
+
+def print_all_summary(grouped, quality_records):
+    print("Course analytics summary")
+    print("-------------------------")
+    for course_id in sorted(grouped):
+        stats = course_stats(course_id, grouped[course_id])
+        quality = quality_records.get(course_id)
+        quality_label = quality["overall"]["label"] if quality else "Unmeasured"
+        print(
+            f"{course_id:28} "
+            f"{stats['totalLessons']:3} lessons  "
+            f"{stats['averageWords']:6.1f} avg words  "
+            f"{quality_label}"
+        )
+
+
+def write_quality_json(quality_records, output_path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(quality_records, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Wrote {len(quality_records)} course quality records to {output_path.relative_to(ROOT)}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Report LibreUni course stats and generate course quality data."
+    )
+    parser.add_argument("course_id", nargs="?", help="Optional course id to report in detail.")
+    parser.add_argument(
+        "--write-quality",
+        action="store_true",
+        help="Write apps/main/src/data/course-quality.json for the course catalog.",
+    )
+    parser.add_argument(
+        "--quality-output",
+        type=Path,
+        default=QUALITY_OUTPUT_PATH,
+        help="Output path used with --write-quality.",
+    )
+    args = parser.parse_args()
+
+    grouped = lessons_by_course()
+    overrides = load_quality_overrides()
+    quality_records = {
+        course_id: course_quality(course_id, lessons, overrides)
+        for course_id, lessons in sorted(grouped.items())
+    }
+
+    if args.course_id:
+        lessons = grouped.get(args.course_id)
+        if not lessons:
+            available = ", ".join(sorted(grouped))
+            raise SystemExit(f"Course not found: {args.course_id}\nAvailable courses: {available}")
+        print_course_stats(course_stats(args.course_id, lessons))
+    else:
+        print_all_summary(grouped, quality_records)
+
+    if args.write_quality:
+        write_quality_json(quality_records, args.quality_output)
+
 
 if __name__ == "__main__":
-    # Get the directory of the script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    # Go up one level to the workspace root and then to the lessons directory
-    base_dir = os.path.join(script_dir, '..', 'apps', 'main', 'src', 'content', 'lessons')
-    
-    if len(sys.argv) < 2:
-        if os.path.exists(base_dir):
-            courses = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-            print("Usage: python course_stats.py <course_id>")
-            print(f"Available courses: {', '.join(courses)}")
-        else:
-            print(f"Error: Could not find lessons directory at {base_dir}")
-    else:
-        get_course_stats(sys.argv[1])
+    main()

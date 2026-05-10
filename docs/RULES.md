@@ -13,7 +13,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 - `apps/main/src/content/lessons/` — MDX lesson files, organized by course slug
 - `apps/main/src/content/courses/` — JSON course metadata
 - `apps/main/src/components/` — Interactive React components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`, etc.)
-- `scripts/course_stats.py` — content validation (character count, headings, etc.)
+- `scripts/course_stats.py` — course analytics: content stats, structure checks, and generated catalog quality data.
 - `docs/` — technical references (UX, PlantUML)
 
 ---
@@ -61,8 +61,12 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
 
 **Before submitting:**
 
-1. Run `python3 scripts/course_stats.py` — check mean lesson length and heading metrics.
+1. Run `python3 scripts/course_stats.py` — check lesson length, headings, interaction counts, and generated quality summary.
+   - Run `python3 scripts/course_stats.py <course-id>` for detailed stats on one course.
+   - Run `python3 scripts/course_stats.py --write-quality` after course content changes that should update the catalog status badges.
 2. Run `npm run build` (or `npm run build:main`) — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams.
+
+Course quality badges on the catalog are generated from observable MDX signals such as source sections, links, descriptions, examples, exercises, and interactive components. Top-tier review states remain manual and should be set through `apps/main/src/data/course-quality-overrides.json`, then regenerated with `python3 scripts/course_stats.py --write-quality`.
 
 ---
 
