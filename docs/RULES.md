@@ -59,6 +59,8 @@ Instead — directly present the question, problem, or concept.
 
 Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: define the concept, demonstrate it with examples (including edge cases), then give the reader something to try.
 
+**Strict Anti-Bypass Rule:** Adding fake "source tracking" comments, placeholder text, or using meaningless words just to bypass the `course_stats.py` source coverage checks is **strictly forbidden**. Any sources or tracking comments added must be genuine, researched references that actively support the lesson content. Bypassing tests undermines the educational integrity of LibreUni.
+
 **Before submitting:**
 
 1. Run `python3 scripts/course_stats.py` — check lesson length, headings, interaction counts, and generated quality summary.

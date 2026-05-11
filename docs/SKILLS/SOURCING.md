@@ -57,6 +57,7 @@ Integrate the knowledge using the following strict formatting rules within Libre
 
 #### Strict Constraints:
 
+* **NEVER** insert fake, boilerplate, or placeholder source tracking comments (e.g., just adding the word "source" or `{/* Source tracking: Content requires review... */}`) merely to bypass the `course_stats.py` source coverage checks. You must perform actual research and provide genuine, verified citations. Bypassing coverage tests is strictly forbidden.
 * **NEVER** just append citations to existing text without fundamentally rewriting it. You must actively read the fetched source material and rewrite the explanations to genuinely synthesize the retrieved text in your own words.
 * **NEVER** hallucinate a source, book, or link. If you cannot verify a URL or book's existence via search tools, do not cite it.
 * **NEVER** bypass type checks or markdown linters when inserting comments or citations. Ensure tracking comments do not break MDX parsing (for MDX v2, you MUST use `{/* comment */}` instead of standard HTML `<!-- comment -->`).
