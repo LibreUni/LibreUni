@@ -2,6 +2,7 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 
@@ -95,8 +96,16 @@ def analyze_lesson(path):
     case_studies = len(re.findall(r"<CaseStudy\b", body))
     interactive_count = quizzes + code_runners + code_exercises + case_studies
     has_reference_heading = bool(REFERENCE_HEADING_RE.search(body))
-    has_source_tracking = bool(SOURCE_TRACKING_RE.search(body))
     source_links = len(LINK_RE.findall(body))
+
+    # FORBIDDEN BYPASS CHECK: Detect attempts to trick the test with fake source comments
+    if "{/*" in body and re.search(r"(source|review|placeholder|bypass)", body, re.IGNORECASE):
+        if not has_reference_heading and source_links == 0:
+            print(f"\nFATAL ERROR: AI bypass attempt detected in {path.name}!", file=sys.stderr)
+            print("Adding fake 'source' comments to bypass coverage tests is STRICTLY FORBIDDEN.", file=sys.stderr)
+            sys.exit(1)
+
+    has_sources = has_reference_heading or (source_links > 0)
 
     return {
         "name": path.name,
@@ -116,9 +125,8 @@ def analyze_lesson(path):
         "mathBlocks": len(re.findall(r"<Math|(?<!\\)\$", body)),
         "diagrams": len(re.findall(r"<PlantUML", body)),
         "hasDescription": bool(frontmatter.get("description", "").strip()),
-        "hasSources": has_reference_heading or has_source_tracking,
+        "hasSources": has_sources,
         "hasReferenceHeading": has_reference_heading,
-        "hasSourceTracking": has_source_tracking,
         "sourceLinks": source_links,
         "hasExampleSignal": bool(re.search(r"\b(example|case|demonstrat|scenario)\b", body, re.IGNORECASE)),
         "hasExerciseSignal": bool(re.search(r"\b(exercise|practice|try|quiz|lab)\b", body, re.IGNORECASE)),
@@ -244,7 +252,34 @@ def course_quality(course_id, lessons, overrides):
     }
 
 
-def print_course_stats(stats):
+def print_course_warnings(course_id, lessons):
+    missing_sources = [l['path'] for l in lessons if not l['hasSources']]
+    missing_desc = [l['path'] for l in lessons if not l['hasDescription']]
+    missing_ex = [l['path'] for l in lessons if not l['hasExampleSignal']]
+    missing_prac = [l['path'] for l in lessons if not l['hasExerciseSignal']]
+    missing_inter = [l['path'] for l in lessons if l['interactiveCount'] == 0]
+    
+    if any([missing_sources, missing_desc, missing_ex, missing_prac, missing_inter]):
+        print(f"\n--- Detailed Warnings for {course_id} ---")
+        if missing_sources:
+            print(f"Missing Sources ({len(missing_sources)}):")
+            for p in missing_sources: print(f"  - {p}")
+        if missing_desc:
+            print(f"Missing Descriptions ({len(missing_desc)}):")
+            for p in missing_desc: print(f"  - {p}")
+        if missing_ex:
+            print(f"Missing Example Signals ({len(missing_ex)}):")
+            for p in missing_ex: print(f"  - {p}")
+        if missing_prac:
+            print(f"Missing Exercise Signals ({len(missing_prac)}):")
+            for p in missing_prac: print(f"  - {p}")
+        if missing_inter:
+            print(f"Missing Interactive Components ({len(missing_inter)}):")
+            for p in missing_inter: print(f"  - {p}")
+        print("---------------------------------------")
+
+
+def print_course_stats(stats, quality, lessons):
     print(f"Course: {stats['courseId']}")
     print("-------------------------")
     print(f"Total lessons:  {stats['totalLessons']}")
@@ -261,6 +296,17 @@ def print_course_stats(stats):
     print("-------------------------")
     print(f"Longest lesson: {stats['longest']['name']} ({stats['longest']['length']} chars)")
     print(f"Shortest lesson:{stats['shortest']['name']} ({stats['shortest']['length']} chars)")
+    
+    print("\nQuality Metrics:")
+    print(f"Overall Level: {quality['overall']['level']} - {quality['overall']['label']}")
+    for metric, data in quality['metrics'].items():
+        if metric == "review": continue
+        print(f"  {metric.capitalize()} Level {data['level']}: {data['label']}")
+        for k, v in data.items():
+            if k not in ('level', 'label'):
+                print(f"    - {k}: {v}")
+                
+    print_course_warnings(stats['courseId'], lessons)
 
 
 def print_all_summary(grouped, quality_records):
@@ -270,18 +316,46 @@ def print_all_summary(grouped, quality_records):
         stats = course_stats(course_id, grouped[course_id])
         quality = quality_records.get(course_id)
         quality_label = quality["overall"]["label"] if quality else "Unmeasured"
+        
+        # We push info aggressively
+        source_cov = quality["metrics"]["sources"]["coverage"] * 100 if quality else 0
+        interactive_cov = quality["metrics"]["practice"]["interactiveCoverage"] * 100 if quality else 0
         print(
-            f"{course_id:28} "
+            f"{course_id:25} "
             f"{stats['totalLessons']:3} lessons  "
             f"{stats['averageWords']:6.1f} avg words  "
-            f"{quality_label}"
+            f"Sources: {source_cov:5.1f}%  "
+            f"Interactive: {interactive_cov:5.1f}%  "
+            f"[{quality_label}]"
         )
+        
+        # Aggressively push all info without flagging/asking
+        print_course_warnings(course_id, grouped[course_id])
 
 
 def write_quality_json(quality_records, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(quality_records, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote {len(quality_records)} course quality records to {output_path.relative_to(ROOT)}")
+
+
+def check_100_percent_source_coverage(grouped, target_course=None):
+    missing_sources = []
+    for course_id, lessons in grouped.items():
+        if target_course and course_id != target_course:
+            continue
+        for lesson in lessons:
+            if not lesson["hasSources"]:
+                missing_sources.append(lesson["path"])
+    
+    if missing_sources:
+        print("\n" + "!" * 60)
+        print("FATAL ERROR: 100% SOURCE COVERAGE REQUIRED")
+        print("The following lessons are completely missing sources:")
+        for path in missing_sources:
+            print(f"  - {path}")
+        print("!" * 60 + "\n")
+        sys.exit(1)
 
 
 def main():
@@ -309,13 +383,18 @@ def main():
         for course_id, lessons in sorted(grouped.items())
     }
 
+    # 1. Enforce 100% source coverage as requested
+    check_100_percent_source_coverage(grouped, args.course_id)
+
     if args.course_id:
         lessons = grouped.get(args.course_id)
         if not lessons:
             available = ", ".join(sorted(grouped))
             raise SystemExit(f"Course not found: {args.course_id}\nAvailable courses: {available}")
-        print_course_stats(course_stats(args.course_id, lessons))
+        stats = course_stats(args.course_id, lessons)
+        print_course_stats(stats, quality_records[args.course_id], lessons)
     else:
+        # "more aggressively push all info even without flagging/asking"
         print_all_summary(grouped, quality_records)
 
     if args.write_quality:
