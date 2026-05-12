@@ -12,6 +12,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 
 - `apps/main/src/content/lessons/` — MDX lesson files, organized by course slug
 - `apps/main/src/content/courses/` — JSON course metadata
+- `apps/main/src/data/course-manifests/` — YAML lesson order and module grouping for each course
 - `apps/main/src/components/` — Interactive React components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`, etc.)
 - `scripts/course_stats.py` — course analytics: content stats, structure checks, and generated catalog quality data.
 - `docs/` — technical references (UX, PlantUML)
@@ -32,6 +33,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 - Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/PUML.md` for troubleshooting.
 - Lessons must be self-contained — no lesson should require reading another first.
 - No lesson numbers in filenames, headers, or text. Lessons can be taken in any order.
+- Lesson order and module grouping must be edited in `apps/main/src/data/course-manifests/<course-id>.yml`, not in lesson frontmatter.
 - Everything must be university level or above.
 
 ---

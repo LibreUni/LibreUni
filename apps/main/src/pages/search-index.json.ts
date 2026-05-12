@@ -1,7 +1,10 @@
 import { getCollection } from 'astro:content';
+import { getLessonsByCourse } from '../utils/lessons';
 
 export async function GET() {
   const allLessons = await getCollection('lessons');
+  const lessonsByCourse = await getLessonsByCourse(allLessons);
+  const orderedLessons = Object.values(lessonsByCourse).flat();
   const courses = await getCollection('courses');
   const courseTitles = Object.fromEntries(courses.map(course => [course.id, course.data.title]));
 
@@ -14,7 +17,7 @@ export async function GET() {
     url: `courses/${course.id}.html`
   }));
 
-  const lessonData = allLessons.map(l => ({
+  const lessonData = orderedLessons.map(l => ({
     type: 'lesson',
     title: l.data.title,
     slug: l.slug,

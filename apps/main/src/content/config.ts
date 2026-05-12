@@ -16,8 +16,6 @@ const lessonsCollection = defineCollection({
   schema: z.object({
     title: z.string(),
     course: z.string(),
-    order: z.number(),
-    module: z.string().optional(),
     description: z.string().optional(),
   }),
 });
