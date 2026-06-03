@@ -1,0 +1,83 @@
+---
+title: "Callbacks and Function Pointers"
+course: c
+description: "Master function pointer syntax in C, register callbacks to decouple hardware drivers, and compare synchronous and asynchronous callback lifecycles in interrupts."
+---
+import CodeExercise from '../../../components/CodeExercise';
+import Quiz from '../../../components/Quiz';
+
+{/* Source tracking: Function pointer syntax and callback architectures in embedded systems synthesized from Barr & Massa "Programming Embedded Systems" (2nd Ed.) and VIA University College ESW1 Lecture Notes Section 9. */}
+
+# Decoupling with Function Pointers
+
+In embedded systems, hardware drivers should remain decoupled from application logic. Rather than having a low-level button driver call a specific application function directly, the driver should accept a **function pointer** (a callback) from the application. This allows the driver to be reused across different projects without modification.
+
+## Example: Function Pointer Syntax & Typedefs
+
+A function name is an implicit pointer to its address in the compiled binary. We can store this address in a variable.
+
+### Variable Declaration
+The declaration syntax requires parenthesis to group the pointer asterisk with the identifier:
+```c
+// Declares a pointer named 'cb' pointing to a function that takes an int and returns void
+void (*cb)(int);
+```
+
+### The Typedef Approach
+To avoid convoluted signatures, define a function pointer type using `typedef`:
+```c
+// Define 'callback_t' as a type for a function taking int and returning void
+typedef void (*callback_t)(int);
+
+// Expose a clean registration function in the driver interface
+void button_register_callback(callback_t handler);
+```
+
+## Callbacks in Interrupt Context
+
+When a hardware event occurs (such as a button press or timer match), it triggers an **Interrupt Service Routine (ISR)**. If the driver needs to invoke a registered callback in response, we must choose between two lifecycle strategies.
+
+### 1. Synchronous Callbacks (Direct Execution)
+The ISR executes the registered callback directly within the interrupt context:
+```c
+ISR(INT0_vect) {
+    if (app_callback != NULL) {
+        app_callback(PIND); // Direct synchronous execution
+    }
+}
+```
+- **Pros**: Immediate response; low latency.
+- **Cons**: While the callback executes, all other interrupts of equal or lower priority are blocked. If the callback performs complex logic or blocks, it can cause the system to miss critical real-time deadlines.
+
+### 2. Asynchronous Callbacks (Event Queue Separation)
+The ISR does not execute the callback. Instead, it places an event into a RAM-buffered **Event Queue** and exits immediately:
+1. Hardware triggers the interrupt.
+2. The ISR logs the event type/data, appends it to a ring buffer (queue) in RAM, and exits.
+3. The main thread's loop polls the event queue, dequeues the event, and executes the callback in the normal user thread context.
+
+- **Pros**: ISRs remain extremely fast, keeping the system responsive.
+- **Cons**: Higher overhead; latency between the hardware event and callback execution is variable (jitter).
+
+<Quiz client:load
+  title="Interrupt Callback Selection"
+  question="Why is it dangerous to perform floating-point math or print statements inside a synchronous callback called directly by an ISR?"
+  options={[
+    "ISRs do not support function pointers.",
+    "Synchronous callbacks run in the background thread where printing is disabled.",
+    "It blocks all other interrupts for too long, potentially violating real-time execution constraints.",
+    "Synchronous callbacks are executed only when the microcontroller enters sleep mode."
+  ]}
+  correctIndex={2}
+  explanation="Synchronous callbacks execute inside the ISR context. While an ISR is running, other hardware interrupts are disabled. Heavy math or I/O operations will block critical hardware services."
+/>
+
+<CodeExercise client:load
+  title="Function Pointer Typedef Syntax"
+  code={`// Declare a type named 'timer_cb_t' pointing to a function that takes no arguments and returns uint8_t\ntypedef [!blank!] (*timer_cb_t)([!blank!]);`}
+  answers={["uint8_t", "void"]}
+  explanation="A function pointer typedef takes the form: 'typedef return_type (*type_name)(parameter_types);'. If there are no arguments, the parameter is 'void'."
+/>
+
+## References & Further Reading
+*   Barr, M., & Massa, A. (2006). *Programming Embedded Systems: With C and GNU Development Tools* (2nd ed.). O'Reilly Media. Chapter 6 (Interrupts).
+*   VIA University College: *Embedded Software 1 (ESW1) Lecture Notes - Section 9 (Callbacks & Function Pointers)*.

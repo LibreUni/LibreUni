@@ -1,0 +1,103 @@
+---
+title: "AVR Register Programming: UART"
+course: c
+description: "Configure the AVR UART peripheral, calculate baud rate divisors, and implement serial transmit and receive driver routines."
+---
+import CodeExercise from '../../../components/CodeExercise';
+import Quiz from '../../../components/Quiz';
+
+{/* Source tracking: UART transceiver register maps and Baud rate equations synthesized from Microchip ATmega2560 Datasheet (USART peripheral sections) and VIA University College ESW1 Lecture Notes Section 8. */}
+
+# Serial Communication via UART
+
+The **Universal Asynchronous Receiver Transmitter (UART)** is a hardware peripheral that converts data between parallel byte streams and asynchronous serial lines. It is widely used to transfer debugging logs and sensor data between microcontrollers and PCs.
+
+## UART Frame Formats (8N1)
+
+Because UART is asynchronous (lacks a shared clock line), sender and receiver must agree on a timing rate (**baud rate**) and frame format. The standard configuration is **8N1**:
+- **Start Bit**: 1 low bit indicating the start of a frame.
+- **Data Bits**: 8 bits of payload data.
+- **Parity Bit**: None (no parity check).
+- **Stop Bit**: 1 high bit indicating the end of a frame.
+
+## UART Peripheral Registers
+
+On the ATmega2560, the USART0 peripheral is configured using several memory-mapped registers:
+
+1. **`UBRR0H` & `UBRR0L` (Baud Rate Registers)**: A 16-bit register pair (split into High and Low bytes) that holds the clock divisor factor.
+2. **`UCSR0A` (Control & Status Register A)**: Tracks transceiver flags:
+   - `UDRE0` (USART Data Register Empty): Set to `1` by hardware when the write buffer is empty and ready for a new byte.
+   - `RXC0` (USART Receive Complete): Set to `1` by hardware when there is unread data waiting in the receive buffer.
+3. **`UCSR0B` (Control & Status Register B)**: Enables transmitter (`TXEN0`), receiver (`RXEN0`), and interrupts.
+4. **`UCSR0C` (Control & Status Register C)**: Configures frame format (data bits size, stop bits, parity).
+5. **`UDR0` (USART Data Register)**: The physical buffer. Writing a byte to `UDR0` transmits it; reading `UDR0` retrieves the received byte.
+
+## Baud Rate Divisor Calculation
+
+The divisor `UBRR` is calculated from the system clock frequency ($f_{CPU}$) and the target baud rate:
+
+$$UBRR = \frac{f_{CPU}}{16 \times Baud} - 1$$
+
+For a standard ATmega2560 clock frequency of 16 MHz ($16,000,000\text{ Hz}$) and a target baud rate of 9600:
+
+$$UBRR = \frac{16,000,000}{16 \times 9600} - 1 = \frac{16,000,000}{153,600} - 1 = 104.17 \approx 104$$
+
+## Example Transceiver Driver Implementation
+
+```c
+#include <avr/io.h>
+#include <stdint.h>
+
+void uart_init(uint32_t baud) {
+    // 1. Calculate and set baud rate registers
+    uint16_t ubrr_val = F_CPU / 16 / baud - 1;
+    UBRR0H = (uint8_t)(ubrr_val >> 8);
+    UBRR0L = (uint8_t)ubrr_val;
+
+    // 2. Enable receiver and transmitter
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0);
+
+    // 3. Set frame format: 8 data bits, 1 stop bit, no parity (8N1)
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+}
+
+void uart_send_char(char data) {
+    // Wait until transmit buffer is empty (UDRE0 bit in UCSR0A is 1)
+    while (!(UCSR0A & (1 << UDRE0)));
+    
+    // Write byte to data register to trigger transmission
+    UDR0 = data;
+}
+
+char uart_receive_char(void) {
+    // Wait until receive buffer has data (RXC0 bit in UCSR0A is 1)
+    while (!(UCSR0A & (1 << RXC0)));
+    
+    // Read and return data register
+    return UDR0;
+}
+```
+
+<Quiz client:load
+  title="UART Transmit Polling Flag"
+  question="Which bit inside the status register UCSR0A must be polled before writing a new byte to UDR0, and why?"
+  options={[
+    "RXC0, because we must check that the receive buffer is clear.",
+    "TXEN0, because we must enable the transmitter on every byte.",
+    "UDRE0, because writing to UDR0 while the transmit register is full will overwrite and corrupt the pending byte.",
+    "UCSZ00, to ensure the word size is set to 8 bits."
+  ]}
+  correctIndex={2}
+  explanation="The UDRE0 (Data Register Empty) flag indicates if the hardware has transferred the previous byte to the shift register. Writing to UDR0 before UDRE0 is set will corrupt the active transmission."
+/>
+
+<CodeExercise client:load
+  title="Baud Rate Register Math"
+  code={`// Calculate UBRR divisor for a 16MHz clock and 115200 baud\n// UBRR = 16000000 / (16 * 115200) - 1 = 8.68 -> rounds to 8\nuint16_t ubrr = [!blank!] / (16UL * [!blank!]) - 1;`}
+  answers={["16000000UL", "115200UL"]}
+  explanation="The formula for UBRR is f_CPU divided by (16 * Baud) minus 1. 16000000UL represents a 16MHz CPU frequency, and 115200UL is the target baud rate."
+/>
+
+## References & Further Reading
+*   Microchip Technology. *ATmega2560 8-bit AVR Microcontroller Datasheet*. Section 22 (USART).
+*   VIA University College: *Embedded Software 1 (ESW1) Lecture Notes - Section 8 (UART Serial Driver)*.

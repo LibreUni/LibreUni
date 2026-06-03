@@ -1,0 +1,116 @@
+---
+title: "Opaque Pointers and the ADT Pattern"
+course: c
+description: "Implement encapsulation in procedural C using incomplete struct types, and map UML class associations and lifecycles directly to C code."
+---
+import CodeExercise from '../../../components/CodeExercise';
+import Quiz from '../../../components/Quiz';
+
+{/* Source tracking: Encapsulation and opaque pointer patterns in C synthesized from Kernighan & Ritchie "The C Programming Language" (2nd Ed.) and VIA University College ESW1 Lecture Notes Section 5. */}
+
+# Encapsulation in C
+
+C is a procedural language and lacks native object-oriented classes. However, we can enforce encapsulation and modularity using the **Abstract Data Type (ADT)** pattern. This pattern prevents client code from reading or writing a data structure's fields directly, shielding implementation details behind a clean public interface.
+
+## Example: The Incomplete Type Pattern
+
+To hide a struct's layout, we declare the struct as an incomplete type in the public header and define it fully in the private implementation file.
+
+### 1. Public Header (`book.h`)
+The header exposes only a pointer to the incomplete structure type:
+
+```c
+#pragma once
+
+// Incomplete type declaration
+struct book;
+
+// Opaque pointer type alias
+typedef struct book* book_t;
+
+// Public interface functions
+book_t book_create(const char* title, int pages);
+int book_get_pages(book_t self);
+void book_destroy(book_t self);
+```
+
+### 2. Private Implementation (`book.c`)
+The layout of the structure is defined only in the implementation file. Client code compiling against `book.h` cannot dereference `book_t` because the compiler does not know its size or members at compile time.
+
+```c
+#include "book.h"
+#include <stdlib.h>
+#include <string.h>
+
+struct book {
+    char title[32];
+    int pages;
+};
+
+book_t book_create(const char* title, int pages) {
+    book_t self = malloc(sizeof(struct book));
+    if (self != NULL) {
+        strncpy(self->title, title, sizeof(self->title) - 1);
+        self->pages = pages;
+    }
+    return self;
+}
+
+int book_get_pages(book_t self) {
+    return self->pages;
+}
+
+void book_destroy(book_t self) {
+    free(self);
+}
+```
+
+## UML to C Mapping Rules
+
+When translating UML class diagrams into C source code, apply the following visibility and relationship rules:
+
+### Visibility Mapping
+- **Public Attributes/Methods (`+`)**: Declared in the `.h` file.
+- **Private Attributes/Methods (`-`)**: Declared inside the struct definition in the `.c` file. Helper functions are declared as `static` inside the `.c` file so they are invisible to the linker.
+
+### Association and Multiplicity
+- **Multiplicity 0..1 (Optional Association)**: Mapped to a single pointer member.
+- **Multiplicity 0..N (Collection)**: Mapped to a fixed-size array of pointers along with a count tracking the active size.
+
+```c
+#define MAX_AUTHORS 5
+
+struct book {
+    char title[32];
+    struct author* authors[MAX_AUTHORS]; // Array of pointers (0..N)
+    int author_count;
+};
+```
+
+### Lifecycles: Composition vs. Aggregation
+- **Composition (Filled Diamond)**: Represents strict ownership. The parent struct owns the child objects. The parent's destructor must destroy all children.
+- **Aggregation (Empty Diamond)**: Represents a temporary relationship. The child objects exist independently of the parent. The parent's destructor simply frees its own container, leaving the children intact.
+
+<Quiz client:load
+  title="Composition Destructor Behavior"
+  question="In a system where a Library has a composition relationship with Books, what must the library destructor do?"
+  options={[
+    "Only free the library structure itself, leaving the book pointers intact.",
+    "Loop through and call book_destroy() on each book pointer, then free the library structure.",
+    "Call free() on the book pointers directly without calling book_destroy().",
+    "Do nothing, because C handles composition cleanup automatically."
+  ]}
+  correctIndex={1}
+  explanation="Composition means the parent owns the child lifecycles. Therefore, the library destructor must loop through and destroy the books using their destructor before freeing itself to avoid memory leaks."
+/>
+
+<CodeExercise client:load
+  title="Define Opaque Pointer Type"
+  code={`#pragma once\n\nstruct author_st;\n\n// Create the opaque pointer type mapping to struct author_st\ntypedef struct author_st* [!blank!];`}
+  answers={["author_t"]}
+  explanation="In the ADT pattern, we create an alias ending in '_t' pointing to the incomplete struct type to serve as our handle."
+/>
+
+## References & Further Reading
+*   Kernighan, B. W., & Ritchie, D. M. (1988). *The C Programming Language* (2nd ed.). Prentice Hall. Section 6.7 (Typedef) and Section 6.2 (Structures and Functions).
+*   VIA University College: *Embedded Software 1 (ESW1) Lecture Notes - Section 5 (Abstract Data Types)*.

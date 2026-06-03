@@ -1,0 +1,108 @@
+---
+title: "Unit Testing and Mocking with FFF"
+course: c
+description: "Verify embedded code behavior in isolation by writing Unity unit tests and mocking hardware register drivers with the Fake Function Framework (FFF)."
+---
+import CodeExercise from '../../../components/CodeExercise';
+import Quiz from '../../../components/Quiz';
+
+{/* Source tracking: Unity testing lifecycle and FFF mock configurations synthesized from throwtheswitch.org (Unity) and FFF github documentation, and VIA University College ESW1 Lecture Notes Section 6 & Section 7. */}
+
+# Unit Testing in C
+
+Embedded systems rely on physical environments (temperature, voltage, external inputs). To test our business logic in isolation, we must substitute these hardware dependencies with **test doubles** (fakes, stubs, and mocks). 
+
+We compile and execute these tests natively on our PC using **Unity** (an embedded-focused unit testing runner) and **FFF** (Fake Function Framework, a header-only mocking utility).
+
+## The Unity Test Lifecycle
+
+Unity runs each test function inside a standard lifecycle to prevent state leakage between tests:
+1. `setUp(void)`: Runs automatically **before** each test case. Used to reset mocks and initialize structures.
+2. `test_function()`: The actual test containing assertions.
+3. `tearDown(void)`: Runs automatically **after** each test case. Used to clean up memory or close file streams.
+
+```c
+#include "unity.h"
+#include "fff.h"
+#include "room.h"
+#include "mock_tempSensor.h"
+
+DEFINE_FFF_GLOBALS;
+
+void setUp(void) {
+    RESET_FAKE(tempSensor_read); // Reset call counters and history
+}
+
+void tearDown(void) {}
+
+void test_RoomHeatingOnWhenCold(void) {
+    // Set mock sensor return value
+    tempSensor_read_fake.return_val = 15; // 15 degrees Celsius
+    
+    room_tick(); // Tick business logic
+    
+    TEST_ASSERT_EQUAL(HEATING_ON, room_get_heating_state());
+}
+
+int main(void) {
+    UNITY_BEGIN();
+    RUN_TEST(test_RoomHeatingOnWhenCold);
+    return UNITY_END();
+}
+```
+
+### Essential Unity Assertions
+- `TEST_ASSERT_EQUAL(expected, actual)`: Compares integers.
+- `TEST_ASSERT_EQUAL_HEX16(expected, actual)`: Compares 16-bit integers in hex format (highly useful for checking registers).
+- `TEST_ASSERT_EQUAL_STRING(expected, actual)`: Compares strings character-by-character.
+- `TEST_ASSERT_NULL(ptr)` / `TEST_ASSERT_NOT_NULL(ptr)`: Verifies pointer addresses.
+
+## Mocking with Fake Function Framework (FFF)
+
+FFF uses preprocessor macros to generate mock implementations of functions. These mocks track how many times they were called and what arguments they received.
+
+- `FAKE_VOID_FUNC(name, arg_types...)`: Mocks a function returning `void`.
+- `FAKE_VALUE_FUNC(return_type, name, arg_types...)`: Mocks a function returning `return_type`.
+
+> [!WARNING]
+> **Void Argument List Exception**
+> If a function has no parameters (e.g. `uint16_t adc_read(void);`), do not write `void` inside the FFF argument macro list.
+> - **Correct**: `FAKE_VALUE_FUNC(uint16_t, adc_read);`
+> - **Incorrect**: `FAKE_VALUE_FUNC(uint16_t, adc_read, void);`
+
+### Controlling FFF Mocks
+FFF automatically generates a tracking struct named `[function_name]_fake`:
+- **Call Count**: `tempSensor_read_fake.call_count` stores the number of times the mock was called.
+- **Inspect Arguments**: `servo_set_angle_fake.arg0_val` stores the first argument passed to the function in the latest call.
+- **Inspect Argument History**: `servo_set_angle_fake.arg0_history[i]` stores the first argument of the $i$-th call.
+- **Sequence Returns**: Set consecutive return values for multiple calls:
+```c
+uint16_t temp_sequence[] = {15, 18, 22};
+tempSensor_read_fake.return_val_seq = temp_sequence;
+tempSensor_read_fake.return_val_seq_len = 3;
+```
+
+<Quiz client:load
+  title="FFF Mock Argument Exception"
+  question="What is the correct FFF macro call to mock the function 'void led_toggle(void);'?"
+  options={[
+    "FAKE_VOID_FUNC(led_toggle, void);",
+    "FAKE_VOID_FUNC(led_toggle);",
+    "FAKE_VALUE_FUNC(void, led_toggle);",
+    "FAKE_VALUE_FUNC(led_toggle, void);"
+  ]}
+  correctIndex={1}
+  explanation="Functions taking no arguments must omit the parameter list entirely in the FFF macro. Since led_toggle returns void, FAKE_VOID_FUNC(led_toggle); is correct."
+/>
+
+<CodeExercise client:load
+  title="Setting Sequence Returns"
+  code={`// Configure the mock 'adc_read' to return elements from array 'seq' of length 3\nadc_read_fake.[!blank!] = seq;\nadc_read_fake.return_val_seq_len = [!blank!];`}
+  answers={["return_val_seq", "3"]}
+  explanation="To supply sequence returns, configure both the sequence array pointer 'return_val_seq' and the length 'return_val_seq_len'."
+/>
+
+## References & Further Reading
+*   ThrowTheSwitch.org. *Unity: The lightweight C Unit Testing Framework*. [ThrowTheSwitch Docs](https://www.throwtheswitch.org/unity).
+*   Fake Function Framework (FFF). *FFF: A testing framework for creating fake C functions*. [GitHub Repository](https://github.com/meekrosoft/fff).
+*   VIA University College: *Embedded Software 1 (ESW1) Lecture Notes - Section 6 (Unit Testing) & Section 7 (Mocking)*.

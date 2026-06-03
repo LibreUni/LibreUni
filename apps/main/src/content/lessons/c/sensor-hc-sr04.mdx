@@ -1,0 +1,145 @@
+---
+title: "Case Study: HC-SR04 Distance Sensor"
+course: c
+description: "Design register-level drivers for the HC-SR04 ultrasonic sensor, calculate timer timeout limits, and optimize conversion with integer scaling."
+---
+import CodeExercise from '../../../components/CodeExercise';
+import Quiz from '../../../components/Quiz';
+
+{/* Source tracking: HC-SR04 physical timing specifications, speed of sound equations, and integer scaling optimizations synthesized from Cytron HC-SR04 Product User's Manual and VIA University College ESW1 Lecture Notes Section 11. */}
+
+# Ultrasonic Distance Sensing
+
+The **HC-SR04 ultrasonic distance sensor** measures distance by emitting sound pulses and timing how long they take to bounce back from an obstacle.
+
+## Driver Working Principle
+1. **Trigger Pulse**: The microcontroller initiates a measurement by sending a High (`1`) pulse of at least 10 µs to the sensor's Trig pin.
+2. **Pulse Transmission**: The sensor automatically emits eight 40kHz acoustic pulses.
+3. **Echo Measurement**: The sensor sets its Echo pin High (`1`). It keeps it High until the reflected sound wave is received, then drops it Low (`0`).
+4. **Timeout**: If no object is detected, the Echo pin automatically drops Low after approximately 38ms to prevent infinite blocking.
+
+## Timing & Prescaler Calculations
+
+To measure the Echo pulse duration, we use a 16-bit hardware timer (such as Timer 4 on the ATmega2560) running at $f_{CPU} = 16\text{ MHz}$.
+
+### 1. Timeout Counter Limit
+A timeout of 38ms ($0.038\text{ seconds}$) corresponds to a CPU cycle count of:
+
+$$\text{Cycles} = 0.038\text{ s} \times 16,000,000\text{ cycles/s} = 608,000\text{ cycles}$$
+
+A 16-bit timer can only count up to $65535$. We must choose a prescaler division factor $N$ such that $65535 \times N > 608,000$:
+
+$$N > \frac{608,000}{65535} \approx 9.27$$
+
+The closest standard prescaler factor higher than 9.27 is **$N = 64$**.
+The comparison threshold `OCR4A` for a 38ms timeout using a prescaler of 64 is:
+
+$$\text{OCR4A} = \frac{608,000}{64} = 9500$$
+
+### 2. Integer Distance Scaling
+Floating-point division is extremely slow on 8-bit microcontrollers and is disabled in standard serial formatting libraries. We pre-calculate a static integer scale factor to convert timer counts directly into millimeters.
+
+- Speed of sound at 20°C: $343\text{ m/s} = 343,000\text{ mm/s}$.
+- The sound travels to the object and back, so the physical distance is half the total travel time:
+
+$$\text{Distance}_{mm} = \frac{1}{2} \times \text{Propagation Time} \times \text{Speed of Sound}$$
+
+$$\text{Distance}_{mm} = \frac{1}{2} \times \frac{\text{Count} \times 64}{16,000,000} \times 343,000$$
+
+$$\text{Distance}_{mm} = \text{Count} \times \frac{32 \times 343,000}{16,000,000} = \text{Count} \times \frac{343}{500}$$
+
+$$\text{Integer Equation: } \text{Distance}_{mm} = \frac{\text{Count} \times 343}{500}$$
+
+### 3. Overflow Protection Check
+Before committing to integer math, verify that the numerator does not overflow the variable container type. The maximum expected count is the timeout limit ($9500$):
+
+$$9500 \times 343 = 3,258,500$$
+
+Since $3,258,500 < 2^{32} - 1$ ($4,294,967,295$), this calculation fits inside a standard 32-bit unsigned integer (`uint32_t`) without risk of overflow.
+
+## Driver Implementation
+
+```c
+#include <avr/io.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#define TRIG_PIN PORTA2
+#define ECHO_PIN PINA3
+
+static volatile bool timeout_flag = false;
+
+void distance_init(void) {
+    DDRA |= (1 << TRIG_PIN);   // Set Trig pin as Output
+    DDRA &= ~(1 << DDA3);      // Set Echo pin as Input
+    
+    // Configure Timer 4 in CTC mode (WGM42=1)
+    TCCR4A = 0; TCCR4B = 0;
+    TCCR4B |= (1 << WGM42);
+    OCR4A = 9500;              // Timeout set at 38ms
+    TIMSK4 |= (1 << OCIE4A);   // Enable Compare A interrupt
+}
+
+ISR(TIMER4_COMPA_vect) {
+    timeout_flag = true;
+}
+
+uint16_t distance_measure(void) {
+    timeout_flag = false;
+    TCNT4 = 0;
+    
+    // 1. Send 10us Trigger Pulse
+    PORTA |= (1 << TRIG_PIN);
+    for (volatile uint8_t i = 0; i < 40; i++); // Short delay loop (~10us)
+    PORTA &= ~(1 << TRIG_PIN);
+    
+    // 2. Wait for Echo pin to go High (with timeout check)
+    while (!(PINA & (1 << ECHO_PIN))) {
+        if (timeout_flag) return UINT16_MAX;
+    }
+    
+    // 3. Start Timer 4 with prescaler 64
+    TCNT4 = 0;
+    TCCR4B |= (1 << CS41) | (1 << CS40); // N = 64
+    
+    // 4. Wait for Echo pin to go Low (with timeout check)
+    while (PINA & (1 << ECHO_PIN)) {
+        if (timeout_flag) {
+            TCCR4B &= ~((1 << CS41) | (1 << CS40)); // Stop timer
+            return UINT16_MAX;
+        }
+    }
+    
+    // 5. Stop Timer 4
+    TCCR4B &= ~((1 << CS41) | (1 << CS40));
+    uint16_t count = TCNT4;
+    
+    // Convert counts to mm: (Count * 343) / 500
+    uint32_t distance = ((uint32_t)count * 343) / 500;
+    return (uint16_t)distance;
+}
+```
+
+<Quiz client:load
+  title="Microcontroller Floating-point Optimization"
+  question="Why do we pre-calculate the integer fraction (343 / 500) rather than writing 'distance = (count * 64.0 / 16000000.0) * 171500.0;'?"
+  options={[
+    "Floating-point variables do not support division operations in C.",
+    "Microcontrollers lack hardware floating-point units, making float operations extremely slow and resource-heavy compared to integer arithmetic.",
+    "Timer registers are physically incapable of multiplying by decimal points.",
+    "Standard print functions crash if passed a floating-point distance value."
+  ]}
+  correctIndex={1}
+  explanation="Many small microcontrollers (like the 8-bit AVR architecture) do not have a floating-point unit (FPU). Float operations are emulated in software, consuming hundreds of clock cycles and increasing code size."
+/>
+
+<CodeExercise client:load
+  title="Distance Scaling Equation"
+  code={`// Calculate distance in mm from timer count using integer scaling\nuint32_t distance = ((uint32_t)count * [!blank!]) / [!blank!];`}
+  answers={["343", "500"]}
+  explanation="The derived integer scaling formula is (count * 343) / 500 to convert counts to millimeters at 20°C."
+/>
+
+## References & Further Reading
+*   Cytron Technologies. *HC-SR04 Ultrasonic Sensor Product User's Manual*.
+*   VIA University College: *Embedded Software 1 (ESW1) Lecture Notes - Section 11 (Case Study: Distance Sensor)*.

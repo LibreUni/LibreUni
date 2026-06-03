@@ -1,0 +1,78 @@
+---
+title: "PlatformIO and TDD Target Isolation"
+course: c
+description: "Isolate target-specific hardware registers from native PC tests using PlatformIO's multi-environment double compilation strategy."
+---
+import CodeExercise from '../../../components/CodeExercise';
+import Quiz from '../../../components/Quiz';
+
+{/* Source tracking: PlatformIO multi-environment build systems and target isolation mechanisms synthesized from PlatformIO Core documentation and VIA University College ESW1 Lecture Notes Section 7 & Section 1. */}
+
+# The Double Compilation Strategy
+
+A major bottleneck in embedded development is the **compile-flash-debug cycle**. Flashing code to a physical microcontroller takes time, and debugging directly on hardware can be difficult due to limited hardware breakpoints and slow serial interfaces.
+
+To solve this, we use a **double compilation** strategy:
+1. **Target Environment**: The compiler targets the microcontroller architecture (e.g., AVR, ARM) to compile the production binary.
+2. **Native PC Environment**: The compiler compiles the code for the host development machine (e.g., x86_64, Apple Silicon) to run unit tests in milliseconds.
+
+However, native PC compilers cannot compile code that includes microcontroller hardware register files (like `<avr/io.h>`) because these registers do not exist on the PC. We must isolate our hardware drivers.
+
+## PlatformIO Directory Classification
+
+PlatformIO structures its projects to enable this target isolation out-of-the-box. Code files are divided into three directories:
+
+### 1. The `lib/` Directory (Shared Business Logic)
+Contains hardware-independent logic (the Unit Under Test, or UUT) and the public interface (`.h` files) of low-level drivers.
+- **Example**: `room.c`, `room.h` (checks temperature thresholds and makes decisions), and `tempDriver.h` (declares the sensor read function).
+- **Compilation**: Compiled for **both** the target microcontroller and the native host PC runner.
+
+### 2. The `src/` Directory (Target-Only Implementation)
+Contains target-specific driver code that manipulates physical hardware registers, along with `main.c` (the microcontroller entry point).
+- **Example**: `tempDriver.c` (reads the physical microcontroller ADC register like `ADMUX`) and `main.c`.
+- **Compilation**: Compiled **only** for the target microcontroller.
+
+### 3. The `test/` Directory (PC-Only Test Runner)
+Contains unit test suites and mocked driver implementations.
+- **Example**: `test_room.c` (Unity assertions) and a mock implementation of `tempDriver.h` built using a mocking framework.
+- **Compilation**: Compiled **only** for the native host PC.
+
+```
+project/
+├── lib/               <-- Shared logic (UUT) & interface .h files
+│   ├── room/
+│   │   ├── room.h
+│   │   └── room.c
+│   └── tempSensor/
+│       └── tempSensor.h
+├── src/               <-- Target-only register drivers & main.c
+│   ├── tempSensor.c   <-- (Includes <avr/io.h>)
+│   └── main.c
+└── test/              <-- PC-only unit tests & ffff mocks
+    └── test_room/
+        └── test_room.c
+```
+
+<Quiz client:load
+  title="File Directory Classification"
+  question="If you are writing a register-level driver file called 'led_driver.c' that references 'PORTB' directly, where should you place it in a PlatformIO project to support PC unit testing?"
+  options={[
+    "In the lib/ directory.",
+    "In the test/ directory.",
+    "In the src/ directory.",
+    "In the project root folder."
+  ]}
+  correctIndex={2}
+  explanation="Files referencing physical hardware registers (like PORTB) cannot compile on a PC. They must be placed in 'src/' (target-only) and mocked out in the 'test/' folder when testing business logic."
+/>
+
+<CodeExercise client:load
+  title="Identify Native Test Folder"
+  code={`// Complete the path of the PlatformIO folder compiled only on the native host PC for testing:\nproject/[!blank!]/test_suite.c`}
+  answers={["test"]}
+  explanation="The 'test/' directory is reserved for PC-only test suites, where hardware interfaces are mocked out."
+/>
+
+## References & Further Reading
+*   PlatformIO Core Community. *PlatformIO Library Dependency Finder (LDF) & Unit Testing Guide*. [PlatformIO Docs](https://docs.platformio.org/).
+*   VIA University College: *Embedded Software 1 (ESW1) Lecture Notes - Section 1 & Section 7 (TDD and Build Process)*.
