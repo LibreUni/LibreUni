@@ -25,6 +25,12 @@ const ROUTES = [
     expectedTitle: /HISTORIA/i,
     expectedText: /Interactive Historical Atlas/i,
   },
+  {
+    name: 'main course export',
+    url: 'http://127.0.0.1:4321/courses/operating-systems/export.html',
+    expectedTitle: /Operating Systems Internals - Full Course Export/i,
+    expectedText: /Save as PDF/i,
+  },
 ];
 
 test.describe('production smoke checks', () => {

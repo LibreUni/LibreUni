@@ -15,6 +15,10 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
   
   // Split by [!blank!] or any sequence of 3 or more underscores
   const parts = actualCode.split(/\[!blank!]|_{3,}/);
+  const completedCode = parts.reduce((result, part, index) => {
+    const answer = index < actualAnswers.length ? actualAnswers[index] || '' : '';
+    return result + part + answer;
+  }, '');
   
   const [userInputs, setUserInputs] = useState<string[]>(new Array(actualAnswers.length).fill(''));
   const [submitted, setSubmitted] = useState(false);
@@ -43,6 +47,12 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
 
   return (
     <div className="code-exercise my-12 group">
+      <div className="print-static-assessment hidden">
+        <div className="print-static-label">{title}</div>
+        <pre className="print-static-code"><code>{completedCode}</code></pre>
+        {explanation && <p className="print-static-explanation">{explanation}</p>}
+      </div>
+
       <div className="code-exercise-shell bg-light-bg dark:bg-dark-surface rounded-3xl overflow-hidden border border-light-border dark:border-dark-border shadow-[0_30px_60px_-15px_rgba(0,0,0,0.05)] dark:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] transition-all duration-500 group-hover:border-primary/30">
         <div className="code-exercise-header bg-light-surface dark:bg-dark-bg/20 px-5 py-1 md:px-7 md:py-1.5 border-b border-light-border dark:border-dark-border flex items-center justify-start">
           <h3 className="code-exercise-title text-[0.78rem] md:text-sm font-black text-light-text dark:text-dark-text tracking-[0.18em] uppercase leading-none">{title}</h3>

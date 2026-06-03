@@ -61,6 +61,37 @@ export default function CodeRunner({ code, output: initialOutput, title = "Inter
     setLoadingProgress(0);
   };
 
+  const loadRequiredPackages = async (pyodide: any) => {
+    // Load standard scientific libs if mentioned in code
+    const libsToLoad: string[] = [];
+    if (currentCode.includes('numpy')) libsToLoad.push('numpy');
+    if (currentCode.includes('pandas')) libsToLoad.push('pandas');
+    if (currentCode.includes('matplotlib')) libsToLoad.push('matplotlib');
+    if (currentCode.includes('sympy')) libsToLoad.push('sympy');
+    if (currentCode.includes('sklearn')) libsToLoad.push('scikit-learn');
+    if (currentCode.includes('scipy')) libsToLoad.push('scipy');
+    if (currentCode.includes('PIL') || currentCode.includes('pillow')) libsToLoad.push('pillow');
+
+    if (libsToLoad.length > 0) {
+      updateLoading(`Loading packages: ${libsToLoad.join(', ')}`, 46);
+      await pyodide.loadPackage(libsToLoad);
+    }
+
+    // Some visualization helpers are pure Python and are best installed with micropip.
+    if (currentCode.includes('seaborn') || currentCode.includes('load_dataset') || currentCode.includes('networkx')) {
+      updateLoading("Installing browser Python packages", 68);
+      await pyodide.loadPackage("micropip");
+      await pyodide.runPythonAsync(`
+import micropip
+${currentCode.includes('seaborn') || currentCode.includes('load_dataset') ? "await micropip.install('seaborn')" : ""}
+${currentCode.includes('networkx') ? "await micropip.install('networkx')" : ""}
+await micropip.install('pyodide-http')
+import pyodide_http
+pyodide_http.patch_all()
+      `);
+    }
+  };
+
   const initPyodide = async () => {
     if (window.pyodideInstance) {
       pyodideRef.current = window.pyodideInstance;
@@ -74,35 +105,6 @@ export default function CodeRunner({ code, output: initialOutput, title = "Inter
       const pyodide = await window.loadPyodide({
         indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/"
       });
-      
-      // Load standard scientific libs if mentioned in code
-      const libsToLoad: string[] = [];
-      if (currentCode.includes('numpy')) libsToLoad.push('numpy');
-      if (currentCode.includes('pandas')) libsToLoad.push('pandas');
-      if (currentCode.includes('matplotlib')) libsToLoad.push('matplotlib');
-      if (currentCode.includes('sympy')) libsToLoad.push('sympy');
-      if (currentCode.includes('sklearn')) libsToLoad.push('scikit-learn');
-      if (currentCode.includes('scipy')) libsToLoad.push('scipy');
-      if (currentCode.includes('PIL') || currentCode.includes('pillow')) libsToLoad.push('pillow');
-
-      if (libsToLoad.length > 0) {
-        updateLoading(`Loading packages: ${libsToLoad.join(', ')}`, 46);
-        await pyodide.loadPackage(libsToLoad);
-      }
-
-      // Some visualization helpers are pure Python and are best installed with micropip.
-      if (currentCode.includes('seaborn') || currentCode.includes('load_dataset') || currentCode.includes('networkx')) {
-        updateLoading("Installing browser Python packages", 68);
-        await pyodide.loadPackage("micropip");
-        await pyodide.runPythonAsync(`
-import micropip
-${currentCode.includes('seaborn') || currentCode.includes('load_dataset') ? "await micropip.install('seaborn')" : ""}
-${currentCode.includes('networkx') ? "await micropip.install('networkx')" : ""}
-await micropip.install('pyodide-http')
-import pyodide_http
-pyodide_http.patch_all()
-        `);
-      }
 
       window.pyodideInstance = pyodide;
       pyodideRef.current = pyodide;
@@ -201,6 +203,8 @@ pyodide_http.patch_all()
 
     try {
       const pyodide = pyodideRef.current || await initPyodide();
+      await loadRequiredPackages(pyodide);
+
       if (usesPythonVisuals) {
         updateLoading("Preparing visualization support", 74);
         await pyodide.loadPackage(['matplotlib']);
@@ -317,6 +321,17 @@ _visual
 
   return (
     <div className="code-runner my-12 group">
+      <div className="print-static-lab hidden">
+        <div className="print-static-label">{title}</div>
+        <pre className="print-static-code"><code>{defaultCode}</code></pre>
+        {initialOutput && (
+          <>
+            <div className="print-static-subhead">Expected output</div>
+            <pre className="print-static-output"><code>{initialOutput.replace(/\\n/g, '\n')}</code></pre>
+          </>
+        )}
+      </div>
+
       <div className="bg-light-bg dark:bg-dark-surface rounded-lg overflow-hidden border border-light-border dark:border-dark-border shadow-xl transition-all duration-300 group-hover:border-primary/30">
         <div className="border-b border-light-border dark:border-dark-border bg-light-bg dark:bg-dark-surface px-4 py-3">
           <div className="flex flex-wrap gap-2" role="tablist" aria-label={`${title} lab sections`}>

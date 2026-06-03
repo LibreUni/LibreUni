@@ -101,8 +101,51 @@ export default function Quiz({
     setSelected(null);
   };
 
+  const allQuestions = quizQuestions
+    .map((quizQuestion) => {
+      const questionOptions = quizQuestion.options || [];
+      const questionCorrectIndex = quizQuestion.correctIndex;
+      const normalizedQuestionOptions: Option[] = questionOptions.map((opt, index) => {
+        if (typeof opt === 'string') {
+          return {
+            id: index.toString(),
+            text: opt,
+            isCorrect: index === questionCorrectIndex
+          };
+        }
+
+        const optObj = opt as any;
+        return {
+          ...optObj,
+          id: optObj.id?.toString() || index.toString(),
+          isCorrect: Boolean(optObj.isCorrect) || index === questionCorrectIndex
+        };
+      });
+
+      const answer = normalizedQuestionOptions.find((option) => option.isCorrect);
+      return {
+        ...quizQuestion,
+        answerText: answer?.text,
+      };
+    });
+
   return (
     <div className="quiz-container my-8 rounded-lg border border-primary/20 bg-primary/[0.03] p-4 dark:border-primary/25 dark:bg-primary/[0.06] md:p-5">
+      <div className="print-static-assessment hidden">
+        <div className="print-static-label">Knowledge Check</div>
+        {allQuestions.map((quizQuestion, index) => (
+          <div className="print-static-item" key={`${quizQuestion.question}-${index}`}>
+            <p className="print-static-question">{quizQuestion.question}</p>
+            {quizQuestion.answerText && (
+              <p className="print-static-answer"><strong>Answer:</strong> {quizQuestion.answerText}</p>
+            )}
+            {quizQuestion.explanation && (
+              <p className="print-static-explanation">{quizQuestion.explanation}</p>
+            )}
+          </div>
+        ))}
+      </div>
+
       <h3 className="mb-4 text-lg font-semibold leading-snug text-light-text dark:text-dark-text">{currentQuestion.question}</h3>
       
       <div

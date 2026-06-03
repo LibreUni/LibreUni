@@ -54,6 +54,7 @@ export default function CaseStudy(props: CaseStudyProps) {
   });
 
   const hasOptions = normalizedOptions.length > 0;
+  const correctAnswer = normalizedOptions.find((option) => option.isCorrect);
 
   const handleOptionClick = (id: string | number) => {
     if (submitted) return;
@@ -88,6 +89,16 @@ export default function CaseStudy(props: CaseStudyProps) {
 
   return (
     <div className="case-study-container my-8 rounded-lg border border-primary/20 bg-primary/[0.03] p-4 dark:border-primary/25 dark:bg-primary/[0.06] md:p-5">
+      <div className="print-static-assessment hidden">
+        <div className="print-static-label">{title || 'Case Study'}</div>
+        {scenario && <p className="print-static-scenario">{scenario}</p>}
+        {qText && <p className="print-static-question">{qText}</p>}
+        {correctAnswer && (
+          <p className="print-static-answer"><strong>Answer:</strong> {correctAnswer.text}</p>
+        )}
+        {exp && <p className="print-static-explanation">{exp}</p>}
+      </div>
+
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 rounded-md border border-primary/20 bg-light-bg px-2.5 py-1 text-xs font-semibold text-primary shadow-sm dark:bg-dark-surface">
