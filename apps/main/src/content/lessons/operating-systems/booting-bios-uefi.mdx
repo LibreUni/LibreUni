@@ -8,38 +8,80 @@ import CodeExercise from '../../../components/CodeExercise';
 
 # The Hardware Handshake: BIOS vs. UEFI
 
-Before an operating system can manage memory or schedule processes, it must be brought into existence by the hardware. This process, known as **booting** (short for bootstrapping), is the sequence of events that occurs from the moment you press the power button until the kernel takes control.
+{/* Source tracking: Hardware booting sequences, BIOS execution models, and UEFI specifications synthesized from "Operating System Concepts" (Silberschatz, Galvin & Gagne, 10th Ed., Chapter 2) and Wikipedia: Booting (CC-BY-SA 4.0). */}
+
+Before an operating system can manage memory or schedule processes, it must be loaded into memory. This sequence of events is known as **booting** (short for bootstrapping), which represents the transition from hardware initialization to operating system control.
 
 ## 1. The Power-On Self-Test (POST)
 
-When power is applied, the CPU is "reset" to a fixed execution state. On x86 systems, it begins in **Real Mode** (16-bit) and jumps to a specific memory address (usually `0xFFFFFFF0`, the "reset vector") where the firmware resides. 
+When power is applied to the motherboard, the CPU begins executing at a hardcoded address called the **reset vector**. For x86 microprocessors, the reset vector is located in 16-bit **Real Mode** at the physical address `0xFFFFFFF0` (near the top of the 4GB address space). This location contains a jump instruction pointing to the system firmware in read-only memory (ROM).
 
-The firmware—either a Legacy BIOS or a modern UEFI—first performs the **POST**. This verifies that the hardware is functional: it checks the CPU, initializes the memory controller (RAM), and detects storage devices.
+The system firmware—either a Legacy BIOS or a modern UEFI—immediately performs the **POST**. The POST diagnostic validates hardware functionality: it checks register integrity, initializes the memory controller (RAM), detects peripheral buses (PCIe), and scans storage interfaces (SATA/NVMe).
+
+An example of the assembly instruction executed at the x86 reset vector:
+
+```assembly
+; Reset Vector at physical address 0xFFFFFFF0
+jmp 0xF000:0xE05B   ; Far jump to BIOS initial entry point
+```
 
 ## 2. Legacy BIOS and the MBR
 
-For decades, the **BIOS** (Basic Input/Output System) was the standard. It is limited by its 16-bit origins.
+Historically, the **BIOS** (Basic Input/Output System) acted as the firmware. Because of its design origins in the late 1970s, it operates under tight physical constraints.
 
 ### The Master Boot Record (MBR)
-The BIOS looks at the first 512 bytes of the bootable disk. This sector is the **MBR**.
-- **Bootstrap Code (446 bytes)**: Tiny machine code that knows how to find the rest of the OS.
-- **Partition Table (64 bytes)**: Defines up to 4 primary partitions.
-- **Boot Signature (2 bytes)**: The hex value `0x55AA`. If this is missing, the BIOS won't boot the disk.
+Upon completing the POST, the BIOS searches for bootable media. It reads the first sector (Sector 0) of the selected disk, which is the 512-byte **MBR**.
+
+* **Bootstrap Code (446 bytes)**: Assembly instructions that locate and load the active partition bootloader.
+* **Partition Table (64 bytes)**: Defines up to 4 primary partitions (16 bytes per partition entry).
+* **Boot Signature (2 bytes)**: The hex value `0x55AA`.
+
+If the boot signature is missing or incorrect, the BIOS halts execution, assuming the disk is not bootable.
+
+An example of a C structure defining the MBR:
+
+```c
+struct MbrPartitionEntry {
+    uint8_t  boot_indicator; // 0x80 for active/bootable
+    uint8_t  start_chs[3];   // Cylinder-Head-Sector address
+    uint8_t  partition_type; // e.g., 0x83 for Linux native
+    uint8_t  end_chs[3];
+    uint32_t start_lba;      // Logical Block Addressing start sector
+    uint32_t sector_count;   // Total sectors in partition
+};
+
+struct MasterBootRecord {
+    uint8_t                  bootstrap_code[446];
+    struct MbrPartitionEntry partitions[4];
+    uint16_t                 boot_signature; // Must be 0x55AA
+};
+```
 
 ### BIOS Limitations
-1. **16-bit Real Mode**: Access to only 1MB of RAM initially.
-2. **2TB Limit**: MBR partitioning cannot address disks larger than 2TB.
-3. **Interrupt Reliance**: Relies on slow, ancient software interrupts (like `INT 0x13` for disk I/O).
+1. **16-bit Real Mode**: BIOS operates with restricted access to only 1MB of memory and lacks hardware memory protection.
+2. **2TB Disk Limit**: The MBR uses 32-bit fields to track logical sectors. With a sector size of 512 bytes, the maximum addressable disk capacity is $2^{32} \times 512\text{ bytes} = 2.19\text{ TB}$.
+3. **Interrupt Reliance**: Input/Output operations depend on BIOS software interrupts (e.g., `INT 0x13`), which run slowly and bypass modern bus speed capabilities.
 
 ## 3. The Modern Standard: UEFI
 
-The **UEFI** (Unified Extensible Firmware Interface) replaced BIOS to address these limitations. It is essentially a miniature operating system itself.
+The **UEFI** (Unified Extensible Firmware Interface) replaces the BIOS to handle modern scale and security demands. UEFI is a modular firmware interface containing its own drivers, shell, and file system parsers.
 
 ### Key Advantages of UEFI
-- **Mode Transition**: Runs in 32-bit or 64-bit mode immediately, allowing access to all system memory.
-- **GPT (GUID Partition Table)**: Supports disks up to 9.4 Zettabytes and up to 128 partitions by default.
-- **EFI System Partition (ESP)**: Instead of hiding code in a "magic" sector (MBR), UEFI looks for a FAT32 partition containing `.efi` executable files.
-- **Secure Boot**: Uses digital signatures to ensure only trusted code (like a signed Linux or Windows bootloader) is executed.
+* **Mode Transition**: Switches the CPU to 32-bit or 64-bit protected mode immediately, enabling full system RAM access.
+* **GPT (GUID Partition Table)**: Replaces the MBR partition table. GPT tracks sectors using 64-bit Logical Block Addressing (LBA), raising the maximum disk limit to 9.4 Zettabytes ($9.4 \times 10^{21}$ bytes) and supporting up to 128 partitions.
+* **EFI System Partition (ESP)**: Instead of executing raw code stored in a specific disk sector, UEFI mounts a dedicated FAT32 partition (the ESP) and executes bootloader applications directly.
+* **Secure Boot**: Restricts bootloader execution to binaries containing digital signatures verified by keys stored within the firmware NVRAM.
+
+An example of the ESP directory tree layout:
+
+```text
+/boot/efi/
+└── EFI/
+    ├── BOOT/
+    │   └── BOOTX64.EFI
+    └── ubuntu/
+        └── grubx64.efi
+```
 
 <PlantUML theme="none" code={`
 @startuml
@@ -67,16 +109,35 @@ stop
 
 ## MBR vs. GPT Comparison
 
+The structural differences between the Legacy BIOS (MBR) and modern UEFI (GPT) partition models dictate system compatibility:
+
+```text
+MBR Layout:
+[ MBR (LBA 0) ] [ Partition 1 ] [ Partition 2 ] ...
+
+GPT Layout:
+[ Protective MBR (LBA 0) ] [ Primary GPT Header (LBA 1) ] [ Partition Entries (LBA 2-33) ] [ Partitions... ] [ Backup Table ]
+```
+
 | Feature | MBR (BIOS) | GPT (UEFI) |
 | :--- | :--- | :--- |
 | **Max Disk Size** | 2 TB | 9.4 ZB |
 | **Max Partitions** | 4 Primary | 128 (Default) |
-| **Redundancy** | None (Single sector) | Header and Table Backups |
+| **Redundancy** | None (Single point of failure) | Primary and Secondary Backup Tables |
 | **Execution Mode** | 16-bit Real Mode | 32/64-bit Protected Mode |
 
 ## Interactive Exercise: The Magic Number
 
-In the world of Legacy BIOS, how does the firmware know that a disk is actually bootable?
+The C struct representing the MBR defines the boot signature as a 16-bit integer. Under little-endian systems, this integer matches the signature bytes.
+
+```c
+// Validating the MBR signature
+if (mbr.boot_signature == 0xAA55) {
+    // Disk is bootable
+}
+```
+
+Verify the boot signature values in big-endian/standard representation below.
 
 <CodeExercise client:load
   title="The Boot Signature"
@@ -85,4 +146,8 @@ In the world of Legacy BIOS, how does the firmware know that a disk is actually 
   explanation="The 0x55AA signature is the standard 'magic number' that tells the BIOS the sector contains valid boot code."
 />
 
-Whether you are using a 30-year-old server or a brand-new laptop, understanding this initial handshake is the first step in \"operating\" the system. In the next lesson, we'll see how the **Bootloader** bridges the gap between this firmware and the Operating System kernel.
+## References & Further Reading
+*   [Booting](https://en.wikipedia.org/wiki/Booting) (CC-BY-SA 4.0)
+*   [Booting process of Linux](https://en.wikipedia.org/wiki/Booting_process_of_Linux) (CC-BY-SA 4.0)
+*   [GUID Partition Table](https://en.wikipedia.org/wiki/GUID_Partition_Table) (CC-BY-SA 4.0)
+*   Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). *Operating System Concepts* (10th ed.). John Wiley & Sons.

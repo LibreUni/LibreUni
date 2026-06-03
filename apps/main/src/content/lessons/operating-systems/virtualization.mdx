@@ -3,25 +3,50 @@ title: "Virtualization and Containers"
 course: "operating-systems"
 description: "How we run multiple operating systems on a single piece of hardware. Comparing VMs, Hypervisors, and Docker containers."
 ---
+import Quiz from '../../../components/Quiz';
+import CodeExercise from '../../../components/CodeExercise';
 import PlantUML from '../../../components/PlantUML.astro';
 
 # Virtualization and Containers
 
-In the old days, "one computer = one OS." If you wanted to run a Linux web server and a Windows database server, you had to buy two physical boxes. Today, we use **Virtualization** to run dozens, or even hundreds, of isolated environments on a single physical machine.
+{/* Source tracking: Concepts of virtualization, hypervisors, and containers synthesized from:
+  - Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). "Operating System Concepts" (10th ed.). Wiley. Chapter 16 (Virtual Machines).
+  - Tanenbaum, A. S., & Bos, H. (2015). "Modern Operating Systems" (4th ed.). Pearson. Chapter 7 (Virtualization and the Cloud).
+  - Popek, G. J., & Goldberg, R. P. (1974). "Formal requirements for virtualizable third generation architectures". Communications of the ACM, 17(7), 412-421.
+  - Soltesz, S., et al. (2007). "Container-based operating system virtualization: a scalable, high-performance alternative to hypervisors". ACM SIGOPS Operating Systems Review, 41(3), 275-287.
+*/}
+
+Virtualization is the process of presenting a set of computing resources (such as hardware, storage, or operating systems) via a logical abstraction layer, allowing multiple isolated virtual systems to execute on a single physical host.
 
 ## The Hypervisor: The OS for OSs
 
-To run multiple operating systems, we need a "Hypervisor" (also called a Virtual Machine Monitor or VMM).
+{/* Source tracking: Hypervisor categorization and execution rings synthesized from Silberschatz et al. (2018), Chapter 16.2. */}
 
-### Type 1: Bare Metal
-The hypervisor is the only thing running on the hardware. It is a tiny, highly efficient kernel whose only job is to manage "Guest" OSs (VMs).
--   **Examples**: VMware ESXi, Microsoft Hyper-V, Xen.
--   **Usage**: These power the enterprise data centers and the public cloud (AWS/Azure).
+To run multiple guest operating systems, we use a **Hypervisor** (also known as a **Virtual Machine Monitor** or **VMM**). The VMM abstracts the physical hardware and coordinates access to resources like CPU cycles, memory blocks, and network interfaces.
 
-### Type 2: Hosted
-The hypervisor runs like an application *inside* a normal OS (like Windows or Mac).
--   **Examples**: Oracle VirtualBox, VMware Workstation.
--   **Usage**: Great for developers who want to run a Linux VM on their Mac to test code.
+### Type 1: Bare-Metal Hypervisors
+A Type-1 hypervisor runs directly on the bare metal host hardware without an underlying host operating system. It possesses the highest privilege level and directly manages resources.
+-   **Examples**: VMware ESXi, Microsoft Hyper-V, and Xen.
+-   **Performance**: Highly efficient due to the lack of an intermediate host OS layer.
+
+### Type 2: Hosted Hypervisors
+A Type-2 hypervisor runs as an application process inside a standard host operating system. Hardware access is translated through the host OS's kernel.
+-   **Examples**: Oracle VirtualBox, VMware Workstation, and QEMU.
+-   **Performance**: Overhead is higher because every instruction virtualized must go through both the VMM and the host OS.
+
+For example, a developer running QEMU to emulate an x86 guest OS on an ARM host uses a command block to initiate the virtual hardware loop:
+
+```bash
+# Example CLI: Booting a guest OS VM using QEMU with KVM hardware-acceleration
+qemu-system-x86_64 \
+  -enable-kvm \
+  -m 2048 \
+  -smp 2 \
+  -drive file=ubuntu_guest.qcow2,media=disk,format=qcow2 \
+  -net nic -net user
+```
+
+The `-enable-kvm` flag directs QEMU to leverage the Linux Kernel-based Virtual Machine module, bypassing software emulation in favor of direct hardware execution where possible.
 
 <PlantUML theme="none" code={`
 @startuml
@@ -57,34 +82,167 @@ package "Type 2 (Hosted)" {
 
 ## Virtual Machines vs. Containers
 
-A **Virtual Machine (VM)** virtualizes the **Hardware**.
--   It includes a full copy of the kernel, the drivers, and all the libraries.
--   **Pros**: Complete isolation (you can run Windows on Linux).
--   **Cons**: Slow to boot, uses a lot of RAM and Disk.
+{/* Source tracking: Comparison of hypervisors and container virtualization concepts based on Soltesz et al. (2007). */}
 
-A **Container** (like **Docker**) virtualizes the **Operating System**.
--   All containers share the *same* host kernel. They only include the specific application and its libraries.
--   **Pros**: Starts in milliseconds, uses almost no extra RAM.
--   **Cons**: You can only run "Linux containers on a Linux host" (though Windows and Mac use a tiny hidden VM to cheat and run Linux containers).
+Operating system virtualization can occur at the hardware level (Virtual Machines) or the operating system level (Containers).
+
+### Virtual Machines (VM)
+A VM virtualizes the underlying physical hardware. Every VM requires a complete guest operating system, including its own kernel, device drivers, and system libraries.
+-   **Isolation**: High. The guest OS runs in its own address space, isolated by the hardware boundary.
+-   **Overhead**: High footprint. Allocates dedicated memory blocks and disk space.
+
+### Containers
+A container virtualizes the operating system. All containers run on a single host machine and share the host operating system's kernel. Isolation is achieved via host kernel features: **namespaces** (isolating process trees, network adapters, and mounts) and **control groups (cgroups)** (limiting resources like RAM and CPU usage).
+-   **Isolation**: Moderate. Kernel sharing means kernel vulnerabilities can compromise the host.
+-   **Overhead**: Low. Startup times are measured in milliseconds rather than minutes.
+
+For example, a developer packages a container using a Dockerfile that specifies only the dependencies needed for the application, sharing the host Linux kernel:
+
+```dockerfile
+# Example: Dockerfile demonstrating OS-level virtualization configuration
+FROM alpine:3.19
+RUN apk add --no-cache python3
+WORKDIR /app
+COPY server.py /app/
+EXPOSE 8080
+CMD ["python3", "server.py"]
+```
+
+Build and execute the isolated application using Docker commands:
+
+```bash
+# Build the container image representing the user-space environment
+docker build -t micro-service:v1 .
+
+# Execute the container using resource limits enforced by cgroups
+docker run -d --name my-app -p 8080:8080 --memory="512m" --cpus="1.0" micro-service:v1
+```
 
 ## WSL2: The Best of Both Worlds
 
-In 2020, Microsoft released **WSL2 (Windows Subsystem for Linux 2)**.
-Unlike WSL1 (which translated Linux calls to Windows calls), WSL2 includes a **real Linux kernel** provided by Microsoft. 
--   It uses a lightweight Type-1 Hypervisor (Hyper-V).
--   When you open a terminal, it boots the Linux kernel in less than a second.
--   This allows developers to have the best UI tools of Windows while having the real-world engineering power of a Linux environment.
+{/* Source tracking: WSL2 architecture and Hyper-V integration synthesized from Microsoft technical documentation on WSL2. */}
+
+Windows Subsystem for Linux 2 (WSL2) changes the approach to running Linux on Windows by shifting from system call translation to direct execution.
+
+WSL2 runs a real Linux kernel inside a lightweight virtual machine. This VM is managed by a subset of the Type-1 Hyper-V hypervisor. 
+-   **Filesystem Performance**: Managed via a virtual disk (ext4 inside a VHDX file).
+-   **Integration**: System startup is optimized to boot in under a second, dynamically reclaiming host RAM when idle.
+
+For example, checking the operational state of WSL2 instances from the Windows terminal:
+
+```powershell
+# Example: Query WSL2 status and running distributions from Windows CLI
+wsl --list --verbose
+
+# Accessing files inside the guest Linux system using the 9P protocol mount
+cd \\wsl$\Ubuntu-22.04\home\developer\projects
+```
 
 ## The Cloud Revolution
 
-Virtualization is what made the "Cloud" possible. 
-When you "rent a server" from Amazon (AWS EC2), you aren't getting a physical computer. You are getting a slice of a massive 128-core server. Because of the hypervisor, you can't see the other users on that machine, and they can't see you.
+{/* Source tracking: Cloud virtualization and microVM architectures synthesized from Rosenblum & Garfinkel (2005). */}
 
-### Serverless Computing (Lambda/FaaS)
-The next step is "Serverless." Instead of a VM or even a container, you just upload a single function (`calculate_tax`). The OS/Hypervisor spins up a micro-container, runs your function for 100 milliseconds, and then destroys it. You only pay for the exact 100ms of CPU time you used.
+Cloud computing relies on hypervisors to achieve multi-tenancy: running workloads for different customers on the same physical processor without cross-contamination.
+
+### Serverless Computing (FaaS)
+In a Function-as-a-Service (FaaS) model, such as AWS Lambda, virtual instances are transient. The host infrastructure utilizes microVMs (e.g., AWS Firecracker) that leverage KVM to start execution in under 5 milliseconds. The function executes, responds, and the container is immediately torn down.
+
+For example, a stateless calculation function is executed inside a serverless environment:
+
+```python
+# Example: Stateless serverless handler executed within a transient microVM
+def lambda_handler(event, context):
+    principal = float(event.get("principal", 1000.0))
+    rate = float(event.get("rate", 0.05))
+    periods = int(event.get("periods", 12))
+    
+    # Calculate simple compound interest without storing state
+    accrued_value = principal * ((1.0 + rate) ** periods)
+    
+    return {
+        "statusCode": 200,
+        "body": {
+            "result": accrued_value
+        }
+    }
+```
 
 ## Why is it so fast now?
 
-Early virtualization was slow because the software had to "emulate" every single instruction. Today, almost every CPU (Intel VT-x, AMD-V) has **Hardware-Assisted Virtualization**. The CPU itself has special instructions that allow the Guest OS to run directly on the physical cores at near-native speed, only trapping back to the hypervisor when it needs to access a sensitive resource like the Network or Disk.
+{/* Source tracking: Hardware virtualization extensions, VMCS, and EPT details synthesized from Tanenbaum & Bos (2015), Chapter 7.2. */}
 
-In our final module, we will look at **Modern Trends** and the "Next Generation" of operating systems that are being built for the era of AI and the Edge.
+Early virtualization (such as binary translation) was slow because the guest OS was unaware it was virtualized. Standard CPU architectures did not allow intercepting sensitive kernel operations without major performance penalties.
+
+### Hardware-Assisted Virtualization
+Modern CPUs feature instruction set extensions (Intel VT-x and AMD-V) designed to handle virtualization in hardware. The CPU introduces a new execution state: **Guest Mode**. When the guest OS executes a sensitive instruction (e.g., changing page tables), the CPU traps the action and performs a **VM-Exit**, returning control back to the hypervisor in **Host Mode**.
+
+The state of a guest execution thread is managed through a memory block called the **Virtual Machine Control Structure (VMCS)** in Intel architectures, or the **Virtual Machine Control Block (VMCB)** in AMD architectures.
+
+```c
+// Example: Conceptual structure of Intel VT-x Virtual Machine Control Structure (VMCS)
+struct vmcs_layout {
+    uint32_t revision_id;
+    uint32_t abort_indicator;
+    
+    /* Guest-State Area */
+    uint64_t guest_cr3;       // Guest page directory address
+    uint64_t guest_rip;       // Guest instruction pointer
+    uint64_t guest_rsp;       // Guest stack pointer
+    uint16_t guest_cs_selector;
+    
+    /* Host-State Area */
+    uint64_t host_cr3;        // Host page directory address
+    uint64_t host_rip;        // Host handler entry point
+    uint64_t host_rsp;        // Host stack pointer
+};
+```
+
+Developers can check if their processor supports hardware virtualization by inspecting CPU flags:
+
+```bash
+# Example: Query CPU flags for Intel VT-x (vmx) or AMD-V (svm)
+grep -E --color=always "(vmx|svm)" /proc/cpuinfo
+```
+
+If the command returns output, the hardware supports hardware-assisted virtualization.
+
+<Quiz client:load
+  title="Hypervisor Types"
+  question="Which of the following describes a Type-1 hypervisor?"
+  options={[
+    "It runs as an application process inside a host operating system like macOS.",
+    "It runs directly on the bare host hardware without an intermediate host operating system.",
+    "It translates Linux system calls into Windows kernel calls in software.",
+    "It relies entirely on software emulation without using CPU hardware virtualization extensions."
+  ]}
+  correctIndex={1}
+  explanation="Type-1 (bare-metal) hypervisors run directly on the physical hardware, which minimizes virtualization overhead and provides high performance and stability."
+/>
+
+<Quiz client:load
+  title="Container Isolation Mechanisms"
+  question="Which kernel features are primarily responsible for resource restriction and namespace isolation in containers?"
+  options={[
+    "Hardware interrupts and DMA channels",
+    "Hyper-V and Virtual Machine Control Structures (VMCS)",
+    "Namespaces and Control Groups (cgroups)",
+    "System call translation and binary emulation"
+  ]}
+  correctIndex={2}
+  explanation="Linux namespaces provide isolation of resource views (mounts, network, process tree), while control groups (cgroups) enforce resource usage limits (CPU, memory, storage I/O)."
+/>
+
+<CodeExercise client:load
+  title="CPU Virtualization Detection"
+  code={"# Query CPU information flags to detect Intel virtualization support\ngrep -E \"[!blank!]\" /proc/cpuinfo"}
+  answers={["vmx"]}
+  explanation="On Intel architectures, the 'vmx' flag indicates support for Intel Virtualization Technology (VT-x). For AMD architectures, the flag is 'svm'."
+/>
+
+## References & Further Reading
+
+*   Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). *Operating System Concepts* (10th ed.). Wiley. (Chapter 16: Virtual Machines).
+*   Tanenbaum, A. S., & Bos, H. (2015). *Modern Operating Systems* (4th ed.). Pearson. (Chapter 7: Virtualization and the Cloud).
+*   Popek, G. J., & Goldberg, R. P. (1974). *Formal requirements for virtualizable third generation architectures*. Communications of the ACM, 17(7), 412-421. [ACM Link](https://dl.acm.org/doi/10.1145/361011.361073).
+*   Soltesz, S., Pötzl, H., Fiuczynski, M. E., Bavier, A., & Peterson, L. (2007). *Container-based operating system virtualization: a scalable, high-performance alternative to hypervisors*. ACM SIGOPS Operating Systems Review, 41(3), 275-287. [ACM Link](https://dl.acm.org/doi/10.1145/1272998.1273025).
+*   Rosenblum, M., & Garfinkel, T. (2005). *Virtual machine monitors: Current technology and future trends*. IEEE Computer, 38(5), 39-47. [IEEE Link](https://ieeexplore.ieee.org/document/1430560).

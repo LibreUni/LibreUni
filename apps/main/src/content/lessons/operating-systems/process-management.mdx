@@ -4,26 +4,65 @@ course: "operating-systems"
 description: "Understanding the lifecycle of a process, how the CPU schedules tasks, and the difference between processes and threads."
 ---
 import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
+import CodeExercise from '../../../components/CodeExercise';
 
 # Process and Thread Management
 
-If the kernel is the conductor of an orchestra, then **Processes** and **Threads** are the musicians. Managing these units of execution is one of the most complex tasks an operating system performs. A modern computer might have hundreds of programs "running" at once, even though it only has a handful of physical CPU cores. The illusion of simultaneous execution is maintained through clever scheduling and context switching.
+{/* Source tracking: Process management concepts, lifecycle, and thread synchronization synthesized from:
+  - Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). "Operating System Concepts" (10th ed.), Chapters 3, 4, 5.
+  - Tanenbaum, A. S., & Bos, H. (2015). "Modern Operating Systems" (4th ed.), Chapter 2.
+  - Kerrisk, M. (2010). "The Linux Programming Interface", Chapters 6, 24, 29, 44.
+*/}
+
+Managing units of execution is one of the most complex tasks an operating system performs. A modern computer might have hundreds of programs running concurrently, even though it only has a handful of physical CPU cores. The execution of multiple processes is managed through scheduling and context switching.
 
 ## What is a Process?
 
-A **Process** is a program in execution. It is more than just the machine code (the "Text" segment); it includes the current activity, as represented by:
--   **Program Counter (PC)**: The address of the next instruction to execute.
--   **Stack**: Temporary data (functions, local variables, return addresses).
--   **Data Section**: Global variables.
--   **Heap**: Dynamically allocated memory during runtime.
--   **Resources**: Open files, network sockets, handles to I/O devices.
+A process is a program in execution. It is more than just the binary machine code stored on disk; it represents an active entity with a specific state in memory. 
+
+A process's address space is divided into distinct segments:
+- **Text Segment**: Contains the compiled machine code instructions read by the CPU.
+- **Data Segment**: Stores initialized global and static variables.
+- **BSS Segment**: Stores uninitialized global and static variables, initialized to zero by default.
+- **Heap**: Manages dynamically allocated memory requested at runtime (e.g., via `malloc` in C).
+- **Stack**: Contains temporary execution data, including function call frames, local variables, and return addresses.
+
+For example, the following C program demonstrates how different variables map to these distinct memory segments of a process:
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Initialized global variable: allocated in the Data Segment */
+int global_initialized = 42;
+
+/* Uninitialized global variable: allocated in the BSS Segment */
+int global_uninitialized;
+
+int main(void) {
+    /* Local variable: allocated on the Stack */
+    int stack_var = 10;
+
+    /* Pointer on Stack; target memory allocated on the Heap */
+    int *heap_var = (int *)malloc(sizeof(int));
+    if (heap_var == NULL) {
+        return 1;
+    }
+    *heap_var = 100;
+
+    free(heap_var);
+    return 0;
+}
+```
 
 ### The Process Control Block (PCB)
-To manage a process, the OS maintains a data structure called the **Process Control Block (PCB)**. Think of this as the "manifest" for the process. When the OS stops one process to start another, it saves the current CPU registers and state into the PCB so it can resume exactly where it left off later.
+
+To manage each process, the operating system maintains a kernel data structure called the **Process Control Block (PCB)**. The PCB contains all metadata necessary to manage the process, including the process ID (PID), register state (including the Program Counter), CPU scheduling information, memory-management information, and a list of open I/O descriptors.
 
 ## The Process Lifecycle
 
-A process moves through various states during its life.
+A process moves through various states during its existence.
 
 <PlantUML theme="none" code={`
 @startuml
@@ -38,48 +77,191 @@ Terminated --> [*]
 @enduml
 `} />
 
-1.  **New**: The process is being created.
-2.  **Ready**: The process is waiting to be assigned to a processor.
-3.  **Running**: Instructions are being executed on a CPU core.
-4.  **Waiting (Blocked)**: The process is waiting for some event to occur (like a keystroke or a disk read).
-5.  **Terminated**: The process has finished execution.
+1. **New**: The process is being created but has not yet been loaded into memory.
+2. **Ready**: The process is loaded in memory and waiting to be assigned to a CPU core.
+3. **Running**: The CPU is actively executing the process's instructions.
+4. **Waiting (Blocked)**: The process cannot proceed until an external event occurs, such as a disk read or network packet receipt.
+5. **Terminated**: The process has finished execution or was killed by the OS.
+
+For example, on a Linux system, the state of a process can be observed using the `/proc` filesystem or the `ps` utility. When a program executes a blocking command, its state transition is reflected in the system status codes:
+
+```bash
+# Start a sleep command in the background (which waits for a timer event)
+sleep 100 &
+[1] 12345
+
+# Query the state code of the process
+ps -o pid,state,cmd -p 12345
+# Output shows 'S' for interruptible sleep (Waiting state):
+#   PID S CMD
+# 12345 S sleep 100
+```
 
 ## Context Switching
 
-The act of stopping the current process, saving its state (the PCB), and loading the state of a new process is called a **Context Switch**. This is "pure overhead"—while the CPU is context switching, it isn't doing any useful work for the user. System designers strive to minimize this overhead, but it is the price we pay for multitasking.
+A context switch is the mechanism of stopping the currently executing process, saving its CPU register state to its PCB, and loading the saved register state of another process to resume its execution. 
+
+A context switch is pure administrative overhead; the CPU cannot perform useful application work while saving and restoring state. Designers minimize this overhead using highly optimized assembly code and hardware-assisted context switching.
+
+For example, this assembly snippet demonstrates the core register-saving sequence during a context switch on an x86 architecture:
+
+```nasm
+; Assembly sequence demonstrating register saving during a context switch
+switch_context:
+    ; Push current task's callee-saved registers onto its stack
+    push ebp
+    push edi
+    push esi
+    push ebx
+
+    ; Save current stack pointer (ESP) into the current PCB
+    mov [eax + PCB_ESP_OFFSET], esp
+
+    ; Load next task's stack pointer (ESP) from its PCB
+    mov esp, [edx + PCB_ESP_OFFSET]
+
+    ; Pop next task's saved registers from its stack
+    pop ebx
+    pop esi
+    pop edi
+    pop ebp
+    ret
+```
 
 ## Threads: Lightweight Processes
 
-A **Thread** is a "lightweight" unit of execution within a process.
--   Processes provide **Isolation**: Process A cannot read Process B's memory.
--   Threads provide **Efficiency**: All threads within a single process share the same memory space and resources.
+A **Thread** is a basic unit of CPU utilization. While processes provide resource isolation, threads allow concurrent execution paths within a single process.
 
-### Why use Threads?
-Imagine a web browser:
--   One thread handles the user interface (buttons, scrolling).
--   One thread downloads a large image.
--   One thread renders the HTML text.
+- **Processes (Isolation)**: Each process runs in its own isolated virtual address space.
+- **Threads (Efficiency)**: Threads belonging to the same process share its code section, data section, heap, and open file descriptors, but maintain their own program counter, registers, and execution stack.
 
-If these were separate processes, they would struggle to share the data of the webpage efficiently. By being threads, they can all access the same global variables and buffers directly.
+For example, the following C program demonstrates thread creation using the POSIX threads API. It illustrates a race condition where multiple threads share and modify the same global variable without synchronization:
 
-### The Downside of Threads
-The "shared memory" that makes threads efficient also makes them dangerous. If two threads try to increment a counter at the exact same time, a **Race Condition** can occur, leading to corrupted data. Developers must use synchronization tools like **Mutexes** (Mutual Exclusion locks) and **Semaphores** to manage this.
+```c
+#include <pthread.h>
+#include <stdio.h>
+
+/* Shared memory variable */
+volatile int counter = 0;
+
+void* increment_counter(void* arg) {
+    for (int i = 0; i < 100000; i++) {
+        /* Non-atomic operation (read-modify-write) subject to race conditions */
+        counter++; 
+    }
+    return NULL;
+}
+
+int main(void) {
+    pthread_t thread1, thread2;
+
+    /* Create two threads executing in the same address space */
+    pthread_create(&thread1, NULL, increment_counter, NULL);
+    pthread_create(&thread2, NULL, increment_counter, NULL);
+
+    /* Wait for both threads to finish execution */
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
+
+    /* Output is usually less than 200000 due to unsynchronized concurrent writes */
+    printf("Final counter value: %d\n", counter);
+    return 0;
+}
+```
 
 ## CPU Scheduling
 
-How does the OS decide which "Ready" process gets to run next? This is the job of the **Scheduler**.
+The CPU scheduler determines which process in the ready queue is allocated to an available CPU core. 
 
-### Common Scheduling Algorithms:
-1.  **First-Come, First-Served (FCFS)**: Simple but inefficient. A long process can "clog" the system (the Convoy Effect).
-2.  **Shortest Job Next (SJN)**: Best for minimizing average wait time, but it's hard to predict how long a job will take.
-3.  **Round Robin (RR)**: Each process gets a small unit of CPU time (a "time slice"). If it doesn't finish, it's moved to the back of the queue. This is the basis for modern interactive systems.
-4.  **Priority Scheduling**: Tasks like audio processing or mouse movement get higher priority than background tasks like indexing files.
+### Scheduling Algorithms
+
+1. **First-Come, First-Served (FCFS)**: Non-preemptive scheduling where the process that requests the CPU first is allocated the CPU first. This can lead to the convoy effect, where short processes wait behind long ones.
+2. **Shortest Job Next (SJN)**: Selects the process with the shortest next CPU burst. This is optimal for minimizing average waiting time but requires predicting burst lengths.
+3. **Round Robin (RR)**: Preemptive scheduling where each process is allocated a small time slice (quantum). If the burst exceeds the quantum, the process is preempted and put at the back of the ready queue.
+4. **Priority Scheduling**: Allocates the CPU based on assigned priority levels, which can lead to starvation of low-priority tasks.
+
+For example, consider three processes ($P_1, P_2, P_3$) arriving at time 0 with CPU burst times of 24ms, 3ms, and 3ms respectively. The following diagram shows how scheduling choices affect the completion timeline:
+
+```
+FCFS Scheduling (Average Waiting Time: 17.0 ms)
+Timeline:   0                            24   27   30
+Gantt Chart: [        P1 (24ms)         ][P2 ][P3 ]
+
+SJN Scheduling (Average Waiting Time: 3.0 ms)
+Timeline:   0    3    6                            30
+Gantt Chart: [P2 ][P3 ][        P1 (24ms)         ]
+```
 
 ## Inter-Process Communication (IPC)
 
-Even though processes are isolated, they often need to talk to each other.
--   **Pipes**: A simple way to "pipe" the output of one process into the input of another (e.g., `ls | grep .txt` in Linux).
--   **Shared Memory**: Two processes map a segment of physical memory into their own address spaces. This is the fastest method.
--   **Message Passing**: The kernel provides a queue where processes can leave messages for each other.
+Processes running in isolated memory spaces must communicate to coordinate actions. The operating system provides mechanisms for Inter-Process Communication:
 
-Managing processes and threads is a balancing act between responsiveness (the user interface shouldn't lag) and throughput (as much work as possible should get done). In the next module, we'll see how the OS provides the memory "sandbox" that these processes live in.
+- **Pipes**: Unidirectional channels that allow the output of one process to be read as the input of another.
+- **Shared Memory**: A region of physical memory mapped into the address spaces of multiple processes. This is the fastest communication method.
+- **Message Passing**: The kernel provides system calls to send and receive messages through mailboxes or queues.
+
+For example, this C program demonstrates unidirectional inter-process communication using a pipe and the `fork` system call:
+
+```c
+#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    int pipefd[2];
+    char write_msg[] = "IPC Data Exchange";
+    char read_msg[32];
+
+    /* Create a pipe (pipefd[0] is read end, pipefd[1] is write end) */
+    if (pipe(pipefd) == -1) {
+        return 1;
+    }
+
+    if (fork() == 0) {
+        /* Child process: close read end, write to pipe */
+        close(pipefd[0]);
+        write(pipefd[1], write_msg, strlen(write_msg) + 1);
+        close(pipefd[1]);
+    } else {
+        /* Parent process: close write end, read from pipe */
+        close(pipefd[1]);
+        read(pipefd[0], read_msg, sizeof(read_msg));
+        printf("Parent received: %s\n", read_msg);
+        close(pipefd[0]);
+    }
+    return 0;
+}
+```
+
+## Exercise: Process Isolation vs. Thread Sharing
+
+Analyze how processes and threads manage resources and execution states in the exercise below:
+
+<Quiz client:load
+  title="Process vs. Thread Resource Sharing"
+  question="Which of the following resources is shared among all threads of a single process?"
+  options={[
+    "CPU Register state (including the Program Counter)",
+    "The execution stack frame area",
+    "The virtual address space containing global variables",
+    "Thread-local storage data"
+  ]}
+  correctIndex={2}
+  explanation="Threads within the same process share its virtual address space (including the code, data, and heap segments) and file descriptors, but each thread retains its own Program Counter, registers, and execution stack."
+/>
+
+<CodeExercise client:load
+  title="Declaring Volatile Memory for Thread Coordination"
+  code={"/* Flag used to signal termination across threads */\n[!blank!] int keep_running = 1;"}
+  answers={["volatile"]}
+  explanation="The volatile keyword tells the compiler not to cache the variable in a CPU register, ensuring that updates to the flag made by one thread are immediately visible when read by another thread."
+/>
+
+## References & Further Reading
+
+For detailed design specifications and examples of scheduling and thread APIs, refer to the following sources:
+
+*   Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). *Operating System Concepts* (10th ed.). Wiley. (Covering processes, threads, and CPU scheduling).
+*   Tanenbaum, A. S., & Bos, H. (2015). *Modern Operating Systems* (4th ed.). Pearson. (Covering process lifecycle and scheduling).
+*   Kerrisk, M. (2010). [The Linux Programming Interface](https://man7.org/tlpi/). No Starch Press. (Covering process and thread management system calls, POSIX threads, and IPC).
+*   [POSIX.1-2008 Specification](https://pubs.opengroup.org/onlinepubs/9699919799/) (IEEE Std 1003.1). The Open Group.

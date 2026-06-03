@@ -4,24 +4,56 @@ course: "operating-systems"
 description: "How desktop kernels were adapted for the brutal constraints of mobile devices. Comparing the Android and iOS architectures."
 ---
 import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
+
+{/* Source tracking: Android architecture, Binder, Bionic, ART, and HAL details sourced from:
+  - Yaghmour, K. (2013). "Embedded Android". O'Reilly Media. Chapters 2, 3, & 4.
+  - Apple Inc. "iOS Security Guide" and "LocalAuthentication" documentation sourced from Apple Developer library.
+  - Tilson, D., Sørensen, C., & Lyytinen, K. (2012). "Change and Control Paradoxes in Mobile Infrastructure Innovation: The Android and iOS Mobile Operating Systems Cases". HICSS.
+*/}
 
 # Mobile Operating Systems
 
-A smartphone is a supercomputer that lives in your pocket, runs on a battery, and is constantly connected to the internet. To make this possible, the operating systems we've studied—Linux and Darwin—had to be radically modified to handle two massive constraints: **Power Management** and **Security**.
+Smartphones and mobile devices operate under hardware constraints that differ fundamentally from traditional desktop systems. To function efficiently on limited battery reserves and maintain security over cellular networks, desktop kernel architectures (Linux and Darwin) underwent significant modifications. The resulting mobile operating systems—Android and iOS—rely on specialized power management, sandboxing, and execution runtimes.
 
 ## The Mobile Constraint: Energy
 
-On a desktop, if a process uses 10% of the CPU while you're not looking, it's a minor annoyance. On a phone, it means your battery will be dead by lunch.
-Mobile OSs use a technique called **Aggressive Suspension**.
--   When an app is not on your screen, it is often "frozen" in memory. The OS saves its state and removes its access to the CPU entirely.
--   If the OS needs more RAM, it will simply kill the background app. The app developer is expected to save the app's state to disk so it can "resume" later as if nothing happened.
+{/* Source tracking: Mobile power states, application freezing, and low-memory killer mechanics from Yaghmour (2013). */}
+On desktop operating systems, background processes may consume CPU cycles with minimal immediate impact on the user. On mobile hardware, unnecessary background CPU activity rapidly drains battery capacity and increases thermal output. 
+
+Mobile operating systems implement **Aggressive Suspension** models:
+*   **Process Freezing**: When an application transitions out of the user's active viewport, the OS suspends its execution threads, removing access to the CPU scheduler while preserving its state in RAM.
+*   **Low Memory Killers**: If system memory pressure increases, the kernel's low-memory killer terminates suspended background processes. Applications must serialize their execution state to persistent storage to support seamless resumption.
+
+You can inspect the power management and battery subsystem diagnostics of a connected mobile device from the command line:
+
+```bash
+# Example: Query power management state and battery status on an Android device via ADB
+adb shell dumpsys battery
+```
+
+The tool reports battery state metrics directly from the kernel driver:
+
+```text
+Current Battery Service State:
+  AC powered: false
+  USB powered: true
+  Wireless powered: false
+  Max charging current: 500000
+  status: 2
+  health: 2
+  present: true
+  level: 98
+  scale: 100
+```
 
 ## Android: The Linux Modification
 
-Android is built on the **Linux Kernel**. However, if you log into an Android phone via the terminal, it won't look like Ubuntu.
--   **No GNU Tools**: Android replaces the standard GNU libraries (glibc) with its own: **Bionic**.
--   **The HAL (Hardware Abstraction Layer)**: Because phone hardware is so diverse, Android has a complex HAL that allows the high-level Java code to talk to camera and sensor drivers without knowing the specifics of the hardware.
--   **ART (Android Runtime)**: Apps on Android are written in Java or Kotlin. They are compiled into specialized "DEX" bytecode. The **Android Runtime (ART)** then compiles this into native machine code on the device.
+{/* Source tracking: Android Bionic, ART compilation models, and HAL driver bindings from Yaghmour (2013). */}
+Android is constructed on top of the Linux kernel, but it does not include standard GNU libraries or the X Window System:
+*   **Bionic libc**: Replaces standard glibc. Bionic is a lightweight C library optimized for low memory footprints, lacking support for complex POSIX features like wide characters, and designed to prevent licensing conflicts.
+*   **Hardware Abstraction Layer (HAL)**: Defines standard interfaces for hardware vendors (e.g., Camera, Audio, Bluetooth). This allows high-level Java frameworks to interact with drivers without compiled-in knowledge of underlying kernel-driver structures.
+*   **Android Runtime (ART)**: Applications are compiled into DEX (Dalvik Executable) bytecode. ART compiles this bytecode into native machine code on-device using a combination of Ahead-of-Time (AOT) and Just-in-Time (JIT) compilation.
 
 <PlantUML theme="none" code={`
 @startuml
@@ -49,36 +81,138 @@ package "Linux Kernel" {
 `} />
 
 ### The Binder
-In standard Linux, IPC is done via pipes or shared memory. In Android, almost *everything* goes through a special kernel driver called the **Binder**. It is a fast, efficient, and highly secure message-passing system that allows different apps and system services to talk to each other.
+Android replaces traditional UNIX Inter-Process Communication (IPC) with a custom driver called **Binder**. Operating as a character device driver (`/dev/binder`), it provides high-performance, object-oriented remote procedure calls (RPC) and handles transaction validation:
+
+```c
+/* android_log_example.c - Using Android's Bionic log library instead of glibc printf */
+#include <android/log.h>
+
+#define LOG_TAG "LibreUniMobile"
+
+void log_system_event(void) {
+    // Bionic intercepts standard stdout/stderr, routing logs through a kernel logger channel
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Initialization of mobile component complete.");
+}
+```
 
 ## iOS: The Secure Sandbox
 
-As we saw, iOS is built on the **Darwin (XNU)** kernel. Its primary focus is **User Security** and **Predictability**.
--   **No Backgrounding**: Until recently, iOS apps were almost never allowed to run in the background. They could only perform specific tasks (like playing music or tracking GPS).
--   **Strict Sandboxing**: Every app on iOS runs in its own "Sandbox." It cannot see the files of another app, it cannot see the list of other running apps, and it cannot even access your photos unless you explicitly grant it a "Capability."
--   **Code Signing**: The kernel will refuse to run any piece of code that hasn't been cryptographically signed by Apple or a verified developer. This makes it almost impossible for traditional "viruses" to function on iOS.
+{/* Source tracking: iOS sandbox design, mandatory code signing, and entitlements from Apple iOS Security Guide. */}
+iOS, derived from Darwin, emphasizes application security and system predictability through strict architectural sandboxing:
+*   **Process Sandboxing**: Every app executes in an isolated sandbox directory. Apps cannot view other active processes, read external files, or access hardware resources without explicit entitlement declarations.
+*   **Mandatory Code Signing**: The kernel's page-fault handler refuses to execute any memory page that lacks a valid cryptographic signature verified against Apple's root authority, blocking arbitrary code execution exploits.
+*   **Capability-Based Permissions**: Apps request system services (e.g., camera, location, contacts) by declaring capabilities in their application manifest.
+
+Developers configure sandboxing access by declaring explicit permissions in the application properties manifest:
+
+```xml
+<!-- Info.plist - Declaring capability entitlement for Camera access on iOS -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSCameraUsageDescription</key>
+    <string>This application requires access to the camera to demonstrate entitlement sandboxing.</string>
+</dict>
+</plist>
+```
+
+If the entry is omitted, the operating system kernel immediately blocks access to the device driver.
 
 ## Cross-Platform Comparison
 
+An example of key differences between Android and iOS architectures is summarized in the table below:
+
 | Feature | Android | iOS |
 | :--- | :--- | :--- |
-| **Kernel** | Linux | XNU (Darwin) |
-| **Customization** | High (Change shell, icons, ROMs) | Low (Locked by Apple) |
-| **App Language** | Java / Kotlin / C++ | Swift / Objective-C |
-| **Updates** | Dependent on Manufacturer | Controlled by Apple |
-| **File Access** | User-accessible system | Hidden from user |
+| **Underlying Kernel** | Linux (Modified) | XNU (Darwin) |
+| **System C Library** | Bionic | BSD-derived Libc |
+| **Primary Runtime** | Android Runtime (ART) | Native Swift / Objective-C |
+| **IPC Framework** | Binder Driver | Mach Messages & Mach Ports |
+| **Code Execution** | On-device compilation (AOT/JIT) | Pre-compiled Native (Strict signing) |
+
+To audit active third-party application directories on an Android device from the shell, developers query the package manager service:
+
+```bash
+# Example: List installed third-party packages on Android
+adb shell pm list packages -3
+```
+
+This returns a list of package identifiers managed by the Android runtime:
+
+```text
+package:com.libreuni.exampleapp
+package:org.mozilla.firefox
+```
 
 ## Real-Time Constraints: The I/O Problem
 
-Mobile OSs also have to act like **Real-Time Operating Systems (RTOS)** for certain tasks.
--   **Touch Latency**: When you move your finger on the screen, the display *must* update within milliseconds. If the CPU is busy indexing a file in the background, your phone will feel "laggy."
--   **Audio Processing**: To prevent "clicks" and "pops" in your music or calls, the OS gives the audio threads absolute priority over almost everything else.
+{/* Source tracking: Real-time audio and touch scheduling policies under mobile OS constraints. */}
+Mobile devices must deliver low-latency responses to user inputs (like screen touch and audio processing) to ensure a fluid user experience:
+*   **Touch Priority**: Touch event delivery pipelines are allocated dedicated realtime priorities to prevent UI frame drops.
+*   **Real-Time Audio**: Audio processing threads bypass standard fair-share scheduling, running under real-time FIFO policies to prevent audio buffer underruns.
+
+The following C program demonstrates setting a thread to real-time scheduling priority under a POSIX-compliant mobile subsystem:
+
+```c
+/* rt_audio_thread.c - Setting real-time priority for audio threads under POSIX */
+#include <pthread.h>
+#include <stdio.h>
+
+void make_thread_realtime(pthread_t thread) {
+    struct sched_param param;
+    param.sched_priority = 99; // Set priority for real-time scheduling
+    
+    // Configure thread to use First-In, First-Out real-time scheduling policy
+    if (pthread_setschedparam(thread, SCHED_FIFO, &param) == 0) {
+        printf("Thread priority set to real-time SCHED_FIFO.\n");
+    } else {
+        perror("pthread_setschedparam failed");
+    }
+}
+```
 
 ## The Future: Convergence
 
-We are currently seeing a "Merging of the Worlds."
--   **iPadOS** is getting multi-window support and file management that looks more like macOS.
--   **macOS** is gaining the security features (signed system volumes) and the ability to run mobile apps from iOS.
--   **Android** is becoming more standardized via "Project Treble," making it easier to update the underlying Linux kernel without breaking the hardware drivers.
+{/* Source tracking: Project Treble architecture, Android GKI, and macOS catalyst convergence details. */}
+Mobile and desktop operating systems are converging towards shared architectures:
+*   **Kernel Standardization**: Android's Generic Kernel Image (GKI) decouples the core Linux kernel from SoC-specific drivers, standardizing update paths.
+*   **Desktop Sandbox Integration**: Desktop macOS incorporates iOS-style security policies, including Signed System Volumes and application entitlements.
+*   **Project Treble**: Decouples Android OS frameworks from vendor-specific HAL implementations, enabling faster OS upgrades:
 
-In the next section, we will leave the theory behind and learn the actual "Basics" of interacting with these systems using the most powerful tool available: the Command Line.
+```bash
+# Example: Query Project Treble system property status on Android
+getprop ro.treble.enabled
+```
+
+If Treble is active, the system confirms modular separation of the OS and driver layers:
+
+```text
+true
+```
+
+## Interactive Practice: Mobile Operating Systems
+
+To demonstrate your understanding of mobile OS constraints and sandboxing, complete the practice quiz below.
+
+<Quiz client:load
+  title="Mobile Operating Systems"
+  question="Why does Android implement the Binder driver for IPC instead of using standard Linux IPC mechanisms like pipes or shared memory?"
+  options={[
+    "Because standard Linux IPC cannot communicate with Java-based applications.",
+    "To provide a high-performance, object-oriented IPC system that enforces security credentials and handles reference counting in kernel space.",
+    "Because the XNU kernel used by Android does not support POSIX pipes.",
+    "To compile Java DEX bytecode into native machine instructions at runtime."
+  ]}
+  correctIndex={1}
+  explanation="While Linux supports standard IPC like pipes and shared memory, Android requires an IPC system that is highly optimized for resource constraints, supports object-oriented IPC (such as AIDL), and enforces permission boundaries. The Binder driver runs in kernel space to safely track process credentials and manage reference-counted resources."
+/>
+
+## References & Further Reading
+
+For an example of detailed documentation on Android and iOS architecture, refer to the sources below:
+
+*   Yaghmour, K. (2013). *Embedded Android*. O'Reilly Media.
+*   Levin, J. (2013). *Mac OS X and iOS Internals: To the Apple's Core*. Wrox.
+*   Apple Inc. (2020). *iOS Security Guide*. Apple Developer Reference.
+*   [Power management](https://en.wikipedia.org/wiki/Power_management) (CC-BY-SA 4.0)

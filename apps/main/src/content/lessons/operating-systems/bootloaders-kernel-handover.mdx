@@ -8,6 +8,8 @@ import CodeExercise from '../../../components/CodeExercise';
 
 # Bootloaders and the Kernel Entry
 
+{/* Source tracking: Bootloader operation, GRUB stages, Multiboot specification, and kernel handover protocol synthesized from the official GNU Multiboot Specification manual (https://www.gnu.org/software/grub/manual/multiboot/multiboot.html), Silberschatz et al. "Operating System Concepts" (10th Ed., Chapter 2), Tanenbaum & Bos "Modern Operating Systems" (4th Ed., Chapter 5), and Wikipedia: Bootloader (CC-BY-SA 4.0). */}
+
 If the BIOS/UEFI is the "ignition," the **Bootloader** is the "starter motor." Its job is to find the Operating System kernel on the disk, load it into memory, and jump to its starting address.
 
 ## 1. Why do we need a Bootloader?
@@ -17,12 +19,40 @@ You might wonder: *Why doesn't the BIOS just load the kernel directly?*
 2. **File Systems**: The firmware doesn't understand complex file systems (like NTFS, ext4, or APFS). The bootloader provides the "drivers" to read these.
 3. **Multi-Boot**: A bootloader allows the user to choose between different operating systems (e.g., Linux vs. Windows).
 
+To demonstrate the size and address limitations, consider how a minimal 16-bit Stage 1 bootloader reads sectors from disk. It uses BIOS software interrupts because it cannot access filesystems directly:
+
+```assembly
+; Load Stage 1.5/2 from disk using BIOS INT 0x13 in 16-bit Real Mode
+mov ah, 0x02        ; BIOS Read Sectors function
+mov al, 0x08        ; Read 8 sectors (4KB)
+mov ch, 0x00        ; Cylinder 0
+mov cl, 0x02        ; Sector 2 (sector 1 contains the MBR itself)
+mov dh, 0x00        ; Head 0
+mov dl, [boot_drv]  ; Drive number (passed by BIOS in DL register)
+mov bx, 0x8000      ; Set buffer destination segment
+mov es, bx          ; ES = 0x8000
+xor bx, bx          ; BX = 0x0000 -> Address ES:BX = 0x80000 physical
+int 0x13            ; Call BIOS disk service
+jc disk_error       ; Carry flag set indicates disk read failure
+```
+
 ## 2. The Grand Unified Bootloader (GRUB)
 
-On Linux and many hobbyist OSs, **GRUB 2** is the standard. It works in stages:
+On Linux and many hobbyist OSs, **GRUB 2** is the standard. It works in stages to bypass storage size constraints:
 - **Stage 1 (boot.img)**: Stored in the MBR or the first sector of a partition. Its only job is to load Stage 1.5.
 - **Stage 1.5 (core.img)**: Contains file system drivers. It is stored in the "gap" between the MBR and the first partition.
 - **Stage 2**: Loads the full GRUB interface, reads `/boot/grub/grub.cfg`, and allows you to select a kernel.
+
+An example of a basic GRUB menu config entry `/boot/grub/grub.cfg` which points to a kernel image:
+
+```grub
+menuentry "LibreUni OS" {
+    insmod ext2
+    set root='hd0,msdos1'
+    multiboot /boot/kernel.bin
+    boot
+}
+```
 
 ## 3. The Multiboot Specification
 
@@ -32,6 +62,17 @@ A Multiboot-compliant kernel has a "Header" in its first 8KB that contains:
 - **Magic Number**: `0x1BADB002` (for Multiboot 1).
 - **Flags**: Telling the bootloader what it needs (e.g., page alignment, memory maps).
 - **Checksum**: Ensures the header is valid.
+
+An example of a Multiboot header defined in NASM assembly:
+
+```assembly
+; Multiboot Header (GNU Multiboot 1 Specification)
+align 4
+section .multiboot
+dd 0x1BADB002           ; Magic number
+dd 0x00000003           ; Flags: memory info + page alignment
+dd -(0x1BADB002 + 0x00000003) ; Checksum (magic + flags + checksum = 0)
+```
 
 ### The Handover State
 When the bootloader jumps to the kernel, it provides critical information in CPU registers:
@@ -64,9 +105,50 @@ Once the kernel has control, it performs its own initialization:
 3. **Drivers**: Initializes basic hardware (Timers, Keyboard, VGA/GOP).
 4. **The First Process**: The kernel finally spawns the first user-space process, known as **init** (or `systemd`, `launchd`). This process has a Process ID (PID) of **1**.
 
-### Exercise: The Multiboot Magic
+A C pseudo-code example of the kernel initialization flow calling scheduler and launching the first thread:
 
-When writing a kernel entry point in assembly, you must ensure the bootloader recognizes it. What magic number must be in the `EAX` register when the kernel starts?
+```c
+void kernel_entry(unsigned long magic, unsigned long addr) {
+    if (magic != 0x2BADB002) {
+        halt_system("Invalid Multiboot signature");
+    }
+    setup_memory(addr);
+    setup_idt();
+    init_drivers();
+    
+    // Spawn the first process (PID 1)
+    if (spawn_process("/sbin/init") == 1) {
+        enable_interrupts();
+        start_scheduler();
+    }
+}
+```
+
+## 5. Summary: The Chain of Trust
+
+Every boot cycle follows a linear sequence, handing execution control from low-level hardware up to the final user-facing environment:
+
+1. **Hardware** -> **Firmware** (BIOS/UEFI)
+2. **Firmware** -> **Bootloader** (GRUB/BOOTMGR)
+3. **Bootloader** -> **Kernel** (Linux/XNU/NT)
+4. **Kernel** -> **Init** (PID 1)
+5. **Init** -> **User Space** (Login screen, Shell)
+
+The transition from a raw bootloader to kernel space can be observed in a Linux kernel log boot buffer:
+
+```text
+[    0.000000] Linux version 6.1.0-21-amd64 ...
+[    0.000000] Command line: BOOT_IMAGE=/vmlinuz-6.1.0-21-amd64 root=/dev/sda1 ro quiet
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009ffff] usable
+...
+[    1.234567] Run /sbin/init as init process
+[    1.250102] systemd[1]: systemd 252.22-1~deb12u1 running in system mode.
+```
+
+## 6. Interactive Practice: Multiboot Verification
+
+When writing a kernel entry point in assembly, you must ensure the bootloader recognizes it. Verify the boot signature and handover values below.
 
 <CodeExercise client:load
   title="Multiboot Verification"
@@ -75,12 +157,10 @@ When writing a kernel entry point in assembly, you must ensure the bootloader re
   explanation="The value 0x2BADB002 is passed by the bootloader to let the kernel know it was booted by a Multiboot-compliant loader."
 />
 
-## Summary: The Chain of Trust
-
-1. **Hardware** -> **Firmware** (BIOS/UEFI)
-2. **Firmware** -> **Bootloader** (GRUB/BOOTMGR)
-3. **Bootloader** -> **Kernel** (Linux/XNU/NT)
-4. **Kernel** -> **Init** (PID 1)
-5. **Init** -> **User Space** (Login screen, Shell)
-
-By understanding this chain, you now have the conceptual blueprint to write your own \"Hello World\" kernel—a journey that begins with a few bytes of assembly and ends with a fully functioning operating system.
+## References & Further Reading
+*   [Multiboot Specification](https://www.gnu.org/software/grub/manual/multiboot/multiboot.html) (GNU official specification manual)
+*   [GNU GRUB Manual](https://www.gnu.org/software/grub/manual/grub/grub.html) (GNU GRUB manual)
+*   [Bootloader](https://en.wikipedia.org/wiki/Bootloader) (CC-BY-SA 4.0)
+*   [Boot loaders](https://en.wikipedia.org/wiki/Boot_loaders) (CC-BY-SA 4.0)
+*   Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). *Operating System Concepts* (10th ed.). John Wiley & Sons.
+*   Tanenbaum, A. S., & Bos, H. (2015). *Modern Operating Systems* (4th ed.). Pearson.

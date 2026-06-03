@@ -7,64 +7,94 @@ import CaseStudy from '../../../components/CaseStudy';
 
 # UNIX Daemons and Services
 
-A daemon is a computer program that runs as a background process, rather than being under the direct control of an interactive user. In UNIX systems, they are essential for long-running services like web servers, database engines, and network monitors. They are typically designated by appending a 'd' at the end of their name (e.g., `sshd` for SSH daemon, `httpd` for HTTP daemon).
+{/* Source tracking: Daemon process creation steps, double fork technique, and systemd integration synthesized from:
+  - Stevens, W. R., & Rago, S. A. (2013). "Advanced Programming in the UNIX Environment" (3rd ed.). Addison-Wesley. Chapter 13 (Daemon Processes).
+  - Kerrisk, M. (2010). "The Linux Programming Interface". No Starch Press. Chapter 37 (Daemons).
+  - Freedesktop.org (2024). "systemd.service — Service unit configuration".
+*/}
+
+A daemon is a background process that runs independently of direct user interaction. In UNIX-like operating systems, daemons manage long-running services, such as web servers (`httpd`), SSH endpoints (`sshd`), and system logging daemons (`syslogd`). By convention, the names of these processes terminate with the character 'd'.
 
 ## Characteristics of Daemons
 
-To function properly across the lifetime of an operating system session, daemons must establish a specific environmental state:
+To run detached from any terminal session and persist across the system lifetime, a traditional POSIX daemon must establish a specific execution environment. 
 
-1.  **Orphan Status:** The daemon process must detach itself from the terminal session that started it. This is typically achieved by forking a child process and instantly exiting the parent. The child becomes an orphan and is adopted by the init process (PID 1).
-2.  **Session Disconnection:** It calls `setsid()` to become the leader of a new process group and session. This severs its connection to the controlling terminal (TTY), making it immune to terminal-generated signals.
-3.  **File Descriptors:** Standard input (STDIN), output (STDOUT), and error (STDERR) are closed or redirected to `/dev/null` or dedicated log files, as the daemon has no terminal to interact with.
-4.  **Working Directory:** The root directory `/` is set as the working directory to prevent the daemon from blocking the unmounting of file systems where it was started.
+1. **Orphan Status**: The daemon detaches from the terminal session that launched it. It does this by calling `fork()`. The parent process immediately exits, and the child process becomes an orphan, which is adopted by the system initialization process (`init` or `systemd`, PID 1).
+2. **Session Disconnection**: The process calls `setsid()` to become the leader of a new process group and session. This severs its connection to any controlling terminal (TTY), preventing the process from receiving terminal-generated signals (such as `SIGHUP` or `SIGINT`).
+3. **Double Fork (Optional but Recommended)**: The process forks a second time. The parent of this second fork exits immediately. This ensures that the daemon is no longer a session leader and cannot accidentally acquire a controlling terminal if it opens a terminal device.
+4. **Working Directory**: The daemon changes its working directory to the root directory `/`. This prevents the process from locking a mounted filesystem, which would otherwise prevent the administrator from unmounting it.
+5. **File Descriptors and Logging**: Standard input (STDIN), output (STDOUT), and error (STDERR) descriptors are closed and redirected to `/dev/null`. To output diagnostic logs, the daemon uses the system log (`syslog`) service.
+
+The following C implementation demonstrates how to transform a process into a daemon using the standard POSIX double-fork method:
 
 ```c
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <syslog.h>
+#include <fcntl.h>
 
-void daemonize() {
-    pid_t pid = fork();
+void daemonize(void) {
+    pid_t pid;
+
+    /* 1. Fork parent, exit to background the process */
+    pid = fork();
     if (pid < 0) exit(EXIT_FAILURE);
-    if (pid > 0) exit(EXIT_SUCCESS); // Parent exits
+    if (pid > 0) exit(EXIT_SUCCESS); /* Parent exits */
 
+    /* 2. Create new session and process group */
     if (setsid() < 0) exit(EXIT_FAILURE);
 
-    // Default permissions
+    /* 3. Second fork to prevent acquiring TTY */
+    pid = fork();
+    if (pid < 0) exit(EXIT_FAILURE);
+    if (pid > 0) exit(EXIT_SUCCESS);
+
+    /* 4. Set file mode creation mask to 0 */
     umask(0);
 
-    // Change to root directory
-    chdir("/");
-    
-    // Close standard file descriptors (FD)
+    /* 5. Change working directory to root */
+    if (chdir("/") < 0) {
+        exit(EXIT_FAILURE);
+    }
+
+    /* 6. Close standard file descriptors */
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
-    
-    // Proceed to core daemon loop
-    while(1) {
-        // Core service logic
-        sleep(60);
+
+    /* 7. Redirect standard channels to /dev/null */
+    int dev_null = open("/dev/null", O_RDWR);
+    if (dev_null != -1) {
+        dup2(dev_null, STDIN_FILENO);
+        dup2(dev_null, STDOUT_FILENO);
+        dup2(dev_null, STDERR_FILENO);
     }
+
+    /* 8. Open system log connection */
+    openlog("custom_daemon", LOG_PID, LOG_DAEMON);
+    syslog(LOG_INFO, "Daemon process detached and initialized.");
 }
 ```
 
-This snippet illustrates the standard POSIX pattern executed by traditional C programs transforming into daemon background services.
-
 ## Init Systems and Service Management
 
-Modern UNIX variants handle daemons through init systems like SysVinit, systemd, or launchd (macOS). These managers abstract the "daemonization" process, allowing developers to write software as standard, foreground-running programs.
+Modern UNIX-like operating systems manage daemons through initialization supervisors such as `systemd` (Linux) or `launchd` (macOS). These init systems handle daemonization, output redirection, and user execution privileges on behalf of the developer. This allows services to be written as standard foreground programs.
 
-Under systemd, developers define a unit service file:
+Under `systemd`, a developer defines a service unit file to manage execution parameters:
+
 ```ini
 [Unit]
-Description=My Custom Web Service
+Description=Custom Web Service Daemon
 After=network.target
 
 [Service]
+# Execute the binary in the foreground
 ExecStart=/usr/local/bin/my_web_service
+# Restart the daemon automatically if it crashes
 Restart=always
+# Drop privileges to a non-root user
 User=nobody
 Group=nogroup
 
@@ -72,19 +102,29 @@ Group=nogroup
 WantedBy=multi-user.target
 ```
 
-Here, systemd inherently executes the application and manages the STDOUT redirection, user execution context, and backgrounding mechanics on behalf of the application developer, removing the necessity of the manual `fork()` and `setsid()` code pattern.
+The service manager handles environment setup, logging to the journal (`journald`), and tracking the process lifecycle, rendering manual `fork()` and `setsid()` code unnecessary for modern system services.
 
 ## Exercise: Daemon Lifecycles
 
+Test your understanding of daemon setup steps in the scenario below:
+
 <CaseStudy client:load
-  scenario="A junior system administrator is writing a custom C daemon to monitor disk usage continuously. They successfully use `fork()` to create a background child process and exit the parent. However, the administrator notices that whenever they close the SSH terminal session they used to launch the program, the monitoring daemon unexpectedly terminates."
-  question="Based on the required characteristics of a daemon, which crucial step did the administrator forget to implement?"
+  scenario="A systems programmer is writing a custom C service to monitor CPU temperature. They use fork() to create a background process and exit the parent. However, when they close the SSH session they used to launch the program, the monitoring daemon terminates immediately."
+  question="Based on the required characteristics of a daemon, which initialization step did the programmer fail to execute?"
   options={[
-    "Setting the working directory to `/` to avoid blocking unmounts.",
+    "Setting the working directory to the root directory `/`.",
     "Calling `setsid()` to disconnect from the controlling terminal (TTY).",
     "Closing the standard input and output file descriptors (STDIN_FILENO, STDOUT_FILENO).",
     "Changing the file creation mask using `umask(0)`."
   ]}
   correctIndex={1}
-  explanation="When a process is tied to a controlling terminal (like an SSH session), closing that terminal sends a SIGHUP (hangup) signal to all processes attached to it, terminating them. Calling `setsid()` creates a new session where the process becomes the leader without a controlling terminal, thus immunizing it from terminal-generated signals."
+  explanation="When a terminal session closes, the operating system sends a SIGHUP (hangup) signal to all processes attached to the controlling terminal. Calling `setsid()` creates a new session without a controlling terminal, immunizing the daemon from terminal-session closure signals."
 />
+
+## References & Further Reading
+
+For additional specifications and implementations of daemon processes, consult the following references:
+
+*   Stevens, W. R., & Rago, S. A. (2013). *Advanced Programming in the UNIX Environment* (3rd ed.). Addison-Wesley. (Covering Chapter 13: Daemon Processes and Chapter 3: File I/O).
+*   Kerrisk, M. (2010). *The Linux Programming Interface*. No Starch Press. (Covering Chapter 37: Daemons and Chapter 34: Process Groups, Sessions, and Job Control).
+*   [systemd.service(5) Manual Page](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html). Freedesktop.org.

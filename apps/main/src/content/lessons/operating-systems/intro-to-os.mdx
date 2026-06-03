@@ -4,8 +4,11 @@ course: "operating-systems"
 description: "Defining the operating system, exploring its core responsibilities, and understanding the user-kernel boundary."
 ---
 import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
 
 # Introduction to Operating Systems
+
+{/* Source tracking: Operating system definitions, hardware abstraction, dual-mode execution (user vs kernel mode), and bootstrap sequences synthesized from "Operating System Concepts" (Silberschatz, Galvin & Gagne, 10th Ed., Chapters 1-2), "Modern Operating Systems" (Tanenbaum & Bos, 4th Ed., Chapter 1), and Wikipedia: Operating system (CC-BY-SA 4.0). */}
 
 At its most fundamental level, an **Operating System (OS)** is a collection of software that manages computer hardware resources and provides common services for computer programs. It acts as an intermediary between users/applications and the computer hardware. Without an OS, every programmer would need to write code to directly manipulate disk read-heads, manage voltage levels for memory cells, and handle the intricate timing of network hardware.
 
@@ -18,6 +21,25 @@ An operating system typically fulfills four primary roles:
 3.  **Process Coordinator**: It manages the execution of multiple programs simultaneously, a feat known as multitasking. This involves scheduling processes, handling interrupts, and facilitating inter-process communication (IPC).
 4.  **Security and Protection**: The OS enforces boundaries. It prevents a browser tab from reading your bank password stored in a password manager's memory space and ensures that users can only access their own files.
 
+For example, standard file writing avoids interacting with physical storage tracks and cylinders directly. Instead, programmers use high-level file system abstractions provided by the OS:
+
+```c
+#include <stdio.h>
+
+// Example demonstrating Hardware Abstraction:
+// Writing a message to disk without manual sector/head addressing.
+int main() {
+    FILE *file = fopen("log.txt", "w");
+    if (file == NULL) {
+        perror("Failed to open file");
+        return 1;
+    }
+    fprintf(file, "LibreUni: Hardware Abstraction Example\n");
+    fclose(file);
+    return 0;
+}
+```
+
 ## The Dual Mode Operation
 
 A critical concept in modern OS design is the distinction between **User Mode** and **Kernel Mode**. This is hardware-supported (via a "mode bit" in the CPU) and is essential for system stability.
@@ -26,6 +48,30 @@ A critical concept in modern OS design is the distinction between **User Mode** 
 -   **Kernel Mode**: The OS kernel runs in Kernel Mode. It has unrestricted access to the hardware and memory. If the kernel crashes, the entire system "Blue Screens" or "Kernel Panics."
 
 When an application needs to perform a privileged operation (like reading a file or sending a packet), it must perform a **System Call**. This triggers a transition from User Mode to Kernel Mode, where the OS validates the request, performs the action, and then returns control to the application.
+
+An example of assembly code executing a system call on an x86-64 CPU shows the mode transition path:
+
+```assembly
+; Example of a system call invocation in x86-64 assembly.
+; This code writes "Hello" to stdout and triggers a mode transition.
+section .data
+    msg db 'Hello', 0xa
+    len equ $ - msg
+
+section .text
+    global _start
+
+_start:
+    mov rax, 1          ; System call number for sys_write
+    mov rdi, 1          ; File descriptor 1 (stdout)
+    mov rsi, msg        ; Pointer to message buffer
+    mov rdx, len        ; Number of bytes to write
+    syscall             ; Privilege transition: User Mode -> Kernel Mode
+
+    mov rax, 60         ; System call number for sys_exit
+    xor rdi, rdi        ; Exit code 0
+    syscall             ; Privilege transition: User Mode -> Kernel Mode
+```
 
 <PlantUML theme="none" code={`
 @startuml
@@ -64,6 +110,21 @@ These are standard functions that applications use to interact with the kernel (
 ### 4. Device Drivers
 Specialized programs that allow the kernel to communicate with specific hardware devices. The driver "translates" generic OS commands into device-specific instructions.
 
+An example in C demonstrates how System Libraries wrap low-level kernel transitions:
+
+```c
+#include <unistd.h>
+#include <string.h>
+
+// Example demonstrating System Library wrapper usage to communicate with the Kernel:
+int main() {
+    const char *msg = "Invoking write() via glibc\n";
+    // write() wraps the low-level sys_write syscall
+    write(STDOUT_FILENO, msg, strlen(msg));
+    return 0;
+}
+```
+
 ## The Boot Process (Bootstrapping)
 
 How does the OS start? When you press the power button, the CPU is in a primitive state and must be "bootstrapped" into a fully functional environment. This involves a hand-off between several layers of software:
@@ -75,4 +136,52 @@ How does the OS start? When you press the power button, the CPU is in a primitiv
 
 *For a deep dive into these mechanics, see the **System Initialization & Booting** module later in this course.*
 
+An example flowchart maps the execution control flow and processor modes during bootstrapping:
+
+```text
+Boot Sequence and Mode Transitions:
++-------------------+      [16-bit Real Mode]
+| 1. Power On / POST| ---> CPU starts at Reset Vector (0xFFFFFFF0)
++-------------------+
+          |
+          v
++-------------------+      [16-bit Real Mode / 32-bit Protected Mode]
+| 2. Bootloader     | ---> Load MBR / read partition, load kernel image
++-------------------+
+          |
+          v
++-------------------+      [64-bit Long Mode]
+| 3. Kernel Load    | ---> Kernel takes control, initializes virtual memory
++-------------------+
+          |
+          v
++-------------------+      [64-bit User Mode]
+| 4. PID 1 / init   | ---> Start systemd or launch user shell / GUI
++-------------------+
+```
+
 Operating systems have evolved from simple "batch processing" systems in the 1950s—which ran one job at a time—to the highly sophisticated, distributed, and real-time systems we use today across laptops, smartphones, and cloud servers. In the following modules, we will dive deeper into the mechanics of how these components work together to create the seamless experience of modern computing.
+
+## Interactive Practice: Operating System Core Concepts
+
+Test your understanding of operating system definitions, responsibilities, and execution modes.
+
+<Quiz client:load 
+  title="Operating System Fundamentals" 
+  question="Which of the following triggers a transition from user mode to kernel mode?" 
+  options={[
+    "An application performing a memory allocation in its own local stack space",
+    "A process triggering a system call (trap) to read a file from the disk",
+    "A shell executing a loop to print a series of numbers to a user variable",
+    "A standard mathematical function like sqrt() executing inside a system library"
+  ]} 
+  correctIndex={1} 
+  explanation="When an application needs to perform a privileged operation (like reading a file or sending network data), it must perform a system call. This triggers a hardware trap that transitions the CPU from User Mode (Ring 3) to Kernel Mode (Ring 0) so the OS can safely execute the request."
+/>
+
+## References & Further Reading
+
+*   [Operating system](https://en.wikipedia.org/wiki/Operating_system) (CC-BY-SA 4.0)
+*   Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). *Operating System Concepts* (10th ed.). John Wiley & Sons.
+*   Tanenbaum, A. S., & Bos, H. (2014). *Modern Operating Systems* (4th ed.). Pearson.
+

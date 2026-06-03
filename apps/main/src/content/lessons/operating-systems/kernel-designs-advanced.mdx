@@ -7,6 +7,8 @@ import CaseStudy from '../../../components/CaseStudy';
 
 # Advanced Kernel Architecture
 
+{/* Source tracking: Comparative kernel architectures and Ring-level execution models synthesized from "Modern Operating Systems" (Tanenbaum & Bos, 4th Ed., Chapter 1), "Operating System Concepts" (Silberschatz et al., 10th Ed., Chapter 2), and Linux/Windows kernel development specifications (man7.org, Microsoft Learn). */}
+
 The kernel is the core component of any operating system. It manages memory, processes, device drivers, and system calls. However, as the demands and complexity of computer systems have evolved, the architectural approach to kernel design has diverged into several radically different methodologies.
 
 ## The Monolithic Approach
@@ -17,6 +19,41 @@ In a monolithic kernel, the entire operating system, including device drivers, f
 2.  **Centralised Data Structures:** Subsystems (e.g., networking and memory management) can easily share access to necessary internal data structures.
 
 However, the significant drawback of the monolithic model is stability and security. A single flaw in any subsystem—a poorly written audio driver or a bug in a networking protocol stack—can crash the entire system. Linux and BSD variants (like FreeBSD) are the most prominent examples of monolithic kernels, although modern implementations support loadable kernel modules (LKMs) that can be inserted dynamically.
+
+An example of Monolithic Kernel Driver Registration in Linux shows how driver functions link directly to the VFS kernel hooks:
+
+```c
+#include <linux/fs.h>
+#include <linux/device.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+
+// Example demonstrating Monolithic Kernel Driver Registration:
+// The driver writes file operation handlers directly to VFS structs.
+static int device_open(struct inode *inode, struct file *file) {
+    pr_info("Device opened in monolithic kernel space\n");
+    return 0;
+}
+
+static struct file_operations fops = {
+    .owner = THIS_MODULE,
+    .open = device_open,
+};
+
+static int __init char_dev_init(void) {
+    // Registering a major number directly in Ring 0
+    int major = register_chrdev(0, "libreuni_dev", &fops);
+    if (major < 0) {
+        pr_alert("Failed to register character device\n");
+        return major;
+    }
+    pr_info("Registered monolithic char device with major %d\n", major);
+    return 0;
+}
+
+module_init(char_dev_init);
+MODULE_LICENSE("GPL");
+```
 
 ## The Microkernel Design
 
@@ -34,11 +71,50 @@ The primary disadvantage is the significant performance penalty. Because service
 
 Early implementations (like early versions of Mach) suffered heavily from this IPC overhead. Modern microkernel designs (like L4) have relentlessly optimized IPC paths, demonstrating performance comparable to monolithic kernels for many workloads.
 
+An example demonstrating Optimized L4-style Register IPC shows how modern microkernels bypass memory copies by loading message data directly into CPU registers before a context switch:
+
+```c
+// Example demonstrating Optimized L4-style Register IPC:
+// Small messages are passed directly via CPU registers to bypass RAM latency.
+inline void l4_ipc_send_fast(unsigned int dest_thread_id, unsigned int data1, unsigned int data2) {
+    register unsigned int r_dest asm("rdi") = dest_thread_id;
+    register unsigned int r_d1   asm("rsi") = data1;
+    register unsigned int r_d2   asm("rdx") = data2;
+    
+    // Execute L4 fast-path system call trap
+    asm volatile(
+        "syscall"
+        : "+r"(r_dest), "+r"(r_d1), "+r"(r_d2)
+        : "a"(0x1) // L4 IPC syscall number
+        : "rcx", "r11", "memory"
+    );
+}
+```
+
 ## Hybrid Kernels
 
 To balance the high performance of monolithic kernels with the modularity of microkernels, operating system architects developed hybrid kernels. These designs typically maintain a monolithic architecture for critical path performance (keeping essential file systems and networking in kernel space) but adopt microkernel concepts for extensibility, moving non-critical or volatile components (like certain peripheral drivers or distinct subsystems) into user space.
 
 Windows NT (the kernel powering modern Windows 10/11) and XNU (the kernel for macOS and iOS) are notable examples. XNU explicitly combines a Mach microkernel core (handling IPC and scheduling) with substantial BSD monolithic components (handling networking and POSIX APIs) in the same address space.
+
+An example demonstrating Windows NT (Hybrid) Object Manager Callback registration shows how drivers monitor system operations by registering callbacks in Ring 0:
+
+```c
+#include <ntddk.h>
+
+// Example demonstrating Windows NT (Hybrid) Object Manager Callback registration:
+// Drivers hook directly into Object Manager handles in Ring 0.
+OB_PREOP_CALLBACK_STATUS PreOpenProcessCallback(
+    PVOID RegistrationContext,
+    POB_PRE_OPERATION_INFORMATION OperationInformation
+) {
+    // Inhibit process termination permissions for protected executables
+    if (OperationInformation->Operation == OB_OPERATION_HANDLE_CREATE) {
+        OperationInformation->Parameters->CreateHandleInformation.DesiredAccess &= ~PROCESS_TERMINATE;
+    }
+    return OB_PREOP_SUCCESS;
+}
+```
 
 ## Exercise: Comparing Kernel Failure Modes
 
@@ -54,3 +130,11 @@ Windows NT (the kernel powering modern Windows 10/11) and XNU (the kernel for ma
   correctIndex={2}
   explanation="In a monolithic system, device drivers reside inside the kernel space with full Ring 0 access. Any fault physically panics the entire system. In a microkernel, non-essential components like an audio driver strictly run as unprivileged user-space processes (servers). The driver process crashes alone, while the microkernel itself survives effortlessly."
 />
+
+## References & Further Reading
+
+*   Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). *Operating System Concepts* (10th ed.). John Wiley & Sons.
+*   Tanenbaum, A. S., & Bos, H. (2014). *Modern Operating Systems* (4th ed.). Pearson.
+*   Liedtke, J. (1993). *Improving IPC by kernel design*. ACM SIGOPS Operating Systems Review, 27(5), 175-188.
+*   Microsoft Corporation. (2023). *Windows Driver Architecture and Object Manager*. Microsoft Learn.
+

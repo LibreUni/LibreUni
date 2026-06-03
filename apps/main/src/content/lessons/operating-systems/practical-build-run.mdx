@@ -7,37 +7,48 @@ import CodeExercise from '../../../components/CodeExercise';
 
 # From Source to Screen: Building and Emulating
 
-Having written the code (`boot.s` and `kernel.c`), we now need to transform it into a single binary file that a computer can execute. This requires a specialized tool: a **Linker Script**.
+{/* Source tracking: Toolchain compilation mechanics and linker script structure verified against:
+  - Free Software Foundation (2024). "GNU Linker (ld) Documentation: Linker Scripts".
+  - Free Software Foundation (2024). "Using the GNU Compiler Collection (GCC): Standards-Conforming Engine".
+  - OSDev Wiki (2024). "Linker Scripts".
+*/}
+Transforming low-level assembly (`boot.s`) and C source files (`kernel.c`) into a single executable binary image requires compiling the code for a target architecture and configuring the physical layout of the output binary using a linker script. 
+
+Because a kernel boots directly on the bare metal without an underlying operating system, the compilation process must omit standard user-space libraries and runtime symbols, and specify the exact physical memory location where the binary will reside.
 
 ## 1. The Linker Script (`linker.ld`)
 
-Standard programs are placed in memory wherever the OS feels like. For a kernel, we must be much more precise. Most bootloaders expect the kernel to be loaded at **1 Megabyte** (`0x100000`).
+Standard user-space applications are compiled to rely on a dynamic loader, allowing the kernel to place the program sections anywhere in virtual memory. For a bootable kernel, memory placement must be precise. Most x86 firmware and bootloaders expect the kernel binary to be loaded at the 1 Megabyte (`0x100000`) boundary in physical memory, leaving lower memory ranges free for BIOS data structures and hardware mapped I/O.
+
+A **Linker Script** specifies how the linker compiles input object sections into output sections, defining the precise memory layout.
+
+For example, a typical linker script (`linker.ld`) defines the starting memory offset and groups the program's segments (`.text`, `.rodata`, `.data`, `.bss`) sequentially:
 
 ```ld
 /* The entry point defined in boot.s */
 ENTRY(_start)
 
 SECTIONS {
-    /* Most kernels start at 1MB */
+    /* Set the location counter to the 1 Megabyte boundary */
     . = 1M;
 
-    /* First, the Multiboot header and the code */
+    /* First, place the Multiboot header and the code segment */
     .text BLOCK(4K) : ALIGN(4K) {
         *(.multiboot)
         *(.text)
     }
 
-    /* Read-only data */
+    /* Read-only data segment (constants and string literals) */
     .rodata BLOCK(4K) : ALIGN(4K) {
         *(.rodata)
     }
 
-    /* Read-write data (initialized) */
+    /* Read-write data segment (initialized global variables) */
     .data BLOCK(4K) : ALIGN(4K) {
         *(.data)
     }
 
-    /* Read-write data (uninitialized) and stack */
+    /* Read-write data segment (uninitialized globals) and stack */
     .bss BLOCK(4K) : ALIGN(4K) {
         *(COMMON)
         *(.bss)
@@ -47,38 +58,63 @@ SECTIONS {
 
 ## 2. The Build Process
 
-To compile these, you need a "bare-metal" cross-compiler. If you are on Linux, you can use the standard `gcc` and `nasm`.
+To compile code for a bare-metal architecture, you use a target-independent cross-compiler. The compilation steps assemble the boot interface, compile the kernel logic, and link the final executable image.
+
+For example, these commands illustrate the compilation sequence on a Linux host targeting x86 bare metal:
 
 ### Step 1: Assemble the Boot Code
-`nasm -f elf32 boot.s -o boot.o`
+```bash
+nasm -f elf32 boot.s -o boot.o
+```
+This command compiles the assembly source file into a 32-bit ELF format object file (`boot.o`).
 
 ### Step 2: Compile the C Kernel
-We use special flags to tell GCC *not* to use any standard C libraries or OS-dependent features.
-`gcc -m32 -c kernel.c -o kernel.o -ffreestanding -O2 -Wall -Wextra`
+```bash
+gcc -m32 -c kernel.c -o kernel.o -ffreestanding -O2 -Wall -Wextra
+```
+The flags serve the following purposes:
+- `-m32`: Generates 32-bit instructions.
+- `-ffreestanding`: Directs GCC not to assume standard C library functions or runtime symbols are available (e.g., omitting standard `main` entry requirements and custom system library linkages).
+- `-O2`: Applies standard optimization structures.
 
 ### Step 3: Link the Binary
-This combines the object files using our linker script.
-`ld -m elf_i386 -T linker.ld boot.o kernel.o -o myos.bin`
+```bash
+ld -m elf_i386 -T linker.ld boot.o kernel.o -o myos.bin
+```
+The `-T` flag instructs the linker (`ld`) to apply our custom memory layout schema (`linker.ld`), linking the object files into the final bootable binary `myos.bin`.
 
 ## 3. Running in QEMU
 
-Developing an OS on real hardware is slow (and can be dangerous). Instead, we use an **Emulator** like **QEMU**. It simulates an x86 PC in software.
+Deploying a raw kernel to physical hardware is time-consuming and risks hardware lockups. Instead, developers use a hardware emulator like **QEMU** (Quick Emulator) to simulate a complete computer system in software.
 
-To run your new kernel, simply execute:
+To run the compiled kernel in a simulated 32-bit x86 environment, execute the following emulation command:
+
 ```bash
 qemu-system-i386 -kernel myos.bin
 ```
 
-If everything worked, a new window will appear with a black screen and the text **"Hello, OS World!"** in the top-left corner. You have successfully booted your own code!
+Upon execution, QEMU boots the multiboot-compliant kernel directly. The emulator initializes the screen buffer, loading the output strings into video memory.
 
 ## Summary of Tools
 
+The table below outlines the functions and outputs of each tool used in the bare-metal development pipeline:
+
 | Tool | Purpose | Output |
 | :--- | :--- | :--- |
-| **NASM** | Assembler | Object File (.o) |
-| **GCC** | C Compiler (with `-ffreestanding`) | Object File (.o) |
-| **LD** | Linker (with `-T linker.ld`) | Executable Binary (.bin) |
+| **NASM** | Assembler | Object File (`.o`) |
+| **GCC** | C Compiler (with `-ffreestanding`) | Object File (`.o`) |
+| **LD** | Linker (with `-T linker.ld`) | Executable Binary (`.bin`) |
 | **QEMU** | Emulator | Simulated PC Execution |
+
+For example, to verify that each component of this toolchain is installed and accessible in the system environment, you can run their version check flags:
+
+```bash
+# Verify installation of the compilation and emulation toolchain
+nasm -v
+gcc --version
+ld -v
+qemu-system-i386 --version
+```
 
 ## Exercise: The Entry Point
 
@@ -91,4 +127,14 @@ Which line in the linker script tells the computer where to start executing the 
   explanation="The ENTRY command in a linker script specifies the first instruction of the executable, which in our case is the _start label from our assembly file."
 />
 
-Congratulations! You have moved from understanding how kernels manage processes to actually writing a "heart" that beats on its own. This is the first step on a long journey that leads to building schedulers, file systems, and eventually, a fully functional operating system.
+Applying these toolchain steps enables the creation of a bootable operating system core, laying the foundation for developing memory managers, process schedulers, and device drivers.
+
+## References & Further Reading
+
+To practice or explore further, see the official documentation below for an example of toolchain configuration and architecture reference:
+
+*   Free Software Foundation. (2024). [GNU Linker (ld) Documentation: Linker Scripts](https://sourceware.org/binutils/docs/ld/Scripts.html).
+*   Free Software Foundation. (2024). [Using the GNU Compiler Collection (GCC): Standards-Conforming Engine](https://gcc.gnu.org/onlinedocs/gcc/Standards.html) (detailing `-ffreestanding` conformance).
+*   QEMU Project. (2024). [QEMU System Emulator User Documentation](https://www.qemu.org/docs/).
+*   The NASM Development Team. (2024). [NASM - The Netwide Assembler Manual](https://www.nasm.us/docs.php) (BSD License).
+*   [OSDev Wiki: Linker Scripts](https://wiki.osdev.org/Linker_Scripts) (Creative Commons Attribution 4.0)

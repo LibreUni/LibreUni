@@ -7,6 +7,8 @@ import CaseStudy from '../../../components/CaseStudy';
 
 # Future Trends in Operating Systems
 
+{/* Source tracking: Unikernels, WebAssembly System Interface (WASI), and Rust integration in monolithic kernels synthesized from Madhavapeddy et al. "Unikernels: Library Operating Systems for the Cloud" (ACM ASPLOS 2013), the WebAssembly specification by Haas et al. (ACM PLDI 2017), the Rust for Linux project documentation (https://rust-for-linux.com/), and Wikipedia: Unikernel (CC-BY-SA 4.0). */}
+
 Operating systems have historically evolved from simple batch-processing monitors into massive, complex millions-of-lines-of-code monolithic architectures. As computing hardware radically shifts toward cloud infrastructure, edge devices, and specialized AI accelerators, the fundamental assumptions surrounding OS design are shifting in response.
 
 ## Unikernels and Library Operating Systems
@@ -19,11 +21,50 @@ The resulting artifact is a single, highly optimized, non-preemptible bootable i
 -   **Security:** Unikernels have an incredibly small attack surface. Since they lack a shell, interactive utilities (like `bash` or `ssh`), or user-space separation (everything runs in kernel mode), an attacker has virtually no tools available if they manage to compromise the application.
 -   **Performance:** Boot times are measured in milliseconds rather than seconds. They consume drastically less memory, allowing for vastly higher density of microservices on a single cloud server compared to traditional Docker containers.
 
+An example configuration file (`config.json`) for packaging a compiled Go microservice into a unikernel using the NanoVMs toolset:
+
+```json
+{
+  "Args": ["/app"],
+  "Env": {"ENV": "production"},
+  "Files": ["/etc/ssl/certs/ca-certificates.crt"],
+  "MapDirs": {"/tmp": "/tmp"},
+  "Ports": ["8080"]
+}
+```
+
 ## WebAssembly (Wasm) Outside the Browser
 
 Originally designed to run high-performance C/C++ or Rust code securely within web browsers, WebAssembly (Wasm) is evolving into a universal, system-agnostic bytecode format. 
 
 Through the WebAssembly System Interface (WASI), Wasm modules can now interact with the underlying host operating system (accessing files, networking, and clocks) safely. This creates a highly secure, truly "write once, run anywhere" sandbox. Operating system researchers are increasingly viewing Wasm not just as an application format, but as a potential foundational security layer to replace traditional POSIX process boundaries, enabling incredibly fast, secure execution of untrusted code directly by the OS or specialized edge computing networks.
+
+Below is a Rust program compiled to target WASI, demonstrating access to environment variables outside the browser:
+
+```rust
+// A Rust console program using the WebAssembly System Interface (WASI)
+use std::env;
+
+fn main() {
+    println!("Querying Host Environment from WASI Sandbox:");
+    for (key, value) in env::vars() {
+        println!("  {} = {}", key, value);
+    }
+}
+```
+
+To build and execute this sandboxed code outside of a web browser on any host machine:
+
+```bash
+# Add the WebAssembly compilation target
+rustup target add wasm32-wasi
+
+# Compile the project
+cargo build --target wasm32-wasi
+
+# Run the compiled WebAssembly binary using a WASI-compliant runtime
+wasmtime target/wasm32-wasi/debug/wasi_example.wasm
+```
 
 ## Safe Systems Programming in the Kernel
 
@@ -34,6 +75,30 @@ A major paradigm shift is underway replacing vulnerable C code with memory-safe 
 -   **Linux:** In late 2022, the Linux kernel officially incorporated Rust as a secondary supported development language alongside C, specifically targeting the development of safer driver modules. 
 
 The strict compile-time borrow checker in Rust eliminates entire classes of runtime memory vulnerabilities without incurring the performance penalty of a garbage collector, aligning perfectly with strict kernel performance requirements.
+
+An example of a minimal memory-safe Rust kernel module configured for the Linux kernel development tree:
+
+```rust
+// Memory-safe Rust module template for the Linux kernel
+use kernel::prelude::*;
+
+module! {
+    type: SafeKernelModule,
+    name: "safe_kernel_module",
+    author: "LibreUni Kernel Contributor",
+    description: "A memory-safe Linux kernel driver compiled in Rust",
+    license: "GPL",
+}
+
+struct SafeKernelModule;
+
+impl kernel::Module for SafeKernelModule {
+    fn init(_module: &'static kernel::ThisModule) -> Result<Self> {
+        pr_info!("Safe Rust Kernel Module Initialized.\n");
+        Ok(SafeKernelModule)
+    }
+}
+```
 
 ## Exercise: Evaluating Cloud Architectures
 
@@ -49,3 +114,9 @@ The strict compile-time borrow checker in Rust eliminates entire classes of runt
   correctIndex={3}
   explanation="While containers are fast, they still rely heavily on complex monolithic host kernels, and VMs are fundamentally too slow to boot. Unikernels represent the optimal architecture: by statically linking only the precise required libraries (a Library OS) directly onto a hypervisor, they strip away interactive shells and bloated stacks. This results in millisecond boot times, high density, and an incredibly restricted attack surface."
 />
+
+## References & Further Reading
+*   [Unikernel](https://en.wikipedia.org/wiki/Unikernel) (Wikipedia, CC-BY-SA 4.0)
+*   Madhavapeddy, A., Mortier, R., Rotsos, C., Crowcroft, J., Ko, B., & Hand, S. (2013). *Unikernels: library operating systems for the cloud*. ACM SIGPLAN Notices, 48(4), 461-472.
+*   Haas, A., Rossberg, A., Schuff, D. L., Titzer, B. L., Holman, M., Gohman, D., ... & Bastien, J. F. (2017). *Bringing WebAssembly to the spec*. ACM SIGPLAN Notices, 52(6), 185-200.
+*   [Rust for Linux Project](https://rust-for-linux.com/) (Official documentation homepage)

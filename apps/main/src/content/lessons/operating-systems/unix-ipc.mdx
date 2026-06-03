@@ -3,82 +3,151 @@ title: "UNIX Interprocess Communication (IPC)"
 course: "operating-systems"
 description: "Exploring mechanisms for interprocess communication (IPC) in UNIX systems, including pipes, sockets, and memory sharing."
 ---
+import Quiz from '../../../components/Quiz';
+import CodeExercise from '../../../components/CodeExercise';
 import CaseStudy from '../../../components/CaseStudy';
 
 # UNIX Interprocess Communication (IPC)
 
-Interprocess Communication (IPC) is the mechanism provided by an operating system that allows processes to manage shared data and synchronize actions. In UNIX and POSIX-compliant systems, processes operate in isolated memory spaces, necessitating structured methods to exchange information securely and efficiently.
+{/* Source tracking: UNIX IPC mechanisms (Pipes, FIFOs, Sockets, and Shared Memory) synthesized from:
+  - Stevens, W. R. (1999). "UNIX Network Programming, Volume 2: Interprocess Communications" (2nd ed.). Prentice Hall.
+  - Kerrisk, M. (2010). "The Linux Programming Interface". No Starch Press. Chapters 43 (Pipes & FIFOs), 48 (POSIX IPC), and 57 (Sockets: UNIX Domain).
+  - Love, R. (2013). "Linux System Programming" (2nd ed.). O'Reilly Media. Chapter 1.
+*/}
+
+Interprocess Communication (IPC) is the mechanism provided by an operating system that allows processes to exchange data and synchronize execution. Because UNIX and POSIX-compliant systems enforce strict virtual memory isolation, processes cannot access each other's memory space directly. They must use kernel-mediated IPC channels to collaborate.
 
 ## Core IPC Mechanisms
 
-UNIX provides several distinct methodologies for communication between processes, each tailored for different use cases regarding data structures, synchronization, and scope.
+UNIX provides several distinct methodologies for communication between processes, each designed for different synchronization paradigms, data structures, and namespaces.
 
 ### Anonymous Pipes
 
-Pipes (`|`) provide a unidirectional data flow from one process to another, typically forming pipelines on the command line. They are accessed via file descriptors returned by the `pipe()` system call in C.
+Anonymous pipes provide a unidirectional byte stream from one process to another. They are created in memory and do not exist on disk. A pipe consists of a pair of file descriptors managed by the kernel, where data written to the write end is queued until read from the read end.
+
+The following C program demonstrates unidirectional parent-child communication using an anonymous pipe:
 
 ```c
 #include <unistd.h>
 #include <stdio.h>
+#include <string.h>
 
-int main() {
+int main(void) {
     int fd[2];
-    pipe(fd); // fd[0] is read end, fd[1] is write end
+    char write_buf[] = "IPC Pipe Transit";
+    char read_buf[32];
+
+    /* Create pipe: fd[0] is read end, fd[1] is write end */
+    if (pipe(fd) == -1) {
+        return 1;
+    }
 
     if (fork() == 0) {
-        close(fd[0]);
-        write(fd[1], "Hello from child", 16);
+        close(fd[0]); /* Close unused read end */
+        write(fd[1], write_buf, strlen(write_buf) + 1);
         close(fd[1]);
     } else {
-        close(fd[1]);
-        char buffer[20];
-        read(fd[0], buffer, 16);
-        printf("Parent read: %s\n", buffer);
+        close(fd[1]); /* Close unused write end */
+        read(fd[0], read_buf, sizeof(read_buf));
+        printf("Parent read: %s\n", read_buf);
         close(fd[0]);
     }
     return 0;
 }
 ```
-Pipes are highly efficient and are fundamental to the UNIX philosophy of creating modular programs that compose elegantly (e.g., `ls -la | grep "txt"`).
+
+Pipes are fundamental to command line composition, allowing the stdout of one process to flow into the stdin of another (e.g., `ls -l | grep ".txt"`).
 
 ### Named Pipes (FIFOs)
 
-While anonymous pipes only connect related processes (parent and child), named pipes allow communication between unrelated processes. They exist as physical files in the filesystem, created using `mkfifo`. Processes open them like standard files, though the kernel handles the data transit in memory.
+While anonymous pipes require processes to share a common ancestor (e.g., parent-child relationship), Named Pipes (also known as FIFOs) allow unrelated processes to communicate. A FIFO exists as a special file in the file system but behaves as a pipe in memory.
+
+```bash
+# Example: Creating and communicating via a FIFO named pipe
+mkfifo /tmp/custom_fifo
+
+# Process A writes to the FIFO (blocks until a reader opens it)
+echo "FIFO Message Exchange" > /tmp/custom_fifo &
+
+# Process B reads from the FIFO
+cat < /tmp/custom_fifo
+```
 
 ### Unix Domain Sockets
 
-UNIX domain sockets (UDS) are data communications endpoints for exchanging data between processes executing on the same host operating system. Unlike pipes, sockets are bidirectional. They use the file system as their address space (e.g., `/tmp/mysocket.sock`), allowing access control through POSIX file permissions.
+UNIX Domain Sockets (UDS) enable bidirectional data exchange between processes running on the same physical host. Unlike network sockets that use IP addresses and ports, UNIX domain sockets use pathnames in the file system (e.g., `/var/run/docker.sock`) as their endpoints, enforcing access security using standard POSIX file permissions.
 
-This is fundamentally the mechanism utilized by background services and daemons connecting components locally, like X Server (X11) connecting graphical applications with the display server.
+The following C snippet shows how to define and bind a UNIX domain socket address structure:
+
+```c
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <string.h>
+
+/* Example: Initializing a UNIX Domain Socket Address Structure */
+void init_socket_address(struct sockaddr_un *addr, const char *socket_path) {
+    memset(addr, 0, sizeof(struct sockaddr_un));
+    addr->sun_family = AF_UNIX;
+    strncpy(addr->sun_path, socket_path, sizeof(addr->sun_path) - 1);
+}
+```
 
 ### Shared Memory
 
-Shared memory is the fastest form of IPC available in UNIX. The kernel designates a block of memory accessible by multiple independent processes. Since data does not have to be copied between process memory and kernel memory buffers, the overhead is minimal.
+Shared memory is the fastest form of IPC. The kernel maps a segment of physical memory directly into the virtual address space of multiple processes. This allows processes to read and write directly to the same memory addresses without copying data through kernel buffers.
+
+The following C code maps a POSIX shared memory object:
 
 ```c
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-// Example setup of shared memory object mapping
-int fd = shm_open("/my_shm", O_CREAT | O_RDWR, 0666);
-ftruncate(fd, 4096);
-void *ptr = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+/* Example: Setting up and mapping a POSIX Shared Memory segment */
+void* setup_shared_memory(const char *name, size_t size) {
+    /* Create or open the shared memory object */
+    int shm_fd = shm_open(name, O_CREAT | O_RDWR, 0666);
+    if (shm_fd == -1) return MAP_FAILED;
+
+    /* Configure segment size */
+    if (ftruncate(shm_fd, size) == -1) return MAP_FAILED;
+
+    /* Map segment into the process address space */
+    return mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+}
 ```
 
-While blazingly fast, shared memory lacks implicit synchronization. Developers must employ semaphores, mutexes, or similar constructs to prevent race conditions during concurrent accesses.
+Because shared memory does not enforce implicit read/write synchronization, developers must use synchronization primitives like semaphores or mutexes to prevent race conditions.
 
 ## Exercise: Selecting the Right IPC
 
+Evaluate your understanding of IPC constraints and selection criteria in the exercises below:
+
 <CaseStudy client:load
-  scenario="A backend system architect is designing an architecture where a web server process and a specialized background database-logging process must constantly exchange highly structured data. Both processes run on the exact same physical server machine. The security team mandates that interaction must be securely restricted using standard file-system user permissions. The development team wants to avoid dealing with manual memory synchronization (like mutexes) to prevent race conditions."
+  scenario="A backend systems architect is designing an architecture where a web server process and a database-logging process must constantly exchange structured telemetry. Both processes execute on the same physical host. The security team mandates that interaction must be restricted using standard file-system user permissions. The development team wants to avoid dealing with manual memory synchronization (like mutexes) to prevent race conditions."
   question="Given these constraints, which IPC mechanism should the architect select?"
   options={[
     "Anonymous Pipes",
-    "Shared Memory",
+    "Shared Memory mapping",
     "Unix Domain Sockets",
     "Named Pipes (FIFOs)"
   ]}
   correctIndex={2}
-  explanation="Unix Domain Sockets provide bidirectional data exchange, reside in the file system allowing standard POSIX permissions for access control, and do not require the intense manual synchronization overhead that writing directly to Shared Memory necessitates."
+  explanation="Unix Domain Sockets provide bidirectional data exchange, reside in the file system allowing standard POSIX permissions for access control, and do not require the manual memory synchronization overhead that writing directly to Shared Memory necessitates."
 />
+
+<CodeExercise client:load
+  title="Creating a POSIX Named Pipe (FIFO)"
+  code={"/* C command to create a named pipe at the specified path */\n#include <sys/types.h>\n#include <sys/stat.h>\n\nint status = [!blank!](\"/tmp/my_fifo\", 0666);"}
+  answers={["mkfifo"]}
+  explanation="The mkfifo() function creates a new FIFO special file at the specified pathname with the provided permission mode."
+/>
+
+## References & Further Reading
+
+For additional details and specifications on IPC APIs, consult the following sources:
+
+*   Stevens, W. R. (1999). *UNIX Network Programming, Volume 2: Interprocess Communications* (2nd ed.). Prentice Hall. (The definitive guide to UNIX IPC systems).
+*   Kerrisk, M. (2010). *The Linux Programming Interface*. No Starch Press. (Covering Chapter 43: Pipes and FIFOs, Chapter 48: POSIX IPC, and Chapter 57: Sockets: UNIX Domain).
+*   [shm_open(3) Manual Page](https://man7.org/linux/man-pages/man3/shm_open.3.html). Linux man-pages project.
+*   [mkfifo(3) POSIX Programmer's Manual](https://man7.org/linux/man-pages/man3/mkfifo.3p.html). IEEE / The Open Group.

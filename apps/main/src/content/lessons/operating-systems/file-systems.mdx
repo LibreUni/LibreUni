@@ -4,8 +4,11 @@ course: "operating-systems"
 description: "How the OS organizes bits on a disk into meaningful files and folders. Exploring inodes, allocation methods, and data integrity."
 ---
 import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
 
 # File Systems
+
+{/* Source tracking: File system abstractions, block allocation methods, directory structures, journaling transactions, and VFS abstraction architectures synthesized from Silberschatz et al. "Operating System Concepts" (10th Ed., Chapters 13-14), Tanenbaum & Bos "Modern Operating Systems" (4th Ed., Chapter 5), and Wikipedia: File system (CC-BY-SA 4.0). */}
 
 A disk drive is essentially a massive array of addressable blocks (traditionally 512 bytes or 4 KB each). To a human, this raw data is useless. The **File System** is the component of the operating system that provides the abstraction we know and love: organized files and nested directories.
 
@@ -20,6 +23,24 @@ Every file has metadata, which is "data about data." This includes:
 -   Creation, modification, and access timestamps.
 -   Permissions (Who can read/write/execute?).
 -   Location (Where on the disk do the blocks start?).
+
+Applications retrieve this metadata via system calls. For example, using the POSIX `stat` system call in C to extract metadata attributes:
+
+```c
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdio.h>
+
+void print_file_metadata(const char *filename) {
+    struct stat sb;
+    if (stat(filename, &sb) == 0) {
+        printf("Size: %lld bytes\n", (long long)sb.st_size);
+        printf("Owner UID: %d\n", sb.st_uid);
+        printf("Permissions (Octal): %o\n", sb.st_mode & 0777);
+    }
+}
+```
 
 ## How Files are Stored: Allocation Methods
 
@@ -61,9 +82,37 @@ inode ..> b3
 @enduml
 `} />
 
+An example of a simplified UNIX-like inode structure defined in C, supporting direct and indirect indexing:
+
+```c
+// Structure representing a Unix-style index node (inode)
+struct inode {
+    uint16_t i_mode;       // File type and access permissions
+    uint32_t i_size;       // Size of file in bytes
+    uint32_t i_blocks;     // Total number of blocks allocated to the file
+    uint32_t i_block[15];  // Pointers to data blocks:
+                           // i_block[0..11]: Direct block pointers
+                           // i_block[12]: Singly indirect block pointer
+                           // i_block[13]: Doubly indirect block pointer
+                           // i_block[14]: Triply indirect block pointer
+};
+```
+
 ## Directories: Just Special Files
 
-A directory (folder) is actually just a special type of file. Instead of containing user data, it contains a list of filenames and their corresponding inode numbers. When you type `cd Documents`, the OS reads the "Documents" file, looks for the entry you want, and finds its inode.
+A directory (folder) is actually just a special type of file. Instead of containing user data, it contains a list of filenames and their corresponding inode numbers. When you type `cd Documents`, the OS reads the "Documents" directory file, looks for the entry you want, and finds its inode.
+
+A directory entry struct in C demonstrates how names map to physical inodes on disk:
+
+```c
+// Simplified representation of a directory entry record
+struct directory_entry {
+    uint32_t inode_number;      // Inode number mapping to this file
+    uint16_t record_length;     // Offset to the next entry record
+    uint8_t  name_length;       // Length of the filename string
+    char     name[255];         // Null-terminated filename string
+};
+```
 
 ## Data Integrity: Journaling
 
@@ -74,9 +123,32 @@ Modern file systems use **Journaling** (e.g., **NTFS**, **Ext4**, **APFS**).
 2.  **The Write**: The OS performs the actual write.
 3.  **The Commit**: The OS marks the journal entry as completed.
 
+Below is an execution example showing a typical journaling transaction lifecycle:
+
+```text
+[Transaction 512: Start]
+  - Target: Inode 10842 (modify file size to 8192 bytes)
+  - Action: Write Data Block 405 (contents: "New file content")
+  - Action: Update Inode block mapping (Block 2 -> Block 405)
+[Transaction 512: Logged to Journal]
+[Write Data Block 405 to Physical Disk Sector] -> Crash here is safe (reverts to state before Transaction 512)
+[Write Inode 10842 metadata to Physical Disk Sector]
+[Transaction 512: Commit logged] -> Changes are permanent
+```
+
 If the system crashes, upon reboot, the OS checks the journal. If it finds a "Fixing" entry that wasn't "Committed," it can either complete the task or safely undo it, ensuring the disk is never in an inconsistent state.
 
 ## Comparison of Major File Systems
+
+The choosing of a file system dictates system properties. For example, a user can format a storage partition using different filesystem tools:
+
+```bash
+# Formats partition /dev/sdb1 with the Ext4 journaling file system
+sudo mkfs.ext4 /dev/sdb1
+
+# Formats partition /dev/sdb2 with the FAT32 file system (VFAT)
+sudo mkfs.vfat -F 32 /dev/sdb2
+```
 
 | Name | Primary OS | Key Features |
 | :--- | :--- | :--- |
@@ -90,4 +162,38 @@ If the system crashes, upon reboot, the OS checks the journal. If it finds a "Fi
 
 In many OSs, there is a layer called the **VFS**. This allows the OS to support many different types of file systems simultaneously. An application just tells the VFS "open file X," and the VFS figures out whether that file is on a USB drive (FAT32), a Linux partition (Ext4), or even a network drive (NFS/SMB).
 
-In the next section, we will leave the abstract theory behind and look at the real-world history and "family tree" of the operating systems we use every day.
+An example of the VFS file operations interface in the Linux kernel exposes how filesystem-specific handlers are abstracted:
+
+```c
+// Linux kernel VFS file_operations interface snippet
+struct file_operations {
+    ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
+    ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
+    int (*open) (struct inode *, struct file *);
+    int (*release) (struct inode *, struct file *);
+    int (*fsync) (struct file *, loff_t, loff_t, int);
+};
+```
+
+## Interactive Practice: File System Mechanisms
+
+Test your knowledge of file allocation techniques and metadata mapping.
+
+<Quiz client:load 
+  title="File Allocation Strategies" 
+  question="Which file allocation method provides the fastest random access speed while preventing external fragmentation?" 
+  options={[
+    "Contiguous Allocation",
+    "Linked Allocation",
+    "Indexed Allocation (inodes)",
+    "Sequential Pointer Chaining"
+  ]} 
+  correctIndex={2} 
+  explanation="Indexed allocation (using inodes) allows direct random access to any block by looking up its address in the index table, avoiding the external fragmentation of contiguous allocation and the linear traversal penalty of linked allocation."
+/>
+
+## References & Further Reading
+*   [File system](https://en.wikipedia.org/wiki/File_system) (Wikipedia, CC-BY-SA 4.0)
+*   [File system structure](https://en.wikipedia.org/wiki/File_system_structure) (Wikipedia, CC-BY-SA 4.0)
+*   Silberschatz, A., Galvin, P. B., & Gagne, G. (2018). *Operating System Concepts* (10th ed.). John Wiley & Sons.
+*   Tanenbaum, A. S., & Bos, H. (2015). *Modern Operating Systems* (4th ed.). Pearson.

@@ -3,74 +3,127 @@ title: "Advanced UNIX Permissions and Security"
 course: "operating-systems"
 description: "Diving beyond chmod to understand setuid, setgid, sticky bits, and access control lists (ACLs)."
 ---
+import Quiz from '../../../components/Quiz';
+import CodeExercise from '../../../components/CodeExercise';
 import CaseStudy from '../../../components/CaseStudy';
 
 # Advanced UNIX Permissions and Security
 
-UNIX file permissions fundamentally control what users and processes can do with files and directories. The basic read, write, and execute bits (`rwx`) for Owner, Group, and Others provide a robust security layer. However, complex real-world scenarios require advanced mechanisms beyond the standard 777 numeric notation.
+{/* Source tracking: Special permissions (SUID, SGID, Sticky Bit) and Access Control Lists (ACLs) synthesized from:
+  - Stevens, W. R., & Rago, S. A. (2013). "Advanced Programming in the UNIX Environment" (3rd ed.). Addison-Wesley. Chapter 4 (Files and Directories).
+  - Kerrisk, M. (2010). "The Linux Programming Interface". No Starch Press. Chapters 9 (Process Credentials), 15 (File Attributes), and 17 (Access Control Lists).
+  - Linux man-pages project (2024). "chmod(1)" and "acl(5)".
+*/}
+
+UNIX file permissions regulate user and process access to files and directories. The basic read, write, and execute bits (`rwx`) for Owner, Group, and Others provide the foundation of this security model. However, multi-user systems require advanced mechanisms to manage privilege escalation, shared directories, and fine-grained access rules.
 
 ## Special Permissions: SUID, SGID, and the Sticky Bit
 
-Three special bits exist to handle necessary privilege escalation or restricted deletion.
+Three special permission bits modify the default access behavior of executables and directories:
 
 ### Set-User-ID (SUID)
 
-When the SUID bit is set on an executable file, the process executing the file assumes the privileges of the file's owner, not the user running it.
-- **Example:** The `passwd` command requires root access to modify `/etc/shadow`. Since `/usr/bin/passwd` is owned by `root` and has the SUID bit set, any user can run it to change their password securely.
-- **Representation:** An 's' appears in the owner's execute position: `-rwsr-xr-x`.
-- **Command:** `chmod u+s /path/to/executable`
+When an executable file has the SUID bit set, a process executing the file assumes the privileges of the file's owner rather than those of the user running it.
+
+- **Use Case**: The `passwd` command requires root access to write to `/etc/shadow`. Since `/usr/bin/passwd` is owned by `root` and has the SUID bit set, ordinary users can run it to change their passwords safely.
+- **Representation**: An 's' in the owner's execute position: `-rwsr-xr-x`.
+- **Command**: `chmod u+s /path/to/executable`
 
 ### Set-Group-ID (SGID)
 
-Similar to SUID, SGID allows a process to assume the group privileges of the file's group. When applied to a directory, it influences inheritance: any new file created within that directory automatically inherits the group ownership of the directory rather than the primary group of the user who created it.
-- **Example:** Collaborative directories where multiple members of a "developers" group need write access to newly created files.
-- **Representation:** An 's' appears in the group's execute position: `drwxrwsr-x`.
-- **Command:** `chmod g+s /path/to/directory`
+On an executable, SGID causes the process to run with the group privileges of the file's group. When set on a directory, files created inside automatically inherit the group of the parent directory rather than the primary group of the creating user.
+
+- **Use Case**: Collaborative directories where members of a group need access to newly created files.
+- **Representation**: An 's' in the group's execute position: `drwxrwsr-x`.
+- **Command**: `chmod g+s /path/to/directory`
 
 ### The Sticky Bit
 
-Historically used to keep executables "sticky" in RAM, the sticky bit is now primarily used on directories to restrict file deletion. When applied, only the file's owner, the directory's owner, or the root user can rename or delete files within it.
-- **Example:** The `/tmp` directory must be writable by everyone (`chmod 777`), but a user shouldn't be able to delete another user's temporary files.
-- **Representation:** A 't' appears in the others' execute position: `drwxrwxrwt`.
-- **Command:** `chmod +t /tmp`
+On directories, the sticky bit prevents users from deleting or renaming files unless they own the file, own the directory, or have root privileges.
+
+- **Use Case**: The `/tmp` directory must be writable by all users (`chmod 777`), but users must be prevented from deleting each other's files.
+- **Representation**: A 't' in the others' execute position: `drwxrwxrwt`.
+- **Command**: `chmod +t /path/to/directory`
+
+The following command shows how to inspect these special permissions on a system:
+
+```bash
+# Example: Inspecting files with special permissions on Linux
+ls -ld /usr/bin/passwd /tmp
+# Output highlights SUID ('s') and the Sticky Bit ('t'):
+# -rwsr-xr-x 1 root root  68208 May 21 12:00 /usr/bin/passwd
+# drwxrwxrwt 9 root root 106496 May 21 12:00 /tmp
+```
 
 ## Access Control Lists (ACLs)
 
-Standard UNIX permissions are inherently limited to a single owner user and a single group. If a file needs to grant read access to "User A" and write access to "User B" who are not in the same group, traditional `chmod` fails. Access Control Lists (ACLs) solve this fine-grained security requirement.
+Standard POSIX permissions are limited to a single owner user and a single group. If a file needs to grant read access to "User A" and write access to "User B" who are not in the same group, traditional `chmod` cannot implement this. Access Control Lists (ACLs) resolve this by providing granular permission mapping.
 
-Using `setfacl` and `getfacl`, administrators establish granular rules mapped to specific users and groups irrespective of the POSIX owner/group logic.
+Using `setfacl` and `getfacl`, administrators can assign specific permissions to arbitrary users or groups:
 
 ```bash
-# View standard and potentially ACL assignments
-ls -l project_data.txt
--rw-r--r--+ 1 admin staff 1024 Mar 14 project_data.txt
+# Example: Explicitly grant read/write access to user alice on a config file
+setfacl -m u:alice:rw /etc/application/config.yaml
 
-# The '+' indicates ACLs are present
-getfacl project_data.txt
-# file: project_data.txt
-# owner: admin
-# group: staff
+# Inspect the file's extended attributes
+ls -l /etc/application/config.yaml
+# The '+' symbol indicates an active ACL:
+# -rw-r--r--+ 1 root sysadmin 1024 May 21 12:00 /etc/application/config.yaml
+
+# View the full ACL detail
+getfacl /etc/application/config.yaml
+# file: /etc/application/config.yaml
+# owner: root
+# group: sysadmin
 user::rw-
-user:alice:r--
-user:bob:rw-
+user:alice:rw-
 group::r--
 mask::rw-
 other::r--
 ```
 
-In this scenario, Alice is explicitly granted read-only access, while Bob has read and write capabilities, overriding the default generic POSIX attributes.
-
 ## Exercise: Resolving Permission Escalation Vectors
 
+Evaluate your understanding of advanced permissions and ACL configuration in the exercises below:
+
 <CaseStudy client:load
-  scenario="A corporate server has a sensitive configuration file located at `/etc/application/config.yaml`. The file is currently owned by the `root` user and the `sysadmin` group. A new requirement mandates that an intern named Alice (in the group `interns`) and a contractor named Bob (in the group `contractors`) both need read and write access to exactly this file, but neither should be added to the powerful `sysadmin` group."
-  question="Since standard POSIX permissions are limited to a single owner and group, what specific mechanism must the administrator employ to fulfill this precise requirement securely?"
+  scenario="A corporate server has a sensitive configuration file located at `/etc/application/config.yaml`. The file is owned by the `root` user and the `sysadmin` group. A new security policy mandates that an intern named Alice (in the group `interns`) and a contractor named Bob (in the group `contractors`) both need read and write access to this file, but neither should be added to the `sysadmin` group."
+  question="Since standard POSIX permissions are limited to a single owner and group, what mechanism should the administrator employ to fulfill this requirement?"
   options={[
-    "Set the SUID bit on the configuration file so they act as root.",
+    "Set the SUID bit on the configuration file so they execute as root.",
     "Assign the Sticky Bit to the `/etc/application` directory.",
     "Apply Access Control Lists (ACLs) via `setfacl` to explicitly grant access to those specific users.",
     "Set the SGID bit on the directory so Bob and Alice inherit group rights."
   ]}
   correctIndex={2}
-  explanation="Access Control Lists (ACLs) are specifically designed to solve fine-grained security requirements that break the standard single-owner/single-group POSIX paradigm. Using `setfacl` allows the administrator to explicitly grant Alice and Bob access without modifying the file's primary ownership or incorrectly elevating their group privileges."
+  explanation="Access Control Lists (ACLs) allow administrators to assign explicit permissions to specific users and groups without altering the primary owner or group of the file, providing fine-grained access control."
 />
+
+<Quiz client:load
+  title="Understanding the SUID Security Implications"
+  question="When an executable file with the SUID (Set-User-ID) bit is executed, what privileges does the running process inherit?"
+  options={[
+    "The privileges of the user who executed the program.",
+    "The privileges of the user who owns the executable file.",
+    "The privileges of the root superuser automatically.",
+    "The privileges of the group associated with the file."
+  ]}
+  correctIndex={1}
+  explanation="The SUID bit forces the system to execute the program with the permissions of the file's owner, not the executing user. If the file is owned by root, the program runs with root privileges."
+/>
+
+<CodeExercise client:load
+  title="Configuring the Sticky Bit"
+  code={"# Example: Apply the Sticky Bit to the /project/shared directory\nchmod [!blank!] /project/shared"}
+  answers={["+t"]}
+  explanation="The '+t' option adds the sticky bit to the directory, restricting deletion of files within it to the file's owner or root."
+/>
+
+## References & Further Reading
+
+For additional details and specifications on advanced POSIX permissions and security attributes, consult the following sources:
+
+*   Stevens, W. R., & Rago, S. A. (2013). *Advanced Programming in the UNIX Environment* (3rd ed.). Addison-Wesley. (Covering Chapter 4: Files and Directories, detailing SUID, SGID, and directory sticky bits).
+*   Kerrisk, M. (2010). *The Linux Programming Interface*. No Starch Press. (Covering Chapter 15: File Attributes and Chapter 17: Access Control Lists).
+*   [setfacl(1) Manual Page](https://man7.org/linux/man-pages/man1/setfacl.1.html). Linux man-pages project.
+*   [acl(5) Manual Page](https://man7.org/linux/man-pages/man5/acl.5.html). Linux man-pages project.

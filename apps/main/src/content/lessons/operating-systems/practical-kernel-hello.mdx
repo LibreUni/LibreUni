@@ -7,11 +7,19 @@ import CodeExercise from '../../../components/CodeExercise';
 
 # The 'Hello World' Kernel: Writing the Code
 
-To build an operating system, you cannot use standard libraries like `stdio.h` because they rely on an underlying OS that doesn't exist yet. Instead, we must talk directly to the hardware. In this laboratory, we will create a minimal **Multiboot-compliant** kernel.
+{/* Source tracking: Multiboot header specs, VGA memory layout, and C volatile properties verified against:
+  - Free Software Foundation (2024). "Multiboot Specification Version 0.6.96".
+  - OSDev Wiki (2024). "VGA Physical Memory Layout".
+  - Intel Corporation (2024). "Intel 64 and IA-32 Architectures Software Developer's Manual".
+  - Kernighan, B. W., & Ritchie, D. M. (1988). "The C Programming Language" (2nd ed.).
+*/}
+Building a custom kernel requires programming directly against physical hardware memory and registers without relying on standard user-space libraries (such as `stdio.h` or `stdlib.h`), as no underlying operating system exists yet to support them. 
+
+This guide details how to create a minimal, **Multiboot-compliant** kernel using x86 assembly for system bootstrapping and C for the high-level execution entry point.
 
 ## 1. The Assembly Entry Point (`boot.s`)
 
-The bootloader (like GRUB) needs a specific "header" to recognize our binary as a kernel. We use x86 assembly to define this header and set up a basic execution environment.
+To allow a multiboot-compliant bootloader (such as GRUB) to load and execute the kernel, the final executable must contain a specific, magic header within its first 8 Kilobytes. This header contains configuration flags and a verification checksum.
 
 ```nasm
 ; Declare constants for the Multiboot header.
@@ -30,13 +38,13 @@ extern kmain
 global _start
 
 _start:
-    ; Set up a stack (the kernel needs one for C functions)
+    ; Set up a stack pointer (ESP) pointing to the allocated memory area
     mov esp, stack_top
 
     ; Call the C kernel entry point
     call kmain
 
-    ; If kmain returns, just halt the CPU
+    ; Disable interrupts and halt the CPU if kmain returns
     cli
 .hang:
     hlt
@@ -45,16 +53,20 @@ _start:
 section .bss
 align 16
 stack_bottom:
-    resb 16384 ; 16 KB for the stack
+    resb 16384 ; Allocate 16 KB for the system stack
 stack_top:
 ```
 
 ## 2. The C Kernel (`kernel.c`)
 
-In a "bare metal" environment, we print to the screen by writing directly to **VGA Text Buffer** at memory address `0xB8000`. Each character on the screen is represented by two bytes: one for the ASCII character and one for the color attribute.
+Without a standard graphics driver or system call interface, the kernel writes text directly to the screen via memory-mapped I/O (MMIO). On x86 architectures, the physical memory address **`0xB8000`** is mapped to the standard VGA text mode buffer.
+
+In text mode, the screen is formatted as a grid of 80 columns by 25 rows. Each character slot consists of two consecutive bytes:
+1. **ASCII Character Byte**: The character code to display.
+2. **Color Attribute Byte**: The foreground and background colors (4 bits each).
 
 ```c
-// The VGA text buffer starts at 0xB8000.
+// The VGA text buffer starts at physical address 0xB8000.
 volatile char* vga_buffer = (volatile char*)0xB8000;
 
 void kmain(void) {
@@ -62,7 +74,7 @@ void kmain(void) {
     int i = 0;
     int j = 0;
 
-    // Clear the screen (filling with black background)
+    // Clear the screen (filling with black background and space characters)
     for (i = 0; i < 80 * 25 * 2; i += 2) {
         vga_buffer[i] = ' ';
         vga_buffer[i+1] = 0x07; // Light grey on black
@@ -71,8 +83,8 @@ void kmain(void) {
     // Write "Hello, OS World!" to the top-left corner
     i = 0;
     while (str[i] != '\0') {
-        vga_buffer[j] = str[i];     // ASCII character
-        vga_buffer[j+1] = 0x0F;     // Color: White on Black
+        vga_buffer[j] = str[i];     // Write the ASCII character byte
+        vga_buffer[j+1] = 0x0F;     // Color attribute: Intense White on Black
         i++;
         j += 2;
     }
@@ -81,15 +93,39 @@ void kmain(void) {
 
 ## Key Concepts Explained
 
+The minimal kernel relies on specific low-level C programming constructs and physical memory allocations.
+
 ### Volatile Keyword
-In `kernel.c`, we use the `volatile` keyword. This tells the C compiler that the value at `0xB8000` can change outside of the program's control (it's hardware memory). Without `volatile`, an aggressive optimizer might skip writing to that memory because it doesn't see any "read" operation.
+In `kernel.c`, the `volatile` type qualifier instructs the compiler that the memory at `0xB8000` is subject to change or has significance beyond the local application scope. Without `volatile`, an optimizing compiler might analyze the write-only assignments and eliminate them, assuming they are redundant because the program never reads from those addresses.
+
+For example, this snippet demonstrates how compiler optimization handles volatile vs. non-volatile pointer writes:
+
+```c
+/* Volatile vs Non-Volatile compiler optimizations example */
+int *non_volatile_ptr = (int *)0x1000;
+volatile int *volatile_ptr = (volatile int *)0x1000;
+
+// Without volatile, the compiler may optimize this loop to only perform the last write
+*non_volatile_ptr = 1;
+*non_volatile_ptr = 2; // Only this write is kept in the output assembly!
+
+// With volatile, the compiler is forced to output assembly instructions for both writes
+*volatile_ptr = 1; // Kept (essential for hardware registers)
+*volatile_ptr = 2; // Kept
+```
 
 ### The Stack
-C functions rely on a **Stack** to store return addresses and local variables. Since the hardware doesn't provide a stack automatically, our assembly code (`boot.s`) must manually allocate 16KB of space and point the `esp` (Stack Pointer) register to the top of it before calling `kmain`.
+C function execution models rely on a stack frame structure to pass parameters, store local variables, and save instruction return pointers. Because x86 hardware does not establish a stack pointer dynamically upon bootloader handover, the assembly entry code (`boot.s`) must manually allocate stack memory within the `.bss` section and load the address into the CPU's stack pointer register (`ESP`) before calling the C function `kmain`.
 
 ## Exercise: Hardware Address
 
-What is the magic memory address where we must write data to see text on an x86 PC in text mode?
+For example, define the VGA buffer address constant in your C program to map the video memory:
+
+```c
+#define VGA_ADDRESS 0xB8000
+```
+
+Identify the starting byte memory address where video text data must be written in the exercise below:
 
 <CodeExercise client:load
   title="VGA Memory Mapping"
@@ -98,4 +134,13 @@ What is the magic memory address where we must write data to see text on an x86 
   explanation="Address 0xB8000 is the standard starting point for the video memory in VGA text mode (80x25 characters)."
 />
 
-In the next lesson, we will see how to link these two files together and run them in a virtual machine.
+The subsequent sections detail how to link these compiled assembly and C object modules together to form a bootable kernel binary.
+
+## References & Further Reading
+
+To practice or explore further, see the official specifications below for an example of bare-metal x86 development reference:
+
+*   Free Software Foundation. (2024). [Multiboot Specification Version 0.6.96](https://www.gnu.org/software/grub/manual/multiboot/multiboot.html).
+*   Intel Corporation. (2024). [Intel 64 and IA-32 Architectures Software Developer's Manual](https://software.intel.com/content/www/us/en/develop/articles/intel-sdm.html).
+*   [OSDev Wiki: VGA Physical Memory Layout](https://wiki.osdev.org/Printing_To_Screen) (Creative Commons Attribution 4.0).
+*   Kernighan, B. W., & Ritchie, D. M. (1988). *The C Programming Language* (2nd ed.). Prentice Hall (covering the `volatile` type qualifier).

@@ -4,8 +4,11 @@ course: "operating-systems"
 description: "How the Linux kernel manages resources via cgroups and namespaces, and the differences between major distribution families."
 ---
 import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
 
 # Linux Kernel and Distributions
+
+{/* Source tracking: Linux kernel internals, CFS scheduler design, cgroups, namespaces, and distribution models synthesized from "Linux Kernel Development" (Love, 3rd Ed., Chapters 3-4), "The Linux Programming Interface" (Kerrisk, 1st Ed., Chapters 38, 53), and Wikipedia: Cgroups / Namespaces (CC-BY-SA 4.0). */}
 
 The Linux kernel is the most flexible operating system ever built. It can run on a $5 microcontroller or a million-dollar supercomputer. This flexibility comes from its modular architecture and two key technologies that have revolutionized modern computing: **Cgroups** and **Namespaces**.
 
@@ -19,6 +22,26 @@ The **Completely Fair Scheduler (CFS)** is the heart of Linux multitasking. Unli
 ### 2. The VFS (Virtual File System)
 The VFS is what allows Linux to support hundreds of different file systems (Ext4, Btrfs, XFS, FAT32) simultaneously. It provides a common interface for all file-related system calls.
 -   **Everything is a File**: Because of VFS, the kernel treats a network socket, a physical disk sector, and a piece of RAM as the same type of object.
+
+An example in C demonstrates how CFS schedulers track execution time internally using task virtual runtime weight calculations:
+
+```c
+// Example illustrating CFS Scheduler vruntime calculation:
+// vruntime = vruntime + delta_exec * (NICE_0_LOAD / weight)
+void update_curr_vruntime(struct sched_entity *curr, unsigned long delta_exec) {
+    unsigned long weight = curr->load.weight;
+    unsigned long delta_vr = delta_exec;
+    
+    // NICE_0_LOAD represents the weight of a default process (nice value 0)
+    if (weight != 1024) { 
+        // Scale delta execution time by priority weight
+        delta_vr = (delta_vr * 1024) / weight;
+    }
+    
+    // Add to the task's virtual runtime
+    curr->vruntime += delta_vr;
+}
+```
 
 ## The Secret Sauce: Isolation
 
@@ -34,6 +57,39 @@ Namespaces allow the OS to "lie" to a process.
 While Namespaces provide *isolation* (hiding things), Cgroups provide *resource limits*.
 -   You can tell the OS: "This group of processes can never use more than 1GB of RAM and 10% of the CPU."
 -   If the processes try to use more, the kernel will physically block them or kill the offending process (the OOM Killer).
+
+An example in C demonstrates how a program initiates new isolated namespaces using the `clone()` system call:
+
+```c
+#define _GNU_SOURCE
+#include <sched.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+// Example demonstrating namespace creation:
+// Launching a child process inside isolated PID and Network namespaces.
+static int child_fn(void *arg) {
+    printf("Child process running. Inner PID: %d\n", getpid());
+    execlp("/bin/bash", "bash", NULL);
+    return 0;
+}
+
+int main() {
+    char *stack = malloc(1024 * 1024); // 1MB stack
+    if (!stack) return 1;
+    
+    // CLONE_NEWPID creates a new PID namespace
+    // CLONE_NEWNET creates a new network namespace
+    int child_pid = clone(child_fn, stack + 1024 * 1024, 
+                          CLONE_NEWPID | CLONE_NEWNET | SIGCHLD, NULL);
+    
+    waitpid(child_pid, NULL, 0);
+    free(stack);
+    return 0;
+}
+```
 
 <PlantUML theme="none" code={`
 @startuml
@@ -76,8 +132,66 @@ A "Linux Distribution" is the combination of the kernel, a package manager, and 
 -   **Android**: Uses the Linux kernel but replaces the windowing system and libraries with Google's custom stack.
 -   **Tails**: Forces all traffic through Tor. If you pull out the USB drive, it wipes the RAM instantly.
 
+An example demonstrating package command syntax across families shows the variations in software deployment:
+
+```bash
+# Example command block for package management syntax across distros:
+
+# Debian / Ubuntu (APT package manager)
+sudo apt update && sudo apt install -y build-essential
+
+# Red Hat / Fedora (DNF package manager)
+sudo dnf check-update && sudo dnf install gcc
+
+# Arch Linux (Pacman package manager)
+sudo pacman -Syu && sudo pacman -S base-devel
+```
+
 ## The Monolithic vs Microkernel Debate Revisited
 
 Linux is monolithic, but it is **highly programmable**. Technologies like **eBPF** (Extended Berkeley Packet Filter) allow developers to inject small bits of code into the kernel while it's running—without recompiling it and without crashing it. This effectively gives Linux the modularity of a microkernel with the performance of a monolithic one.
 
+An example in C demonstrates a basic eBPF program hooked into the kernel syscall dispatch path to trace executing processes dynamically:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+// Example demonstrating eBPF dynamic kernel monitoring:
+// Hooks the sys_enter_execve syscall tracepoint.
+SEC("tracepoint/syscalls/sys_enter_execve")
+int bpf_prog_exec(void *ctx) {
+    char msg[] = "execve() system call detected by eBPF!\n";
+    bpf_trace_printk(msg, sizeof(msg));
+    return 0;
+}
+
+char _license[] SEC("license") = "GPL";
+```
+
 Understanding Linux is about understanding that the "OS" is just a platform. You choose the kernel features you want, you choose the distribution that fits your needs, and you build exactly the system you require. In the next module, we'll look at the "alternative" Unix family: the rock-stable and secure BSD distributions.
+
+## Interactive Practice: Linux Kernel Mechanics
+
+Test your understanding of Linux-specific scheduling, isolation, and configuration concepts.
+
+<Quiz client:load
+  title="Linux Internals"
+  question="Which Linux feature physically restricts CPU and Memory usage for a group of processes, and which feature isolates their view of system resources?"
+  options={[
+    "Namespaces restrict usage; Cgroups isolate the view.",
+    "Cgroups restrict usage; Namespaces isolate the view.",
+    "The CFS Scheduler restricts usage; VFS isolates the view.",
+    "eBPF restricts usage; the VFS isolates the view."
+  ]}
+  correctIndex={1}
+  explanation="Control Groups (Cgroups) enforce strict physical limitations on hardware resource consumption (such as RAM, CPU, and Disk I/O). Namespaces isolate what a process can see (e.g., process lists, network adapters, and file paths)."
+/>
+
+## References & Further Reading
+
+*   Love, R. (2010). *Linux Kernel Development* (3rd ed.). Addison-Wesley Professional.
+*   Kerrisk, M. (2010). *The Linux Programming Interface*. No Starch Press.
+*   [Control groups](https://en.wikipedia.org/wiki/Cgroups) (CC-BY-SA 4.0)
+*   [Linux namespaces](https://en.wikipedia.org/wiki/Linux_namespaces) (CC-BY-SA 4.0)
+

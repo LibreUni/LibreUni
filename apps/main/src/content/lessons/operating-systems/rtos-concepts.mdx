@@ -7,53 +7,136 @@ import CaseStudy from '../../../components/CaseStudy';
 
 # Real-Time Operating Systems (RTOS)
 
-A Real-Time Operating System (RTOS) fundamentally differs from a general-purpose operating system (GPOS) in its primary design objective. While a GPOS (like Windows or Linux) strives to maximize overall system throughput and ensure fairness among competing processes, an RTOS is engineered to guarantee *determinism* and strict adherence to timing constraints.
+{/* Source tracking: RTOS scheduling, priority inversion, and real-time constraints synthesized from:
+  - Liu, J. W. (2000). "Real-Time Systems". Prentice Hall.
+  - Buttazzo, G. C. (2011). "Hard Real-Time Computing Systems: Predictable Scheduling Algorithms and Applications" (3rd ed.). Springer.
+  - OSDev Wiki (2024). "Real-Time Systems & Determinism".
+*/}
 
-In real-time environments, calculating the correct logical result is insufficient; the result must be produced within a specific, absolute timeframe. A logically correct answer delivered late represents a critical system failure. 
+A Real-Time Operating System (RTOS) fundamentally differs from a general-purpose operating system (GPOS) in its primary design objective. While a GPOS (such as Linux or Windows) is optimized to maximize overall system throughput and ensure fairness among competing processes, an RTOS is engineered to guarantee determinism and strict adherence to timing constraints.
+
+In real-time environments, calculating the correct logical result is only half the requirement; the result must be produced within a specific, absolute timeframe. A logically correct answer delivered late constitutes a critical system failure.
 
 ## Hard vs. Soft Real-Time Constraints
 
-Real-time systems are categorized by the severity of the consequences when a timing deadline is missed:
+Real-time systems are categorized by the severity of the consequences when a execution deadline is missed:
 
-1.  **Hard Real-Time Systems:** Missing a deadline results in catastrophic failure, physical damage, or loss of life. These systems provide absolute guarantees.
-    -   *Examples:* Anti-lock braking systems (ABS), pacemaker pacemakers, industrial robotic assembly arms, avionic flight control systems. If the ABS calculates brake pressure milliseconds too late, the vehicle crashes.
-2.  **Firm Real-Time Systems:** Missing a deadline renders the computed result completely useless, but does not cause catastrophic localized failure. 
-3.  **Soft Real-Time Systems:** Missing a deadline degrades the quality of service, but the system continues to function, and the result may still have diminished value.
-    -   *Examples:* Live video streaming, VoIP protocols. If a video frame processing misses its 16ms deadline, the user experiences visual stutter or artifacting, but the system itself does not catastrophically fail.
+1. **Hard Real-Time Systems**: Missing a single deadline results in catastrophic failure, physical damage, or loss of life. These systems must guarantee that deadlines are met in all execution scenarios.
+2. **Firm Real-Time Systems**: Missing a deadline renders the computed result useless, but does not cause localized safety failures.
+3. **Soft Real-Time Systems**: Missing a deadline degrades the quality of service, but the system continues to operate, and late results still retain partial value.
+
+The following code snippets illustrate the structural difference between handling a hard real-time safety critical check and a soft real-time data buffer:
+
+```c
+/* Example of Hard Real-Time Constraint: Pacemaker Pulse Monitoring */
+void monitor_cardiac_state(void) {
+    uint32_t start_tick = get_system_ticks();
+
+    if (detect_arrhythmia()) {
+        trigger_ventricular_stimulus();
+
+        /* Hard deadline: Stimulus delivery must complete in under 2ms */
+        uint32_t duration = get_system_ticks() - start_tick;
+        if (duration > MS_TO_TICKS(2)) {
+            /* Catastrophic deadline miss: activate hardware fail-safe */
+            activate_backup_hardware_pacemaker();
+        }
+    }
+}
+```
+
+```c
+/* Example of Soft Real-Time Constraint: Frame Decoding for VoIP / Video */
+void render_video_frame(Frame* frame) {
+    if (get_buffer_fill_level() > MAX_BUFFER_LIMIT) {
+        /* Drop frame: degrades playback quality slightly, but the app continues */
+        drop_frame(frame);
+        return;
+    }
+    decode_and_draw_to_screen(frame);
+}
+```
 
 ## Deterministic Scheduling
 
-To achieve hard timing guarantees, an RTOS employs distinct process scheduling algorithms. General-purpose schedulers (like the Completely Fair Scheduler in Linux) dynamically adjust process priorities to balance CPU time. RTOS schedulers are inflexible and highly predictable.
+To achieve timing guarantees, an RTOS employs scheduling algorithms that prioritize predictability over throughput. GPOS schedulers dynamically adjust process priorities to prevent starvation, but RTOS schedulers execute tasks according to strict, predictable rules.
 
-1.  **Strict Priority-Based Preemptive Scheduling:** Tasks are assigned static priorities by the engineer based on their deadlines. The RTOS guarantees that at any given moment, the highest-priority "Ready" task dictates CPU control. If a lower-priority task is running and a higher-priority task awakes, the RTOS immediately preempts the lower task.
-2.  **Rate Monotonic Scheduling (RMS):** A mathematical approach where priorities are assigned based on cycle duration (frequency). Tasks with shorter periods (e.g., executing every 10ms) receive higher absolute priority than tasks with longer periods (e.g., executing every 100ms).
+1. **Strict Priority-Based Preemptive Scheduling**: Tasks are assigned static priorities based on design-time constraints. The scheduler guarantees that the ready task with the highest priority is always allocated the CPU.
+2. **Rate Monotonic Scheduling (RMS)**: A mathematical priority assignment algorithm where tasks with shorter cycle periods (higher frequency) are assigned higher static priorities.
+
+The following C program demonstrates a typical periodic task definition in a real-time kernel (such as FreeRTOS) utilizing strict priority-based scheduling:
+
+```c
+#include "FreeRTOS.h"
+#include "task.h"
+
+/* Deterministic sensor task running at 50 Hz (every 20 ms) */
+void vSensorTask(void *pvParameters) {
+    TickType_t xLastWakeTime;
+    const TickType_t xPeriod = pdMS_TO_TICKS(20);
+
+    /* Initialize wake time with current system tick */
+    xLastWakeTime = xTaskGetTickCount();
+
+    for (;;) {
+        /* Suspend task until exactly 20ms has elapsed since xLastWakeTime */
+        vTaskDelayUntil(&xLastWakeTime, xPeriod);
+
+        /* Perform physical sensor read and process telemetry */
+        poll_gyroscope_data();
+    }
+}
+
+int main(void) {
+    /* Initialize task with high priority (5) */
+    xTaskCreate(vSensorTask, "GyroTask", 2048, NULL, 5, NULL);
+    
+    /* Start the preemptive real-time scheduler */
+    vTaskStartScheduler();
+    return 0;
+}
+```
 
 ## The Priority Inversion Problem
 
-Deterministic scheduling introduces complex race conditions, most notably *priority inversion*. This occurs when a high-priority task is blocked from executing, continuously preempted by a lower-priority task.
+Deterministic priority-based scheduling introduces a vulnerability known as **priority inversion**. This occurs when a high-priority task is blocked from executing while a lower-priority task runs.
 
-Imagine three tasks: High ($T_H$), Medium ($T_M$), and Low ($T_L$).
-1.  $T_L$ begins running and acquires a mutex lock on a shared memory bus.
-2.  $T_H$ awakes, preempts $T_L$, but requires access to the memory bus. It encounters the locked mutex and blocks, waiting for $T_L$ to release it.
-3.  Before $T_L$ can run and release the lock, $T_M$ awakes. $T_M$ is a long-running computation task that does not need the memory bus.
-4.  Because $T_M$ has higher priority than $T_L$, $T_M$ preempts $T_L$ and monopolizes the CPU.
+Consider a scenario with three tasks: High priority ($T_H$), Medium priority ($T_M$), and Low priority ($T_L$).
 
-The scenario: $T_H$ (the most critical task) is effectively blocked by $T_M$ (a mid-priority task), completely subverting the deterministic priority hierarchy. This exact bug famously crashed the NASA Mars Pathfinder probe in 1997.
+1. $T_L$ executes and acquires a lock (mutex) on a shared memory bus.
+2. $T_H$ awakes, preempts $T_L$, and attempts to acquire the same shared memory bus.
+3. Since the resource is locked, $T_H$ blocks, allowing $T_L$ to resume running so it can release the lock.
+4. Before $T_L$ can finish, $T_M$ (a long CPU-bound task that does not need the shared bus) awakes. Since $T_M$ has higher priority than $T_L$, the scheduler preempts $T_L$ and runs $T_M$.
+5. As a result, $T_H$ is blocked waiting for $T_L$, which cannot run because it is preempted by $T_M$. 
 
-### Priority Inheritance 
-To solve priority inversion, RTOS kernels implement *priority inheritance*. When $T_H$ blocks on a resource held by $T_L$, the operating system temporarily elevates the priority of $T_L$ to match $T_H$. This prevents $T_M$ from preempting $T_L$. $T_L$ finishes its operation rapidly at the elevated priority, releases the lock, and returns to its true low priority, allowing $T_H$ to immediately execute and meet its deadline.
+$T_H$ (the most critical task) is now indirectly blocked by $T_M$, subverting the priority hierarchy.
+
+### Priority Inheritance
+
+To resolve priority inversion, kernels implement **Priority Inheritance**. When a high-priority task ($T_H$) blocks on a resource held by a low-priority task ($T_L$), the kernel temporarily elevates the priority of $T_L$ to match the priority of $T_H$. This prevents medium-priority tasks ($T_M$) from preempting $T_L$. Once $T_L$ releases the resource, its priority returns to its original base level, allowing $T_H$ to run immediately.
 
 ## Exercise: Applying RM Scheduling
 
+Analyze the application of Rate Monotonic Scheduling in the system scenario below:
+
 <CaseStudy client:load
-  scenario="A robotics engineer is designing the flight controller firmware for an autonomous planetary reconnaissance drone. The embedded kernel must juggle exactly two continuous periodic tasks. `Task A` processes gyroscopic stabilization readings and runs every 20 milliseconds. `Task B` handles compressing and writing telemetry metadata to internal flash storage, running every 100 milliseconds. The system uses a strict priority-based scheduling loop."
+  scenario="An embedded engineer is designing the flight controller firmware for an autonomous planetary reconnaissance drone. The embedded kernel must schedule exactly two continuous periodic tasks. Task A processes gyroscopic stabilization readings and runs every 20 milliseconds. Task B handles compressing and writing telemetry metadata to internal flash storage, running every 100 milliseconds. The system uses a strict priority-based scheduling loop."
   question="If the engineer applies the mathematical principles of Rate Monotonic Scheduling (RMS), how must the execution priorities be structured to mathematically guarantee stability?"
   options={[
-    "Task A and Task B should be assigned equal priority so the CPU scheduler balances them perfectly.",
-    "Task A must be assigned an absolute hardware priority higher than Task B.",
-    "Task B must be assigned a higher priority because data logging is naturally less tolerant to interruption than sensor polling.",
-    "The priority should be inverted dynamically based on runtime metrics."
+    "Task A and Task B should be assigned equal priority so the CPU scheduler balances them.",
+    "Task A must be assigned an absolute priority higher than Task B.",
+    "Task B must be assigned a higher priority because data logging is less tolerant to interruption than sensor polling.",
+    "The priority should be inverted dynamically based on runtime memory pressure."
   ]}
   correctIndex={1}
-  explanation="In Rate Monotonic Scheduling, priority is assigned inversely to the task's period. Because Task A runs every 20ms (a shorter period/higher frequency than Task B's 100ms), it statistically MUST be granted higher priority. This prevents long-running, lower-frequency background tasks from blocking critical, high-frequency physical adjustments."
+  explanation="In Rate Monotonic Scheduling, priority is assigned inversely to the task's period. Because Task A runs every 20ms (a shorter period / higher frequency than Task B's 100ms), it must be granted higher priority. This prevents long-running, lower-frequency background tasks from blocking critical, high-frequency physical adjustments."
 />
+
+## References & Further Reading
+
+For detailed design specifications and examples of scheduling and real-time kernels, refer to the following sources:
+
+*   Buttazzo, G. C. (2011). *Hard Real-Time Computing Systems: Predictable Scheduling Algorithms and Applications* (3rd ed.). Springer. (Detailing Rate Monotonic and Earliest Deadline First scheduling).
+*   Liu, J. W. (2000). *Real-Time Systems*. Prentice Hall. (Covering formal scheduling proofs and priority inversion remedies).
+*   [FreeRTOS Developer Documentation: Task Co-routines and Scheduling](https://www.freertos.org/Documentation/RTOS_book.html). Real Time Engineers Ltd.
+*   [NASA Pathfinder Priority Inversion Report](https://www.cs.unc.edu/~anderson/teach/comp790/papers/pathfinder.pdf). National Aeronautics and Space Administration (documenting the 1997 Mars Pathfinder priority inversion incident and VxWorks patch).
