@@ -31,7 +31,10 @@ import {
     Bot,
     TrendingUp,
     Building2,
-    DollarSign
+    DollarSign,
+    Github,
+    GitBranch,
+    Calendar
 } from 'lucide-react';
 
 export { 
@@ -67,5 +70,8 @@ export {
     Bot,
     TrendingUp,
     Building2,
-    DollarSign
+    DollarSign,
+    Github,
+    GitBranch,
+    Calendar
 };
