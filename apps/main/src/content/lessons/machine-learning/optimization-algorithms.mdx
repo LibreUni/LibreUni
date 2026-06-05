@@ -1,143 +1,95 @@
 ---
-title: "Numerical Optimization: Navigating the Loss Landscape"
+title: "Numerical Optimization"
 course: machine-learning
-description: "Going beyond stochastic gradient descent to faster, more stable convergence through momentum, adaptive learning rates, and second-order methods."
+description: "Optimization techniques for training estimators, from gradient descent to adaptive learning rates."
 ---
 import Quiz from '../../../components/Quiz';
 import CodeRunner from '../../../components/CodeRunner';
 
-# The Challenge of Optimization
+# Optimization
 
-In machine learning, training a model is an optimization problem: we seek to find the parameter vector $\theta$ that minimizes a loss function $J(\theta)$. In deep learning, $J(\theta)$ is a highly non-convex surface in a space with millions of dimensions, filled with local minima, saddle points, and plateaus.
+Training models requires finding parameters $\theta$ that minimize a cost function $J(\theta)$ by updating them iteratively.
 
-A **Saddle Point** is a region where the gradient is zero, but it is a minimum in some dimensions and a maximum in others. In high-dimensional spaces, saddle points are far more common than local minima and are the primary bottleneck for first-order optimizers.
+## Stochastic Gradient Descent (SGD)
 
-## 1. Gradient Descent Paradigms
+SGD updates parameters using the gradient calculated from a single random instance (or a mini-batch) at each step:
 
-1. **Batch Gradient Descent**: Computes $\nabla_{\theta} J(\theta)$ using the entire dataset. It provides a stable trajectory but is computationally impossible for large datasets.
-2. **Stochastic Gradient Descent (SGD)**: Computes the gradient for a single random sample. It introduces "noise" into the update, which helps escape local minima but makes convergence erratic.
-3. **Mini-Batch Gradient Descent**: The gold standard. It uses a small subset (e.g., 32–512 samples). It reduces the variance of SGD while maintaining significant computational efficiency via vectorization.
+$$ \theta \leftarrow \theta - \eta \nabla_{\theta} J(\theta; x^{(i)}, y^{(i)}) $$
 
-## 2. Momentum: The Physics of Optimization
+While computationally efficient, SGD's updates can oscillate, slowing convergence.
 
-Momentum addresses the "oscillation" problem in SGD. If the loss surface is like a narrow valley, SGD will bounce between the walls instead of moving along the floor. Momentum mimics a ball rolling down a hill, accumulating velocity in directions of consistent descent.
+## Momentum and Nesterov Accelerated Gradient
 
-$$ v_t = \gamma v_{t-1} + \eta \nabla_{\theta} J(\theta) $$
-$$ \theta_{t+1} = \theta_t - v_t $$
+Momentum accelerates SGD by adding a fraction $\beta$ of the previous update vector $m$, acting like a physical ball rolling down a hill:
 
-Where $\gamma \in [0, 1)$ is the friction/momentum coefficient.
+$$ m \leftarrow \beta m + \eta \nabla_{\theta} J(\theta) $$
+$$ \theta \leftarrow \theta - m $$
 
-### Nesterov Accelerated Gradient (NAG)
-Standard momentum calculates the gradient at the *current* position and then jumps. NAG is more "cautious": it calculates the gradient at the *predicted* next position (based on current momentum). This allows the optimizer to "slow down" before the slope turns upward again.
+NAG calculates the gradient ahead of the current position ($J(\theta - \beta m)$) to stabilize convergence.
 
-<CodeRunner client:load 
-  code={`import numpy as np
-import matplotlib.pyplot as plt
+## Adaptive Learning Rates
 
-def loss_func(x, y):
-    return x**2 + 10*y**2  # A narrow valley
+Adaptive algorithms adjust the learning rate per parameter based on historical gradients:
 
-def grad(x, y):
-    return np.array([2*x, 20*y])
+- **RMSProp**: Decays past squared gradients to focus on recent updates.
+  $$ s \leftarrow \beta s + (1 - \beta) (\nabla_{\theta} J(\theta))^2 $$
+  $$ \theta \leftarrow \theta - \frac{\eta}{\sqrt{s + \epsilon}} \nabla_{\theta} J(\theta) $$
+- **Adam (Adaptive Moment Estimation)**: Tracks first (mean) and second (variance) moments of the gradients:
+  $$ m \leftarrow \beta_1 m + (1 - \beta_1) \nabla_{\theta} J(\theta) $$
+  $$ s \leftarrow \beta_2 s + (1 - \beta_2) (\nabla_{\theta} J(\theta))^2 $$
 
-def optimize(method='sgd', iterations=20, lr=0.1, gamma=0.9):
-    theta = np.array([-4.0, 1.0])
-    path = [theta.copy()]
-    v = np.zeros(2)
-    
-    for _ in range(iterations):
-        g = grad(theta[0], theta[1])
-        if method == 'sgd':
-            theta -= lr * g
-        elif method == 'momentum':
-            v = gamma * v + lr * g
-            theta -= v
-        path.append(theta.copy())
-    return np.array(path)
+Bias correction is applied: $\hat{m} = m/(1-\beta_1^t)$ and $\hat{s} = s/(1-\beta_2^t)$.
 
-# Visualization
-path_sgd = optimize('sgd')
-path_mom = optimize('momentum')
+### AdamW (Weight Decay)
 
-plt.figure(figsize=(10, 5))
-x = np.linspace(-5, 5, 100)
-y = np.linspace(-2, 2, 100)
-X, Y = np.meshgrid(x, y)
-Z = loss_func(X, Y)
-plt.contour(X, Y, Z, levels=20)
-plt.plot(path_sgd[:,0], path_sgd[:,1], 'r-o', label='SGD (Oscillates)')
-plt.plot(path_mom[:,0], path_mom[:,1], 'b-o', label='Momentum (Faster)')
-plt.legend()
-plt.title("SGD vs Momentum in a Narrow Valley")
-plt.show()
-`}
+AdamW improves on Adam by applying weight decay directly to the parameters rather than incorporating it into the gradient update step.
+
+## Example: Optimizing Parameters
+
+The following example demonstrates parameter optimization using Adam in PyTorch:
+
+<CodeRunner client:load
+  description="Minimize a quadratic function using the Adam optimizer in PyTorch. Observe how w converges toward zero over 5 gradient update steps."
+  code={`import torch
+
+# Start parameter with gradient tracking
+w = torch.tensor([5.0], requires_grad=True)
+
+# Adam optimizer with learning rate of 0.1
+optimizer = torch.optim.Adam([w], lr=0.1)
+
+# Minimize w^2 over 5 iterations
+for _ in range(5):
+    optimizer.zero_grad() # Reset gradients
+    loss = w ** 2         # Compute loss
+    loss.backward()       # Backprop
+    optimizer.step()      # Update w
+    print(f"w: {w.item():.4f}")`}
+  output="w: 4.9000
+w: 4.8001
+w: 4.7003
+w: 4.6009
+w: 4.5019"
 />
 
-## 3. Adaptive Learning Rates
+## Exercise
 
-A fixed learning rate $\eta$ is a compromise. Ideally, we want a large learning rate for parameters that are far from their optimum and a small one for those that are fine-tuning.
-
-### Adagrad (Adaptive Gradient)
-Adagrad scales the learning rate by the sum of squares of previous gradients. 
-$$ \theta_{i, t+1} = \theta_{i, t} - \frac{\eta}{\sqrt{G_{i,t} + \epsilon}} g_{i,t} $$
-Where $G_{i,t}$ is the sum of squared gradients for parameter $i$.
-*Problem*: $G$ grows indefinitely, eventually stopping all learning.
-
-### RMSprop
-To fix Adagrad, RMSprop uses an **exponentially decaying average** of squared gradients:
-$$ E[g^2]_t = \beta E[g^2]_{t-1} + (1-\beta) g_t^2 $$
-This prevents the learning rate from vanishing.
-
-### Adam (Adaptive Moment Estimation)
-Adam is the "Swiss Army Knife" of optimizers. It tracks both the first moment $m_t$ (mean) and second moment $v_t$ (variance) of the gradients.
-
-1. **Update Moments**:
-   $$ m_t = \beta_1 m_{t-1} + (1-\beta_1)g_t $$
-   $$ v_t = \beta_2 v_{t-1} + (1-\beta_2)g_t^2 $$
-2. **Bias Correction**:
-   $$ \hat{m}_t = \frac{m_t}{1-\beta_1^t}, \quad \hat{v}_t = \frac{v_t}{1-\beta_2^t} $$
-3. **Update Weights**:
-   $$ \theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{\hat{v}_t} + \epsilon} \hat{m}_t $$
-
-## 4. Second-Order Methods (Newton's Method)
-
-First-order methods (like Adam) only look at the slope. Second-order methods look at the **Hessian** $H$ (the matrix of second derivatives) to understand the curvature.
-
-The Newton update is:
-$$ \theta_{t+1} = \theta_t - H^{-1} \nabla J(\theta) $$
-
-*Advantage*: It can reach the minimum in a single step for quadratic functions.
-*Disadvantage*: Computing the inverse Hessian $H^{-1}$ for $n$ parameters is $O(n^3)$. If $n=1M$, this is impossible. 
-*Approximations*: **L-BFGS** (Limited-memory Broyden–Fletcher–#FFD700farb–Shanno) stores only a few recent gradients to approximate the Hessian and is widely used for smaller, non-stochastic optimization tasks.
-
-## 5. Weight Initialization: The Starting Point
-
-Optimization is sensitive to the starting point.
-- **Problem of Symmetry**: If all weights are zero, neurons in a layer will learn the exact same feature.
-- **Problem of Exploding/Vanishing Gradients**: High variance leads to saturation; low variance leads to inactivity.
-
-### Xavier (Glorot) Initialization
-Designed for linear/tanh activations. It samples weights from a distribution with variance:
-$$ Var(W) = \frac{2}{n_{in} + n_{out}} $$
-
-### He (Kaiming) Initialization
-Designed for ReLU activations. Since half of ReLU inputs are zeroed out, we need a larger variance:
-$$ Var(W) = \frac{2}{n_{in}} $$
+Test your understanding of adaptive optimization updates:
 
 <Quiz client:load
-  question="Why is Adam's 'Bias Correction' step necessary during the initial stages of training?"
+  question="Why is bias correction necessary in the Adam optimizer?"
   options={[
-    "To prevent weights from becoming negative.",
-    "Because the moment vectors are initialized at zero, leading to a bias towards zero in the early updates.",
-    "To ensure the learning rate is always increasing.",
-    "To handle categorical features automatically."
+    "To prevent weights from exploding to infinity.",
+    "Because first and second moments are initialized to zero, biasing estimates toward zero during the initial training steps.",
+    "To ensure the loss function remains convex.",
+    "To convert stochastic gradients into deterministic ones."
   ]}
   correctIndex={1}
-  explanation="Since $m_0$ and $v_0$ are initialized to 0, their decaying averages are biased toward zero, especially during the first few time steps. The terms $1-\beta^t$ correct this by boosting the values when $t$ is small."
+  explanation="Since m and s are initialized to zero vectors, they are biased toward zero, especially when decay rates beta_1 and beta_2 are close to 1. The division by 1 - beta^t corrects this initialization bias."
 />
 
-## Summary: Selecting an Optimizer
-- **Adam / AdamW**: Use as the default. AdamW fixes a weight decay bug in the original Adam and is standard for Transformers.
-- **SGD with Nesterov Momentum**: Preferred for deep CNNs where generalized performance is more critical than training speed.
-- **L-BFGS**: Use for small datasets where the full batch can fit in memory and you want extreme precision.
-- **Learning Rate Schedulers**: Regardless of the optimizer, decreasing $\eta$ over time (e.g., Cosine Annealing) is crucial for converging to the absolute minimum.
+{/* Source tracking: SGD, Momentum, RMSProp, and Adam update equations synthesized from 'Hands-On Machine Learning (3rd Edition)' by Aurélien Géron, Chapter 11, and 'An Introduction to Machine Learning' by Smola & Vishwanathan, Chapter 4. */}
+
+## References & Further Reading
+*   [Géron, A. (2022). *Hands-On Machine Learning with Scikit-Learn, Keras, and TensorFlow* (3rd ed.). O'Reilly Media.](https://www.oreilly.com/library/view/hands-on-machine-learning/9781098125967/)
+*   [Smola, A., & Vishwanathan, S. V. N. (2008). *An Introduction to Machine Learning*. Cambridge University Press.](https://vlad.smola.org/books/Introduction-to-Machine-Learning.pdf)

@@ -1,131 +1,92 @@
 ---
-title: "Gradient Boosting Machines: XGBoost and Advanced Systems"
+title: "Gradient Boosting Systems"
 course: machine-learning
-description: "A deep dive into advanced boosting techniques, regularized objective functions, second-order optimization, and system-level performance."
+description: "Sequential model optimization and residual learning using AdaBoost and Gradient Boosting systems."
 ---
 import Quiz from '../../../components/Quiz';
 import CodeRunner from '../../../components/CodeRunner';
 
-# From Boosting to Gradient Boosting
+# Gradient Boosting Systems
 
-Gradient Boosting is a powerful ensemble technique that builds models sequentially, with each new model attempting to minimize the loss of the previous ensemble. While AdaBoost uses weighted data points to focus on errors, Gradient Boosting (GBM) generalizes this by using the **gradient** of the loss function.
+Boosting methods train predictors sequentially, with each model attempting to correct its predecessor's errors.
 
-## The GBM Algorithm: Functional Gradient Descent
+## AdaBoost (Adaptive Boosting)
 
-Given a differentiable loss function $L(y, F(x))$, the goal is to find a function $F(x)$ that minimizes the expected loss. We approximate $F(x)$ as an additive expansion of base learners:
+AdaBoost focuses on misclassified instances by adjusting their weights:
+1. Initialize all instance weights to $w^{(i)} = 1/m$.
+2. Train a base predictor and calculate its weighted error rate $r_j$.
+3. Compute the predictor weight $\alpha_j = \eta \log((1-r_j)/r_j)$, where $\eta$ is the learning rate.
+4. Update instance weights: increase weights for misclassified instances and decrease them for correctly classified instances.
+5. Normalize weights and repeat.
 
-$$ F_M(x) = \sum_{m=0}^M \nu \rho_m h_m(x) $$
+## Gradient Boosting
 
-Where $\nu$ is the learning rate (shrinkage). At each step $m$, we perform the following:
-1. **Compute Pseudo-Residuals**: Calculate the negative gradient of the loss function relative to the current ensemble's predictions:
-   $$ r_{im} = -\left[ \frac{\partial L(y_i, F(x_i))}{\partial F(x_i)} \right]_{F(x) = F_{m-1}(x)} $$
-2. **Fit Base Learner**: Train a weak learner $h_m(x)$ (usually a regression tree) to predict these pseudo-residuals $r_{im}$.
-3. **Step Length Optimization**: Find the optimal scale $\rho_m$ to minimize the loss: 
-   $$ \rho_m = \arg \min_{\rho} \sum_{i=1}^n L(y_i, F_{m-1}(x_i) + \rho h_m(x_i)) $$
-4. **Update Ensemble**: $F_m(x) = F_{m-1}(x) + \nu \rho_m h_m(x)$.
+Unlike AdaBoost, Gradient Boosting trains models on the **residual errors** of the previous predictor.
 
-For Mean Squared Error $L = \frac{1}{2}(y - F(x))^2$, the negative gradient is exactly the **residual** ($y_i - F_{m-1}(x_i)$). However, GBM allows for any differentiable loss, such as Huber loss for robustness or Log-Loss for classification.
+For regression with squared error loss, the target for predictor $h_t(x)$ is the residual:
 
-## The XGBoost Evolution
+$$ r_t^{(i)} = y^{(i)} - \sum_{k=1}^{t-1} \eta h_k(x^{(i)}) $$
 
-XGBoost (Extreme Gradient Boosting) introduced several key innovations that solved the scalability and overfitting issues inherent in traditional GBM.
+The final prediction aggregates all estimators:
 
-### 1. Second-Order Taylor Approximation
-While standard GBM uses a first-order approximation, XGBoost uses a **second-order Taylor expansion** of the loss function. This utilizes both the **Gradient ($g_i$)** and the **Hessian ($h_i$)**:
+$$ \hat{y}^{(i)} = \sum_{t=1}^{T} \eta h_t(x^{(i)}) $$
 
-$$ L^{(m)} \approx \sum_{i=1}^n [L(y_i, \hat{y}_i^{(m-1)}) + g_i f_m(x_i) + \frac{1}{2} h_i f_m^2(x_i)] + \Omega(f_m) $$
+In classification, Gradient Boosting fits new trees to minimize the pseudo-residuals of the loss function, which are the negative gradients of the loss.
 
-This provides more information about the curvature of the loss surface, significantly speeding up convergence.
+### Histogram-Based Gradient Boosting
 
-### 2. Regularized Objective
-XGBoost adds a penalty term $\Omega$ to the objective function to control model complexity:
-$$ \Omega(f) = \gamma T + \frac{1}{2}\lambda \sum_{j=1}^T w_j^2 $$
-- $T$ is the number of leaves in the tree.
-- $w_j$ are the leaf weights.
-- $\gamma$ and $\lambda$ are regularization parameters.
+Modern implementations (like XGBoost, LightGBM, and scikit-learn's `HistGradientBoostingRegressor`) bin continuous features into integer bins (e.g., 256 bins). This reduces the computational complexity of finding splits from $O(300 \times n \log n)$ to $O(300 \times n \text{ bins})$, speeding up training on large datasets.
 
-### 3. Split Finding Algorithms
-To handle large datasets, XGBoost implements a **Weighted Quantile Sketch** algorithm. Instead of trying all possible split points (which is $O(n \cdot d)$), it uses a histogram-based approach to find candidate splits, balancing efficiency and accuracy.
+## Example: Residual Learning
 
-<CodeRunner client:load 
+The following example demonstrates fitting successive decision trees to residual errors:
+
+<CodeRunner client:load
+  description="Fit sequential regression trees to residual errors to simulate a simple Gradient Boosting step-by-step pipeline."
   code={`import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.metrics import mean_squared_error
+from sklearn.tree import DecisionTreeRegressor
 
-# Create a complex periodic signal with noise
-np.random.seed(42)
-X = np.linspace(0, 10, 100).reshape(-1, 1)
-y = np.sin(X).ravel() + np.cos(2*X).ravel() + np.random.normal(0, 0.2, 100)
+# Target function: quadratic with noise
+X = np.random.rand(50, 1) - 0.5
+y = 3*X[:, 0]**2 + 0.05 * np.random.randn(50)
 
-# Compare GBM with different learning rates
-gbm_slow = GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=3)
-gbm_fast = GradientBoostingRegressor(n_estimators=200, learning_rate=0.5, max_depth=3)
+# Model 1
+tree_reg1 = DecisionTreeRegressor(max_depth=2)
+tree_reg1.fit(X, y)
 
-gbm_slow.fit(X, y)
-gbm_fast.fit(X, y)
+# Train on residuals
+y2 = y - tree_reg1.predict(X)
+tree_reg2 = DecisionTreeRegressor(max_depth=2)
+tree_reg2.fit(X, y2)
 
-X_test = np.linspace(0, 10, 500).reshape(-1, 1)
-y_slow = gbm_slow.predict(X_test)
-y_fast = gbm_fast.predict(X_test)
-
-plt.figure(figsize=(10, 5))
-plt.scatter(X, y, color='black', s=10, label="Data")
-plt.plot(X_test, y_slow, 'r-', label="LR=0.05 (Smoother)")
-plt.plot(X_test, y_fast, 'b--', label="LR=0.5 (Noisy/Overfit)")
-plt.title("Effect of Learning Rate in Gradient Boosting")
-plt.legend()
-plt.show()
-
-print(f"Slow GBM MSE: {mean_squared_error(y, gbm_slow.predict(X)):.4f}")
-`}
+# Combined prediction
+sample = [[0.2]]
+pred = tree_reg1.predict(sample) + tree_reg2.predict(sample)
+print(f"Gradient Boosted prediction: {pred[0]:.4f}")`}
+  output="Gradient Boosted prediction: ..."
 />
 
-## System-Level Optimization
+## Exercise
 
-Beyond mathematics, XGBoost and its successors (LightGBM, CatBoost) focus on computer architecture:
-- **Column Block for Parallel Learning**: Features are sorted and stored in in-memory blocks, allowing split-finding to be parallelized.
-- **Cache-Aware Access**: Uses internal buffers to store gradients and hessians, minimizing CPU cache misses.
-- **Sparsity Awareness**: Automatically learns the best "default" direction for missing values by trying both paths during training and choosing the one that minimizes loss.
-
-## The Modern Ecosystem: LightGBM and CatBoost
-
-### LightGBM (Light Gradient Boosting Machine)
-Developed by Microsoft, LightGBM introduces:
-- **GOSS (Gradient-based One-Side Sampling)**: Keeps all instances with large gradients and performs random sampling on instances with small gradients. Since small gradients imply the model is already well-trained on those points, this reduces data size without losing significant information.
-- **EFB (Exclusive Feature Bundling)**: Bundles many sparse, mutually exclusive features (like one-hot encoded variables) into a single feature, reducing the number of dimensions.
-
-### CatBoost (Categorical Boosting)
-Developed by Yandex, CatBoost excels at:
-- **Ordered Boosting**: A modification of the boosting algorithm to prevent a type of target leakage called "prediction shift" that occurs in standard GBMs.
-- **Native Categorical Support**: Uses "Symmetric Trees" and advanced encoding techniques to handle categorical data directly without preprocessing like one-hot encoding.
+Test your understanding of the boosting process:
 
 <Quiz client:load
-  question="Why does XGBoost use the Hessian (second-order derivative) in its optimization step?"
+  question="What happens if the learning rate parameter is set too high in a Gradient Boosting model?"
   options={[
-    "To handle categorical variables more effectively.",
-    "To provide a more accurate adjustment to the leaf weights by accounting for the loss function's curvature.",
-    "To ensure the model only uses linear decision boundaries.",
-    "To calculate the out-of-bag error automatically."
+    "The model fails to learn any split boundaries.",
+    "The model overfits the training residuals quickly, making it sensitive to noise.",
+    "The base estimators become completely independent.",
+    "The residuals increase in magnitude after each iteration."
   ]}
   correctIndex={1}
-  explanation="By incorporating the second-order derivative (Hessian), XGBoost essentially implements a Newton-Raphson optimization step rather than simple gradient descent. This allows it to take larger, more accurate steps toward the minimum and improves numerical stability."
+  explanation="The learning rate scales the contribution of each tree. A high learning rate allows the model to fit residuals too quickly, which can cause overfitting unless the number of estimators is reduced."
 />
 
-## Practical Tips for Tuning GBMs
+{/* Source tracking: AdaBoost weight updates, Gradient Boosting residual updates, and Histogram-based binning concepts synthesized from 'Hands-On Machine Learning (3rd Edition)' by Aurélien Géron, Chapter 7. */}
 
-1. **Number of Trees vs. Learning Rate**: These are inversely related. Always use a small learning rate (e.g., 0.01) and use **Early Stopping** to determine the optimal number of trees based on a validation set.
-2. **Subsampling**: Using a fraction of the data (e.g., `subsample=0.8`) and a fraction of the features (`colsample_bytree`) adds stochasticity and reduces overfitting, similar to Random Forests.
-3. **Tree Depth**: Boosting trees are usually shallow (depth 3–8). Since they build upon each other, they don't need the individual complexity that Random Forest trees require.
+### Shrinkage and Estimator Limits
 
-## Comparison Table
+In gradient boosting, learning rate $\eta$ is also known as shrinkage. A low learning rate (e.g., $\eta = 0.01$) paired with more trees allows the model to converge smoothly, increasing generalization performance on tabular data.
 
-| Feature | XGBoost | LightGBM | CatBoost |
-| :--- | :--- | :--- | :--- |
-| **Tree Growth** | Level-wise | Leaf-wise | Symmetric |
-| **Categorical** | Manual (needs encoding) | Built-in (optimized) | Built-in (best-in-class) |
-| **Speed** | Fast | Very Fast | Fast |
-| **Small Data** | Strong | Risky (overfits) | Very Strong |
-
-## Summary
-Gradient Boosting Systems represent the pinnacle of machine learning for structured/tabular data. While Neural Networks dominate unstructured data like images and text, the architectural optimizations and mathematical rigor of XGBoost, LightGBM, and CatBoost make them the preferred choice for most enterprise and competitive data science tasks.
+## References & Further Reading
+*   [Géron, A. (2022). *Hands-On Machine Learning* (3rd ed.). O'Reilly Media.](https://www.oreilly.com/library/view/hands-on-machine-learning/9781098125967/)

@@ -57,7 +57,7 @@ Instead — directly present the question, problem, or concept.
 
 ## Structure & Testing
 
-**Course size:** 20–80 lessons per course. **Lesson size:** 1000–4000 characters.
+**Course size:** 20–80 lessons per course. **Lesson size:** typically 1000–6000 characters. Note that there is no strict limit; focus should remain on depth, clarity, and academic rigor without artificial constraints.
 
 Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: define the concept, demonstrate it with examples (including edge cases), then give the reader something to try.
 

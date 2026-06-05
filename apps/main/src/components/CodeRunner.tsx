@@ -6,6 +6,7 @@ interface CodeRunnerProps {
   code?: string;
   output?: string;
   title?: string;
+  description?: string;
   language?: 'python' | 'javascript' | 'typescript' | 'c' | 'cpp' | 'git' | 'bash';
 }
 
@@ -18,7 +19,7 @@ declare global {
 
 type RunnerTab = 'guide' | 'code' | 'output';
 
-export default function CodeRunner({ code, output: initialOutput, title = "Interactive Lab", language }: CodeRunnerProps) {
+export default function CodeRunner({ code, output: initialOutput, title = "Interactive Lab", description, language }: CodeRunnerProps) {
   const defaultCode = code || '';
   const [currentCode, setCurrentCode] = useState(defaultCode);
   const [consoleOutput, setConsoleOutput] = useState<string[]>([]);
@@ -374,7 +375,7 @@ _visual
                 </div>
                 <h4 className="mb-3 text-xl font-black text-light-text dark:text-dark-text">{title}</h4>
                 <p className="mb-5 text-sm leading-7 text-light-muted dark:text-dark-muted">
-                  Read the code, make a small change, then run it and inspect the output. Runtime setup messages stay outside the terminal so the result remains focused on what the program prints.
+                  {description || "Read the code, make a small change, then run it and inspect the output. Runtime setup messages stay outside the terminal so the result remains focused on what the program prints."}
                 </p>
                 <div className="grid gap-3 sm:grid-cols-3">
                   {['Inspect the idea', 'Edit the program', 'Run and compare'].map((step, index) => (
