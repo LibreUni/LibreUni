@@ -4,6 +4,9 @@ ARG APP=main
 
 WORKDIR /app
 
+# Install Python and scientific libraries required for rendering build-time diagrams
+RUN apk add --no-cache python3 py3-matplotlib py3-numpy
+
 # Install workspace dependencies first to maximize layer cache reuse.
 COPY package*.json ./
 COPY apps/main/package.json apps/main/package.json
