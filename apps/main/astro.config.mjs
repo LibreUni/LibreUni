@@ -4,6 +4,29 @@ import mdx from '@astrojs/mdx';
 import react from '@astrojs/react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import fs from 'node:fs';
+import path from 'node:path';
+
+function checkPythonDiagramErrors() {
+  return {
+    name: 'check-python-diagram-errors',
+    hooks: {
+      'astro:build:start': () => {
+        const errorLog = path.resolve('./python-diagram-errors.log');
+        if (fs.existsSync(errorLog)) fs.unlinkSync(errorLog);
+      },
+      'astro:build:done': () => {
+        const errorLog = path.resolve('./python-diagram-errors.log');
+        if (fs.existsSync(errorLog)) {
+           const errStr = fs.readFileSync(errorLog, 'utf-8');
+           console.error('\\n\\x1b[31m❌ Python Diagram Errors found during build:\\x1b[0m\\n');
+           console.error(errStr);
+           throw new Error('Python Diagram Build Failed. See logs above.');
+        }
+      }
+    }
+  };
+}
 
 // Common Markdown configuration for extreme performance
 const markdownConfig = {
@@ -30,7 +53,8 @@ export default defineConfig({
   integrations: [
     tailwind(), 
     mdx(markdownConfig), // MDX will use the same optimized config
-    react()
+    react(),
+    checkPythonDiagramErrors()
   ],
   markdown: markdownConfig,
   build: {
