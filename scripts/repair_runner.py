@@ -104,8 +104,8 @@ def main():
             sys.exit(1)
             
         # Also run astro build to catch compile issues
-        print("Running build verification (npm run build:main)...")
-        build_ret, build_out, build_err = run_command("npm", ["run", "build:main"])
+        print("Running build verification (npm run build)...")
+        build_ret, build_out, build_err = run_command("npm", ["run", "build"])
         if build_ret != 0:
             print("\n❌ Build Verification Failed!")
             print(build_err or build_out)

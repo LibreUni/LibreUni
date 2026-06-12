@@ -68,7 +68,7 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
 1. Run `python3 scripts/course_stats.py` — check lesson length, headings, interaction counts, and generated quality summary.
    - Run `python3 scripts/course_stats.py <course-id>` for detailed stats on one course.
    - Run `python3 scripts/course_stats.py --write-quality` after course content changes that should update the catalog status badges.
-2. Run `npm run build` (or `npm run build:main`) — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams.
+2. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams.
 
 Course quality badges on the catalog are generated from observable MDX signals such as source sections, links, descriptions, examples, exercises, and interactive components. Top-tier review states remain manual and should be set through `apps/main/src/data/course-quality-overrides.json`, then regenerated with `python3 scripts/course_stats.py --write-quality`.
 

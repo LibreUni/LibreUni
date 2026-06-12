@@ -130,28 +130,32 @@ The pipeline builds all apps, runs Playwright smoke and accessibility tests on d
 
 ## 🚢 Deployment
 
-### Docker (recommended)
+### Local Docker Testing
 
 This repository includes a production-ready multi-stage [Dockerfile](Dockerfile) that builds one selected app from the monorepo and serves its generated static files with Nginx.
-The runtime includes:
 
+The runtime includes:
 - Static route handling for extensionless HTML routes.
 - Long-lived immutable caching for fingerprinted assets.
 - Gzip compression for text assets.
 - Basic security headers.
 - Health endpoint at `/healthz`.
 
-1. **Build and run with Compose:**
-   Run base + local override to publish on localhost:8080. By default it serves `apps/main`; override with `APP=lang` or `APP=history` as needed:
-   
+To build and run an app locally with Docker for verification:
+
+1. **Build the image:**
    ```bash
-   APP=main docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+   docker build -t libreuni-main --build-arg APP=main .
+   ```
+   *(To test other apps, replace `main` with `lang` or `history`)*
+
+2. **Run the container:**
+   ```bash
+   docker run -d -p 8080:80 --name libreuni-main-test libreuni-main
    ```
 
-2. **Open the site:**
-   ```text
-   http://localhost:8080
-   ```
+3. **Verify locally:**
+   Open `http://localhost:8080` or curl the health check `curl http://localhost:8080/healthz`.
 
 ### Coolify setup (source-based)
 
@@ -173,7 +177,6 @@ If you prefer Coolify's source/static flow instead of Docker:
 3. Use `APP=<app-name> npm run build` as the build command.
 4. Publish `apps/<app-name>/dist` as the static output directory.
 
-Note: the base [docker-compose.yml](docker-compose.yml) intentionally does not bind a host port to avoid collisions on shared servers. Local host binding is defined in [docker-compose.local.yml](docker-compose.local.yml).
 This keeps all LibreUni sections in one repository while letting each app choose its own frontend stack as long as it outputs a static `dist/`.
 
 ## 🤝 Contributing

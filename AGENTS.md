@@ -49,9 +49,9 @@ npm test
 Use narrower commands when appropriate:
 
 ```bash
-npm run build:main
-npm run build:lang
-npm run build:history
+npm run build
+APP=lang npm run build
+APP=history npm run build
 npm run test:e2e
 npm run test:ux
 npm run test:lighthouse
