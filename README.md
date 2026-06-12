@@ -55,12 +55,10 @@ LibreUni is built on the belief that high-quality, university-level education sh
 ```text
 LibreUni/
 ├── apps/
-│   ├── main/                  # Main LibreUni Astro application
-│   │   ├── src/               # Astro pages, components, and course content
-│   │   ├── astro.config.mjs
-│   │   └── package.json
-│   ├── lang/                  # Language-focused static app (non-Astro for now)
-│   └── history/               # History-focused static app (non-Astro for now)
+│   └── main/                  # Main LibreUni Astro application
+│       ├── src/               # Astro pages, components, and course content
+│       ├── astro.config.mjs
+│       └── package.json
 ├── docs/                      # Technical references (UX vision, PlantUML guide, Rules)
 ├── scripts/                   # Content and maintenance utilities
 ├── tools/                     # Shared monorepo build/dev helpers
@@ -90,32 +88,16 @@ Follow these steps to set up the project locally for development.
    ```
    The site will be available at `http://localhost:4321`.
 
-3. **Run a section app locally:**
-   ```bash
-   npm run dev:lang
-   npm run dev:history
-   ```
-
-4. **Validate content and refresh catalog quality data (Optional but recommended):**
+3. **Validate content and refresh catalog quality data (Optional but recommended):**
    ```bash
    python3 scripts/course_stats.py
    python3 scripts/course_stats.py --write-quality
    ```
 
-5. **Build for production:**
+4. **Build for production:**
    ```bash
-    npm run build
-    npm run build:lang
-    npm run build:history
-    ```
-
-`npm run build` defaults to the main site. For source-based deployments you can also select an app with:
-
-```bash
-APP=main npm run build
-APP=lang npm run build
-APP=history npm run build
-```
+   npm run build
+   ```
 
 ## ✅ Testing
 
@@ -141,13 +123,12 @@ The runtime includes:
 - Basic security headers.
 - Health endpoint at `/healthz`.
 
-To build and run an app locally with Docker for verification:
+To build and run the app locally with Docker for verification:
 
 1. **Build the image:**
    ```bash
-   docker build -t libreuni-main --build-arg APP=main .
+   docker build -t libreuni-main .
    ```
-   *(To test other apps, replace `main` with `lang` or `history`)*
 
 2. **Run the container:**
    ```bash
@@ -159,25 +140,21 @@ To build and run an app locally with Docker for verification:
 
 ### Coolify setup (source-based)
 
-If you deploy with Coolify and want automatic builds from source, create one service per subdomain and point all of them at the same repository.
-
-Recommended setup:
+If you deploy with Coolify and want automatic builds from source:
 
 1. Use **Build Pack: Dockerfile**.
 2. Keep repository root as the build context.
-3. Set a Docker build arg named `APP`.
-4. Use `APP=main` for the main site, `APP=lang` for `lang.libreuni`, and `APP=history` for `history.libreuni`.
-5. Set service internal port to **80**.
-6. Set healthcheck path to `/healthz`.
+3. Set service internal port to **80**.
+4. Set healthcheck path to `/healthz`.
 
 If you prefer Coolify's source/static flow instead of Docker:
 
 1. Keep the repository root as the base directory.
 2. Use `npm install` as the install command.
-3. Use `APP=<app-name> npm run build` as the build command.
-4. Publish `apps/<app-name>/dist` as the static output directory.
+3. Use `npm run build` as the build command.
+4. Publish `apps/main/dist` as the static output directory.
 
-This keeps all LibreUni sections in one repository while letting each app choose its own frontend stack as long as it outputs a static `dist/`.
+This keeps all LibreUni resources organized while letting you run a clean static build.
 
 ## 🤝 Contributing
 

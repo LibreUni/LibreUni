@@ -9,8 +9,6 @@ const REPORT_DIR = path.resolve(process.cwd(), 'reports/ux');
 const TARGETS = [
   { app: 'main', name: 'Home', url: 'http://127.0.0.1:4321/' },
   { app: 'main', name: 'Python Lesson', url: 'http://127.0.0.1:4321/lessons/python/intro.html' },
-  { app: 'lang', name: 'Language App', url: 'http://127.0.0.1:4322/' },
-  { app: 'history', name: 'History Atlas', url: 'http://127.0.0.1:4323/' },
 ];
 
 const VIEWPORTS = [

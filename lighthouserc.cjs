@@ -8,8 +8,6 @@ module.exports = {
       url: [
         'http://127.0.0.1:4321/',
         'http://127.0.0.1:4321/lessons/python/intro.html',
-        'http://127.0.0.1:4322/',
-        'http://127.0.0.1:4323/',
       ],
       numberOfRuns: 1,
       settings: {

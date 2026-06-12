@@ -10,8 +10,6 @@ RUN apk add --no-cache python3 py3-matplotlib py3-numpy py3-pandas
 # Install workspace dependencies first to maximize layer cache reuse.
 COPY package*.json ./
 COPY apps/main/package.json apps/main/package.json
-COPY apps/lang/package.json apps/lang/package.json
-COPY apps/history/package.json apps/history/package.json
 RUN npm ci
 
 # Build the selected app from the monorepo.

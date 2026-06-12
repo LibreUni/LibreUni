@@ -14,18 +14,6 @@ const ROUTES = [
     expectedText: /Python/i,
   },
   {
-    name: 'language app',
-    url: 'http://127.0.0.1:4322/',
-    expectedTitle: /LibreUni Languages/i,
-    expectedText: /Language tracks/i,
-  },
-  {
-    name: 'history app',
-    url: 'http://127.0.0.1:4323/',
-    expectedTitle: /HISTORIA/i,
-    expectedText: /Interactive Historical Atlas/i,
-  },
-  {
     name: 'main course export',
     url: 'http://127.0.0.1:4321/courses/operating-systems/export.html',
     expectedTitle: /Operating Systems Internals - Full Course Export/i,

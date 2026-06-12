@@ -4,8 +4,6 @@ import path from 'node:path';
 
 const APPS = [
   { name: 'main', root: 'apps/main/dist', port: Number(process.env.MAIN_PORT ?? 4321) },
-  { name: 'lang', root: 'apps/lang/dist', port: Number(process.env.LANG_PORT ?? 4322) },
-  { name: 'history', root: 'apps/history/dist', port: Number(process.env.HISTORY_PORT ?? 4323) },
 ];
 
 const CONTENT_TYPES = {

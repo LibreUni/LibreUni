@@ -28,8 +28,6 @@ This file is the first stop for AI agents working in this repository. Read it be
 - `apps/main/src/content/lessons/` - MDX lessons by course slug.
 - `apps/main/src/content/courses/` - course metadata.
 - `apps/main/src/components/` - React components used by lessons and pages.
-- `apps/lang/` - language-focused static app.
-- `apps/history/` - history-focused static app.
 - `docs/` - rules, sourcing instructions, UX, PlantUML, and testing references.
 - `scripts/` - content and maintenance utilities.
 - `tools/` - shared monorepo helpers.
@@ -50,8 +48,6 @@ Use narrower commands when appropriate:
 
 ```bash
 npm run build
-APP=lang npm run build
-APP=history npm run build
 npm run test:e2e
 npm run test:ux
 npm run test:lighthouse
