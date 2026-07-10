@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search as SearchIcon } from 'lucide-react';
-import { cn } from '../utils/cn';
 
 interface SearchResult {
     type: 'course' | 'lesson';
@@ -76,16 +75,13 @@ export default function Search({ baseUrl, variant = 'compact' }: { baseUrl: stri
     }, []);
 
     return (
-        <div className={cn("relative w-full", variant === 'hero' ? "max-w-3xl mx-auto" : "max-w-md")} ref={searchRef}>
+        <div className={`relative w-full ${variant === 'hero' ? 'max-w-3xl mx-auto' : 'max-w-md'}`} ref={searchRef}>
             <div className="relative">
-                <SearchIcon size={variant === 'hero' ? 22 : 16} className={cn("absolute top-1/2 -translate-y-1/2 text-light-muted dark:text-dark-muted", variant === 'hero' ? "left-6" : "left-4")} />
+                <SearchIcon size={variant === 'hero' ? 22 : 16} className={`absolute top-1/2 -translate-y-1/2 text-light-muted dark:text-dark-muted ${variant === 'hero' ? 'left-6' : 'left-4'}`} />
                 <input 
                     type="text" 
                     placeholder="Search courses, modules, and topics" 
-                    className={cn(
-                        "input-field",
-                        variant === 'hero' ? "pl-16 pr-6 !py-5 text-base md:text-lg shadow-2xl shadow-primary/10 !rounded-2xl" : "pl-11 !py-2.5"
-                    )}
+                    className={`input-field ${variant === 'hero' ? 'pl-16 pr-6 !py-5 text-base md:text-lg shadow-2xl shadow-primary/10 !rounded-2xl' : 'pl-11 !py-2.5'}`}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     onFocus={() => query.length > 1 && setIsOpen(true)}
