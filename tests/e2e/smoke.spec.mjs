@@ -61,12 +61,17 @@ test.describe('production smoke checks', () => {
 
     const pythonCard = page.locator('.course-card:has(a[href$="courses/python.html"])');
     const machineLearningCard = page.locator('.course-card:has(a[href$="courses/machine-learning.html"])');
+    const javascriptCard = page.locator('.course-card:has(a[href$="courses/javascript.html"])');
 
     await expect(pythonCard).toBeVisible();
     await expect(machineLearningCard).toBeHidden();
 
     await search.fill('');
     await expect(machineLearningCard).toBeVisible();
+    await expect(javascriptCard).toBeHidden();
+
+    await page.locator('#draft-toggle').check();
+    await expect(javascriptCard).toBeVisible();
   });
 
   test('mobile menu exposes primary navigation', async ({ page }, testInfo) => {

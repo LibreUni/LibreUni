@@ -8,6 +8,7 @@ const coursesCollection = defineCollection({
     icon: z.string(),
     color: z.string(),
     image: z.string().optional(),
+    status: z.enum(['public', 'draft']).default('public'),
   }),
 });
 

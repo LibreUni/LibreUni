@@ -4,8 +4,11 @@ import { getLessonsByCourse } from '../utils/lessons';
 export async function GET() {
   const allLessons = await getCollection('lessons');
   const lessonsByCourse = await getLessonsByCourse(allLessons);
-  const orderedLessons = Object.values(lessonsByCourse).flat();
-  const courses = await getCollection('courses');
+  const courses = (await getCollection('courses')).filter(course => course.data.status === 'public');
+  const publicCourseIds = new Set(courses.map(course => course.id));
+  const orderedLessons = Object.values(lessonsByCourse)
+    .flat()
+    .filter(lesson => publicCourseIds.has(lesson.data.course));
   const courseTitles = Object.fromEntries(courses.map(course => [course.id, course.data.title]));
 
   const courseData = courses.map(course => ({
