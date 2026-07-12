@@ -17,3 +17,7 @@ Serious learning for serious learners. The platform follows a "No Bullshit" appr
 ## Search and Navigation
 - **Visibility**: Search results and navigation elements must be opaque and clearly separated from background content.
 - **Accessibility**: High contrast for readability, focus states for keyboard navigation, and clear visual cues for interactions.
+
+## Visual Validation
+- After any layout, styling, theme, interaction, or accessibility change, run `npm run test:visual`.
+- Review the screenshots in `reports/visual/` at their generated desktop and mobile sizes. Fix visible overlap, clipping, unreadable contrast, and broken responsive layouts before handoff.

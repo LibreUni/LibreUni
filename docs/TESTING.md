@@ -30,10 +30,13 @@ Useful narrower commands:
 npm run test:e2e
 npm run test:ux
 npm run test:lighthouse
+npm run test:visual
 npm run test:report
 ```
 
 `test:report` opens the Playwright HTML report from the last run.
+
+`test:visual` builds the app and captures representative interface states under `reports/visual/`. It covers the course catalog at desktop and mobile widths, a course overview, and a lesson across the available theme modes. Run it for every layout, styling, theme, interaction, or accessibility change; inspect the generated images for overlap, clipping, contrast, and responsive failures before handoff.
 
 ## What Gets Checked
 
@@ -52,6 +55,8 @@ The custom UX audit writes `reports/ux/index.html` plus per-page JSON. It checks
 
 The Lighthouse CI run writes reports to `reports/lighthouse` and enforces accessibility, core metadata, and conservative performance/best-practice budgets.
 
+The visual capture test writes PNG files to `reports/visual/`. It is a review aid rather than a pixel-diff gate: agents must inspect its output when their work changes the interface.
+
 ## CI
 
 The GitHub Actions workflow in `.github/workflows/quality.yml` runs `npm test` on pushes and pull requests, then uploads `reports/` and `test-results/` as artifacts even when a check fails.
@@ -63,6 +68,7 @@ Add new high-value routes to:
 - `tests/e2e/smoke.spec.mjs` for production smoke checks.
 - `tests/e2e/accessibility.spec.mjs` for axe scans.
 - `tests/ux/ux-report.spec.mjs` for visual/UX reports.
+- `tests/visual/capture.spec.mjs` for representative screenshot coverage.
 - `lighthouserc.cjs` for Lighthouse budgets.
 
 Keep the route list small and representative. The goal is fast local signal, not crawling every lesson on every run.

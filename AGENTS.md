@@ -9,6 +9,7 @@ This file is the first stop for AI agents working in this repository. Read it be
 3. If the task changes layout, styling, interaction, accessibility, or visual design, read `docs/UX.md`.
 4. If the task adds or changes PlantUML, read `docs/PUML.md`.
 5. Before finishing, run the narrowest useful validation. For broad changes, use the commands in `docs/TESTING.md`.
+6. For layout, styling, theme, interaction, or accessibility changes, run `npm run test:visual` and inspect the generated screenshots in `reports/visual/` before handing work back.
 
 ## Non-Negotiable Content Rules
 
@@ -39,6 +40,7 @@ npm install
 npm run dev
 npm run build
 npm run build:all
+npm run test:visual
 python3 scripts/course_stats.py
 python3 scripts/course_stats.py --write-quality
 npm test
@@ -51,6 +53,7 @@ npm run build
 npm run test:e2e
 npm run test:ux
 npm run test:lighthouse
+npm run test:visual
 ```
 
 ## Finish Criteria
@@ -59,5 +62,6 @@ Before handing work back:
 
 - Confirm that the relevant docs above were followed.
 - Run the validation that matches the risk of the change, or explicitly explain why it was not run.
+- For UI changes, inspect `reports/visual/` after `npm run test:visual`; fix visible overlap, clipping, contrast, or responsive-layout issues before handoff.
 - Do not bypass MDX, type, build, accessibility, or UX failures.
 - Keep changes scoped to the user's request.
