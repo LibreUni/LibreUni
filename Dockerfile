@@ -1,16 +1,24 @@
-FROM node:20-alpine AS builder
+FROM node:20 AS builder
 
 ARG APP=main
 
 WORKDIR /app
 
 # Install Python and scientific libraries required for rendering build-time diagrams
-RUN apk add --no-cache python3 py3-matplotlib py3-numpy py3-pandas
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-matplotlib \
+    python3-numpy \
+    python3-pandas \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install workspace dependencies first to maximize layer cache reuse.
 COPY package*.json ./
 COPY apps/main/package.json apps/main/package.json
 RUN npm ci
+
+# Install Playwright Chromium and its system dependencies
+RUN npx playwright install --with-deps chromium
 
 # Build the selected app from the monorepo.
 COPY . .
