@@ -1,10 +1,8 @@
 FROM node:20 AS builder
 
-ARG APP=main
-
 WORKDIR /app
 
-# Install Python and scientific libraries required for rendering build-time diagrams
+# Install Python and scientific libraries for build-time diagram rendering
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-matplotlib \
@@ -12,27 +10,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pandas \
     && rm -rf /var/lib/apt/lists/*
 
-# Install workspace dependencies first to maximize layer cache reuse.
+# Install workspace dependencies
 COPY package*.json ./
 COPY apps/main/package.json apps/main/package.json
 RUN npm ci
 
-# Install Playwright Chromium and its system dependencies
+# Install Playwright Chromium for CI
 RUN npx playwright install --with-deps chromium
 
-# Build the selected app from the monorepo.
+# Build the static site
 COPY . .
-RUN APP=${APP} npm run build
+RUN npm run build:all
 
 FROM nginx:alpine AS runner
 
-ARG APP=main
-
-# Use a tuned static-site nginx config.
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-
-# Serve the generated static files for the selected app.
-COPY --from=builder /app/apps/${APP}/dist /usr/share/nginx/html
+COPY --from=builder /app/apps/main/dist /usr/share/nginx/html
 
 EXPOSE 80
 

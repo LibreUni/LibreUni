@@ -2,46 +2,112 @@ name: Quality
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Build, Test, And UX Audit
+  validate-content:
+    name: Validate content
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
+    timeout-minutes: 5
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install Python scientific libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-numpy python3-pandas python3-matplotlib
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - run: npm ci
+      - name: Lesson structure check
+        run: python3 scripts/verify_lessons.py
+      - name: Course stats check
+        run: python3 scripts/course_stats.py
 
-      - name: Install dependencies
-        run: npm ci
-
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    needs: validate-content
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python scientific libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-numpy python3-pandas python3-matplotlib
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-
-      - name: Run quality pipeline
-        run: npm test
-
-      - name: Upload quality artifacts
+      - name: Build static site
+        run: npm run build:all
+      - name: E2E smoke tests
+        run: npx playwright test --project=chromium --project=mobile-chrome
+      - name: UX audit
+        run: npm run test:ux:run
+      - name: Copy UX report to dist
+        run: node tools/copy-ux-report.mjs
+      - name: Lighthouse CI
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: npm run test:lighthouse:run
+      - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: quality-reports
+          name: reports
           path: |
             reports/
             test-results/
           if-no-files-found: ignore
+      - name: Upload dist (for Pages deploy)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/main/dist
+
+  publish-quality-badges:
+    name: Publish quality badges
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Regenerate quality badges
+        run: python3 scripts/course_stats.py --write-quality
+      - name: Commit if changed
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add apps/main/src/data/course-quality.json
+          git diff --cached --quiet || git commit -m 'chore: update quality badges [skip ci]'
+          git push
+
+  deploy-pages:
+    name: Deploy report pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

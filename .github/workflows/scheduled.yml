@@ -1,0 +1,64 @@
+name: Scheduled maintenance
+
+on:
+  schedule:
+    - cron: '0 6 * * 0'  # weekly Sunday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  dead-links:
+    name: Check for dead links
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/verify_lessons.py --check-links 2>&1 | tee dead-links.log
+      - name: Open issue if dead links found
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.readFileSync('dead-links.log', 'utf8');
+            const title = 'Dead links found in lessons';
+            const body = `Weekly link check found dead or unreachable URLs:\n\n\`\`\`\n${log.slice(0, 64000)}\n\`\`\``;
+            const issues = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: ['maintenance'] });
+            const existing = issues.data.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body, labels: ['maintenance'] });
+            }
+
+  dependency-audit:
+    name: Audit dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run npm audit
+        continue-on-error: true
+        run: npm audit --audit-level=high 2>&1 | tee audit.log
+      - name: Open issue on critical advisories
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.readFileSync('audit.log', 'utf8');
+            if (log.includes('critical')) {
+              const title = 'Critical npm advisory detected';
+              const body = `Weekly audit found critical advisories:\n\n\`\`\`\n${log.slice(0, 32000)}\n\`\`\``;
+              const issues = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: ['maintenance'] });
+              const existing = issues.data.find(i => i.title === title);
+              if (existing) {
+                await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
+              } else {
+                await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body, labels: ['maintenance'] });
+              }
+            }

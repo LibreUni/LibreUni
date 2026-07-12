@@ -55,15 +55,25 @@ LibreUni is built on the belief that high-quality, university-level education sh
 ```text
 LibreUni/
 ├── apps/
-│   └── main/                  # Main LibreUni Astro application
-│       ├── src/               # Astro pages, components, and course content
+│   └── main/                  # LibreUni Astro application
+│       ├── src/               # Pages, components, and course content
 │       ├── astro.config.mjs
 │       └── package.json
-├── docs/                      # Technical references (UX vision, PlantUML guide, Rules)
-├── scripts/                   # Content and maintenance utilities
-├── tools/                     # Shared monorepo build/dev helpers
-├── Dockerfile                 # Generic static app builder/runner
-└── package.json               # Workspace entrypoint
+├── .github/
+│   └── workflows/             # CI: quality checks, scheduled maintenance, Dependabot
+├── docker/
+│   └── nginx.conf             # Production nginx config
+├── docs/                      # Technical references (UX, PlantUML, Rules)
+├── scripts/                   # Content validation utilities
+├── tests/
+│   ├── e2e/                   # Playwright smoke tests
+│   ├── ux/                    # UX audit (contrast, spacing, overflow)
+│   └── visual/                # Visual regression capture
+├── tools/                     # Build and test helpers
+├── Dockerfile                 # Multi-stage static site builder
+├── lighthouserc.cjs           # Lighthouse CI config
+├── playwright.config.mjs      # Playwright test config
+└── package.json               # Root workspace entrypoint
 ```
 
 ## 🚀 Getting Started
@@ -108,13 +118,21 @@ npm run test:install
 npm test
 ```
 
-The pipeline builds all apps, runs Playwright smoke and accessibility tests on desktop/mobile, generates a UX report with color-blind contrast and element spacing analysis, and runs Lighthouse CI budgets. See [docs/TESTING.md](docs/TESTING.md) for the full command list and report locations.
+The pipeline builds the static site, runs Playwright smoke tests on desktop/mobile, generates a UX report with color-blind contrast and element spacing analysis, and runs Lighthouse CI budgets on main branch pushes. See [docs/TESTING.md](docs/TESTING.md) for the full command list and report locations.
+
+### CI Pipeline
+
+| Workflow | Trigger | Jobs |
+|---|---|---|
+| `quality.yml` | Push/PR on main | Validate content → Build + e2e + UX + Lighthouse → Publish quality badges → Deploy reports to Pages |
+| `scheduled.yml` | Weekly Sunday | Dead link check, dependency audit (opens issues on failure) |
+| `dependabot.yml` | Monthly | Auto PRs for npm and Actions dependency updates |
 
 ## 🚢 Deployment
 
 ### Local Docker Testing
 
-This repository includes a production-ready multi-stage [Dockerfile](Dockerfile) that builds one selected app from the monorepo and serves its generated static files with Nginx.
+This repository includes a production-ready multi-stage [Dockerfile](Dockerfile) that builds the static site and serves it with Nginx.
 
 The runtime includes:
 - Static route handling for extensionless HTML routes.
@@ -123,22 +141,22 @@ The runtime includes:
 - Basic security headers.
 - Health endpoint at `/healthz`.
 
-To build and run the app locally with Docker for verification:
+To build and run locally with Docker:
 
 1. **Build the image:**
    ```bash
-   docker build -t libreuni-main .
+   docker build -t libreuni .
    ```
 
 2. **Run the container:**
    ```bash
-   docker run -d -p 8080:80 --name libreuni-main-test libreuni-main
+   docker run -d -p 8080:80 --name libreuni-test libreuni
    ```
 
-3. **Verify locally:**
-   Open `http://localhost:8080` or curl the health check `curl http://localhost:8080/healthz`.
+3. **Verify:**
+   `curl http://localhost:8080/healthz`
 
-### Coolify setup (source-based)
+### Coolify setup
 
 If you deploy with Coolify and want automatic builds from source:
 
@@ -153,8 +171,6 @@ If you prefer Coolify's source/static flow instead of Docker:
 2. Use `npm install` as the install command.
 3. Use `npm run build` as the build command.
 4. Publish `apps/main/dist` as the static output directory.
-
-This keeps all LibreUni resources organized while letting you run a clean static build.
 
 ## 🤝 Contributing
 
