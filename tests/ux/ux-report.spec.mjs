@@ -7,8 +7,11 @@ import path from 'node:path';
 const REPORT_DIR = path.resolve(process.cwd(), 'reports/ux');
 
 const TARGETS = [
-  { app: 'main', name: 'Home', url: 'http://127.0.0.1:4321/' },
-  { app: 'main', name: 'Python Lesson', url: 'http://127.0.0.1:4321/lessons/python/intro.html' },
+  { app: 'main', name: 'Home (Modern Light)', url: 'http://127.0.0.1:4321/', theme: 'modern', mode: 'light' },
+  { app: 'main', name: 'Python Lesson (Monochrome Light)', url: 'http://127.0.0.1:4321/lessons/python/intro.html', theme: 'monochrome', mode: 'light' },
+  { app: 'main', name: 'Python Lesson (Monochrome Dark)', url: 'http://127.0.0.1:4321/lessons/python/intro.html', theme: 'monochrome', mode: 'dark' },
+  { app: 'main', name: 'Career Path (Monochrome Light)', url: 'http://127.0.0.1:4321/careers/ai-specialist.html', theme: 'monochrome', mode: 'light' },
+  { app: 'main', name: 'Career Path (Monochrome Dark)', url: 'http://127.0.0.1:4321/careers/ai-specialist.html', theme: 'monochrome', mode: 'dark' },
 ];
 
 const VIEWPORTS = [
@@ -609,6 +612,11 @@ test('generate UX health report', async ({ page }, testInfo) => {
 
     for (const target of TARGETS) {
       await page.goto(target.url, { waitUntil: 'domcontentloaded' });
+      await page.evaluate(({ theme, mode }) => {
+        localStorage.setItem('theme', theme);
+        localStorage.setItem('color-mode', mode);
+      }, target);
+      await page.reload({ waitUntil: 'domcontentloaded' });
       await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
       await page.waitForTimeout(300);
 

@@ -85,4 +85,50 @@ test.describe('production smoke checks', () => {
     await expect(mobileMenu.getByRole('link', { name: /Courses/i })).toBeVisible();
     await expect(mobileMenu.getByRole('link', { name: /Career Paths/i })).toBeVisible();
   });
+
+  test('development quality page renders charts and supports table sorting', async ({ page }) => {
+    const browserErrors = [];
+    page.on('pageerror', (error) => browserErrors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        browserErrors.push(message.text());
+      }
+    });
+
+    await page.goto('http://127.0.0.1:4321/development.html', { waitUntil: 'networkidle' });
+
+    // Verify no console/browser errors occurred (tolerating 404 resource failures for UX reports that build later in pipeline)
+    const toleratedErrors = browserErrors.filter(
+      (msg) => !/Failed to load resource/i.test(msg)
+    );
+    expect(toleratedErrors).toEqual([]);
+
+    // Check that plots are visible (meaning JS rendered them and removed the 'hidden' class)
+    const screePlot = page.locator('#scree-plot');
+    await expect(screePlot).toBeVisible();
+    await expect(screePlot).not.toHaveClass(/hidden/);
+    await expect(screePlot.locator('rect')).not.toHaveCount(0);
+
+    const scatterPlot = page.locator('#scatter-plot');
+    await expect(scatterPlot).toBeVisible();
+    await expect(scatterPlot).not.toHaveClass(/hidden/);
+    await expect(scatterPlot.locator('circle.scatter-dot')).not.toHaveCount(0);
+
+    // Check warning list rendering
+    const warningsList = page.locator('#warnings-list');
+    await expect(warningsList.locator('.warning-card')).not.toHaveCount(0);
+
+    // Test table sorting by lessons
+    const courseMetricsBody = page.locator('#course-metrics');
+
+    // Click sort by lessons
+    await page.locator('button[data-sort="lessons"]').click();
+    const firstRowAfterAsc = await courseMetricsBody.locator('tr').first().innerText();
+
+    // Click again for descending sort
+    await page.locator('button[data-sort="lessons"]').click();
+    const firstRowAfterDesc = await courseMetricsBody.locator('tr').first().innerText();
+
+    expect(firstRowAfterAsc).not.toEqual(firstRowAfterDesc);
+  });
 });

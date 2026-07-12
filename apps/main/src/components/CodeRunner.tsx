@@ -21,12 +21,14 @@ type RunnerTab = 'guide' | 'code' | 'output';
 
 export default function CodeRunner({ code, output: initialOutput, title = "Interactive Lab", description, language }: CodeRunnerProps) {
   const defaultCode = code || '';
+  const hasDescription = Boolean(description?.trim());
+  const initialTab: RunnerTab = hasDescription ? 'guide' : 'code';
   const [currentCode, setCurrentCode] = useState(defaultCode);
   const [consoleOutput, setConsoleOutput] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
-  const [activeTab, setActiveTab] = useState<RunnerTab>('guide');
+  const [activeTab, setActiveTab] = useState<RunnerTab>(initialTab);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -301,7 +303,7 @@ _visual
     setCurrentCode(defaultCode);
     setConsoleOutput([]);
     setShowTerminal(false);
-    setActiveTab('guide');
+    setActiveTab(initialTab);
     setPlotImage(null);
     setLastRunCode(null);
     clearLoading();
@@ -336,10 +338,12 @@ _visual
       <div className="bg-light-bg dark:bg-dark-surface rounded-lg overflow-hidden border border-light-border dark:border-dark-border shadow-xl transition-all duration-300 group-hover:border-primary/30">
         <div className="border-b border-light-border dark:border-dark-border bg-light-bg dark:bg-dark-surface px-4 py-3">
           <div className="flex flex-wrap gap-2" role="tablist" aria-label={`${title} lab sections`}>
-            <button type="button" role="tab" aria-selected={activeTab === 'guide'} className={tabButtonClass('guide')} onClick={() => setActiveTab('guide')}>
-              <BookOpen size={14} />
-              Topic
-            </button>
+            {hasDescription && (
+              <button type="button" role="tab" aria-selected={activeTab === 'guide'} className={tabButtonClass('guide')} onClick={() => setActiveTab('guide')}>
+                <BookOpen size={14} />
+                Topic
+              </button>
+            )}
             <button type="button" role="tab" aria-selected={activeTab === 'code'} className={tabButtonClass('code')} onClick={() => setActiveTab('code')}>
               <Code2 size={14} />
               Code
@@ -367,7 +371,7 @@ _visual
         )}
 
         <div className="min-h-[460px]">
-          {activeTab === 'guide' && (
+          {hasDescription && activeTab === 'guide' && (
             <section className="px-5 py-8 sm:px-8" role="tabpanel">
               <div className="max-w-3xl">
                 <div className="mb-4 inline-flex items-center rounded-md border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-bold uppercase text-primary">

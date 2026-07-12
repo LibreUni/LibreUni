@@ -1,0 +1,505 @@
+---
+import { getCollection } from 'astro:content';
+import Layout from '../layouts/Layout.astro';
+import { getLessonsByCourse } from '../utils/lessons';
+import qualityData from '../data/course-quality.json';
+
+const courses = await getCollection('courses');
+const lessons = await getCollection('lessons');
+const lessonsByCourse = await getLessonsByCourse(lessons);
+const quality = qualityData as Record<string, Record<string, unknown>>;
+
+const courseMetrics = courses
+  .map((course) => {
+    const courseLessons = lessonsByCourse[course.id] ?? [];
+    const modules = new Map<string, { lessons: number; characters: number }>();
+
+    for (const lesson of courseLessons) {
+      const module = modules.get(lesson.data.module ?? 'Overview') ?? { lessons: 0, characters: 0 };
+      module.lessons += 1;
+      module.characters += lesson.body.length;
+      modules.set(lesson.data.module ?? 'Overview', module);
+    }
+
+    const characters = [...modules.values()].reduce((total, module) => total + module.characters, 0);
+    return {
+      course,
+      characters,
+      lessons: courseLessons.length,
+      modules: modules.size,
+      charactersPerLesson: courseLessons.length ? Math.round(characters / courseLessons.length) : 0,
+      charactersPerModule: modules.size ? Math.round(characters / modules.size) : 0,
+      lessonsPerModule: modules.size ? Number((courseLessons.length / modules.size).toFixed(1)) : 0,
+      averageWords: (quality[course.id] as any)?.metrics?.content?.averageWords ?? 0,
+      qualityScore: (quality[course.id] as any)?.overall?.score ?? 0,
+      quality: quality[course.id],
+    };
+  })
+  .sort((a, b) => a.course.data.title.localeCompare(b.course.data.title));
+
+const formatNumber = new Intl.NumberFormat('en-US');
+const courseData = courseMetrics.map(m => ({
+  id: m.course.id,
+  title: m.course.data.title,
+  status: m.course.data.status,
+  characters: m.characters,
+  lessons: m.lessons,
+  modules: m.modules,
+  charactersPerLesson: m.charactersPerLesson,
+  charactersPerModule: m.charactersPerModule,
+  lessonsPerModule: m.lessonsPerModule,
+  averageWords: m.averageWords,
+  qualityScore: m.qualityScore,
+  quality: m.quality,
+}));
+const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
+---
+
+<Layout title="Development - LibreUni">
+  <main id="ml-dashboard" class="flex-1 bg-light-bg dark:bg-dark-bg" data-courses={encoded}>
+    <section class="border-b border-light-border bg-white px-6 py-16 dark:border-dark-border dark:bg-dark-bg md:px-8 md:py-24">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.25em] text-primary">Development</p>
+        <h1 class="mt-4 text-5xl font-black uppercase leading-none tracking-tight text-light-text dark:text-dark-text md:text-7xl">Quality and Course Metrics</h1>
+        <p class="mt-6 max-w-3xl text-lg font-medium leading-relaxed text-light-muted dark:text-dark-muted">Generated UX findings, content measurements, and ML-driven course analysis for maintaining LibreUni.</p>
+      </div>
+    </section>
+
+    <section class="mx-auto max-w-7xl px-6 py-12 md:px-8 md:py-16">
+      <div class="flex flex-wrap items-end justify-between gap-6">
+        <div>
+          <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Latest UX Audit</p>
+          <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Build report</h2>
+        </div>
+        <a class="btn-secondary !rounded-xl !px-5 !py-3 text-sm" href={`${import.meta.env.BASE_URL}development/ux/index.html`} target="_blank" rel="noopener noreferrer">Open full report</a>
+      </div>
+      <p class="mt-4 text-sm leading-relaxed text-light-muted dark:text-dark-muted"><code>npm run build</code> regenerates this report. It checks contrast, color-vision simulation, target sizes, overlap, and overflow across the representative routes.</p>
+      <iframe class="mt-8 h-[42rem] w-full rounded-2xl border border-light-border bg-white dark:border-dark-border dark:bg-dark-surface" src={`${import.meta.env.BASE_URL}development/ux/index.html`} title="Latest LibreUni UX report">
+        The UX report is unavailable. Run npm run build to generate it.
+      </iframe>
+    </section>
+
+    <section class="border-t border-light-border bg-light-surface/50 px-6 py-12 dark:border-dark-border dark:bg-dark-surface/40 md:px-8 md:py-16">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">PCA</p>
+        <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Principal Component Analysis</h2>
+        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">PCA reduces eight numeric course metrics into principal components. The scree plot shows how much variance each component captures; the scatter plot projects courses onto the first two components, with k-means clusters and flagged outliers.</p>
+
+        <div class="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div class="rounded-2xl border border-light-border bg-white p-6 dark:border-dark-border dark:bg-dark-bg">
+            <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Scree Plot</p>
+            <p class="mt-1 text-sm text-light-muted dark:text-dark-muted">Variance explained per principal component</p>
+            <svg id="scree-plot" class="mt-4 hidden h-64 w-full" viewBox="0 0 800 260" role="img" aria-label="PCA scree plot showing variance explained by each component"></svg>
+            <p id="scree-summary" class="mt-2 text-xs leading-relaxed text-light-muted dark:text-dark-muted"></p>
+          </div>
+
+          <div class="rounded-2xl border border-light-border bg-white p-6 dark:border-dark-border dark:bg-dark-bg">
+            <div class="flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Component Space</p>
+                <p class="mt-1 text-sm text-light-muted dark:text-dark-muted">Course positions on PCA axes</p>
+              </div>
+              <div class="flex gap-3 text-xs font-bold text-light-text dark:text-dark-text">
+                <label>X <select id="chart-x" class="ml-1 rounded-lg border border-light-border bg-light-bg px-2 py-1 dark:border-dark-border dark:bg-dark-surface"><option value="pca1">PCA 1</option><option value="characters">Total characters</option><option value="lessons">Lessons</option><option value="modules">Modules</option><option value="charactersPerLesson">Chars / lesson</option><option value="charactersPerModule">Chars / module</option><option value="lessonsPerModule">Lessons / module</option><option value="averageWords">Avg words</option><option value="qualityScore">Quality score</option></select></label>
+                <label>Y <select id="chart-y" class="ml-1 rounded-lg border border-light-border bg-light-bg px-2 py-1 dark:border-dark-border dark:bg-dark-surface"><option value="pca2">PCA 2</option><option value="characters">Total characters</option><option value="lessons">Lessons</option><option value="modules">Modules</option><option value="charactersPerLesson">Chars / lesson</option><option value="charactersPerModule">Chars / module</option><option value="lessonsPerModule">Lessons / module</option><option value="averageWords">Avg words</option><option value="qualityScore">Quality score</option></select></label>
+              </div>
+            </div>
+            <svg id="scatter-plot" class="mt-4 hidden h-64 w-full" viewBox="0 0 800 300" role="img" aria-label="Course metrics scatter plot on PCA axes"></svg>
+            <p id="chart-tooltip" class="mt-1 text-xs font-bold text-light-muted dark:text-dark-muted"></p>
+          </div>
+        </div>
+
+        <p id="chart-summary" class="mt-6 text-sm leading-relaxed text-light-muted dark:text-dark-muted"></p>
+      </div>
+    </section>
+
+    <section class="border-t border-light-border bg-white px-6 py-12 dark:border-dark-border dark:bg-dark-bg md:px-8 md:py-16">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Course Metrics</p>
+        <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Content by course</h2>
+        <div class="mt-8 overflow-x-auto rounded-2xl border border-light-border bg-white dark:border-dark-border dark:bg-dark-bg">
+          <table class="w-full min-w-[68rem] text-left text-sm">
+            <thead class="border-b border-light-border text-xs uppercase tracking-wider text-light-muted dark:border-dark-border dark:text-dark-muted">
+              <tr>
+                <th class="px-5 py-4"><button data-sort="title" class="font-black">Course</button></th><th class="px-5 py-4"><button data-sort="status" class="font-black">Status</button></th><th class="px-5 py-4"><button data-sort="lessons" class="font-black">Lessons</button></th><th class="px-5 py-4"><button data-sort="modules" class="font-black">Modules</button></th><th class="px-5 py-4"><button data-sort="characters" class="font-black">Characters</button></th><th class="px-5 py-4"><button data-sort="charactersPerModule" class="font-black">Chars / module</button></th><th class="px-5 py-4"><button data-sort="charactersPerLesson" class="font-black">Chars / lesson</button></th><th class="px-5 py-4"><button data-sort="lessonsPerModule" class="font-black">Lessons / module</button></th><th class="px-5 py-4"><button data-sort="averageWords" class="font-black">Avg words</button></th><th class="px-5 py-4">Quality</th>
+              </tr>
+            </thead>
+            <tbody id="course-metrics" class="divide-y divide-light-border dark:divide-dark-border">
+              {courseMetrics.map((metric) => (
+                <tr class="align-top" data-title={metric.course.data.title} data-status={metric.course.data.status} data-lessons={metric.lessons} data-modules={metric.modules} data-characters={metric.characters} data-characters-per-module={metric.charactersPerModule} data-characters-per-lesson={metric.charactersPerLesson} data-lessons-per-module={metric.lessonsPerModule} data-average-words={metric.averageWords} data-quality-score={metric.qualityScore}>
+                  <td class="px-5 py-4 font-black text-light-text dark:text-dark-text">{metric.course.data.title}</td>
+                  <td class="px-5 py-4"><span class="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-black uppercase tracking-wider text-primary">{metric.course.data.status}</span></td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{metric.lessons}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{metric.modules}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.characters)}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.charactersPerModule)}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.charactersPerLesson)}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{metric.lessonsPerModule}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.averageWords)}</td>
+                  <td class="px-5 py-4 text-light-muted dark:text-dark-muted">{(metric.quality as any)?.overall?.label ?? 'Not measured'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="border-t border-light-border bg-light-surface/50 px-6 py-12 dark:border-dark-border dark:bg-dark-surface/40 md:px-8 md:py-16">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Course Health</p>
+        <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Warnings and Improvement Points</h2>
+        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">Automated checks flagging courses that need attention. Warnings are generated from quality data and statistical analysis of content metrics.</p>
+
+        <div class="mt-8 flex flex-wrap items-center gap-4">
+          <span class="inline-flex items-center gap-1.5 rounded-full border-2 border-light-border bg-light-surface px-4 py-1.5 text-sm font-black dark:border-dark-border dark:bg-dark-surface">
+            <span class="flex h-5 w-5 items-center justify-center rounded-full bg-light-text text-xs text-light-bg dark:bg-dark-text dark:text-dark-bg">!</span>
+            High <span id="high-count" class="text-light-muted dark:text-dark-muted">0</span>
+          </span>
+          <span class="inline-flex items-center gap-1.5 rounded-full border border-light-border bg-light-surface px-4 py-1.5 text-sm font-black dark:border-dark-border dark:bg-dark-surface">
+            <span class="flex h-5 w-5 items-center justify-center rounded-full bg-light-muted text-xs text-light-bg dark:bg-dark-muted dark:text-dark-bg">?</span>
+            Medium <span id="medium-count" class="text-light-muted dark:text-dark-muted">0</span>
+          </span>
+          <span class="inline-flex items-center gap-1.5 rounded-full border border-dashed border-light-border bg-light-surface px-4 py-1.5 text-sm font-black dark:border-dark-border dark:bg-dark-surface">
+            <span class="flex h-5 w-5 items-center justify-center rounded-full border border-light-border text-xs text-light-muted dark:border-dark-border dark:text-dark-muted">i</span>
+            Low <span id="low-count" class="text-light-muted dark:text-dark-muted">0</span>
+          </span>
+        </div>
+
+        <div class="mt-6 flex flex-wrap gap-2">
+          <button data-filter="all" class="filter-btn rounded-xl border border-light-border bg-light-surface px-4 py-2 text-xs font-black uppercase tracking-wider text-light-text transition-all hover:bg-light-text hover:text-light-bg dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-text dark:hover:text-dark-bg">All</button>
+          <button data-filter="high" class="filter-btn rounded-xl border border-light-border bg-light-surface px-4 py-2 text-xs font-black uppercase tracking-wider text-light-text transition-all hover:bg-light-text hover:text-light-bg dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-text dark:hover:text-dark-bg">High</button>
+          <button data-filter="medium" class="filter-btn rounded-xl border border-light-border bg-light-surface px-4 py-2 text-xs font-black uppercase tracking-wider text-light-text transition-all hover:bg-light-text hover:text-light-bg dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-text dark:hover:text-dark-bg">Medium</button>
+          <button data-filter="low" class="filter-btn rounded-xl border border-light-border bg-light-surface px-4 py-2 text-xs font-black uppercase tracking-wider text-light-text transition-all hover:bg-light-text hover:text-light-bg dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-text dark:hover:text-dark-bg">Low</button>
+        </div>
+
+        <div id="warnings-list" class="mt-6 space-y-3"></div>
+        <p id="warnings-empty" class="mt-8 hidden text-center text-sm text-light-muted dark:text-dark-muted">No warnings match this filter.</p>
+      </div>
+    </section>
+  </main>
+</Layout>
+
+<script>
+const dashboard = document.getElementById('ml-dashboard');
+if (dashboard && dashboard.dataset.courses) {
+  const COURSES = JSON.parse(atob(dashboard.dataset.courses));
+
+  if (COURSES && COURSES.length > 0) {
+    const FEATURES = ['characters', 'lessons', 'modules', 'charactersPerLesson', 'charactersPerModule', 'lessonsPerModule', 'averageWords', 'qualityScore'];
+    const LABELS = {
+      pca1: 'PCA 1', pca2: 'PCA 2', characters: 'Total characters', lessons: 'Lessons', modules: 'Modules',
+      charactersPerLesson: 'Chars / lesson', charactersPerModule: 'Chars / module', lessonsPerModule: 'Lessons / module',
+      averageWords: 'Avg words', qualityScore: 'Quality score',
+    };
+
+    const mean = (values) => values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
+    const distance = (a, b) => Math.hypot(...a.map((v, i) => v - b[i]));
+    const multiply = (mat, vec) => mat.map((row) => row.reduce((s, v, i) => s + v * vec[i], 0));
+    const normalize = (vec) => { const len = Math.hypot(...vec) || 1; return vec.map((v) => v / len); };
+    const powerIteration = (mat, seed) => {
+      let vec = normalize(seed);
+      for (let i = 0; i < 80; i++) vec = normalize(multiply(mat, vec));
+      const eigenvalue = vec.reduce((s, v, i) => s + v * multiply(mat, vec)[i], 0);
+      return { eigenvalue, vector: vec };
+    };
+
+    const raw = COURSES.map((c) => FEATURES.map((k) => Number(c[k])));
+    const standardized = raw.map((row) => row.map((v, col) => {
+      const values = raw.map((r) => r[col]);
+      const avg = mean(values);
+      const dev = Math.sqrt(mean(values.map((x) => (x - avg) ** 2))) || 1;
+      return (v - avg) / dev;
+    }));
+    const covariance = FEATURES.map((_, r) => FEATURES.map((__, c) => mean(standardized.map((row) => row[r] * row[c]))));
+
+    const components = [];
+    let current = covariance.map((r) => [...r]);
+    for (let i = 0; i < 8; i++) {
+      const seed = FEATURES.map((_, idx) => ((idx + i) % 2 ? 1 : -1) / (idx + 1 + i * 0.1));
+      const pc = powerIteration(current, seed);
+      components.push(pc);
+      current = current.map((row, r) => row.map((v, c) => v - pc.eigenvalue * pc.vector[r] * pc.vector[c]));
+    }
+    const totalVar = components.reduce((s, c) => s + c.eigenvalue, 0);
+    const varRatios = components.map((c) => totalVar > 0 ? c.eigenvalue / totalVar : 0);
+    const cumulative = varRatios.reduce((acc, v) => { acc.push((acc.at(-1) || 0) + v); return acc; }, []);
+
+    COURSES.forEach((c, i) => {
+      c.pca1 = standardized[i].reduce((s, v, col) => s + v * components[0].vector[col], 0);
+      c.pca2 = standardized[i].reduce((s, v, col) => s + v * components[1].vector[col], 0);
+    });
+
+    const k = Math.min(3, COURSES.length);
+    let centers = [standardized[0], standardized[Math.floor(standardized.length / 2)], standardized.at(-1)].slice(0, k).map((c) => [...c]);
+    let assignments = [];
+    for (let iter = 0; iter < 40; iter++) {
+      assignments = standardized.map((row) => centers.reduce((best, center, idx) => distance(row, center) < distance(row, centers[best]) ? idx : best, 0));
+      centers = centers.map((center, idx) => {
+        const members = standardized.filter((_, ri) => assignments[ri] === idx);
+        return members.length ? center.map((_, col) => mean(members.map((m) => m[col]))) : center;
+      });
+    }
+    const clusterDist = standardized.map((row, i) => distance(row, centers[assignments[i]]));
+    const outlierCut = Math.max(1, Math.ceil(COURSES.length * 0.1));
+    const outlierSet = new Set(clusterDist.map((d, i) => ({ d, i })).sort((a, b) => b.d - a.d).slice(0, outlierCut).map((x) => x.i));
+    COURSES.forEach((c, i) => { c.cluster = assignments[i]; c.outlier = outlierSet.has(i); c.outlierScore = clusterDist[i]; });
+
+    function renderScree() {
+      const svg = document.getElementById('scree-plot');
+      if (!svg) return;
+      svg.classList.remove('hidden');
+      const W = 800, H = 260, L = 50, R = 20, T = 20, B = 45;
+      const plotW = W - L - R, plotH = H - T - B;
+      const yMax = 1.0;
+      const barW = Math.min(50, plotW / 8 * 0.55);
+      const gap = (plotW - barW * 8) / 9;
+      let html = `<rect x="0" y="0" width="${W}" height="${H}" fill="none"/>`;
+      html += `<line x1="${L}" y1="${T}" x2="${L}" y2="${T + plotH}" stroke="currentColor" opacity="0.3"/>`;
+      html += `<line x1="${L}" y1="${T + plotH}" x2="${L + plotW}" y2="${T + plotH}" stroke="currentColor" opacity="0.3"/>`;
+      for (let pct = 0; pct <= 100; pct += 25) {
+        const y = T + plotH - (pct / 100) * plotH;
+        html += `<text x="${L - 6}" y="${y + 4}" text-anchor="end" font-size="10" fill="currentColor" opacity="0.5">${pct}%</text>`;
+        html += `<line x1="${L}" y1="${y}" x2="${L + plotW}" y2="${y}" stroke="currentColor" opacity="0.08" stroke-dasharray="3,3"/>`;
+      }
+      const pathData = [];
+      cumulative.forEach((cum, i) => {
+        const x = L + gap + i * (barW + gap);
+        const barH = cum * plotH;
+        const y = T + plotH - barH;
+        html += `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" fill="currentColor" opacity="${0.1 + 0.3 * cum}" rx="2"/>`;
+        html += `<text x="${x + barW / 2}" y="${T + plotH + 16}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.6">PC${i + 1}</text>`;
+        pathData.push({ x: x + barW / 2, y });
+      });
+      let cumPath = '';
+      pathData.forEach((pt, i) => {
+        cumPath += `${i === 0 ? 'M' : 'L'}${pt.x} ${pt.y} `;
+      });
+      if (pathData.length) {
+        html += `<path d="${cumPath}" fill="none" stroke="currentColor" stroke-width="2" opacity="0.6"/>`;
+        pathData.forEach((pt, i) => {
+          html += `<circle cx="${pt.x}" cy="${pt.y}" r="3.5" fill="currentColor" opacity="0.8"/>`;
+          html += `<text x="${pt.x}" y="${pt.y - 8}" text-anchor="middle" font-size="9" font-weight="bold" fill="currentColor" opacity="0.85">${(cumulative[i] * 100).toFixed(0)}%</text>`;
+        });
+      }
+      svg.innerHTML = html;
+      const pc2cum = cumulative[1] || 0;
+      const screeSummaryEl = document.getElementById('scree-summary');
+      if (screeSummaryEl) {
+        screeSummaryEl.textContent =
+          `PC1 explains ${(varRatios[0] * 100).toFixed(1)}%, cumulative PC1+PC2 explains ${(pc2cum * 100).toFixed(1)}% of total variance.`;
+      }
+    }
+
+    function renderScatter(xKey, yKey) {
+      const svg = document.getElementById('scatter-plot');
+      if (!svg) return;
+      svg.classList.remove('hidden');
+      const tooltip = document.getElementById('chart-tooltip');
+      const W = 800, H = 300, L = 56, R = 20, T = 16, B = 40;
+      const plotW = W - L - R, plotH = H - T - B;
+      const xVals = COURSES.map((c) => Number(c[xKey]));
+      const yVals = COURSES.map((c) => Number(c[yKey]));
+      const scale = (v, list, start, size, invert = false) => {
+        if (list.length === 0) return start + size / 2;
+        const mn = Math.min(...list), mx = Math.max(...list);
+        const ratio = mx === mn ? 0.5 : (v - mn) / (mx - mn);
+        return start + (invert ? 1 - ratio : ratio) * size;
+      };
+      let html = `<line x1="${L}" y1="${T}" x2="${L}" y2="${T + plotH}" stroke="currentColor" opacity="0.3"/>`;
+      html += `<line x1="${L}" y1="${T + plotH}" x2="${L + plotW}" y2="${T + plotH}" stroke="currentColor" opacity="0.3"/>`;
+      html += `<text x="${L + plotW / 2}" y="${H - 4}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.5">${LABELS[xKey]}</text>`;
+      html += `<text x="${12}" y="${T + plotH / 2}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.5" transform="rotate(-90,12,${T + plotH / 2})">${LABELS[yKey]}</text>`;
+      const clusterLabels = ['Cluster 1', 'Cluster 2', 'Cluster 3'];
+      const clusterColors = ['#3b82f6', '#6366f1', '#a855f7'];
+      let legendHtml = '';
+      for (let i = 0; i < k; i++) {
+        const lx = L + i * 70;
+        legendHtml += `<circle cx="${lx}" cy="${T - 6}" r="4" fill="${clusterColors[i]}"/><text x="${lx + 8}" y="${T - 2}" font-size="9" fill="currentColor" opacity="0.6">${clusterLabels[i]}</text>`;
+      }
+      html += legendHtml;
+      const dots = [];
+      COURSES.forEach((c, i) => {
+        const x = scale(xVals[i], xVals, L, plotW);
+        const y = scale(yVals[i], yVals, T, plotH, true);
+        dots.push({ x, y, i, c });
+      });
+      dots.forEach(({ x, y, i, c }) => {
+        html += `<circle cx="${x}" cy="${y}" r="${c.outlier ? 7 : 5}" fill="${clusterColors[c.cluster]}" opacity="${c.outlier ? 1 : 0.6}" stroke="${c.outlier ? '#ef4444' : 'none'}" stroke-width="${c.outlier ? 2 : 0}" class="scatter-dot cursor-pointer" data-index="${i}"/>`;
+      });
+      svg.innerHTML = html;
+      svg.querySelectorAll('.scatter-dot').forEach((dot) => {
+        const i = Number(dot.dataset.index);
+        const c = COURSES[i];
+        const xv = Number(c[xKey]), yv = Number(c[yKey]);
+        dot.addEventListener('mouseenter', () => {
+          if (tooltip) {
+            tooltip.textContent = `${c.title}: ${LABELS[xKey]} ${xv.toLocaleString()}, ${LABELS[yKey]} ${yv.toLocaleString()}. ${clusterLabels[c.cluster]}${c.outlier ? `, outlier score ${c.outlierScore.toFixed(2)}` : ''}.`;
+          }
+        });
+        dot.addEventListener('mouseleave', () => { if (tooltip) tooltip.textContent = ''; });
+      });
+    }
+
+    function generateWarnings() {
+      const all = [];
+      for (const c of COURSES) {
+        const q = c.quality;
+        const sources = q?.metrics?.sources;
+        const content = q?.metrics?.content;
+        const practice = q?.metrics?.practice;
+        const review = q?.metrics?.review;
+        const overall = q?.overall;
+
+        if (overall?.score != null && overall.score < 1) {
+          all.push({ course: c.title, severity: 'high', message: `Quality score is very low (${overall.score.toFixed(2)}/3). Needs improvement across all dimensions.` });
+        }
+        if (sources?.coverage === 0) {
+          all.push({ course: c.title, severity: 'high', message: 'No lessons have source citations. Add references to every lesson.' });
+        }
+        if (practice?.interactiveCoverage != null && practice.interactiveCoverage === 0) {
+          all.push({ course: c.title, severity: 'high', message: 'No interactive components (quizzes, code runners, exercises). Add practice elements.' });
+        }
+        if (sources?.coverage != null && sources.coverage > 0 && sources.coverage < 0.75) {
+          all.push({ course: c.title, severity: 'medium', message: `Only ${Math.round(sources.coverage * 100)}% of lessons have source citations. Target 75% or higher.` });
+        }
+        if (content?.descriptionCoverage != null && content.descriptionCoverage < 0.6) {
+          all.push({ course: c.title, severity: 'medium', message: `Only ${Math.round(content.descriptionCoverage * 100)}% of lessons have descriptions. Add descriptions for search and navigation.` });
+        }
+        if (content?.exampleCoverage != null && content.exampleCoverage < 0.5) {
+          all.push({ course: c.title, severity: 'medium', message: `Low example coverage (${Math.round(content.exampleCoverage * 100)}%). Add practical examples and case studies.` });
+        }
+        if (content?.exerciseCoverage != null && content.exerciseCoverage < 0.35) {
+          all.push({ course: c.title, severity: 'medium', message: `Low exercise coverage (${Math.round(content.exerciseCoverage * 100)}%). Add exercises for hands-on practice.` });
+        }
+        if (c.lessons < 5) {
+          all.push({ course: c.title, severity: 'medium', message: `Only ${c.lessons} lessons. Consider expanding the course material.` });
+        }
+        if (c.averageWords > 0 && c.averageWords < 550) {
+          all.push({ course: c.title, severity: 'medium', message: `Lessons are very short (avg ${Math.round(c.averageWords)} words). Aim for 550+ words per lesson.` });
+        }
+        if (overall?.score != null && overall.score >= 1 && overall.score < 2) {
+          all.push({ course: c.title, severity: 'low', message: `Quality score (${overall.score.toFixed(2)}/3) is below the target of 2.` });
+        }
+        if (review?.level === 0) {
+          all.push({ course: c.title, severity: 'low', message: 'Course has not been externally reviewed. Arrange a review to validate quality.' });
+        }
+        if (c.modules === 1 && c.lessons > 3) {
+          all.push({ course: c.title, severity: 'low', message: 'Only one module with multiple lessons. Consider organizing into thematic modules.' });
+        }
+        if (c.outlier) {
+          const avgDist = clusterDist.reduce((a, b) => a + b, 0) / clusterDist.length;
+          const sev = c.outlierScore > avgDist * 2 ? 'high' : 'medium';
+          all.push({ course: c.title, severity: sev, message: `Statistical outlier (distance ${c.outlierScore.toFixed(2)} from cluster center). Metrics deviate significantly from similar courses. Review course structure.` });
+        }
+      }
+      return all;
+    }
+
+    function renderWarnings() {
+      const container = document.getElementById('warnings-list');
+      const empty = document.getElementById('warnings-empty');
+      if (!container || !empty) return;
+      const warnings = generateWarnings();
+      const groups = { high: [], medium: [], low: [] };
+      for (const w of warnings) groups[w.severity].push(w);
+      const highCountEl = document.getElementById('high-count');
+      const mediumCountEl = document.getElementById('medium-count');
+      const lowCountEl = document.getElementById('low-count');
+      if (highCountEl) highCountEl.textContent = groups.high.length;
+      if (mediumCountEl) mediumCountEl.textContent = groups.medium.length;
+      if (lowCountEl) lowCountEl.textContent = groups.low.length;
+
+      const ACTIVE_CLASSES = ['border-primary', 'dark:border-primary', 'border-2', 'bg-primary', 'dark:bg-primary', 'text-white', 'dark:text-white'];
+      const INACTIVE_CLASSES = ['border-light-border', 'dark:border-dark-border', 'border', 'bg-light-surface', 'dark:bg-dark-surface', 'text-light-text', 'dark:text-dark-text'];
+
+      function render(filter) {
+        const severities = filter === 'all' ? ['high', 'medium', 'low'] : [filter];
+        const items = severities.flatMap((sev) => groups[sev].map((w) => ({ ...w, sev })));
+        if (!items.length) {
+          container.innerHTML = '';
+          empty.classList.remove('hidden');
+          return;
+        }
+        empty.classList.add('hidden');
+        const borderMap = { high: 'border-2', medium: 'border', low: 'border border-dashed' };
+        const iconMap = { high: '!', medium: '?', low: 'i' };
+        container.innerHTML = items.map((w) => `
+          <div class="warning-card rounded-xl ${borderMap[w.sev]} border-light-border bg-white p-4 dark:border-dark-border dark:bg-dark-bg">
+            <div class="flex gap-3">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-light-text text-xs font-black text-light-bg dark:bg-dark-text dark:text-dark-bg">${iconMap[w.sev]}</span>
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-sm font-black text-light-text dark:text-dark-text">${w.course}</span>
+                  <span class="rounded border border-light-border bg-light-surface px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-light-muted dark:border-dark-border dark:bg-dark-surface dark:text-dark-muted">${w.severity}</span>
+                </div>
+                <p class="mt-1 text-sm leading-relaxed text-light-muted dark:text-dark-muted">${w.message}</p>
+              </div>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      document.querySelectorAll('[data-filter]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('[data-filter]').forEach((b) => {
+            b.classList.remove(...ACTIVE_CLASSES);
+            b.classList.add(...INACTIVE_CLASSES);
+          });
+          btn.classList.remove(...INACTIVE_CLASSES);
+          btn.classList.add(...ACTIVE_CLASSES);
+          render(btn.dataset.filter);
+        });
+      });
+
+      const allBtn = document.querySelector('[data-filter="all"]');
+      if (allBtn) {
+        allBtn.classList.remove(...INACTIVE_CLASSES);
+        allBtn.classList.add(...ACTIVE_CLASSES);
+      }
+      render('all');
+    }
+
+    const summaryEl = document.getElementById('chart-summary');
+    const pc2cum = cumulative[1] || 0;
+    const clusterCount = new Set(assignments).size;
+    if (summaryEl) {
+      summaryEl.textContent =
+        `PCA on 8 course metrics. ${(varRatios[0] * 100).toFixed(1)}% of variance captured by PC1, ${(pc2cum * 100).toFixed(1)}% by PC1+PC2. K-means found ${clusterCount} course clusters. ${outlierCut} courses flagged as outliers (top 10% by distance to cluster centroid). Contributors should review flagged outliers and high-severity warnings first.`;
+    }
+
+    renderScree();
+    renderScatter('pca1', 'pca2');
+    renderWarnings();
+
+    document.querySelectorAll('[data-sort]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.sort;
+        const tbody = document.getElementById('course-metrics');
+        if (!tbody) return;
+        const rows = [...tbody.rows];
+        rows.sort((a, b) => {
+          const va = a.dataset[key], vb = b.dataset[key];
+          const na = Number(va), nb = Number(vb);
+          const isNumA = !Number.isNaN(na) && va !== '';
+          const isNumB = !Number.isNaN(nb) && vb !== '';
+          if (isNumA && isNumB) {
+            return na - nb;
+          }
+          return String(va).localeCompare(String(vb));
+        });
+        const dir = btn.dataset.dir = -(Number(btn.dataset.dir) || 1);
+        if (dir < 0) rows.reverse();
+        rows.forEach((row) => tbody.append(row));
+      });
+    });
+
+    const chartXSelect = document.getElementById('chart-x');
+    const chartYSelect = document.getElementById('chart-y');
+    if (chartXSelect && chartYSelect) {
+      chartXSelect.addEventListener('change', () => renderScatter(chartXSelect.value, chartYSelect.value));
+      chartYSelect.addEventListener('change', () => renderScatter(chartXSelect.value, chartYSelect.value));
+    }
+  }
+}
+</script>

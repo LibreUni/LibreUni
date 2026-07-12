@@ -54,5 +54,13 @@ export default defineConfig({
         viewport: { width: 1440, height: 1000 },
       },
     },
+    {
+      name: 'visual',
+      testMatch: /visual\/.*\.spec\.mjs/,
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1440, height: 1000 },
+      },
+    },
   ],
 });
