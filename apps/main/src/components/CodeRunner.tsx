@@ -169,16 +169,8 @@ pyodide_http.patch_all()
       return;
     }
 
-    // legacy blocks (C, Git, Bash) should use predefined output
-    const isLegacy = language === 'c' || language === 'cpp' || language === 'git' || language === 'bash' ||
-                    currentCode.includes('#include') || 
-                    currentCode.includes('int main') || 
-                    currentCode.includes('printf(') ||
-                    currentCode.includes('iostream') ||
-                    currentCode.includes('std::') ||
-                    currentCode.includes('void ') ||
-                    currentCode.includes('Simulation of a workflow') ||
-                    /^\s*(git|echo|mkdir|cd|cp|mv|ls|gcc|g\+\+|nasm|chmod|chown)\s+/m.test(currentCode);
+    // ponytail: language prop drives execution; no content sniffing
+    const isLegacy = language === 'c' || language === 'cpp' || language === 'git' || language === 'bash';
 
     if (isLegacy) {
       setShowTerminal(true);

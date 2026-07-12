@@ -383,9 +383,6 @@ def main():
         for course_id, lessons in sorted(grouped.items())
     }
 
-    # 1. Enforce 100% source coverage as requested
-    check_100_percent_source_coverage(grouped, args.course_id)
-
     if args.course_id:
         lessons = grouped.get(args.course_id)
         if not lessons:
@@ -399,6 +396,9 @@ def main():
 
     if args.write_quality:
         write_quality_json(quality_records, args.quality_output)
+
+    # Enforce 100% source coverage last (after reporting, so output isn't swallowed on failure)
+    check_100_percent_source_coverage(grouped, args.course_id)
 
 
 if __name__ == "__main__":
