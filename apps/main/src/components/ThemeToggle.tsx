@@ -38,13 +38,8 @@ export default function ThemeToggle() {
   }, []);
 
   useEffect(() => {
-    if (mode !== 'auto') return;
-
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const update = () => document.documentElement.classList.toggle('dark', mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
+    const root = window.document.documentElement;
+    root.classList.toggle('dark', resolveColorMode(mode) === 'dark');
   }, [mode]);
 
   useEffect(() => {

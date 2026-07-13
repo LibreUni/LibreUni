@@ -72,3 +72,22 @@ Add new high-value routes to:
 - `lighthouserc.cjs` for Lighthouse budgets.
 
 Keep the route list small and representative. The goal is fast local signal, not crawling every lesson on every run.
+
+## Theme and Appearance Testing Guidelines
+
+When modifying theme-specific properties, color modes (Light, Dark, Auto), or interactive styling customizers, follow this validation protocol:
+
+### 1. Verification Checklist for Hydration and Reloads
+* **Initial Page Mount**: Validate that the initial client-side mount matches the server-rendered color mode. Verify there is no "flash of incorrect mode" or desync where the UI controls show "Light" while the actual elements render "Dark" (or vice versa).
+* **Refresh Persistence**:
+  1. Toggle to **Light** mode -> Refresh -> Verify mode remains Light.
+  2. Toggle to **Dark** mode -> Refresh -> Verify mode remains Dark.
+  3. Toggle to **Auto** mode -> Refresh -> Verify mode resolves to dark/light matching system preference (or time-of-day logic).
+* **Cross-Theme CSS paste check**: Verify that the selector block copied from the customizer (`html[data-theme='...']`, `html.dark[data-theme='...']`) matches the target selector in `global.css` exactly, preventing variable bleeding between light and dark modes.
+
+### 2. Automated Visual Audit
+Run the visual regression suite to capture representative states under various width/mode parameters:
+```bash
+npm run test:visual
+```
+Inspect the output files in `reports/visual/` to ensure text readability, correct colors, and contrast compliance.
