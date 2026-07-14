@@ -16,8 +16,8 @@ class WorkflowState(TypedDict, total=False):
     findings: list[dict[str, Any]]
     review: dict[str, Any]
     revision_count: int
+    revision_cursor: int
     checks: dict[str, Any]
     history: list[dict[str, Any]]
     status: Literal["running", "approved", "blocked", "failed"]
     error: str
-

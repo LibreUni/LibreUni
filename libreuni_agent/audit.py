@@ -18,6 +18,52 @@ COMPONENTS = {
 }
 
 
+def _strip_jsx_expressions(value: str) -> str:
+    """Replace balanced JSX expression bodies while retaining their braces."""
+    output: list[str] = []
+    index = 0
+    quote = None
+    while index < len(value):
+        if quote:
+            char = value[index]
+            output.append(char)
+            if char == "\\":
+                if index + 1 < len(value):
+                    output.append(value[index + 1])
+                    index += 2
+                    continue
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if value[index] in "'\"`":
+            quote = value[index]
+            output.append(value[index])
+            index += 1
+            continue
+        if value[index] != "{":
+            output.append(value[index])
+            index += 1
+            continue
+        output.append("{}"); depth = 1; index += 1; quote = None
+        while index < len(value) and depth:
+            char = value[index]
+            if quote:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in "'\"`":
+                quote = char
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            index += 1
+    return "".join(output)
+
+
 def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
     if not match:
@@ -47,8 +93,17 @@ def audit_text(text: str, label: str = "<draft>") -> dict[str, Any]:
         if not re.search(r"```[\w+-]+|\b(example|case|demonstrat|scenario)\b", section, re.I):
             warnings.append(f"Section '{section.splitlines()[0].strip()}' has no clear example signal")
     for component, allowed in COMPONENTS.items():
-        for match in re.finditer(rf"<{component}\b([^>]*)/?>", body, re.DOTALL):
-            props = match.group(1)
+        # A component can contain a multiline JSX expression such as
+        # ``code={`... Python x > y ...`}``.  Stopping at the first ``>``
+        # would interpret code variables as JSX attributes.  The repository's
+        # components are self-closing, so consume through the closing ``/>``
+        # and inspect only the attribute prefix before an embedded expression.
+        tag_pattern = rf"<{component}\b(.*?)\n\s*/>"
+        for match in re.finditer(tag_pattern, body, re.DOTALL):
+            props = _strip_jsx_expressions(match.group(1))
+            # Text inside quoted attribute values can contain mathematical
+            # assignments such as ``H = {R_0, S_1}``; it is not JSX syntax.
+            props = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', "", props)
             if "client:load" not in props:
                 errors.append(f"<{component}> is missing client:load")
             for prop in re.findall(r"\b([a-zA-Z][\w:-]*)(?=\s*=)", props):

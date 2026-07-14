@@ -111,6 +111,7 @@ libreuni-agent TARGET [--kind course|module|lesson]
 | `--objective` | `Audit and improve the target while preserving its intent.` | Detailed instructions for the planner, writer, and reviewer. State the subject-specific risks and priorities here. |
 | `--apply` | off | Apply proposals only after the workflow reaches `approved`; omit for proposal mode. |
 | `--root` | current directory | Repository root, useful when invoking the CLI from another directory. |
+| `--resume RUN_ID` | off | Resume a checkpointed run after a timeout or interruption; do not provide a new target. |
 
 The objective is the main user-facing control. Good objectives specify scope, priorities, constraints, and what must not be changed. For example: “repair proofs and prerequisites, do not invent citations, preserve the current lesson topics, and prefer small file-by-file changes.”
 
@@ -120,15 +121,20 @@ The objective is the main user-facing control. Good objectives specify scope, pr
 |---|---|---|
 | `OPENROUTER_API_KEY` | required for authoring | API key; may be loaded from a local ignored `.env`, but never commit or print it |
 | `LIBREUNI_MODEL` | `deepseek/deepseek-v4-flash` | Planner/writer/reviser model |
-| `LIBREUNI_REVIEWER_MODEL` | `openai/gpt-5.6-luna-pro` | Independent adversarial reviewer model |
+| `LIBREUNI_REVIEWER_MODEL` | `deepseek/deepseek-v4-flash` | Independent adversarial reviewer model |
 | `LIBREUNI_MAX_REVISIONS` | `3` | Maximum repair loops before the run becomes `blocked` |
 | `LIBREUNI_MAX_SOURCES` | `8` | Maximum successfully fetched sources in the evidence bundle |
+| `LIBREUNI_FILES_PER_CALL` | `4` | Maximum lesson files sent to one draft, review, or revision call |
+| `LIBREUNI_API_TIMEOUT_SECONDS` | `90` | Maximum time allowed for one model request before the run fails closed |
+| `LIBREUNI_MAX_OUTPUT_TOKENS` | `20000` | Maximum response budget for complete-file draft/revision calls; planning and review calls use smaller internal caps |
+| `LIBREUNI_REASONING_EFFORT` | `low` | OpenRouter reasoning effort; use `medium` or `high` only when the extra cost is justified |
+| `LIBREUNI_REVISION_MODE` | `edits` | Existing-course repairs return small exact edits; set to `full` only when complete-file regeneration is required |
 
 Example using inexpensive models and a longer repair budget:
 
 ```bash
 export LIBREUNI_MODEL='google/gemini-2.0-flash-001'
-export LIBREUNI_REVIEWER_MODEL='qwen/qwen-2.5-72b-instruct'
+export LIBREUNI_REVIEWER_MODEL='deepseek/deepseek-v4-flash'
 export LIBREUNI_MAX_REVISIONS='5'
 export LIBREUNI_MAX_SOURCES='12'
 libreuni-agent math-algebra --kind course
@@ -153,9 +159,9 @@ For LibreUni course work, read AGENTS.md and docs/AGENT_WORKFLOWS.md first. Use 
 1. Inventory loads the repository rules, sourcing rules, repair guidance, manifest data, and target content.
 2. Research searches online and fetches a bounded evidence bundle. Failed fetches are excluded.
 3. Planning identifies the smallest useful set of changes and the claims that need support.
-4. Drafting proposes complete MDX files using only the evidence bundle.
+4. Drafting starts existing-content repair runs from the original MDX as a baseline; the reviser normally returns small exact edits for targeted findings. This avoids rewriting an entire course before its defects are known. The deterministic audit validates the edited result.
 5. Deterministic checks inspect frontmatter, banned filler, references, source-comment bypasses, component hydration, and canonical props.
-6. A separate reviewer challenges correctness, prerequisites, sequencing, citations, exercise quality, and MDX safety.
+6. A separate reviewer challenges correctness, prerequisites, sequencing, citations, exercise quality, and MDX safety. Reviewer hard findings must cite a fetched source URL or repository rule; unsupported severity is downgraded to a warning rather than being trusted as fact.
 7. The reviser addresses findings. This loop is bounded; unresolved errors produce `blocked`, not a false success.
 8. Final checks run `course_stats.py` and `verify_lessons.py`. Approved proposals are saved, and `--apply` writes them to the repository.
 
@@ -166,5 +172,11 @@ Each run prints a `run_id` and the artifact directory `.libreuni-agent/`. The JS
 - `approved`: all configured gates passed; proposals are available and may be applied.
 - `blocked`: a source, model, deterministic check, repository check, or revision limit prevented approval.
 - `failed`: an unexpected execution error occurred and should be investigated before retrying.
+
+If a run times out after successfully completing earlier stages, resume it instead of starting over:
+
+```bash
+LIBREUNI_API_TIMEOUT_SECONDS=90 libreuni-agent --resume RUN_ID
+```
 
 Research is not a citation generator. The writer must cite URLs in the fetched evidence bundle, and the reviewer must flag unsupported or fabricated references. Human review remains appropriate for mathematical correctness, high-stakes subjects, and final publication.

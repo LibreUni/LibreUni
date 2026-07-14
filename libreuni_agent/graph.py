@@ -38,6 +38,39 @@ def _record(state: WorkflowState, event: str, **details: Any) -> list[dict[str, 
     return [*state.get("history", []), {"event": event, **details}]
 
 
+def _batches(items: list[str], size: int) -> list[list[str]]:
+    return [items[index:index + max(1, size)] for index in range(0, len(items), max(1, size))]
+
+
+def _compact_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{"title": source.get("title", ""), "url": source.get("url", ""), "snippet": source.get("snippet", "")[:1000], "text": source.get("text", "")[:3000]} for source in sources]
+
+
+def _revision_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{"title": source.get("title", ""), "url": source.get("url", ""), "snippet": source.get("snippet", "")[:600]} for source in sources]
+
+
+def _compact_inventory(inventory: dict[str, Any]) -> dict[str, Any]:
+    return {"files": inventory.get("files", []), "contents": {path: content[:2000] for path, content in inventory.get("contents", {}).items()}}
+
+
+def _normalize_review(findings: list[dict[str, Any]], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    urls = [source.get("url", "") for source in sources if source.get("url")]
+    normalized = []
+    for finding in findings:
+        item = dict(finding)
+        evidence = str(item.get("evidence", ""))
+        issue = str(item.get("issue", ""))
+        source_claim = re.search(r"source|citation|claim|fabricat|unsupported|historical", issue, re.I)
+        has_url = any(url in evidence for url in urls)
+        has_rule = bool(re.search(r"docs/|RULES\.md|SOURCING\.md", evidence, re.I))
+        if item.get("severity") in ("blocker", "error") and (not has_url and (source_claim or not has_rule)):
+            item["severity"] = "warning"
+            item["normalization"] = "Reviewer severity downgraded because its evidence did not cite a fetched URL or repository rule."
+        normalized.append(item)
+    return normalized
+
+
 def build_workflow(settings: Settings, apply_changes: bool = False):
     try:
         from langgraph.graph import END, START, StateGraph
@@ -66,17 +99,21 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
         return "blocked" if not state.get("sources") else "plan"
 
     def plan(state: WorkflowState) -> WorkflowState:
-        client = ModelClient(settings.model)
+        client = ModelClient(settings.model, settings.api_timeout_seconds, min(settings.max_output_tokens, 4000), settings.reasoning_effort)
         prompt = """Create a concrete improvement plan for the target. Return JSON with keys `rationale`, `files`, and `checks`. `files` is an array of objects with `path`, `goal`, and `claims_to_support`. Do not invent sources; use only the evidence bundle. Preserve existing intent and do not propose mass mechanical rewrites."""
-        response = client.json(prompt + "\nPROJECT RULES:\n" + state["rules"], json.dumps({"target": state["target"], "objective": state["objective"], "inventory": state["inventory"], "sources": state.get("sources", [])}, ensure_ascii=False))
+        inventory = state["inventory"]
+        # Keep planning bounded for whole courses. Detailed lesson text is
+        # supplied later to the deterministic auditor, reviewer, and editor;
+        # the planner only needs the file inventory, objective, and evidence.
+        plan_input = {"target": state["target"], "objective": state["objective"], "files": inventory.get("files", []), "sources": _compact_sources(state.get("sources", []))}
+        response = client.json(prompt + "\nPROJECT RULES:\n" + state["rules"], json.dumps(plan_input, ensure_ascii=False))
         return {"phase": "plan", "plan": response, "history": _record(state, "plan")}
 
     def draft(state: WorkflowState) -> WorkflowState:
-        client = ModelClient(settings.model)
-        prompt = """Write the planned LibreUni files. Return JSON `{\"files\":[{\"path\":\"...\",\"content\":\"complete MDX content\"}]}`. Content must be self-contained, university level, theory → example → exercise, and include genuine visible references with URLs from the evidence bundle. Do not add fake tracking comments. Keep unchanged files out of the response. You are proposing content, not certifying it."""
-        response = client.json(prompt + "\nPROJECT RULES:\n" + state["rules"], json.dumps({"plan": state["plan"], "existing": state["inventory"]["contents"], "sources": state.get("sources", [])}, ensure_ascii=False))
-        drafts = {item["path"]: item["content"] for item in response.get("files", []) if item.get("path") and item.get("content")}
-        return {"phase": "draft", "drafts": drafts, "history": _record(state, "draft", files=len(drafts))}
+        planned = [item.get("path") for item in state["plan"].get("files", []) if item.get("path") in state["inventory"]["contents"]]
+        paths = planned or list(state["inventory"]["contents"])
+        drafts = {path: state["inventory"]["contents"][path] for path in paths}
+        return {"phase": "draft", "drafts": drafts, "history": _record(state, "draft", files=len(drafts), mode="existing_content_baseline")}
 
     def deterministic_audit(state: WorkflowState) -> WorkflowState:
         root = Path(state["root"])
@@ -90,18 +127,72 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
         return {"phase": "deterministic_audit", "checks": checks, "findings": findings, "history": _record(state, "deterministic_audit", findings=len(findings))}
 
     def adversarial_review(state: WorkflowState) -> WorkflowState:
-        client = ModelClient(settings.reviewer_model)
-        prompt = """Act as an adversarial academic editor. Inspect the proposed files against every rule and every cited source. Return JSON `{\"approved\":bool,\"findings\":[{\"path\":\"...\",\"severity\":\"blocker|error|warning\",\"issue\":\"...\",\"evidence\":\"specific quote, rule, or source URL\",\"fix\":\"precise repair\"}]}`. Never approve based on the author's claims. Flag unsupported claims, fabricated citations, copied wording, missing prerequisites, weak exercises, and MDX/component errors."""
-        response = client.json(prompt + "\nRULES:\n" + state["rules"], json.dumps({"drafts": state.get("drafts", {}), "sources": state.get("sources", []), "deterministic": state.get("findings", [])}, ensure_ascii=False))
-        findings = [*state.get("findings", []), *response.get("findings", [])]
-        return {"phase": "review", "review": response, "findings": findings, "history": _record(state, "adversarial_review", approved=response.get("approved", False))}
+        client = ModelClient(settings.reviewer_model, settings.api_timeout_seconds, min(settings.max_output_tokens, 6000), settings.reasoning_effort)
+        prompt = """Act as an adversarial academic editor. Inspect the proposed files against every rule and cited source. Return compact JSON `{\"approved\":bool,\"findings\":[{\"path\":\"...\",\"severity\":\"blocker|error|warning\",\"issue\":\"short issue\",\"evidence\":\"short rule or URL\",\"fix\":\"short repair\"}]}`. Return at most five highest-priority findings per call. Never use long quotations or commentary. Never approve based on the author's claims. Flag unsupported claims, fabricated citations, copied wording, missing prerequisites, weak exercises, and MDX/component errors."""
+        findings = list(state.get("findings", []))
+        approved = True
+        paths = list(state.get("drafts", {}))
+        batches = _batches(paths, settings.files_per_call)
+        for batch in batches:
+            response = client.json(prompt + "\nRULES:\n" + state["rules"], json.dumps({"drafts": {path: state["drafts"][path] for path in batch}, "sources": _compact_sources(state.get("sources", [])), "deterministic": [finding for finding in findings if finding.get("path") in batch]}, ensure_ascii=False))
+            reviewer_findings = _normalize_review([{**finding, "path": finding.get("path") or batch[0]} for finding in response.get("findings", [])], state.get("sources", []))
+            approved = approved and not any(finding.get("severity") in ("blocker", "error") for finding in reviewer_findings)
+            findings.extend(reviewer_findings)
+        return {"phase": "review", "review": {"approved": approved}, "findings": findings, "history": _record(state, "adversarial_review", approved=approved, batches=len(batches))}
 
     def revise(state: WorkflowState) -> WorkflowState:
-        client = ModelClient(settings.model)
+        client = ModelClient(settings.model, settings.api_timeout_seconds, min(settings.max_output_tokens, 8000) if settings.revision_mode == "edits" else settings.max_output_tokens, settings.reasoning_effort)
+        if settings.revision_mode == "edits":
+            paths = sorted({finding.get("path") for finding in state.get("findings", []) if finding.get("path") in state.get("drafts", {}) and finding.get("severity") in ("blocker", "error")}) or list(state.get("drafts", {}))
+            drafts = dict(state.get("drafts", {}))
+            batches = _batches(paths, settings.files_per_call)
+            applied = 0
+            failed = []
+            prompt = """Return compact JSON exactly as {\"edits\":[{\"old\":\"exact existing substring\",\"new\":\"replacement substring\"}]}. Repair only the listed hard findings in the supplied MDX file. Each `old` string must occur exactly once. Keep edits small and preserve all unrelated content. Do not return full files, markdown, or commentary. Return an empty edits array only if no safe evidence-backed edit exists."""
+            for batch in batches:
+                for path in batch:
+                    hard_findings = [finding for finding in state.get("findings", []) if finding.get("path") == path and finding.get("severity") in ("blocker", "error")]
+                    content = drafts[path]
+                    # Small finding groups keep the edit contract tractable for cheap models.
+                    path_applied = 0
+                    for finding_group in _batches(hard_findings[:20], 5) or [[]]:
+                        response = client.json(prompt + "\nRELEVANT RULES:\n" + state["rules"][:6000], json.dumps({"path": path, "draft": content, "findings": finding_group, "sources": _revision_sources(state.get("sources", []))}, ensure_ascii=False))
+                        for edit in response.get("edits", []):
+                            old, new = edit.get("old"), edit.get("new")
+                            if isinstance(old, str) and isinstance(new, str) and old and content.count(old) == 1:
+                                content = content.replace(old, new)
+                                applied += 1
+                                path_applied += 1
+                    if not path_applied:
+                        failed.append(path)
+                    drafts[path] = content
+            findings = [{"severity": "blocker", "issue": "No safe edits were returned for revision", "path": path, "evidence": path} for path in failed]
+            return {"phase": "revise", "drafts": drafts, "findings": findings, "revision_count": state.get("revision_count", 0) + 1, "history": _record(state, "revision", count=state.get("revision_count", 0) + 1, mode="edits", batches=len(batches), applied=applied, failed=len(failed))}
         prompt = """Repair every blocker and error in the proposed files. Return the same JSON file format. Make only evidence-backed changes. Preserve all good material and include complete file contents."""
-        response = client.json(prompt + "\nRULES:\n" + state["rules"], json.dumps({"drafts": state.get("drafts", {}), "findings": state.get("findings", []), "sources": state.get("sources", [])}, ensure_ascii=False))
-        drafts = {item["path"]: item["content"] for item in response.get("files", []) if item.get("path") and item.get("content")}
-        return {"phase": "revise", "drafts": drafts, "revision_count": state.get("revision_count", 0) + 1, "history": _record(state, "revision", count=state.get("revision_count", 0) + 1)}
+        paths = sorted({finding.get("path") for finding in state.get("findings", []) if finding.get("path") in state.get("drafts")}) or list(state.get("drafts", {}))
+        drafts = dict(state.get("drafts", {}))
+        empty_batches = []
+        batches = _batches(paths, settings.files_per_call)
+        for batch in batches:
+            focused_prompt = """Return exactly one complete corrected MDX file as JSON: {\"files\":[{\"path\":\"EXACT_PATH\",\"content\":\"FULL_FILE\"}]}. Use the exact path provided. Repair only the listed hard findings. Do not return an empty files array, a patch, markdown fences, or commentary."""
+            hard_findings = [finding for finding in state.get("findings", []) if finding.get("path") in batch and finding.get("severity") in ("blocker", "error")]
+            focused = client.json(focused_prompt + "\nRELEVANT RULES:\n" + state["rules"][:6000], json.dumps({"path": batch[0], "draft": drafts[batch[0]], "findings": hard_findings[:20], "sources": _revision_sources(state.get("sources", []))}, ensure_ascii=False), repair_invalid=False)
+            returned = {}
+            for item in focused.get("files", []):
+                item_path = item.get("path") or batch[0]
+                if item.get("content") and item_path == batch[0]:
+                    returned[item_path] = item["content"]
+            if not returned:
+                retry = client.json(focused_prompt + "\nRELEVANT RULES:\n" + state["rules"][:6000], json.dumps({"path": batch[0], "draft": drafts[batch[0]], "findings": hard_findings[:5]}, ensure_ascii=False), repair_invalid=False)
+                for item in retry.get("files", []):
+                    item_path = item.get("path") or batch[0]
+                    if item.get("content") and item_path == batch[0]:
+                        returned[item_path] = item["content"]
+            if not returned:
+                empty_batches.append(batch)
+            drafts.update(returned)
+        new_findings = [{"severity": "blocker", "issue": "Writer returned no files for revision batch", "evidence": ", ".join(batch), "path": batch[0]} for batch in empty_batches]
+        return {"phase": "revise", "drafts": drafts, "findings": new_findings, "revision_count": state.get("revision_count", 0) + 1, "history": _record(state, "revision", count=state.get("revision_count", 0) + 1, batches=len(batches), empty_batches=len(empty_batches))}
 
     def gate(state: WorkflowState) -> str:
         hard = [f for f in state.get("findings", []) if f.get("severity") in ("blocker", "error")]
@@ -129,7 +220,7 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
 
     def blocked(state: WorkflowState) -> WorkflowState:
         settings.artifacts.mkdir(parents=True, exist_ok=True)
-        (settings.artifacts / f"{state['run_id']}-blocked.json").write_text(json.dumps({"target": state["target"], "findings": state.get("findings", []), "history": state.get("history", [])}, indent=2), encoding="utf-8")
+        (settings.artifacts / f"{state['run_id']}-blocked.json").write_text(json.dumps({"target": state["target"], "findings": state.get("findings", []), "drafts": state.get("drafts", {}), "sources": state.get("sources", []), "history": state.get("history", [])}, indent=2), encoding="utf-8")
         return {"phase": "blocked", "status": "blocked", "history": _record(state, "blocked", reason="quality gate did not pass")}
 
     graph = StateGraph(WorkflowState)
@@ -155,4 +246,4 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
 
 
 def initial_state(settings: Settings, target: str, target_kind: str, objective: str) -> WorkflowState:
-    return {"run_id": uuid.uuid4().hex, "root": str(settings.root), "target": target, "target_kind": target_kind, "objective": objective, "revision_count": 0, "findings": [], "history": [], "status": "running"}
+    return {"run_id": uuid.uuid4().hex, "root": str(settings.root), "target": target, "target_kind": target_kind, "objective": objective, "revision_count": 0, "revision_cursor": 0, "findings": [], "history": [], "status": "running"}
