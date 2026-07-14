@@ -22,8 +22,8 @@ First stop for agents in this repo. Read before editing files, generating lesson
   - `<CodeRunner>`: `code`, `output`, `language`, `title`
   - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`
   - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title`
-- Lesson order/modules are set in `apps/main/src/data/course-manifests/<course-id>.yml`, not in frontmatter.
-- Course quality badges are generated (`python3 scripts/course_stats.py --write-quality`). Override via `apps/main/src/data/course-quality-overrides.json`.
+- Lesson order/modules are set in `src/data/course-manifests/<course-id>.yml`, not in frontmatter.
+- Course quality badges are generated (`python3 scripts/course_stats.py --write-quality`). Override via `src/data/course-quality-overrides.json`.
 - Banned: fake source-tracking comments to bypass `course_stats.py` checks. Every citation must be genuine.
 
 ## Commands
@@ -49,21 +49,21 @@ npm run build:all && npm run test:ux:run            # quick ux after build
 
 ## Architecture Notes
 
-- **Single workspace app** under `apps/main/`. Few other apps may exist but main is the active one.
-- **Build quirk**: `apps/main` build uses `node --max-old-space-size=8192` and runs `tools/fix-static-paths.mjs` on the output (rewrites absolute paths to relative for file-served deployments).
+- **Single application** at the repository root.
+- **Build quirk**: the build uses `node --max-old-space-size=8192` and runs `tools/fix-static-paths.mjs` on the output (rewrites absolute paths to relative for file-served deployments).
 - **Math rendering**: KaTeX configured with `output: 'mathml'` (faster, no JS hydration for math).
-- **Build caches**: `puml-cache/`, `python-diagram-cache/`, `tikz-cache/` under `apps/main/src/`. Delete to force rerender.
+- **Build caches**: `puml-cache/`, `python-diagram-cache/`, `tikz-cache/` under `src/`. Delete to force rerender.
 - **Test server**: Playwright/Lighthouse use `tools/serve-test-apps.mjs` (serves built `dist/` folders), not the Astro dev server.
 - **CI**: `.github/workflows/quality.yml` runs `npm test` on push/PR to main.
 - **Dockerfile**: multi-stage build with Nginx for deployment.
 
 ## Project Map
 
-- `apps/main/src/content/lessons/` — MDX lessons by course slug
-- `apps/main/src/content/courses/` — JSON course metadata
-- `apps/main/src/data/course-manifests/` — YAML lesson order & module grouping
-- `apps/main/src/data/course-quality-overrides.json` — manual quality badge overrides
-- `apps/main/src/components/` — React components (Quiz, CodeRunner, CodeExercise, CaseStudy, etc.)
+- `src/content/lessons/` — MDX lessons by course slug
+- `src/content/courses/` — JSON course metadata
+- `src/data/course-manifests/` — YAML lesson order & module grouping
+- `src/data/course-quality-overrides.json` — manual quality badge overrides
+- `src/components/` — React components (Quiz, CodeRunner, CodeExercise, CaseStudy, etc.)
 - `docs/` — rules, sourcing, UX, PlantUML, testing references
 - `scripts/` — content validation and stats
 - `tools/` — monorepo build/test helpers

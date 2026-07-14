@@ -7,9 +7,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LESSONS_DIR = ROOT / "apps" / "main" / "src" / "content" / "lessons"
-QUALITY_OUTPUT_PATH = ROOT / "apps" / "main" / "src" / "data" / "course-quality.json"
-QUALITY_OVERRIDES_PATH = ROOT / "apps" / "main" / "src" / "data" / "course-quality-overrides.json"
+LESSONS_DIR = ROOT / "src" / "content" / "lessons"
+QUALITY_OUTPUT_PATH = ROOT / "src" / "data" / "course-quality.json"
+QUALITY_OVERRIDES_PATH = ROOT / "src" / "data" / "course-quality-overrides.json"
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 REFERENCE_HEADING_RE = re.compile(
@@ -366,7 +366,7 @@ def main():
     parser.add_argument(
         "--write-quality",
         action="store_true",
-        help="Write apps/main/src/data/course-quality.json for the course catalog.",
+        help="Write src/data/course-quality.json for the course catalog.",
     )
     parser.add_argument(
         "--quality-output",

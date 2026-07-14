@@ -31,9 +31,9 @@ function createStaticServer({ name, root, port }) {
 }
 
 const servers = [];
-for (const app of [{ name: 'main', root: 'apps/main/dist', port: Number(process.env.MAIN_PORT ?? 4321) }]) {
-  try { servers.push(createStaticServer(app)); } catch (e) { console.error(e.message); process.exit(1); }
-}
+try {
+  servers.push(createStaticServer({ name: 'LibreUni', root: 'dist', port: Number(process.env.MAIN_PORT ?? 4321) }));
+} catch (e) { console.error(e.message); process.exit(1); }
 
 process.on('SIGINT', () => { servers.forEach(s => s.close()); process.exit(0); });
 process.on('SIGTERM', () => { servers.forEach(s => s.close()); process.exit(0); });

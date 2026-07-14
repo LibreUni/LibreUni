@@ -23,7 +23,7 @@ Quick reference for fixing PlantUML diagrams. Update this file when new error pa
 
 - Prefer simple shapes (`rectangle`, `component`, `note`) over complex `state`/`activity` syntax unless necessary.
 - When in doubt, convert visual elements to `rectangle` + `note` text — these are robust across PlantUML versions.
-- Keep generated SVGs cached under `apps/main/src/puml-cache/`; failures should be logged, not cached.
+- Keep generated SVGs cached under `src/puml-cache/`; failures should be logged, not cached.
 
 ## Examples
 

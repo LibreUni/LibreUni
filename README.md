@@ -54,11 +54,9 @@ LibreUni is built on the belief that high-quality, university-level education sh
 
 ```text
 LibreUni/
-├── apps/
-│   └── main/                  # LibreUni Astro application
-│       ├── src/               # Pages, components, and course content
-│       ├── astro.config.mjs
-│       └── package.json
+├── src/                       # Pages, components, and course content
+├── astro.config.mjs           # Astro configuration
+├── package.json               # Application dependencies and scripts
 ├── .github/
 │   └── workflows/             # CI: quality checks, scheduled maintenance, Dependabot
 ├── docker/
@@ -73,7 +71,7 @@ LibreUni/
 ├── Dockerfile                 # Multi-stage static site builder
 ├── lighthouserc.cjs           # Lighthouse CI config
 ├── playwright.config.mjs      # Playwright test config
-└── package.json               # Root workspace entrypoint
+└── package-lock.json          # Locked dependencies
 ```
 
 ## 🚀 Getting Started
@@ -170,7 +168,7 @@ If you prefer Coolify's source/static flow instead of Docker:
 1. Keep the repository root as the base directory.
 2. Use `npm install` as the install command.
 3. Use `npm run build` as the build command.
-4. Publish `apps/main/dist` as the static output directory.
+4. Publish `dist` as the static output directory.
 
 ## 🤝 Contributing
 

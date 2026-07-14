@@ -10,10 +10,10 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 
 **Key directories:**
 
-- `apps/main/src/content/lessons/` — MDX lesson files, organized by course slug
-- `apps/main/src/content/courses/` — JSON course metadata
-- `apps/main/src/data/course-manifests/` — YAML lesson order and module grouping for each course
-- `apps/main/src/components/` — Interactive React components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`, etc.)
+- `src/content/lessons/` — MDX lesson files, organized by course slug
+- `src/content/courses/` — JSON course metadata
+- `src/data/course-manifests/` — YAML lesson order and module grouping for each course
+- `src/components/` — Interactive React components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`, etc.)
 - `scripts/course_stats.py` — course analytics: content stats, structure checks, and generated catalog quality data.
 - `docs/` — technical references (UX, PlantUML)
 
@@ -33,7 +33,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 - Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/PUML.md` for troubleshooting.
 - Lessons must be self-contained — no lesson should require reading another first.
 - No lesson numbers in filenames, headers, or text. Lessons can be taken in any order.
-- Lesson order and module grouping must be edited in `apps/main/src/data/course-manifests/<course-id>.yml`, not in lesson frontmatter.
+- Lesson order and module grouping must be edited in `src/data/course-manifests/<course-id>.yml`, not in lesson frontmatter.
 - Everything must be university level or above.
 
 ---
@@ -70,7 +70,7 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
    - Run `python3 scripts/course_stats.py --write-quality` after course content changes that should update the catalog status badges.
 2. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams.
 
-Course quality badges on the catalog are generated from observable MDX signals such as source sections, links, descriptions, examples, exercises, and interactive components. Top-tier review states remain manual and should be set through `apps/main/src/data/course-quality-overrides.json`, then regenerated with `python3 scripts/course_stats.py --write-quality`.
+Course quality badges on the catalog are generated from observable MDX signals such as source sections, links, descriptions, examples, exercises, and interactive components. Top-tier review states remain manual and should be set through `src/data/course-quality-overrides.json`, then regenerated with `python3 scripts/course_stats.py --write-quality`.
 
 ---
 
