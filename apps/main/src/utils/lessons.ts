@@ -2,6 +2,7 @@ import { getCollection } from 'astro:content';
 import type { CollectionEntry } from 'astro:content';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 
 interface CourseManifest {
@@ -26,17 +27,24 @@ function lessonStem(lesson: LessonEntry) {
 }
 
 function loadCourseManifest(courseId: string) {
-  if (!manifestCache.has(courseId)) {
-    const manifestPath = path.join(process.cwd(), 'src', 'data', 'course-manifests', `${courseId}.yml`);
+  let manifestName = courseId;
+  if (courseId.startsWith('math-') && courseId !== 'math-stats' && courseId !== 'math-algebra') {
+    manifestName = 'math';
+  }
+
+  if (!manifestCache.has(manifestName)) {
+    const manifestPath = fileURLToPath(
+      new URL(`../data/course-manifests/${manifestName}.yml`, import.meta.url)
+    );
     manifestCache.set(
-      courseId,
+      manifestName,
       readFile(manifestPath, 'utf-8')
         .then((content) => parse(content) as CourseManifest)
         .catch(() => ({ modules: [] })),
     );
   }
 
-  return manifestCache.get(courseId)!;
+  return manifestCache.get(manifestName)!;
 }
 
 export async function getCourseLessons(courseId: string, lessonEntries?: LessonEntry[]): Promise<OrderedLesson[]> {

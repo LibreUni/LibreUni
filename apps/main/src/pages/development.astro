@@ -2,12 +2,177 @@
 import { getCollection } from 'astro:content';
 import Layout from '../layouts/Layout.astro';
 import { getLessonsByCourse } from '../utils/lessons';
-import qualityData from '../data/course-quality.json';
+import qualityOverrides from '../data/course-quality-overrides.json';
+
+const REFERENCE_HEADING_RE = /^##+\s+(references|sources|bibliography|further reading|references\s*&\s*further reading)\b/mi;
+const LINK_RE = /https?:\/\//gi;
+const EXAMPLE_RE = /\b(example|case|demonstrat|scenario)\b/i;
+const EXERCISE_RE = /\b(exercise|practice|try|quiz|lab)\b/i;
+
+function analyzeLesson(body: string, data: any) {
+  const quizzes = (body.match(/<Quiz\b/g) || []).length;
+  const codeRunners = (body.match(/<CodeRunner\b/g) || []).length;
+  const codeExercises = (body.match(/<CodeExercise\b/g) || []).length;
+  const caseStudies = (body.match(/<CaseStudy\b/g) || []).length;
+  const interactiveCount = quizzes + codeRunners + codeExercises + caseStudies;
+
+  const hasReferenceHeading = REFERENCE_HEADING_RE.test(body);
+  const sourceLinks = (body.match(LINK_RE) || []).length;
+  const hasSources = hasReferenceHeading || sourceLinks > 0;
+
+  const h2s = (body.match(/^##\s+/gm) || []).length;
+  const words = (body.match(/\w+/g) || []).length;
+
+  return {
+    length: body.length,
+    words,
+    h2s,
+    interactiveCount,
+    hasDescription: !!data.description?.trim(),
+    hasSources,
+    hasReferenceHeading,
+    sourceLinks,
+    hasExampleSignal: EXAMPLE_RE.test(body),
+    hasExerciseSignal: EXERCISE_RE.test(body),
+  };
+}
+
+function level(value: number, thresholds: number[]): number {
+  let score = 0;
+  for (const t of thresholds) {
+    if (value >= t) score += 1;
+  }
+  return score;
+}
+
+function labelFor(metric: string, val: number): string {
+  const labels: Record<string, string[]> = {
+    sources: [
+      "Unsourced draft",
+      "Source notes present",
+      "Properly sourced",
+      "Professionally checked",
+    ],
+    content: [
+      "Brief overview",
+      "Course notes",
+      "Self-contained course",
+      "State-of-the-art reference",
+    ],
+    practice: [
+      "Mostly prose",
+      "Some checks",
+      "Interactive practice",
+      "Practice-rich course",
+    ],
+    review: [
+      "Not reviewed",
+      "Internal review",
+      "External review",
+      "Professional check",
+    ],
+  };
+  return labels[metric][val];
+}
+
+function computeCourseQuality(courseId: string, courseLessons: any[], overrides: any) {
+  const lessonCount = courseLessons.length;
+  if (lessonCount === 0) return null;
+
+  const analyzed = courseLessons.map(l => analyzeLesson(l.body, l.data));
+
+  const sourceCoverage = analyzed.filter(l => l.hasSources).length / lessonCount;
+  const referenceHeadingCoverage = analyzed.filter(l => l.hasReferenceHeading).length / lessonCount;
+  const linkedSourceCoverage = analyzed.filter(l => l.sourceLinks > 0).length / lessonCount;
+  const avgWords = analyzed.reduce((sum, l) => sum + l.words, 0) / lessonCount;
+  const avgH2 = analyzed.reduce((sum, l) => sum + l.h2s, 0) / lessonCount;
+  const descriptionCoverage = analyzed.filter(l => l.hasDescription).length / lessonCount;
+  const exampleCoverage = analyzed.filter(l => l.hasExampleSignal).length / lessonCount;
+  const exerciseCoverage = analyzed.filter(l => l.hasExerciseSignal).length / lessonCount;
+  const interactiveCoverage = analyzed.filter(l => l.interactiveCount > 0).length / lessonCount;
+  const avgInteractive = analyzed.reduce((sum, l) => sum + l.interactiveCount, 0) / lessonCount;
+
+  let sourceLevel = level(sourceCoverage, [0.25, 0.75]);
+  if (referenceHeadingCoverage >= 0.75 && linkedSourceCoverage >= 0.75) {
+    sourceLevel = Math.max(sourceLevel, 2);
+  }
+
+  let contentLevel = 0;
+  if (avgWords >= 550 && avgH2 >= 1.5 && descriptionCoverage >= 0.6) {
+    contentLevel = 1;
+  }
+  if (avgWords >= 900 && avgH2 >= 2 && exampleCoverage >= 0.5 && exerciseCoverage >= 0.35) {
+    contentLevel = 2;
+  }
+
+  let practiceLevel = level(interactiveCoverage, [0.25, 0.6]);
+  if (interactiveCoverage >= 0.75 && avgInteractive >= 1.5) {
+    practiceLevel = 3;
+  }
+
+  const override = overrides[courseId] || {};
+  
+  const clampManual = (val: any) => {
+    if (val == null) return null;
+    return Math.max(0, Math.min(3, parseInt(val)));
+  };
+
+  const manualSourceLevel = clampManual(override.sourcesLevel);
+  const manualContentLevel = clampManual(override.contentLevel);
+  const manualPracticeLevel = clampManual(override.practiceLevel);
+  const reviewLevel = clampManual(override.reviewLevel) || 0;
+
+  if (manualSourceLevel !== null) sourceLevel = manualSourceLevel;
+  if (manualContentLevel !== null) contentLevel = manualContentLevel;
+  if (manualPracticeLevel !== null) practiceLevel = manualPracticeLevel;
+
+  const weightedScore = (sourceLevel * 0.35) + (contentLevel * 0.4) + (practiceLevel * 0.2) + (reviewLevel * 0.05);
+  const overallLevel = Math.max(0, Math.min(2, Math.round(weightedScore / 3 * 2)));
+
+  return {
+    courseId,
+    lessonCount,
+    overall: {
+      level: overallLevel,
+      label: ["Needs work", "Developing", "Strong"][overallLevel],
+      score: Math.round(weightedScore * 100) / 100,
+    },
+    metrics: {
+      sources: {
+        level: sourceLevel,
+        label: labelFor("sources", sourceLevel),
+        coverage: Math.round(sourceCoverage * 1000) / 1000,
+        referenceHeadingCoverage: Math.round(referenceHeadingCoverage * 1000) / 1000,
+        linkedSourceCoverage: Math.round(linkedSourceCoverage * 1000) / 1000,
+      },
+      content: {
+        level: contentLevel,
+        label: labelFor("content", contentLevel),
+        averageWords: Math.round(avgWords),
+        descriptionCoverage: Math.round(descriptionCoverage * 1000) / 1000,
+        exampleCoverage: Math.round(exampleCoverage * 1000) / 1000,
+        exerciseCoverage: Math.round(exerciseCoverage * 1000) / 1000,
+      },
+      practice: {
+        level: practiceLevel,
+        label: labelFor("practice", practiceLevel),
+        interactiveCoverage: Math.round(interactiveCoverage * 1000) / 1000,
+        averageInteractiveComponents: Math.round(avgInteractive * 100) / 100,
+      },
+      review: {
+        level: reviewLevel,
+        label: labelFor("review", reviewLevel),
+        manual: true,
+      },
+    },
+    notes: override.notes || "",
+  };
+}
 
 const courses = await getCollection('courses');
 const lessons = await getCollection('lessons');
 const lessonsByCourse = await getLessonsByCourse(lessons);
-const quality = qualityData as Record<string, Record<string, unknown>>;
+const qualityOverridesData = qualityOverrides as Record<string, any>;
 
 const courseMetrics = courses
   .map((course) => {
@@ -22,6 +187,8 @@ const courseMetrics = courses
     }
 
     const characters = [...modules.values()].reduce((total, module) => total + module.characters, 0);
+    const courseQuality = computeCourseQuality(course.id, courseLessons, qualityOverridesData);
+
     return {
       course,
       characters,
@@ -30,9 +197,9 @@ const courseMetrics = courses
       charactersPerLesson: courseLessons.length ? Math.round(characters / courseLessons.length) : 0,
       charactersPerModule: modules.size ? Math.round(characters / modules.size) : 0,
       lessonsPerModule: modules.size ? Number((courseLessons.length / modules.size).toFixed(1)) : 0,
-      averageWords: (quality[course.id] as any)?.metrics?.content?.averageWords ?? 0,
-      qualityScore: (quality[course.id] as any)?.overall?.score ?? 0,
-      quality: quality[course.id],
+      averageWords: courseQuality?.metrics?.content?.averageWords ?? 0,
+      qualityScore: courseQuality?.overall?.score ?? 0,
+      quality: courseQuality,
     };
   })
   .sort((a, b) => a.course.data.title.localeCompare(b.course.data.title));
