@@ -1,4 +1,5 @@
 import json
+import difflib
 import re
 import sqlite3
 import uuid
@@ -54,6 +55,27 @@ def _compact_inventory(inventory: dict[str, Any]) -> dict[str, Any]:
     return {"files": inventory.get("files", []), "contents": {path: content[:2000] for path, content in inventory.get("contents", {}).items()}}
 
 
+def _substantive_edit(old: str, new: str) -> bool:
+    """Reject edits whose only changed lines are headings/whitespace."""
+    changed = [line[2:].strip() for line in difflib.ndiff(old.splitlines(), new.splitlines()) if line[:2] in ("+ ", "- ")]
+    return any(line and not line.startswith("#") for line in changed)
+
+
+def _persist_workspace(settings: Settings, state: WorkflowState, *, phase: str, drafts: dict[str, str] | None = None, findings: list[dict[str, Any]] | None = None) -> None:
+    """Materialize resumable, human-readable run state after every useful phase."""
+    workspace = settings.artifacts / "runs" / state["run_id"]
+    workspace.mkdir(parents=True, exist_ok=True)
+    if drafts:
+        for relative, content in drafts.items():
+            destination = workspace / "draft" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(content, encoding="utf-8")
+    if findings is not None:
+        (workspace / "findings.json").write_text(json.dumps(findings, indent=2), encoding="utf-8")
+    snapshot = {"run_id": state["run_id"], "target": state["target"], "kind": state["target_kind"], "phase": phase, "revision_count": state.get("revision_count", 0), "drafts": sorted((drafts or state.get("drafts", {})).keys())}
+    (workspace / "state.json").write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+
+
 def _normalize_review(findings: list[dict[str, Any]], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     urls = [source.get("url", "") for source in sources if source.get("url")]
     normalized = []
@@ -64,7 +86,11 @@ def _normalize_review(findings: list[dict[str, Any]], sources: list[dict[str, An
         source_claim = re.search(r"source|citation|claim|fabricat|unsupported|historical", issue, re.I)
         has_url = any(url in evidence for url in urls)
         has_rule = bool(re.search(r"docs/|RULES\.md|SOURCING\.md", evidence, re.I))
-        if item.get("severity") in ("blocker", "error") and (not has_url and (source_claim or not has_rule)):
+        # Internal pedagogical, sequencing, and consistency findings can be
+        # hard findings when grounded in the lesson itself. Only factual or
+        # citation allegations require a fetched URL; otherwise the reviewer
+        # would silently turn the expert panel into a cosmetic linter.
+        if item.get("severity") in ("blocker", "error") and (source_claim and not has_url or not evidence.strip()):
             item["severity"] = "warning"
             item["normalization"] = "Reviewer severity downgraded because its evidence did not cite a fetched URL or repository rule."
         normalized.append(item)
@@ -83,7 +109,10 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
         files = _target_files(root, state["target"], state["target_kind"])
         if not files:
             raise FileNotFoundError(f"No lessons found for {state['target_kind']} '{state['target']}'")
-        return {"phase": "inventory", "rules": load_rules(root), "inventory": {"files": [str(p.relative_to(root)) for p in files], "contents": {str(p.relative_to(root)): p.read_text(encoding="utf-8") for p in files}}, "history": _record(state, "inventory", files=len(files))}
+        contents = {str(p.relative_to(root)): p.read_text(encoding="utf-8") for p in files}
+        result = {"phase": "inventory", "rules": load_rules(root), "inventory": {"files": list(contents), "contents": contents}, "history": _record(state, "inventory", files=len(files))}
+        _persist_workspace(settings, state, phase="inventory", drafts=contents)
+        return result
 
     def source_research(state: WorkflowState) -> WorkflowState:
         query = f"{state['target']} university education authoritative documentation open educational resources"
@@ -124,11 +153,12 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
         for path, result in checks.items():
             findings.extend({"path": path, "severity": "error", "issue": error} for error in result["errors"])
             findings.extend({"path": path, "severity": "warning", "issue": warning} for warning in result["warnings"])
+        _persist_workspace(settings, state, phase="deterministic_audit", drafts=state.get("drafts", {}), findings=findings)
         return {"phase": "deterministic_audit", "checks": checks, "findings": findings, "history": _record(state, "deterministic_audit", findings=len(findings))}
 
     def adversarial_review(state: WorkflowState) -> WorkflowState:
         client = ModelClient(settings.reviewer_model, settings.api_timeout_seconds, min(settings.max_output_tokens, 6000), settings.reasoning_effort)
-        prompt = """Act as an adversarial academic editor. Inspect the proposed files against every rule and cited source. Return compact JSON `{\"approved\":bool,\"findings\":[{\"path\":\"...\",\"severity\":\"blocker|error|warning\",\"issue\":\"short issue\",\"evidence\":\"short rule or URL\",\"fix\":\"short repair\"}]}`. Return at most five highest-priority findings per call. Never use long quotations or commentary. Never approve based on the author's claims. Flag unsupported claims, fabricated citations, copied wording, missing prerequisites, weak exercises, and MDX/component errors."""
+        prompt = """Act as a hostile expert review panel: subject-matter expert, learning designer, instructor, assessment designer, and skeptical student. Debate internally before returning JSON. Return compact JSON {\"approved\":bool,\"findings\":[{\"path\":\"...\",\"severity\":\"blocker|error|warning\",\"impact\":\"high|medium|low\",\"issue\":\"specific learner or correctness problem\",\"evidence\":\"short rule, lesson evidence, or URL\",\"principle\":\"pedagogical principle\",\"fix\":\"substantive repair\"}]}. Return at most five highest-impact findings. Prioritize misconceptions, missing prerequisites, broken reasoning, weak guided practice, invalid or unsolvable exercises, poor transfer, sequencing, and unsupported claims. Cosmetic heading changes, wording polish, and paragraph reshuffling are never findings. If the lesson is sound, approve it without inventing changes."""
         findings = list(state.get("findings", []))
         approved = True
         paths = list(state.get("drafts", {}))
@@ -138,6 +168,7 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
             reviewer_findings = _normalize_review([{**finding, "path": finding.get("path") or batch[0]} for finding in response.get("findings", [])], state.get("sources", []))
             approved = approved and not any(finding.get("severity") in ("blocker", "error") for finding in reviewer_findings)
             findings.extend(reviewer_findings)
+        _persist_workspace(settings, state, phase="review", drafts=state.get("drafts", {}), findings=findings)
         return {"phase": "review", "review": {"approved": approved}, "findings": findings, "history": _record(state, "adversarial_review", approved=approved, batches=len(batches))}
 
     def revise(state: WorkflowState) -> WorkflowState:
@@ -147,8 +178,9 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
             drafts = dict(state.get("drafts", {}))
             batches = _batches(paths, settings.files_per_call)
             applied = 0
+            substantive_applied = 0
             failed = []
-            prompt = """Return compact JSON exactly as {\"edits\":[{\"old\":\"exact existing substring\",\"new\":\"replacement substring\"}]}. Repair only the listed hard findings in the supplied MDX file. Each `old` string must occur exactly once. Keep edits small and preserve all unrelated content. Do not return full files, markdown, or commentary. Return an empty edits array only if no safe evidence-backed edit exists."""
+            prompt = """Return compact JSON exactly as {\"edits\":[{\"old\":\"exact existing substring\",\"new\":\"replacement substring\"}]}. Repair only the listed high-impact pedagogical or correctness findings. Make substantive improvements to reasoning, guided exploration, prerequisites, examples, exercises, feedback, sequencing, or sourcing. Never change headings merely to satisfy a pattern; never make cosmetic edits. Each `old` string must occur exactly once. Preserve unrelated content. Do not return full files, markdown, or commentary. Return an empty edits array if no safe evidence-backed substantive edit exists."""
             for batch in batches:
                 for path in batch:
                     hard_findings = [finding for finding in state.get("findings", []) if finding.get("path") == path and finding.get("severity") in ("blocker", "error")]
@@ -162,12 +194,16 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
                             if isinstance(old, str) and isinstance(new, str) and old and content.count(old) == 1:
                                 content = content.replace(old, new)
                                 applied += 1
+                                substantive_applied += int(_substantive_edit(old, new))
                                 path_applied += 1
                     if not path_applied:
                         failed.append(path)
                     drafts[path] = content
             findings = [{"severity": "blocker", "issue": "No safe edits were returned for revision", "path": path, "evidence": path} for path in failed]
-            return {"phase": "revise", "drafts": drafts, "findings": findings, "revision_count": state.get("revision_count", 0) + 1, "history": _record(state, "revision", count=state.get("revision_count", 0) + 1, mode="edits", batches=len(batches), applied=applied, failed=len(failed))}
+            if applied and not substantive_applied:
+                findings.append({"severity": "blocker", "issue": "Revision made only cosmetic heading or whitespace changes", "evidence": "docs/SKILLS/PEDAGOGY.md", "fix": "Make a substantive improvement or leave the lesson unchanged."})
+            _persist_workspace(settings, state, phase="revise", drafts=drafts, findings=findings)
+            return {"phase": "revise", "drafts": drafts, "findings": findings, "revision_count": state.get("revision_count", 0) + 1, "history": _record(state, "revision", count=state.get("revision_count", 0) + 1, mode="edits", batches=len(batches), applied=applied, substantive_applied=substantive_applied, failed=len(failed))}
         prompt = """Repair every blocker and error in the proposed files. Return the same JSON file format. Make only evidence-backed changes. Preserve all good material and include complete file contents."""
         paths = sorted({finding.get("path") for finding in state.get("findings", []) if finding.get("path") in state.get("drafts")}) or list(state.get("drafts", {}))
         drafts = dict(state.get("drafts", {}))
@@ -192,6 +228,7 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
                 empty_batches.append(batch)
             drafts.update(returned)
         new_findings = [{"severity": "blocker", "issue": "Writer returned no files for revision batch", "evidence": ", ".join(batch), "path": batch[0]} for batch in empty_batches]
+        _persist_workspace(settings, state, phase="revise", drafts=drafts, findings=new_findings)
         return {"phase": "revise", "drafts": drafts, "findings": new_findings, "revision_count": state.get("revision_count", 0) + 1, "history": _record(state, "revision", count=state.get("revision_count", 0) + 1, batches=len(batches), empty_batches=len(empty_batches))}
 
     def gate(state: WorkflowState) -> str:
@@ -220,6 +257,7 @@ def build_workflow(settings: Settings, apply_changes: bool = False):
 
     def blocked(state: WorkflowState) -> WorkflowState:
         settings.artifacts.mkdir(parents=True, exist_ok=True)
+        _persist_workspace(settings, state, phase="blocked", drafts=state.get("drafts", {}), findings=state.get("findings", []))
         (settings.artifacts / f"{state['run_id']}-blocked.json").write_text(json.dumps({"target": state["target"], "findings": state.get("findings", []), "drafts": state.get("drafts", {}), "sources": state.get("sources", []), "history": state.get("history", [])}, indent=2), encoding="utf-8")
         return {"phase": "blocked", "status": "blocked", "history": _record(state, "blocked", reason="quality gate did not pass")}
 

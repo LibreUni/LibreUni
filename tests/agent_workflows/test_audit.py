@@ -1,5 +1,5 @@
 from libreuni_agent.audit import audit_text, split_frontmatter
-from libreuni_agent.graph import _batches, _normalize_review
+from libreuni_agent.graph import _batches, _normalize_review, _substantive_edit
 
 
 GOOD = """---
@@ -68,3 +68,10 @@ def test_workflow_batches_and_downgrades_unsupported_reviewer_claims():
     assert _batches(["a", "b", "c"], 2) == [["a", "b"], ["c"]]
     result = _normalize_review([{"severity": "blocker", "issue": "claim", "evidence": "model opinion"}], [{"url": "https://example.org/source"}])
     assert result[0]["severity"] == "warning"
+    pedagogical = _normalize_review([{"severity": "error", "issue": "missing prerequisite", "evidence": "the lesson uses cycle notation before explaining it"}], [])
+    assert pedagogical[0]["severity"] == "error"
+
+
+def test_cosmetic_heading_edits_are_not_substantive():
+    assert not _substantive_edit("## Theory\nText", "### Example: Theory\nText")
+    assert _substantive_edit("## Theory\nText", "## Theory\nA worked derivation with feedback.")
