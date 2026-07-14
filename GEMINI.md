@@ -11,6 +11,7 @@ Gemini agents must treat `AGENTS.md` as the repository entrypoint and follow it 
 5. When adding or changing PlantUML, read `docs/PUML.md`.
 6. Use `docs/TESTING.md` to choose the validation command before finishing.
 7. When repairing or editing course content, read and strictly follow `docs/SKILLS/COURSE_REPAIR.md`.
+8. For course creation, review, research, or repair, use `docs/AGENT_WORKFLOWS.md` and the `libreuni-agent` LangGraph workflow as the primary path. Run `libreuni-agent --check-config` before model-backed work and start in proposal mode.
 
 ## Absolute Mandate
 

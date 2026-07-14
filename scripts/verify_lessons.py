@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Paths
 ROOT = Path(__file__).resolve().parents[1]
-LESSONS_DIR = ROOT / "apps" / "main" / "src" / "content" / "lessons"
+LESSONS_DIR = ROOT / "src" / "content" / "lessons"
 
 # Regexes
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)

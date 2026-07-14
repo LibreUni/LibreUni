@@ -179,6 +179,8 @@ Please read our [RULES.md](docs/RULES.md) carefully. It contains the complete se
 
 AI agents and coding assistants must also start with [AGENTS.md](AGENTS.md), which points to the required project rules, sourcing workflow, UX guidance, and validation commands.
 
+For durable, evidence-driven course authoring and auditing, see [docs/AGENT_WORKFLOWS.md](docs/AGENT_WORKFLOWS.md). The LangGraph runner separates research, drafting, deterministic checks, adversarial review, bounded revision, and final repository validation.
+
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
 3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)

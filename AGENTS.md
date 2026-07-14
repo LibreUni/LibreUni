@@ -2,6 +2,10 @@
 
 First stop for agents in this repo. Read before editing files, generating lesson content, researching sources, or changing UI.
 
+## Primary course workflow
+
+For creating, reviewing, researching, auditing, or repairing courses, use the repository's LangGraph workflow as the primary implementation path. Read `docs/AGENT_WORKFLOWS.md` and run `libreuni-agent --check-config` before attempting a model-backed content run. Use proposal mode first; use `--apply` only when the resulting run is approved and its proposals have been inspected. Do not replace this workflow with an unsupervised one-shot content prompt.
+
 ## Startup
 
 1. Read `docs/RULES.md` before any content or code change.
