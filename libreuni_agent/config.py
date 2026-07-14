@@ -7,8 +7,8 @@ from pathlib import Path
 class Settings:
     root: Path
     artifacts: Path
-    model: str = "openai/gpt-4o-mini"
-    reviewer_model: str = "openai/gpt-4o-mini"
+    model: str = "deepseek/deepseek-v4-flash"
+    reviewer_model: str = "openai/gpt-5.6-luna-pro"
     max_revisions: int = 3
     max_sources: int = 8
 
@@ -23,8 +23,8 @@ class Settings:
         return cls(
             root=root,
             artifacts=root / ".libreuni-agent",
-            model=os.getenv("LIBREUNI_MODEL", "openai/gpt-4o-mini"),
-            reviewer_model=os.getenv("LIBREUNI_REVIEWER_MODEL", os.getenv("LIBREUNI_MODEL", "openai/gpt-4o-mini")),
+            model=os.getenv("LIBREUNI_MODEL", "deepseek/deepseek-v4-flash"),
+            reviewer_model=os.getenv("LIBREUNI_REVIEWER_MODEL", os.getenv("LIBREUNI_MODEL", "openai/gpt-5.6-luna-pro")),
             max_revisions=int(os.getenv("LIBREUNI_MAX_REVISIONS", "3")),
             max_sources=int(os.getenv("LIBREUNI_MAX_SOURCES", "8")),
         )

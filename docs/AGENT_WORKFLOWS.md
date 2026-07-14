@@ -119,8 +119,8 @@ The objective is the main user-facing control. Good objectives specify scope, pr
 | Variable | Default | Meaning |
 |---|---|---|
 | `OPENROUTER_API_KEY` | required for authoring | API key; may be loaded from a local ignored `.env`, but never commit or print it |
-| `LIBREUNI_MODEL` | `openai/gpt-4o-mini` | Planner/writer/reviser model |
-| `LIBREUNI_REVIEWER_MODEL` | value of `LIBREUNI_MODEL` | Independent adversarial reviewer model |
+| `LIBREUNI_MODEL` | `deepseek/deepseek-v4-flash` | Planner/writer/reviser model |
+| `LIBREUNI_REVIEWER_MODEL` | `openai/gpt-5.6-luna-pro` | Independent adversarial reviewer model |
 | `LIBREUNI_MAX_REVISIONS` | `3` | Maximum repair loops before the run becomes `blocked` |
 | `LIBREUNI_MAX_SOURCES` | `8` | Maximum successfully fetched sources in the evidence bundle |
 
