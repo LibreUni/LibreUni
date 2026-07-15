@@ -2,6 +2,8 @@
 
 Use the `libreuni` MCP server as the primary interface for course work.
 
+Before authoring lessons, read `docs/COURSE_COMPONENTS.md`. It is the canonical guide to available components, their props, and when they are appropriate. Components are intentional teaching tools, never quotas.
+
 ## Required workflow
 
 1. Call `get_libreuni_rules` and `list_course_lessons`.
@@ -12,6 +14,8 @@ Use the `libreuni` MCP server as the primary interface for course work.
 6. Save and validate drafts with `save_proposal` or `save_course_proposal`.
 7. Apply directly: `git add -A && git commit -m "[Verb] description"`.
 8. Re-read the applied lesson and call `validate_lesson` again.
+
+Before declaring course work complete, run `python3 scripts/course_stats.py`. Do not stop while it reports code-block or structural smoke-test failures. A passing smoke test is only a brokenness guarantee, not a pedagogical review.
 
 For a course, work in small batches and finish each lesson transaction before moving to the next. Never claim success unless the proposal was validated and, when requested, actually applied.
 

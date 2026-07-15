@@ -2,178 +2,17 @@
 import { getCollection } from 'astro:content';
 import Layout from '../layouts/Layout.astro';
 import { getLessonsByCourse } from '../utils/lessons';
-import qualityOverrides from '../data/course-quality-overrides.json';
-
-const REFERENCE_HEADING_RE = /^##+\s+(references|sources|bibliography|further reading|references\s*&\s*further reading)\b/mi;
-const LINK_RE = /https?:\/\//gi;
-const EXAMPLE_RE = /\b(example|case|demonstrat|scenario)\b/i;
-const EXERCISE_RE = /\b(exercise|practice|try|quiz|lab)\b/i;
+import smokeRecords from '../data/course-quality.json';
+const COMPONENTS = ['Quiz', 'CodeRunner', 'CodeExercise', 'CaseStudy'];
 
 function analyzeLesson(body: string, data: any) {
-  const quizzes = (body.match(/<Quiz\b/g) || []).length;
-  const codeRunners = (body.match(/<CodeRunner\b/g) || []).length;
-  const codeExercises = (body.match(/<CodeExercise\b/g) || []).length;
-  const caseStudies = (body.match(/<CaseStudy\b/g) || []).length;
-  const interactiveCount = quizzes + codeRunners + codeExercises + caseStudies;
-
-  const hasReferenceHeading = REFERENCE_HEADING_RE.test(body);
-  const sourceLinks = (body.match(LINK_RE) || []).length;
-  const hasSources = hasReferenceHeading || sourceLinks > 0;
-
-  const h2s = (body.match(/^##\s+/gm) || []).length;
-  const words = (body.match(/\w+/g) || []).length;
-
-  return {
-    length: body.length,
-    words,
-    h2s,
-    interactiveCount,
-    hasDescription: !!data.description?.trim(),
-    hasSources,
-    hasReferenceHeading,
-    sourceLinks,
-    hasExampleSignal: EXAMPLE_RE.test(body),
-    hasExerciseSignal: EXERCISE_RE.test(body),
-  };
-}
-
-function level(value: number, thresholds: number[]): number {
-  let score = 0;
-  for (const t of thresholds) {
-    if (value >= t) score += 1;
-  }
-  return score;
-}
-
-function labelFor(metric: string, val: number): string {
-  const labels: Record<string, string[]> = {
-    sources: [
-      "Unsourced draft",
-      "Source notes present",
-      "Properly sourced",
-      "Professionally checked",
-    ],
-    content: [
-      "Brief overview",
-      "Course notes",
-      "Self-contained course",
-      "State-of-the-art reference",
-    ],
-    practice: [
-      "Mostly prose",
-      "Some checks",
-      "Interactive practice",
-      "Practice-rich course",
-    ],
-    review: [
-      "Not reviewed",
-      "Internal review",
-      "External review",
-      "Professional check",
-    ],
-  };
-  return labels[metric][val];
-}
-
-function computeCourseQuality(courseId: string, courseLessons: any[], overrides: any) {
-  const lessonCount = courseLessons.length;
-  if (lessonCount === 0) return null;
-
-  const analyzed = courseLessons.map(l => analyzeLesson(l.body, l.data));
-
-  const sourceCoverage = analyzed.filter(l => l.hasSources).length / lessonCount;
-  const referenceHeadingCoverage = analyzed.filter(l => l.hasReferenceHeading).length / lessonCount;
-  const linkedSourceCoverage = analyzed.filter(l => l.sourceLinks > 0).length / lessonCount;
-  const avgWords = analyzed.reduce((sum, l) => sum + l.words, 0) / lessonCount;
-  const avgH2 = analyzed.reduce((sum, l) => sum + l.h2s, 0) / lessonCount;
-  const descriptionCoverage = analyzed.filter(l => l.hasDescription).length / lessonCount;
-  const exampleCoverage = analyzed.filter(l => l.hasExampleSignal).length / lessonCount;
-  const exerciseCoverage = analyzed.filter(l => l.hasExerciseSignal).length / lessonCount;
-  const interactiveCoverage = analyzed.filter(l => l.interactiveCount > 0).length / lessonCount;
-  const avgInteractive = analyzed.reduce((sum, l) => sum + l.interactiveCount, 0) / lessonCount;
-
-  let sourceLevel = level(sourceCoverage, [0.25, 0.75]);
-  if (referenceHeadingCoverage >= 0.75 && linkedSourceCoverage >= 0.75) {
-    sourceLevel = Math.max(sourceLevel, 2);
-  }
-
-  let contentLevel = 0;
-  if (avgWords >= 550 && avgH2 >= 1.5 && descriptionCoverage >= 0.6) {
-    contentLevel = 1;
-  }
-  if (avgWords >= 900 && avgH2 >= 2 && exampleCoverage >= 0.5 && exerciseCoverage >= 0.35) {
-    contentLevel = 2;
-  }
-
-  let practiceLevel = level(interactiveCoverage, [0.25, 0.6]);
-  if (interactiveCoverage >= 0.75 && avgInteractive >= 1.5) {
-    practiceLevel = 3;
-  }
-
-  const override = overrides[courseId] || {};
-  
-  const clampManual = (val: any) => {
-    if (val == null) return null;
-    return Math.max(0, Math.min(3, parseInt(val)));
-  };
-
-  const manualSourceLevel = clampManual(override.sourcesLevel);
-  const manualContentLevel = clampManual(override.contentLevel);
-  const manualPracticeLevel = clampManual(override.practiceLevel);
-  const reviewLevel = clampManual(override.reviewLevel) || 0;
-
-  if (manualSourceLevel !== null) sourceLevel = manualSourceLevel;
-  if (manualContentLevel !== null) contentLevel = manualContentLevel;
-  if (manualPracticeLevel !== null) practiceLevel = manualPracticeLevel;
-
-  const weightedScore = (sourceLevel * 0.35) + (contentLevel * 0.4) + (practiceLevel * 0.2) + (reviewLevel * 0.05);
-  const overallLevel = Math.max(0, Math.min(2, Math.round(weightedScore / 3 * 2)));
-
-  return {
-    courseId,
-    lessonCount,
-    overall: {
-      level: overallLevel,
-      label: ["Needs work", "Developing", "Strong"][overallLevel],
-      score: Math.round(weightedScore * 100) / 100,
-    },
-    metrics: {
-      sources: {
-        level: sourceLevel,
-        label: labelFor("sources", sourceLevel),
-        coverage: Math.round(sourceCoverage * 1000) / 1000,
-        referenceHeadingCoverage: Math.round(referenceHeadingCoverage * 1000) / 1000,
-        linkedSourceCoverage: Math.round(linkedSourceCoverage * 1000) / 1000,
-      },
-      content: {
-        level: contentLevel,
-        label: labelFor("content", contentLevel),
-        averageWords: Math.round(avgWords),
-        descriptionCoverage: Math.round(descriptionCoverage * 1000) / 1000,
-        exampleCoverage: Math.round(exampleCoverage * 1000) / 1000,
-        exerciseCoverage: Math.round(exerciseCoverage * 1000) / 1000,
-      },
-      practice: {
-        level: practiceLevel,
-        label: labelFor("practice", practiceLevel),
-        interactiveCoverage: Math.round(interactiveCoverage * 1000) / 1000,
-        averageInteractiveComponents: Math.round(avgInteractive * 100) / 100,
-      },
-      review: {
-        level: reviewLevel,
-        label: labelFor("review", reviewLevel),
-        manual: true,
-      },
-    },
-    notes: override.notes || "",
-  };
+  const components = Object.fromEntries(COMPONENTS.map((name) => [name, (body.match(new RegExp(`<${name}\\b`, 'g')) || []).length]));
+  return { words: (body.match(/\w+/g) || []).length, components };
 }
 
 const courses = await getCollection('courses');
 const lessons = await getCollection('lessons');
 const lessonsByCourse = await getLessonsByCourse(lessons);
-const qualityOverridesData = qualityOverrides as Record<string, any>;
-
 const courseMetrics = courses
   .map((course) => {
     const courseLessons = lessonsByCourse[course.id] ?? [];
@@ -187,7 +26,9 @@ const courseMetrics = courses
     }
 
     const characters = [...modules.values()].reduce((total, module) => total + module.characters, 0);
-    const courseQuality = computeCourseQuality(course.id, courseLessons, qualityOverridesData);
+    const analyzedLessons = courseLessons.map(l => analyzeLesson(l.body, l.data));
+    const componentCounts = Object.fromEntries(COMPONENTS.map(name => [name, analyzedLessons.reduce((sum, l) => sum + (l.components[name] || 0), 0)]));
+    const smokeTest = (smokeRecords as Record<string, any>)[course.id]?.smokeTest ?? { status: 'not-run', errors: [] };
 
     return {
       course,
@@ -197,9 +38,10 @@ const courseMetrics = courses
       charactersPerLesson: courseLessons.length ? Math.round(characters / courseLessons.length) : 0,
       charactersPerModule: modules.size ? Math.round(characters / modules.size) : 0,
       lessonsPerModule: modules.size ? Number((courseLessons.length / modules.size).toFixed(1)) : 0,
-      averageWords: courseQuality?.metrics?.content?.averageWords ?? 0,
-      qualityScore: courseQuality?.overall?.score ?? 0,
-      quality: courseQuality,
+      averageWords: courseLessons.length ? Math.round(analyzedLessons.reduce((sum, l) => sum + l.words, 0) / courseLessons.length) : 0,
+      componentCounts,
+      smokeStatus: smokeTest.status,
+      smokeErrors: smokeTest.errors ?? [],
     };
   })
   .sort((a, b) => a.course.data.title.localeCompare(b.course.data.title));
@@ -216,8 +58,9 @@ const courseData = courseMetrics.map(m => ({
   charactersPerModule: m.charactersPerModule,
   lessonsPerModule: m.lessonsPerModule,
   averageWords: m.averageWords,
-  qualityScore: m.qualityScore,
-  quality: m.quality,
+  componentCounts: m.componentCounts,
+  smokeStatus: m.smokeStatus,
+  smokeErrors: m.smokeErrors,
 }));
 const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
 ---
@@ -227,8 +70,8 @@ const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
     <section class="border-b border-light-border bg-white px-6 py-16 dark:border-dark-border dark:bg-dark-bg md:px-8 md:py-24">
       <div class="mx-auto max-w-7xl">
         <p class="text-xs font-black uppercase tracking-[0.25em] text-primary">Development</p>
-        <h1 class="mt-4 text-5xl font-black uppercase leading-none tracking-tight text-light-text dark:text-dark-text md:text-7xl">Quality and Course Metrics</h1>
-        <p class="mt-6 max-w-3xl text-lg font-medium leading-relaxed text-light-muted dark:text-dark-muted">Generated UX findings, content measurements, and ML-driven course analysis for maintaining LibreUni.</p>
+        <h1 class="mt-4 text-5xl font-black uppercase leading-none tracking-tight text-light-text dark:text-dark-text md:text-7xl">Course Metrics and Smoke Tests</h1>
+        <p class="mt-6 max-w-3xl text-lg font-medium leading-relaxed text-light-muted dark:text-dark-muted">Generated UX findings, course metrics, and code smoke-test failures for maintaining LibreUni.</p>
       </div>
     </section>
 
@@ -268,7 +111,7 @@ const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
       <div class="mx-auto max-w-7xl">
         <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">PCA</p>
         <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Principal Component Analysis</h2>
-        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">PCA reduces eight numeric course metrics into principal components. The scree plot shows how much variance each component captures; the scatter plot projects courses onto the first two components, with k-means clusters and flagged outliers.</p>
+        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">PCA reduces descriptive course metrics into principal components. The plots show patterns and outliers in course size and structure; they are not quality ratings.</p>
 
         <div class="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div class="rounded-2xl border border-light-border bg-white p-6 dark:border-dark-border dark:bg-dark-bg">
@@ -285,8 +128,8 @@ const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
                 <p class="mt-1 text-sm text-light-muted dark:text-dark-muted">Course positions on PCA axes</p>
               </div>
               <div class="flex gap-3 text-xs font-bold text-light-text dark:text-dark-text">
-                <label>X <select id="chart-x" class="ml-1 rounded-lg border border-light-border bg-light-bg px-2 py-1 dark:border-dark-border dark:bg-dark-surface"><option value="pca1">PCA 1</option><option value="characters">Total characters</option><option value="lessons">Lessons</option><option value="modules">Modules</option><option value="charactersPerLesson">Chars / lesson</option><option value="charactersPerModule">Chars / module</option><option value="lessonsPerModule">Lessons / module</option><option value="averageWords">Avg words</option><option value="qualityScore">Quality score</option></select></label>
-                <label>Y <select id="chart-y" class="ml-1 rounded-lg border border-light-border bg-light-bg px-2 py-1 dark:border-dark-border dark:bg-dark-surface"><option value="pca2">PCA 2</option><option value="characters">Total characters</option><option value="lessons">Lessons</option><option value="modules">Modules</option><option value="charactersPerLesson">Chars / lesson</option><option value="charactersPerModule">Chars / module</option><option value="lessonsPerModule">Lessons / module</option><option value="averageWords">Avg words</option><option value="qualityScore">Quality score</option></select></label>
+                <label>X <select id="chart-x" class="ml-1 rounded-lg border border-light-border bg-light-bg px-2 py-1 dark:border-dark-border dark:bg-dark-surface"><option value="pca1">PCA 1</option><option value="characters">Total characters</option><option value="lessons">Lessons</option><option value="modules">Modules</option><option value="charactersPerLesson">Chars / lesson</option><option value="charactersPerModule">Chars / module</option><option value="lessonsPerModule">Lessons / module</option><option value="averageWords">Avg words</option></select></label>
+                <label>Y <select id="chart-y" class="ml-1 rounded-lg border border-light-border bg-light-bg px-2 py-1 dark:border-dark-border dark:bg-dark-surface"><option value="pca2">PCA 2</option><option value="characters">Total characters</option><option value="lessons">Lessons</option><option value="modules">Modules</option><option value="charactersPerLesson">Chars / lesson</option><option value="charactersPerModule">Chars / module</option><option value="lessonsPerModule">Lessons / module</option><option value="averageWords">Avg words</option></select></label>
               </div>
             </div>
             <svg id="scatter-plot" class="mt-4 hidden h-64 w-full" viewBox="0 0 800 300" role="img" aria-label="Course metrics scatter plot on PCA axes"></svg>
@@ -306,12 +149,12 @@ const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
           <table class="w-full min-w-[68rem] text-left text-sm">
             <thead class="border-b border-light-border text-xs uppercase tracking-wider text-light-muted dark:border-dark-border dark:text-dark-muted">
               <tr>
-                <th class="px-5 py-4"><button data-sort="title" class="font-black">Course</button></th><th class="px-5 py-4"><button data-sort="status" class="font-black">Status</button></th><th class="px-5 py-4"><button data-sort="lessons" class="font-black">Lessons</button></th><th class="px-5 py-4"><button data-sort="modules" class="font-black">Modules</button></th><th class="px-5 py-4"><button data-sort="characters" class="font-black">Characters</button></th><th class="px-5 py-4"><button data-sort="charactersPerModule" class="font-black">Chars / module</button></th><th class="px-5 py-4"><button data-sort="charactersPerLesson" class="font-black">Chars / lesson</button></th><th class="px-5 py-4"><button data-sort="lessonsPerModule" class="font-black">Lessons / module</button></th><th class="px-5 py-4"><button data-sort="averageWords" class="font-black">Avg words</button></th><th class="px-5 py-4">Quality</th>
+                <th class="px-5 py-4"><button data-sort="title" class="font-black">Course</button></th><th class="px-5 py-4"><button data-sort="status" class="font-black">Status</button></th><th class="px-5 py-4"><button data-sort="lessons" class="font-black">Lessons</button></th><th class="px-5 py-4"><button data-sort="modules" class="font-black">Modules</button></th><th class="px-5 py-4"><button data-sort="characters" class="font-black">Characters</button></th><th class="px-5 py-4"><button data-sort="charactersPerModule" class="font-black">Chars / module</button></th><th class="px-5 py-4"><button data-sort="charactersPerLesson" class="font-black">Chars / lesson</button></th><th class="px-5 py-4"><button data-sort="lessonsPerModule" class="font-black">Lessons / module</button></th><th class="px-5 py-4"><button data-sort="averageWords" class="font-black">Avg words</button></th><th class="px-5 py-4">Components</th><th class="px-5 py-4">Smoke test</th>
               </tr>
             </thead>
             <tbody id="course-metrics" class="divide-y divide-light-border dark:divide-dark-border">
               {courseMetrics.map((metric) => (
-                <tr class="align-top" data-title={metric.course.data.title} data-status={metric.course.data.status} data-lessons={metric.lessons} data-modules={metric.modules} data-characters={metric.characters} data-characters-per-module={metric.charactersPerModule} data-characters-per-lesson={metric.charactersPerLesson} data-lessons-per-module={metric.lessonsPerModule} data-average-words={metric.averageWords} data-quality-score={metric.qualityScore}>
+                <tr class="align-top" data-title={metric.course.data.title} data-status={metric.course.data.status} data-lessons={metric.lessons} data-modules={metric.modules} data-characters={metric.characters} data-characters-per-module={metric.charactersPerModule} data-characters-per-lesson={metric.charactersPerLesson} data-lessons-per-module={metric.lessonsPerModule} data-average-words={metric.averageWords}>
                   <td class="px-5 py-4 font-black text-light-text dark:text-dark-text">{metric.course.data.title}</td>
                   <td class="px-5 py-4"><span class="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-black uppercase tracking-wider text-primary">{metric.course.data.status}</span></td>
                   <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{metric.lessons}</td>
@@ -321,7 +164,8 @@ const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
                   <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.charactersPerLesson)}</td>
                   <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{metric.lessonsPerModule}</td>
                   <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.averageWords)}</td>
-                  <td class="px-5 py-4 text-light-muted dark:text-dark-muted">{(metric.quality as any)?.overall?.label ?? 'Not measured'}</td>
+                  <td class="px-5 py-4 text-xs leading-6 text-light-muted dark:text-dark-muted">{COMPONENTS.map(name => `${name.replace('CaseStudy', 'Case')}: ${metric.componentCounts[name]}`).join(' · ')}</td>
+                  <td class:list={['px-5 py-4 font-bold', metric.smokeStatus === 'passed' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400']}>{metric.smokeStatus}{metric.smokeErrors.length ? ` (${metric.smokeErrors.length} warnings)` : ''}</td>
                 </tr>
               ))}
             </tbody>
@@ -334,7 +178,7 @@ const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
       <div class="mx-auto max-w-7xl">
         <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Course Health</p>
         <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Warnings and Improvement Points</h2>
-        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">Automated checks flagging courses that need attention. Warnings are generated from quality data and statistical analysis of content metrics.</p>
+        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">Automated checks flag broken structure and supported code syntax. Passing these checks does not certify pedagogy, correctness, sourcing, or exercise quality.</p>
 
         <div class="mt-8 flex flex-wrap items-center gap-4">
           <span class="inline-flex items-center gap-1.5 rounded-full border-2 border-light-border bg-light-surface px-4 py-1.5 text-sm font-black dark:border-dark-border dark:bg-dark-surface">
@@ -386,11 +230,11 @@ if (dashboard && dashboard.dataset.courses) {
   const COURSES = JSON.parse(atob(dashboard.dataset.courses));
 
   if (COURSES && COURSES.length > 0) {
-    const FEATURES = ['characters', 'lessons', 'modules', 'charactersPerLesson', 'charactersPerModule', 'lessonsPerModule', 'averageWords', 'qualityScore'];
+    const FEATURES = ['characters', 'lessons', 'modules', 'charactersPerLesson', 'charactersPerModule', 'lessonsPerModule', 'averageWords'];
     const LABELS = {
       pca1: 'PCA 1', pca2: 'PCA 2', characters: 'Total characters', lessons: 'Lessons', modules: 'Modules',
       charactersPerLesson: 'Chars / lesson', charactersPerModule: 'Chars / module', lessonsPerModule: 'Lessons / module',
-      averageWords: 'Avg words', qualityScore: 'Quality score',
+      averageWords: 'Avg words',
     };
 
     const mean = (values) => values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
@@ -544,113 +388,17 @@ if (dashboard && dashboard.dataset.courses) {
     function generateWarnings() {
       const all = [];
       for (const c of COURSES) {
-        const q = c.quality;
-        const sources = q?.metrics?.sources;
-        const content = q?.metrics?.content;
-        const practice = q?.metrics?.practice;
-        const review = q?.metrics?.review;
-        const overall = q?.overall;
         const isDraft = c.status === 'draft';
-
-        if (overall?.score != null && overall.score < 1) {
+        for (const error of (c.smokeErrors || [])) {
           all.push({
             course: c.title,
             isDraft,
             severity: 'high',
-            message: `Quality score is very low (${overall.score.toFixed(2)}/3). Needs improvement across all dimensions.`,
-            fix: "Add source references, interactive components (quizzes/exercises), expand word count, or organize lessons into modules to improve overall metrics."
+            message: error,
+            fix: 'Keep working on this course until every reported code block and structural smoke test passes. Run python3 scripts/course_stats.py after each fix.'
           });
         }
-        if (sources?.coverage === 0) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'high',
-            message: 'No lessons have source citations. Add references to every lesson.',
-            fix: "Add a '## References' section at the end of each lesson MDX file and list the cited sources."
-          });
-        }
-        if (practice?.interactiveCoverage != null && practice.interactiveCoverage === 0) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'high',
-            message: 'No interactive components (quizzes, code runners, exercises). Add practice elements.',
-            fix: "Insert interactive React components such as <Quiz client:load>, <CodeExercise client:load>, <CodeRunner client:load>, or <CaseStudy client:load> into the lesson files."
-          });
-        }
-        if (sources?.coverage != null && sources.coverage > 0 && sources.coverage < 0.75) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'medium',
-            message: `Only ${Math.round(sources.coverage * 100)}% of lessons have source citations. Target 75% or higher.`,
-            fix: "Identify lessons missing a '## References' section and add source citations to them."
-          });
-        }
-        if (content?.descriptionCoverage != null && content.descriptionCoverage < 0.6) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'medium',
-            message: `Only ${Math.round(content.descriptionCoverage * 100)}% of lessons have descriptions. Add descriptions for search and navigation.`,
-            fix: "Add a 'description' field to the frontmatter header of the missing lesson files (e.g. description: \"Brief summary of this lesson.\")."
-          });
-        }
-        if (content?.exampleCoverage != null && content.exampleCoverage < 0.5) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'medium',
-            message: `Low example coverage (${Math.round(content.exampleCoverage * 100)}%). Add practical examples and case studies.`,
-            fix: "Include the word 'example', 'case', 'demonstrate', or 'scenario' in lesson text, accompanied by concrete examples or scenarios."
-          });
-        }
-        if (content?.exerciseCoverage != null && content.exerciseCoverage < 0.35) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'medium',
-            message: `Low exercise coverage (${Math.round(content.exerciseCoverage * 100)}%). Add exercises for hands-on practice.`,
-            fix: "Include the word 'exercise', 'practice', 'try', 'quiz', or 'lab' in lesson text, and add interactive exercises."
-          });
-        }
-        if (c.lessons < 5) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'medium',
-            message: `Only ${c.lessons} lessons. Consider expanding the course material.`,
-            fix: "Add more lesson MDX files in src/content/lessons/<course-id>/ to cover the topic comprehensively."
-          });
-        }
-        if (c.averageWords > 0 && c.averageWords < 550) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'medium',
-            message: `Lessons are very short (avg ${Math.round(c.averageWords)} words). Aim for 550+ words per lesson.`,
-            fix: "Expand the explanations and detail in the current lessons to ensure they meet university-level depth."
-          });
-        }
-        if (overall?.score != null && overall.score >= 1 && overall.score < 2) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'low',
-            message: `Quality score (${overall.score.toFixed(2)}/3) is below the target of 2.`,
-            fix: "Improve content details, add more interactive components, or secure external reviews to raise the score."
-          });
-        }
-        if (review?.level === 0) {
-          all.push({
-            course: c.title,
-            isDraft,
-            severity: 'low',
-            message: 'Course has not been externally reviewed. Arrange a review to validate quality.',
-            fix: "Request an external review from a subject matter expert. Once complete, update the reviewLevel in src/data/course-quality-overrides.json."
-          });
-        }
+        if (c.smokeStatus === 'not-run') all.push({ course: c.title, isDraft, severity: 'medium', message: 'Smoke tests have not produced a record for this course.', fix: 'Run python3 scripts/course_stats.py --write-quality.' });
         if (c.modules === 1 && c.lessons > 3) {
           all.push({
             course: c.title,
@@ -800,7 +548,7 @@ if (dashboard && dashboard.dataset.courses) {
     const clusterCount = new Set(assignments).size;
     if (summaryEl) {
       summaryEl.textContent =
-        `PCA on 8 course metrics. ${(varRatios[0] * 100).toFixed(1)}% of variance captured by PC1, ${(pc2cum * 100).toFixed(1)}% by PC1+PC2. K-means found ${clusterCount} course clusters. ${outlierCut} courses flagged as outliers (top 10% by distance to cluster centroid). Contributors should review flagged outliers and high-severity warnings first.`;
+        `PCA on 7 descriptive course metrics. ${(varRatios[0] * 100).toFixed(1)}% of variance captured by PC1, ${(pc2cum * 100).toFixed(1)}% by PC1+PC2. K-means found ${clusterCount} course clusters. ${outlierCut} courses flagged as outliers (top 10% by distance to cluster centroid). These are descriptive anomalies, not quality ratings.`;
     }
 
     renderScree();

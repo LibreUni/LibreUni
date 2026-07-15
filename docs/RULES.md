@@ -14,7 +14,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 - `src/content/courses/` — JSON course metadata
 - `src/data/course-manifests/` — YAML lesson order and module grouping for each course
 - `src/components/` — Interactive React components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`, etc.)
-- `scripts/course_stats.py` — course analytics: content stats, structure checks, and generated catalog quality data.
+- `scripts/course_stats.py` — course inventory and smoke tests; it does not rate pedagogical quality.
 - `docs/` — technical references (UX, PlantUML)
 
 ---
@@ -22,7 +22,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 ## Core Rules
 
 - Lessons are created by hand — no Python scripts or auto-generation.
-- Use interactive components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`) where they add real value. In Astro/MDX, all interactive React components **must** use `client:load` (e.g. `<Quiz client:load ... />`).
+- Use interactive components where they add real value; never add them to satisfy a quota. See `docs/COURSE_COMPONENTS.md`. In Astro/MDX, all interactive React components **must** use `client:load` (e.g. `<Quiz client:load ... />`).
 - Use `<Quiz client:load>` for knowledge validation; `<CaseStudy client:load>` for scenario-based problems with setup context.
 - **Canonical component props** — use exactly these names, no aliases:
   - `<Quiz>`: `question`, `options`, `correctIndex`, `explanation`, `questions`, `title`
@@ -67,12 +67,12 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
 
 **Before submitting:**
 
-1. Run `python3 scripts/course_stats.py` — check lesson length, headings, interaction counts, and generated quality summary.
-   - Run `python3 scripts/course_stats.py <course-id>` for detailed stats on one course.
-   - Run `python3 scripts/course_stats.py --write-quality` after course content changes that should update the catalog status badges.
+1. Run `python3 scripts/course_stats.py` — run course smoke tests and inventory code blocks/components. Every `CodeRunner` must use a checked, declared language; renderer failures from PlantUML, PythonDiagram, and TikZ logs are also failures. A passing result means the checked structure and code are not broken; it is not a quality rating.
+   - Run `python3 scripts/course_stats.py <course-id>` to smoke-test one course.
+   - Run `python3 scripts/course_stats.py --write-quality` to regenerate the smoke-test data used by development tooling.
 2. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams. Note: use `$$` for display math, not `\[` — remark-math does not support LaTeX-style `\[ ... \]` delimiters.
 
-Course quality badges on the catalog are generated from observable MDX signals such as source sections, links, descriptions, examples, exercises, and interactive components. Top-tier review states remain manual and should be set through `src/data/course-quality-overrides.json`, then regenerated with `python3 scripts/course_stats.py --write-quality`.
+Automated metrics do not certify course quality. Pedagogy, correctness, sourcing, and exercise value require human or agent review under `docs/SKILLS/PEDAGOGY.md`.
 
 ---
 

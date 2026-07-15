@@ -1,135 +1,66 @@
 #!/usr/bin/env python3
+"""Course inventory and smoke tests.
+
+This command deliberately does not rate pedagogy. Counts are diagnostics, not
+quality scores. A passing result means that the checks below did not find a
+broken course; it does not mean that the teaching is good.
+"""
+
 import argparse
 import json
 import re
+import subprocess
 import sys
+import tempfile
+import shutil
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 LESSONS_DIR = ROOT / "src" / "content" / "lessons"
 QUALITY_OUTPUT_PATH = ROOT / "src" / "data" / "course-quality.json"
-QUALITY_OVERRIDES_PATH = ROOT / "src" / "data" / "course-quality-overrides.json"
+RENDER_ERROR_LOGS = [
+    ROOT / "puml-errors.log",
+    ROOT / "python-diagram-errors.log",
+    ROOT / "tikz-errors.log",
+]
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
-REFERENCE_HEADING_RE = re.compile(
-    r"^##+\s+(references|sources|bibliography|further reading|references\s*&\s*further reading)\b",
-    re.IGNORECASE | re.MULTILINE,
-)
-SOURCE_TRACKING_RE = re.compile(r"source tracking|source note|sources?:", re.IGNORECASE)
-LINK_RE = re.compile(r"https?://")
+FENCE_RE = re.compile(r"^```([\w+#.-]*)\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+COMPONENT_RE = re.compile(r"<(Quiz|CodeRunner|CodeExercise|CaseStudy)\b(.*?)/>", re.DOTALL)
+ALLOWED_PROPS = {
+    "Quiz": {"question", "options", "correctIndex", "explanation", "questions", "title", "client:load"},
+    "CodeRunner": {"code", "output", "language", "title", "client:load"},
+    "CodeExercise": {"code", "answers", "explanation", "title", "client:load"},
+    "CaseStudy": {"scenario", "question", "options", "correctIndex", "explanation", "title", "client:load"},
+}
 
 
 def split_frontmatter(content):
     match = FRONTMATTER_RE.match(content)
     if not match:
         return {}, content
-
-    frontmatter = {}
+    data = {}
     for line in match.group(1).splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        frontmatter[key.strip()] = value.strip().strip('"')
-
-    return frontmatter, content[match.end():]
-
-
-def level(value, thresholds):
-    score = 0
-    for threshold in thresholds:
-        if value >= threshold:
-            score += 1
-    return score
-
-
-def label_for(metric, level_value):
-    labels = {
-        "sources": [
-            "Unsourced draft",
-            "Source notes present",
-            "Properly sourced",
-            "Professionally checked",
-        ],
-        "content": [
-            "Brief overview",
-            "Course notes",
-            "Self-contained course",
-            "State-of-the-art reference",
-        ],
-        "practice": [
-            "Mostly prose",
-            "Some checks",
-            "Interactive practice",
-            "Practice-rich course",
-        ],
-        "review": [
-            "Not reviewed",
-            "Internal review",
-            "External review",
-            "Professional check",
-        ],
-    }
-    return labels[metric][level_value]
-
-
-def clamp_manual(value):
-    try:
-        return max(0, min(3, int(value)))
-    except (TypeError, ValueError):
-        return None
-
-
-def load_quality_overrides():
-    if not QUALITY_OVERRIDES_PATH.exists():
-        return {}
-    return json.loads(QUALITY_OVERRIDES_PATH.read_text(encoding="utf-8"))
+        if ":" in line:
+            key, value = line.split(":", 1)
+            data[key.strip()] = value.strip().strip('"').strip("'")
+    return data, content[match.end():]
 
 
 def analyze_lesson(path):
     content = path.read_text(encoding="utf-8")
     frontmatter, body = split_frontmatter(content)
-
-    quizzes = len(re.findall(r"<Quiz\b", body))
-    code_runners = len(re.findall(r"<CodeRunner\b", body))
-    code_exercises = len(re.findall(r"<CodeExercise\b", body))
-    case_studies = len(re.findall(r"<CaseStudy\b", body))
-    interactive_count = quizzes + code_runners + code_exercises + case_studies
-    has_reference_heading = bool(REFERENCE_HEADING_RE.search(body))
-    source_links = len(LINK_RE.findall(body))
-
-    # FORBIDDEN BYPASS CHECK: Detect attempts to trick the test with fake source comments
-    if "{/*" in body and re.search(r"(source|review|placeholder|bypass)", body, re.IGNORECASE):
-        if not has_reference_heading and source_links == 0:
-            print(f"\nFATAL ERROR: AI bypass attempt detected in {path.name}!", file=sys.stderr)
-            print("Adding fake 'source' comments to bypass coverage tests is STRICTLY FORBIDDEN.", file=sys.stderr)
-            sys.exit(1)
-
-    has_sources = has_reference_heading or (source_links > 0)
-
+    components = {name: len(re.findall(rf"<{name}\b", body)) for name in ALLOWED_PROPS}
     return {
         "name": path.name,
         "path": str(path.relative_to(ROOT)),
         "courseId": frontmatter.get("course", "").strip() or path.parent.name,
-        "length": len(body),
         "words": len(re.findall(r"\w+", body)),
-        "h1s": len(re.findall(r"^#\s", body, re.MULTILINE)),
-        "h2s": len(re.findall(r"^##\s+", body, re.MULTILINE)),
-        "h3s": len(re.findall(r"^###\s+", body, re.MULTILINE)),
-        "paragraphs": len([p for p in re.split(r"\n\s*\n", body) if p.strip()]),
-        "quizzes": quizzes,
-        "codeRunners": code_runners,
-        "codeExercises": code_exercises,
-        "caseStudies": case_studies,
-        "interactiveCount": interactive_count,
-        "mathBlocks": len(re.findall(r"<Math|(?<!\\)\$", body)),
-        "diagrams": len(re.findall(r"<PlantUML", body)),
-        "hasDescription": bool(frontmatter.get("description", "").strip()),
-        "hasSources": has_sources,
-        "hasReferenceHeading": has_reference_heading,
-        "sourceLinks": source_links,
-        "hasExampleSignal": bool(re.search(r"\b(example|case|demonstrat|scenario)\b", body, re.IGNORECASE)),
-        "hasExerciseSignal": bool(re.search(r"\b(exercise|practice|try|quiz|lab)\b", body, re.IGNORECASE)),
+        "characters": len(body),
+        "headings": len(re.findall(r"^#{1,3}\s+", body, re.MULTILINE)),
+        "codeBlocks": len(FENCE_RE.findall(body)),
+        "components": components,
+        "interactiveCount": sum(components.values()),
     }
 
 
@@ -141,265 +72,225 @@ def lessons_by_course():
     return grouped
 
 
-def course_stats(course_id, lessons):
-    total_lessons = len(lessons)
-    if total_lessons == 0:
-        return None
+def extract_code(text):
+    """Extract the simple string form used by CodeRunner's MDX props."""
+    match = re.search(r"\bcode\s*=\s*\{?([`\"'])(.*?)\1", text, re.DOTALL)
+    return match.group(2) if match else None
 
-    longest = max(lessons, key=lambda lesson: lesson["length"])
-    shortest = min(lessons, key=lambda lesson: lesson["length"])
 
-    return {
-        "courseId": course_id,
-        "totalLessons": total_lessons,
-        "averageLength": sum(lesson["length"] for lesson in lessons) / total_lessons,
-        "averageWords": sum(lesson["words"] for lesson in lessons) / total_lessons,
-        "averageH1": sum(lesson["h1s"] for lesson in lessons) / total_lessons,
-        "averageH2": sum(lesson["h2s"] for lesson in lessons) / total_lessons,
-        "averageH3": sum(lesson["h3s"] for lesson in lessons) / total_lessons,
-        "averageParagraphs": sum(lesson["paragraphs"] for lesson in lessons) / total_lessons,
-        "totalQuizzes": sum(lesson["quizzes"] for lesson in lessons),
-        "totalMath": sum(lesson["mathBlocks"] for lesson in lessons),
-        "totalDiagrams": sum(lesson["diagrams"] for lesson in lessons),
-        "longest": longest,
-        "shortest": shortest,
+def run_source(source, language, path, line):
+    """Check a runnable block using the toolchain named by its language."""
+    aliases = {"py": "python", "js": "javascript", "ts": "typescript", "c++": "cpp"}
+    language = aliases.get(language.lower(), language.lower())
+    commands = {
+        "python": ("python3", ".py", ["python3", "-m", "py_compile"]),
+        "javascript": ("node", ".mjs", ["node", "--check"]),
+        "typescript": ("tsc", ".ts", ["tsc", "--noEmit", "--skipLibCheck"]),
+        "rust": ("rustc", ".rs", ["rustc"]),
+        "c": ("gcc", ".c", ["gcc", "-std=c11", "-Wall", "-Wextra"]),
+        "cpp": ("g++", ".cpp", ["g++", "-std=c++17", "-Wall", "-Wextra"]),
+        "java": ("javac", ".java", ["javac"]),
+        "go": ("go", ".go", ["go", "tool", "compile"]),
+        "bash": ("bash", ".sh", ["bash", "-n"]),
     }
-
-
-def course_quality(course_id, lessons, overrides):
-    lesson_count = len(lessons)
-    if lesson_count == 0:
+    if language not in commands:
+        return f"{path}:{line}: CodeRunner declares unsupported language '{language}'"
+    executable, suffix, command = commands[language]
+    if shutil.which(executable) is None:
+        return f"{path}:{line}: CodeRunner language '{language}' requires missing tool '{executable}'"
+    # MDX CodeRunner strings commonly encode newlines as ``\\n``.
+    source = source.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
+    if language == "javascript":
+        suffix = ".mjs"
+    output_path = None
+    with tempfile.NamedTemporaryFile("w", suffix=suffix, encoding="utf-8", delete=False) as handle:
+        handle.write(source)
+        temp_path = handle.name
+    try:
+        if language in {"rust", "c", "cpp"}:
+            output_path = temp_path + ".bin"
+            command += [temp_path, "-o", output_path]
+        elif language == "java":
+            temp_dir = str(Path(temp_path).parent)
+            source_path = Path(temp_path).with_name("Main.java")
+            source_path.write_text(source, encoding="utf-8")
+            Path(temp_path).unlink(missing_ok=True)
+            temp_path = str(source_path)
+            command += [temp_path]
+        else:
+            command += [temp_path]
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=15)
+        if result.returncode:
+            output = (result.stderr or result.stdout).strip()
+            lines = output.splitlines()
+            detail = next((line.strip() for line in lines if re.search(r"(?:syntaxerror|error:|fatal error)", line, re.IGNORECASE)), lines[-1] if lines else "non-zero exit")
+            return f"{path}:{line}: {language} block failed: {detail}"
+        if output_path:
+            result = subprocess.run([output_path], cwd=ROOT, capture_output=True, text=True, timeout=15)
+            if result.returncode:
+                detail = (result.stderr or result.stdout).strip().splitlines()[-1] if (result.stderr or result.stdout).strip() else "non-zero exit"
+                return f"{path}:{line}: {language} block failed at runtime: {detail}"
         return None
+    except subprocess.TimeoutExpired:
+        return f"{path}:{line}: {language} block timed out after 15 seconds"
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+        if output_path:
+            Path(output_path).unlink(missing_ok=True)
 
-    source_coverage = sum(lesson["hasSources"] for lesson in lessons) / lesson_count
-    reference_heading_coverage = sum(lesson["hasReferenceHeading"] for lesson in lessons) / lesson_count
-    linked_source_coverage = sum(lesson["sourceLinks"] > 0 for lesson in lessons) / lesson_count
-    avg_words = sum(lesson["words"] for lesson in lessons) / lesson_count
-    avg_h2 = sum(lesson["h2s"] for lesson in lessons) / lesson_count
-    description_coverage = sum(lesson["hasDescription"] for lesson in lessons) / lesson_count
-    example_coverage = sum(lesson["hasExampleSignal"] for lesson in lessons) / lesson_count
-    exercise_coverage = sum(lesson["hasExerciseSignal"] for lesson in lessons) / lesson_count
-    interactive_coverage = sum(lesson["interactiveCount"] > 0 for lesson in lessons) / lesson_count
-    avg_interactive = sum(lesson["interactiveCount"] for lesson in lessons) / lesson_count
 
-    source_level = level(source_coverage, [0.25, 0.75])
-    if reference_heading_coverage >= 0.75 and linked_source_coverage >= 0.75:
-        source_level = max(source_level, 2)
+def component_props(component, props):
+    """Read only attribute-looking lines; do not treat code contents as props."""
+    names = []
+    allowed = ALLOWED_PROPS[component]
+    for line in props.splitlines():
+        match = re.match(r"\s*([A-Za-z][\w:-]*)(?=\s*(?:=|$))", line)
+        if match and match.group(1) in allowed:
+            names.append(match.group(1))
+    return names
 
-    content_level = 0
-    if avg_words >= 550 and avg_h2 >= 1.5 and description_coverage >= 0.6:
-        content_level = 1
-    if avg_words >= 900 and avg_h2 >= 2 and example_coverage >= 0.5 and exercise_coverage >= 0.35:
-        content_level = 2
 
-    practice_level = level(interactive_coverage, [0.25, 0.6])
-    if interactive_coverage >= 0.75 and avg_interactive >= 1.5:
-        practice_level = 3
-
-    override = overrides.get(course_id, {})
-    manual_source_level = clamp_manual(override.get("sourcesLevel"))
-    manual_content_level = clamp_manual(override.get("contentLevel"))
-    manual_practice_level = clamp_manual(override.get("practiceLevel"))
-    review_level = clamp_manual(override.get("reviewLevel")) or 0
-
-    if manual_source_level is not None:
-        source_level = manual_source_level
-    if manual_content_level is not None:
-        content_level = manual_content_level
-    if manual_practice_level is not None:
-        practice_level = manual_practice_level
-
-    weighted_score = (source_level * 0.35) + (content_level * 0.4) + (practice_level * 0.2) + (review_level * 0.05)
-    overall_level = max(0, min(2, round(weighted_score / 3 * 2)))
-
-    return {
-        "courseId": course_id,
-        "lessonCount": lesson_count,
-        "overall": {
-            "level": overall_level,
-            "label": ["Needs work", "Developing", "Strong"][overall_level],
-            "score": round(weighted_score, 2),
-        },
-        "metrics": {
-            "sources": {
-                "level": source_level,
-                "label": label_for("sources", source_level),
-                "coverage": round(source_coverage, 3),
-                "referenceHeadingCoverage": round(reference_heading_coverage, 3),
-                "linkedSourceCoverage": round(linked_source_coverage, 3),
-            },
-            "content": {
-                "level": content_level,
-                "label": label_for("content", content_level),
-                "averageWords": round(avg_words),
-                "descriptionCoverage": round(description_coverage, 3),
-                "exampleCoverage": round(example_coverage, 3),
-                "exerciseCoverage": round(exercise_coverage, 3),
-            },
-            "practice": {
-                "level": practice_level,
-                "label": label_for("practice", practice_level),
-                "interactiveCoverage": round(interactive_coverage, 3),
-                "averageInteractiveComponents": round(avg_interactive, 2),
-            },
-            "review": {
-                "level": review_level,
-                "label": label_for("review", review_level),
-                "manual": True,
-            },
-        },
-        "notes": override.get("notes", ""),
+def language_mismatch(source, declared):
+    """Catch the common mistake where a runner silently defaults to Python."""
+    declared = declared.lower()
+    signatures = {
+        "rust": [r"\bfn\s+main\s*\(", r"\blet\s+mut\b", r"String::from"],
+        "c": [r"#include\s*<", r"\bprintf\s*\("],
+        "cpp": [r"#include\s*<iostream>", r"\bcout\s*<<"],
+        "javascript": [r"\b(const|let|var)\s+\w+\s*=", r"console\.log\s*\("],
+        "java": [r"public\s+static\s+void\s+main", r"System\.out\.println"],
+        "go": [r"package\s+main", r"fmt\.Print"],
     }
+    # C and C++ deliberately overlap; do not report a false mismatch between
+    # those two languages. The important failure is a runner silently using
+    # Python (the component's default) for another language.
+    if declared in {"python", "py"}:
+        for language, patterns in signatures.items():
+            if language != "javascript" and any(re.search(pattern, source) for pattern in patterns):
+                return language
+    elif any(re.search(pattern, source) for pattern in [r"^\s*def\s+\w+\s*\(", r"^\s*from\s+\w+\s+import\s+", r"^\s*import\s+\w+"]):
+        return "python"
+    return None
 
 
-def print_course_warnings(course_id, lessons):
-    missing_sources = [l['path'] for l in lessons if not l['hasSources']]
-    missing_desc = [l['path'] for l in lessons if not l['hasDescription']]
-    missing_ex = [l['path'] for l in lessons if not l['hasExampleSignal']]
-    missing_prac = [l['path'] for l in lessons if not l['hasExerciseSignal']]
-    missing_inter = [l['path'] for l in lessons if l['interactiveCount'] == 0]
-    
-    if any([missing_sources, missing_desc, missing_ex, missing_prac, missing_inter]):
-        print(f"\n--- Detailed Warnings for {course_id} ---")
-        if missing_sources:
-            print(f"Missing Sources ({len(missing_sources)}):")
-            for p in missing_sources: print(f"  - {p}")
-        if missing_desc:
-            print(f"Missing Descriptions ({len(missing_desc)}):")
-            for p in missing_desc: print(f"  - {p}")
-        if missing_ex:
-            print(f"Missing Example Signals ({len(missing_ex)}):")
-            for p in missing_ex: print(f"  - {p}")
-        if missing_prac:
-            print(f"Missing Exercise Signals ({len(missing_prac)}):")
-            for p in missing_prac: print(f"  - {p}")
-        if missing_inter:
-            print(f"Missing Interactive Components ({len(missing_inter)}):")
-            for p in missing_inter: print(f"  - {p}")
-        print("---------------------------------------")
-
-
-def print_course_stats(stats, quality, lessons):
-    print(f"Course: {stats['courseId']}")
-    print("-------------------------")
-    print(f"Total lessons:  {stats['totalLessons']}")
-    print(f"Mean length:    {stats['averageLength']:.1f} characters")
-    print(f"Mean word count:{stats['averageWords']:.1f} words")
-    print(f"Avg H1 headers: {stats['averageH1']:.2f}")
-    print(f"Avg H2 headers: {stats['averageH2']:.2f}")
-    print(f"Avg H3 headers: {stats['averageH3']:.2f}")
-    print(f"Avg Paragraphs: {stats['averageParagraphs']:.2f}")
-    print("-------------------------")
-    print(f"Total Quizzes:  {stats['totalQuizzes']}")
-    print(f"Total Math:     {stats['totalMath']} (tags/blocks)")
-    print(f"Total Diagrams: {stats['totalDiagrams']}")
-    print("-------------------------")
-    print(f"Longest lesson: {stats['longest']['name']} ({stats['longest']['length']} chars)")
-    print(f"Shortest lesson:{stats['shortest']['name']} ({stats['shortest']['length']} chars)")
-    
-    print("\nQuality Metrics:")
-    print(f"Overall Level: {quality['overall']['level']} - {quality['overall']['label']}")
-    for metric, data in quality['metrics'].items():
-        if metric == "review": continue
-        print(f"  {metric.capitalize()} Level {data['level']}: {data['label']}")
-        for k, v in data.items():
-            if k not in ('level', 'label'):
-                print(f"    - {k}: {v}")
-                
-    print_course_warnings(stats['courseId'], lessons)
-
-
-def print_all_summary(grouped, quality_records):
-    print("Course analytics summary")
-    print("-------------------------")
-    for course_id in sorted(grouped):
-        stats = course_stats(course_id, grouped[course_id])
-        quality = quality_records.get(course_id)
-        quality_label = quality["overall"]["label"] if quality else "Unmeasured"
-        
-        # We push info aggressively
-        source_cov = quality["metrics"]["sources"]["coverage"] * 100 if quality else 0
-        interactive_cov = quality["metrics"]["practice"]["interactiveCoverage"] * 100 if quality else 0
-        print(
-            f"{course_id:25} "
-            f"{stats['totalLessons']:3} lessons  "
-            f"{stats['averageWords']:6.1f} avg words  "
-            f"Sources: {source_cov:5.1f}%  "
-            f"Interactive: {interactive_cov:5.1f}%  "
-            f"[{quality_label}]"
-        )
-        
-        # Aggressively push all info without flagging/asking
-        print_course_warnings(course_id, grouped[course_id])
-
-
-def write_quality_json(quality_records, output_path):
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(quality_records, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"Wrote {len(quality_records)} course quality records to {output_path.relative_to(ROOT)}")
-
-
-def check_100_percent_source_coverage(grouped, target_course=None):
-    missing_sources = []
-    for course_id, lessons in grouped.items():
-        if target_course and course_id != target_course:
+def render_errors_by_course():
+    """Read renderer failures emitted during the build and attach them to courses."""
+    failures = {}
+    seen = set()
+    for log_path in RENDER_ERROR_LOGS:
+        if not log_path.exists():
             continue
-        for lesson in lessons:
-            if not lesson["hasSources"]:
-                missing_sources.append(lesson["path"])
-    
-    if missing_sources:
-        print("\n" + "!" * 60)
-        print("FATAL ERROR: 100% SOURCE COVERAGE REQUIRED")
-        print("The following lessons are completely missing sources:")
-        for path in missing_sources:
-            print(f"  - {path}")
-        print("!" * 60 + "\n")
-        sys.exit(1)
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        for block in re.split(r"\n(?=\[\d{4}-\d{2}-\d{2}T)", text):
+            page = re.search(r"PAGE:\s*(/(?:lessons|courses)/([^/]+)(?:/|\.html))", block)
+            if not page:
+                continue
+            error = re.search(r"ERROR:\s*(.+)", block)
+            detail = error.group(1).strip() if error else f"renderer failure in {log_path.name}"
+            page_path = page.group(1)
+            message = f"{page_path}: {log_path.name}: {detail}"
+            if message not in seen:
+                failures.setdefault(page.group(2), []).append(message)
+                seen.add(message)
+    return failures
+
+
+def smoke_lesson(path):
+    content = path.read_text(encoding="utf-8")
+    _, body = split_frontmatter(content)
+    errors = []
+    if not split_frontmatter(content)[0].get("title"):
+        errors.append(f"{path.relative_to(ROOT)}: missing frontmatter title")
+    for component, props in COMPONENT_RE.findall(body):
+        if "client:load" not in props:
+            errors.append(f"{path.relative_to(ROOT)}: <{component}> is missing client:load")
+        for prop in component_props(component, props):
+            if prop not in ALLOWED_PROPS[component]:
+                errors.append(f"{path.relative_to(ROOT)}: <{component}> uses non-canonical prop {prop}")
+
+    for match in FENCE_RE.finditer(body):
+        language, source = match.group(1).lower(), match.group(2)
+        # Fenced blocks are often fragments. Validate the languages with a
+        # reliable syntax checker here; CodeRunner blocks below are stricter.
+        if language not in {"python", "py", "javascript", "js", "typescript", "ts"}:
+            continue
+        error = run_source(source, language, path.relative_to(ROOT), body[:match.start()].count("\n") + 1)
+        if error:
+            errors.append(error)
+
+    # CodeRunner is the explicitly executable course component. Its supported
+    # local languages are smoke-tested; C/C++/shell runners remain build/UI
+    # checks because the browser component currently displays their declared output.
+    for match in COMPONENT_RE.finditer(body):
+        if match.group(1) != "CodeRunner":
+            continue
+        code = extract_code(match.group(2))
+        language_match = re.search(r"\blanguage\s*=\s*[\{\"']?([\w+-]+)", match.group(2))
+        if not code:
+            errors.append(f"{path.relative_to(ROOT)}: CodeRunner must declare code")
+            continue
+        language = language_match.group(1).lower() if language_match else "python"
+        mismatch = language_mismatch(code, language)
+        if mismatch:
+            errors.append(f"{path.relative_to(ROOT)}: CodeRunner declares '{language}' but its code looks like {mismatch}")
+        error = run_source(code, language, path.relative_to(ROOT), body[:match.start()].count("\n") + 1)
+        if error and error not in errors:
+            errors.append(error)
+    return errors
+
+
+def course_record(course_id, lessons, errors):
+    counts = {name: sum(l["components"][name] for l in lessons) for name in ALLOWED_PROPS}
+    return {
+        "courseId": course_id,
+        "lessonCount": len(lessons),
+        "codeBlockCount": sum(l["codeBlocks"] for l in lessons),
+        "componentCounts": counts,
+        "smokeTest": {
+            "status": "passed" if not errors else "failed",
+            "meaning": "No detected broken course structure or supported code syntax." if not errors else "At least one smoke test failed; this says nothing about pedagogical quality.",
+            "errors": errors,
+        },
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Report LibreUni course stats and generate course quality data."
-    )
-    parser.add_argument("course_id", nargs="?", help="Optional course id to report in detail.")
-    parser.add_argument(
-        "--write-quality",
-        action="store_true",
-        help="Write src/data/course-quality.json for the course catalog.",
-    )
-    parser.add_argument(
-        "--quality-output",
-        type=Path,
-        default=QUALITY_OUTPUT_PATH,
-        help="Output path used with --write-quality.",
-    )
+    parser = argparse.ArgumentParser(description="Inventory courses and run non-pedagogical course smoke tests.")
+    parser.add_argument("course_id", nargs="?", help="Optional course id to check")
+    parser.add_argument("--write-quality", action="store_true", help="Write smoke-test records to src/data/course-quality.json")
+    parser.add_argument("--quality-output", type=Path, default=QUALITY_OUTPUT_PATH)
     args = parser.parse_args()
-
     grouped = lessons_by_course()
-    overrides = load_quality_overrides()
-    quality_records = {
-        course_id: course_quality(course_id, lessons, overrides)
-        for course_id, lessons in sorted(grouped.items())
-    }
-
-    if args.course_id:
-        lessons = grouped.get(args.course_id)
-        if not lessons:
-            available = ", ".join(sorted(grouped))
-            raise SystemExit(f"Course not found: {args.course_id}\nAvailable courses: {available}")
-        stats = course_stats(args.course_id, lessons)
-        print_course_stats(stats, quality_records[args.course_id], lessons)
-    else:
-        # "more aggressively push all info even without flagging/asking"
-        print_all_summary(grouped, quality_records)
-
+    if args.course_id and args.course_id not in grouped:
+        raise SystemExit(f"Course not found: {args.course_id}")
+    selected = {args.course_id: grouped[args.course_id]} if args.course_id else grouped
+    records = {}
+    all_errors = []
+    render_failures = render_errors_by_course()
+    for course_id, lessons in sorted(selected.items()):
+        errors = [error for lesson in lessons for error in smoke_lesson(ROOT / lesson["path"])]
+        errors.extend(render_failures.get(course_id, []))
+        records[course_id] = course_record(course_id, lessons, errors)
+        print(f"{course_id:25} {len(lessons):3} lessons  {records[course_id]['codeBlockCount']:3} code blocks  smoke: {records[course_id]['smokeTest']['status']}")
+        all_errors.extend(errors)
     if args.write_quality:
-        write_quality_json(quality_records, args.quality_output)
-
-    # Enforce 100% source coverage last (after reporting, so output isn't swallowed on failure)
-    check_100_percent_source_coverage(grouped, args.course_id)
+        args.quality_output.parent.mkdir(parents=True, exist_ok=True)
+        output_records = records
+        if args.course_id and args.quality_output.exists():
+            try:
+                output_records = json.loads(args.quality_output.read_text(encoding="utf-8"))
+                output_records.update(records)
+            except json.JSONDecodeError:
+                output_records = records
+        args.quality_output.write_text(json.dumps(output_records, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"Wrote {len(output_records)} smoke-test records to {args.quality_output.relative_to(ROOT)}")
+    if all_errors:
+        print("\nSmoke-test failures:", file=sys.stderr)
+        print("\n".join(f"- {error}" for error in all_errors), file=sys.stderr)
+        return 1
+    print("\nSmoke tests passed. This is a brokenness check, not a course-quality rating.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

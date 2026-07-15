@@ -29,7 +29,10 @@ In OpenCode, load the discoverable `libreuni-course` skill for this workflow. �
   - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`
   - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title`
 - Lesson order/modules are set in `src/data/course-manifests/<course-id>.yml`, not in frontmatter.
-- Course quality badges are generated (`python3 scripts/course_stats.py --write-quality`). Override via `src/data/course-quality-overrides.json`.
+- Smoke-test data is generated with `python3 scripts/course_stats.py --write-quality`; it is not a course-quality badge.
+- `docs/COURSE_COMPONENTS.md` is the canonical component guide for all course authors and agents.
+- `scripts/course_stats.py` is a smoke-test/inventory tool. It does not rate course quality; a pass only means checked structure and supported code syntax were not found broken.
+- Course agents must treat every smoke-test error as unfinished work and continue until all supported code blocks and structural checks pass, or clearly report an external blocker.
 - Banned: fake source-tracking comments to bypass `course_stats.py` checks. Every citation must be genuine.
 
 ## Commands
@@ -46,9 +49,9 @@ npm run test:visual      # build + capture screenshots to reports/visual/
 npm run test:lighthouse  # build + Lighthouse CI budgets
 npm run test:report      # open last Playwright HTML report
 # focused validation:
-python3 scripts/course_stats.py                     # lesson stats & quality
-python3 scripts/course_stats.py --write-quality     # regenerate catalog badges
-python3 scripts/course_stats.py <course-id>         # stats for one course
+python3 scripts/course_stats.py                     # course smoke tests & inventory
+python3 scripts/course_stats.py --write-quality     # regenerate smoke-test data
+python3 scripts/course_stats.py <course-id>         # smoke-test one course
 npm run build:all && npm run test:e2e:run           # quick e2e after build
 npm run build:all && npm run test:ux:run            # quick ux after build
 ```
@@ -68,7 +71,7 @@ npm run build:all && npm run test:ux:run            # quick ux after build
 - `src/content/lessons/` — MDX lessons by course slug
 - `src/content/courses/` — JSON course metadata
 - `src/data/course-manifests/` — YAML lesson order & module grouping
-- `src/data/course-quality-overrides.json` — manual quality badge overrides
+- `src/data/course-quality.json` — generated smoke-test records and descriptive counts
 - `src/components/` — React components (Quiz, CodeRunner, CodeExercise, CaseStudy, etc.)
 - `docs/` — rules, sourcing, UX, PlantUML, testing references
 - `scripts/` — content validation and stats

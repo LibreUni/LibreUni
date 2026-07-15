@@ -27,6 +27,7 @@ if (!fs.existsSync(CACHE_DIR)) {
 }
 
 const ERROR_LOG = path.resolve('./puml-errors.log');
+const plantUmlJar = process.env.LIBREUNI_PLANTUML_JAR || '/home/edf/puml.jar';
 
 const hash = crypto.createHash('md5').update(processedCode + (theme || '')).digest('hex');
 const cacheFile = path.join(CACHE_DIR, `${hash}.svg`);
@@ -76,9 +77,10 @@ let svgContent = '';
 if (fs.existsSync(cacheFile)) {
   svgContent = normalizeSvg(fs.readFileSync(cacheFile, 'utf-8'));
 } else {
-  console.log(`[PlantUML] Attempt remote render first: ${hash.substring(0, 8)}...`);
   let remoteSucceeded = false;
-  try {
+  // Remote rendering is opt-in. This keeps builds local, deterministic, and
+  // free of unexpected network activity or desktop integrations.
+  if (process.env.LIBREUNI_PLANTUML_REMOTE === '1') try {
     // Use global fetch if available; otherwise skip remote attempt
     let res;
     if (typeof fetch === 'function') {
@@ -107,7 +109,9 @@ if (fs.existsSync(cacheFile)) {
   if (!remoteSucceeded) {
     console.log(`[PlantUML] Generating diagram locally: ${hash.substring(0, 8)}...`);
     try {
-      svgContent = execSync('java -jar /home/edf/puml.jar -pipe -tsvg', {
+      // Build-time rendering must stay headless: never launch a desktop
+      // PlantUML viewer while an agent or CI job is generating lessons.
+      svgContent = execSync(`java -Djava.awt.headless=true -jar ${plantUmlJar} -pipe -tsvg`, {
       input: finalCode,
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024
