@@ -15,3 +15,9 @@ Use the `libreuni` MCP server as the primary interface for course work.
 9. Re-read the applied lesson and call `validate_lesson` again.
 
 For a course, work in small batches and finish each lesson transaction before moving to the next. Never claim success unless the proposal was validated and, when requested, actually applied.
+
+## Course-scale improvement contract
+
+Interpret “improve course X” as a whole-course pedagogical audit and substantive redesign request. Do not satisfy it with banned-phrase cleanup, heading changes, transition rewrites, or other cosmetic edits.
+
+Before drafting course lessons, inspect every lesson and the course manifest, then produce an audit and blueprint covering the conceptual spine, prerequisites, sequencing, mathematical correctness, worked reasoning, exercises and feedback, visual models, sourcing, and intended learning outcomes. Rank findings by learner impact. The blueprint may call for rewriting most or all lessons, adding or removing lessons, or changing the manifest. Present that rationale before lesson proposals. A course task is incomplete if its resulting diff is cosmetic-only or if no high-impact pedagogical change was attempted.

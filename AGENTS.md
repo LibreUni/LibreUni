@@ -6,6 +6,8 @@ First stop for agents in this repo. Read before editing files, generating lesson
 
 For creating, reviewing, researching, auditing, or repairing courses, infer the target and operation from ordinary requests such as `improve course X`, `repair lesson Y`, or `create course Z`; do not require the user to restate this workflow. Read `docs/AGENT_INTEGRATIONS.md` and `docs/SKILLS/LIBREUNI_COURSE.md`, use the `libreuni` MCP server as the primary host-agent interface, and treat `docs/SKILLS/PEDAGOGY.md` as the central quality contract. Start in proposal mode, use a read-only adversarial review when available, and apply only after showing the user the rationale and exact diff and receiving approval. The older `libreuni-agent` LangGraph CLI remains available for batch experiments and deterministic checks.
 
+In OpenCode, load the discoverable `libreuni-course` skill for this workflow. “Improve course X” means a whole-course audit and substantive redesign proposal; cosmetic-only edits do not satisfy the request.
+
 ## Startup
 
 1. Read `docs/RULES.md` before any content or code change.

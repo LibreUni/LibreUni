@@ -41,6 +41,8 @@ repair lesson groups-and-homomorphisms
 
 The configured agent infers the target and operation, loads the pedagogical standard, uses the MCP tools, and delegates a read-only `pedagogical-reviewer` for substantive course work. It remains proposal-first: it must show rationale and exact diffs before applying anything.
 
+The repository also provides `.opencode/skills/libreuni-course/SKILL.md`. This is intentional: `libreuni-course` is both the configured primary agent and an explicitly discoverable skill. The agent loads the skill before course work, so `/skill libreuni-course` and ordinary course requests use the same workflow. For an “improve course X” request, the skill requires a whole-course audit and blueprint before lesson edits and rejects cosmetic-only completion.
+
 ## Codex
 
 Keep `AGENTS.md` as the entrypoint and add the local MCP server to the trusted project MCP configuration used by your Codex installation. Codex should infer course intent from ordinary requests, then load `docs/SKILLS/PEDAGOGY.md` and `docs/SKILLS/LIBREUNI_COURSE.md` before using the MCP workflow. If the host does not auto-discover the local server, explicitly enable it in the trusted project configuration.
