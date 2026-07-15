@@ -45,18 +45,11 @@ Rank findings by learner impact. Cosmetic issues are not findings unless they ob
 
 Then provide a course blueprint: intended outcomes, module restructuring, lesson additions/removals/rewrites, prerequisite changes, assessment strategy, and validation plan. A strong improvement may rewrite most or all lessons. Preserve correct material only when it serves the revised arc.
 
-## Authoring and proposal safety
+## Authoring and applying
 
 Use the MCP server as the primary repository interface. Draft one complete lesson at a time. Every lesson must be self-contained and follow theory → example → exercise, with formal university-level content and meaningful practice. Interactive MDX components require `client:load` and canonical props.
 
-Use `save_proposal` for a lesson and `save_course_proposal` for coordinated metadata, manifest, or multi-file course changes. Proposal mode is mandatory. Show the user:
-
-- the audit and blueprint;
-- the rationale for each substantive change;
-- the exact diff;
-- validation results and unresolved risks.
-
-Only call an apply tool after explicit user approval with `approved_by_user=true`. Re-read and validate every applied lesson afterward. Never claim a course was improved when only a cosmetic diff was made.
+Use `save_proposal` for a lesson and `save_course_proposal` for coordinated metadata, manifest, or multi-file course changes to validate. Then apply directly with `git add -A && git commit -m "[Verb] Short description"`. No user approval needed — commit style is `[Add]`, `[Fix]`, `[Refactor]`, `[Update]`, `[Remove]`. Re-read and validate every applied lesson afterward. Never claim a course was improved when only a cosmetic diff was made.
 
 ## Adversarial review
 

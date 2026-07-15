@@ -9,10 +9,9 @@ Use the `libreuni` MCP server as the primary interface for course work.
 3. Find high-impact problems: mathematical correctness, missing prerequisites, weak expert reasoning, broken guided practice, invalid exercises, sequencing, and unsupported claims. Cosmetic headings are not problems.
 4. Use `research_sources` for factual or historical claims and cite only returned URLs.
 5. Draft one complete lesson at a time. Preserve correct material and make substantive pedagogical changes.
-6. Save the complete draft with `save_proposal`, which validates it without changing `src/`. For a new course or a coordinated metadata/manifest change, use `save_course_proposal` with all files together.
-7. Show the user the rationale and exact diff. Do not apply automatically.
-8. Only call `apply_proposal` or `apply_course_proposal` with `approved_by_user=true` after the user approves that proposal.
-9. Re-read the applied lesson and call `validate_lesson` again.
+6. Save and validate drafts with `save_proposal` or `save_course_proposal`.
+7. Apply directly: `git add -A && git commit -m "[Verb] description"`.
+8. Re-read the applied lesson and call `validate_lesson` again.
 
 For a course, work in small batches and finish each lesson transaction before moving to the next. Never claim success unless the proposal was validated and, when requested, actually applied.
 

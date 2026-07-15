@@ -63,12 +63,14 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
 
 **Strict Anti-Bypass Rule:** Adding fake "source tracking" comments, placeholder text, or using meaningless words just to bypass the `course_stats.py` source coverage checks is **strictly forbidden**. Any sources or tracking comments added must be genuine, researched references that actively support the lesson content. Bypassing tests undermines the educational integrity of LibreUni.
 
+**Commit messages:** Use `[Verb] Short description` style (e.g., `[Add]`, `[Fix]`, `[Refactor]`, `[Update]`, `[Remove]`).
+
 **Before submitting:**
 
 1. Run `python3 scripts/course_stats.py` — check lesson length, headings, interaction counts, and generated quality summary.
    - Run `python3 scripts/course_stats.py <course-id>` for detailed stats on one course.
    - Run `python3 scripts/course_stats.py --write-quality` after course content changes that should update the catalog status badges.
-2. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams.
+2. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams. Note: use `$$` for display math, not `\[` — remark-math does not support LaTeX-style `\[ ... \]` delimiters.
 
 Course quality badges on the catalog are generated from observable MDX signals such as source sections, links, descriptions, examples, exercises, and interactive components. Top-tier review states remain manual and should be set through `src/data/course-quality-overrides.json`, then regenerated with `python3 scripts/course_stats.py --write-quality`.
 

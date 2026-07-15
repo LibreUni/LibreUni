@@ -11,7 +11,7 @@ import threading
 import uuid
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any
+from typing import Any, TypedDict
 
 import anyio
 from mcp.server.fastmcp import FastMCP
@@ -147,8 +147,13 @@ def save_proposal(path: str, proposed_content: str, rationale: str, findings: li
     return _json({"proposal_id": proposal_id, "directory": str(directory), "manifest": manifest})
 
 
+class FileProposal(TypedDict):
+    path: str
+    content: str
+
+
 @mcp.tool()
-def save_course_proposal(target: str, files: list[dict[str, str]], rationale: str, findings: list[dict[str, Any]] | None = None) -> str:
+def save_course_proposal(target: str, files: list[FileProposal], rationale: str, findings: list[dict[str, Any]] | None = None) -> str:
     """Persist a new or multi-file course proposal without changing src/."""
     if not files:
         raise ValueError("A course proposal must contain at least one file")

@@ -39,7 +39,7 @@ create course Numerical Methods
 repair lesson groups-and-homomorphisms
 ```
 
-The configured agent infers the target and operation, loads the pedagogical standard, uses the MCP tools, and delegates a read-only `pedagogical-reviewer` for substantive course work. It remains proposal-first: it must show rationale and exact diffs before applying anything.
+The configured agent infers the target and operation, loads the pedagogical standard, uses the MCP tools, and delegates a read-only `pedagogical-reviewer` for substantive course work. It validates proposals through MCP tools, then applies changes directly with git commits.
 
 The repository also provides `.opencode/skills/libreuni-course/SKILL.md`. This is intentional: `libreuni-course` is both the configured primary agent and an explicitly discoverable skill. The agent loads the skill before course work, so `/skill libreuni-course` and ordinary course requests use the same workflow. For an “improve course X” request, the skill requires a whole-course audit and blueprint before lesson edits and rejects cosmetic-only completion.
 
@@ -63,4 +63,4 @@ Tell the agent to read `docs/SKILLS/LIBREUNI_COURSE.md` and use the `libreuni` t
 
 ## Safety model
 
-`save_proposal` and `save_course_proposal` write only under ignored `.libreuni-agent/mcp-proposals/`. Their apply counterparts refuse to write unless `approved_by_user=true`, the proposal passed deterministic checks, and every baseline file is unchanged since proposal creation. Every applied change is visible in ordinary `git diff`.
+`save_proposal` and `save_course_proposal` write only under ignored `.libreuni-agent/mcp-proposals/`. Agents apply proposals by writing directly to `src/` and committing with git (`[Verb] summary` style). Every change is visible in ordinary `git diff`.
