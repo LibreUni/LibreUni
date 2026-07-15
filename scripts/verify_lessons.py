@@ -99,15 +99,22 @@ def verify_lesson(path, check_links=False):
 
     # 4. Interactive Component Props & client:load Check
     for comp in ["Quiz", "CodeRunner", "CodeExercise", "CaseStudy"]:
-        pattern = re.compile(rf"<{comp}\b([^>]*)/?>", re.DOTALL)
+        # Match props, treating backtick strings as indivisible (they can contain >)
+        pattern = re.compile(rf"<{comp}\b((?:[^>`]|`[^`]*`)+)\s*/?>", re.DOTALL)
         for match in pattern.finditer(body):
             props_block = match.group(1)
             # Must use client:load
             if "client:load" not in props_block:
                 errors.append(f"<{comp}> component is missing 'client:load'")
             
-            # Check for non-canonical props
-            prop_names = re.findall(r"\b([a-zA-Z0-9:]+)(?=\s*=)", props_block)
+            # Strip backtick template literals first (may contain {, }, and >)
+            stripped = re.sub(r"`[^`]*`", "", props_block)
+            # Strip remaining JSX expression values ( { ... } )
+            stripped = re.sub(r"\{[^}]*\}", "", stripped)
+            # Strip quoted attribute values
+            # Strip quoted attribute values
+            stripped = re.sub(r"""[^"]*"|'[^']*'""", "", stripped)
+            prop_names = re.findall(r"\b([a-zA-Z0-9:]+)(?=\s*=)", stripped)
             allowed = COMPONENT_PROPS[comp]
             for p in prop_names:
                 if p not in allowed:

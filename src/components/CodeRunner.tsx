@@ -7,7 +7,7 @@ interface CodeRunnerProps {
   output?: string;
   title?: string;
   description?: string;
-  language?: 'python' | 'javascript' | 'typescript' | 'c' | 'cpp' | 'git' | 'bash';
+  language?: 'python' | 'javascript' | 'typescript' | 'c' | 'cpp' | 'git' | 'bash' | 'rust';
 }
 
 declare global {
@@ -170,7 +170,7 @@ pyodide_http.patch_all()
     }
 
     // ponytail: language prop drives execution; no content sniffing
-    const isLegacy = language === 'c' || language === 'cpp' || language === 'git' || language === 'bash';
+    const isLegacy = language === 'c' || language === 'cpp' || language === 'git' || language === 'bash' || language === 'rust';
 
     if (isLegacy) {
       setShowTerminal(true);
