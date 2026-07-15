@@ -1,32 +1,34 @@
-# LibreUni Pedagogical Review Standard
 
-This is a quality contract, not a checklist for adding headings. Reviews must identify the largest learning risks and make substantive improvements to the learner's path.
+LibreUni Pedagogical Review & Generation Standard
+This is a strict quality contract for university-level learning resources. The AI must treat the audience as rigorous academic learners, completely eliminating "broad public" conversational fluff and replacing it with deep, structurally sound, and challenging material.
 
-## Expert panel
+1. Expert Panel (Internal Reasoning Constraints)
+   Before generating or reviewing content, the AI must reason from these distinct perspectives to resolve pedagogical design:
 
-Reason as five voices and resolve their disagreements using course goals and sources:
+   The Rigorous Subject-Matter Expert: Demands depth. Ensures definitions, mathematical proofs, complex formulas, and edge cases are correct, precise, and unconditionally true. Never dumbs down the content.
+   The Cognitive Designer: Ensures the progression aligns with the three levels of mathematical thinking: trial and error, pattern recognition, and formal deductive reasoning. Maps how concepts compress into a few core foundational rules (the "trunk").
+   The Anti-Fluff Editor: Strips out all conversational filler, repetitive headings, and transitionary bloat (e.g., "Now we will look at...", "In the next lesson...").
+   The Visual/Structural Strategist: Actively hunts for walls of text and translates them into graphs, visual models, or structural representations.
+   The Interactive Skeptic: Interrogates every interactive element or quiz. Exercises are only permitted if they test a specific intended outcome or address a vital misconception, never just to meet a "quota".
+2. The Core Rules of Generation
+   To address the systemic issues of AI-generated content, all output must adhere to these strict rules:
 
-1. **Subject-matter expert:** definitions, proofs, examples, edge cases, and historical claims are correct and precise.
-2. **Learning designer:** prerequisites are visible, sequencing reduces cognitive load, and each idea earns its place.
-3. **Instructor:** the expert's reasoning is modeled explicitly, including choices and wrong turns.
-4. **Assessment designer:** exercises test the intended outcome and are solvable from preceding material without guessing.
-5. **Skeptical student:** confusion, false confidence, disengagement, and missing connections are actively sought.
+   Deep, University-Level Rigor: Content must include complex problems, dilemmas, and formal mathematical notation. Do not shy away from the "struggle" of hard math. Present foundational generators (like Maxwell's equations) and prove how they derive broader results.
+   Zero Fluff and Compression: Avoid conversational transitions. Start immediately with the core propositions. Compress the knowledge into a few core generating ideas ("unconditional truths") rather than presenting a scattered list of facts.
+   Strict Modularity (No Interlinking): Never use relative chronological references like "In the next lesson" or "As we saw yesterday." Math is cumulative, but course structures change. Rely only on explicit prerequisites (e.g., "This requires an understanding of limit definitions") rather than referencing external modules.
+   Visual Over Textual: If a relationship, formula, or concept can be mapped visually, do so. Do not explain over text what a graph can demonstrate instantly.
+   Intentional, Meaningful Practice (The 80/20 Rule): Do not push mindless coding exercises. Practice should make up the bulk of the learner's effort, but the exercises must be purposefully mixed in type to build genuine intuition and pattern recognition, avoiding repetitive rote tasks.
+3. The University Learning Arc
+   Use this structure to introduce concepts, replacing the standard "I do, We do, You do" with a structure modeled after how the brain actually learns advanced math:
 
-## Learning arc
+   Motivated Discovery (The "Why"): Do not just hand the student an arbitrary formula. Establish a real problem or tension. Show the "happy path" of discovery: Question → Attempt → Obstacle → Insight → Formalization. Walk through how a mathematician would have naturally discovered this using trial and error.
+   Worked Examples Before Formal Definitions: Our working memory processes new concepts better through concrete examples. Introduce the formal, rigorous definition, but immediately ground it in step-by-step worked examples where the reasoning behind every single step is explicitly justified.
+   Deep Independent Practice: Provide challenging problems that require independent transfer. These problems should operate right at the "edge of the learner's understanding" to induce a flow state, rather than being impossibly hard or boringly easy.
+   Feedback & Knowledge Gaps: Feedback must do more than provide the correct answer. It must act as a "diagnosis," revealing the exact missing prerequisite or logic gap that caused the error, allowing the student to use targeted self-explanation (Feynman technique) to patch their understanding.
+4. Substantive Quality Checks
+   When reviewing or generating material, rank findings by learning impact.
 
-Use the strongest applicable form of this arc for each concept:
+   Critical Violations: Missing prerequisites, mathematically imprecise formulas, conversational fluff, assumed chronological sequencing (interlinking), and mindless/unrelated quiz questions.
+   Substantive Improvements: Enhancing the transition from concrete examples to formal proofs, providing a missing visual graph, adding deeper edge-case problems to challenge advanced students, or clarifying the "why" behind a specific mathematical move.
 
-- **I do:** establish a real question, tension, example, or problem; state the goal; model expert reasoning.
-- **We do:** invite a prediction or attempt using prior knowledge, reveal the work step by step, explain choices and misconceptions, and connect the concrete case to the abstraction.
-- **You do:** require independent transfer, with enough preceding theory and worked examples to make the task solvable without outside searching.
-- **Feedback:** explain why the answer works, address the likely misconception, and make the next conceptual need visible.
-
-For discovery-based mathematics, make the happy path visible: question → attempt → obstacle → insight → formalization → transfer. Labels such as “Example” or “Exercise” do not create this arc.
-
-## Substantive improvement
-
-Prefer changes to motivation, narrative continuity, prerequisites, concrete-to-formal transitions, worked reasoning, edge cases, guided practice, exercise validity and feedback, mathematical precision, sourcing, contradictions, or course sequencing.
-
-Cosmetic heading changes, synonym swaps, paragraph reshuffling without a learning reason, and mechanically adding “Example” are not improvements. Do not make them. If material is already strong, report why and leave it unchanged.
-
-For every proposed change, record the learner problem, evidence, pedagogical principle, intended improvement, and validation method. Rank findings by learning impact; cosmetic issues can never outrank misconceptions, missing prerequisites, broken exercises, weak explanations, or sequencing problems.
+(Note: Cosmetic changes like synonym swaps or paragraph reshuffling are forbidden unless they directly compress the text or remove filler.)
