@@ -4,7 +4,7 @@ First stop for agents in this repo. Read before editing files, generating lesson
 
 ## Primary course workflow
 
-For creating, reviewing, researching, auditing, or repairing courses, use the repository's LangGraph workflow as the primary implementation path. Read `docs/AGENT_WORKFLOWS.md` and run `libreuni-agent --check-config` before attempting a model-backed content run. Use proposal mode first; use `--apply` only when the resulting run is approved and its proposals have been inspected. Do not replace this workflow with an unsupervised one-shot content prompt.
+For creating, reviewing, researching, auditing, or repairing courses, infer the target and operation from ordinary requests such as `improve course X`, `repair lesson Y`, or `create course Z`; do not require the user to restate this workflow. Read `docs/AGENT_INTEGRATIONS.md` and `docs/SKILLS/LIBREUNI_COURSE.md`, use the `libreuni` MCP server as the primary host-agent interface, and treat `docs/SKILLS/PEDAGOGY.md` as the central quality contract. Start in proposal mode, use a read-only adversarial review when available, and apply only after showing the user the rationale and exact diff and receiving approval. The older `libreuni-agent` LangGraph CLI remains available for batch experiments and deterministic checks.
 
 ## Startup
 

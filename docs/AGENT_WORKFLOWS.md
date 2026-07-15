@@ -1,4 +1,6 @@
-# LibreUni agent workflows
+# LibreUni legacy CLI workflows
+
+For normal work from OpenCode, Codex, Gemini, or Antigravity, use the MCP integration in `docs/AGENT_INTEGRATIONS.md`. This document describes the older standalone `libreuni-agent` CLI, which remains useful for deterministic batch experiments but is no longer the primary host-agent interface.
 
 `libreuni-agent` is the command-line workflow for having an AI research, design, draft, repair, review, and validate LibreUni content. It is intentionally a sequence of independent stages rather than one agent being asked whether its own work is good.
 
