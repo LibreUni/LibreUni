@@ -96,6 +96,42 @@ Prefer a diagram when it communicates relationships more clearly than prose. Kee
 
 Use fenced blocks for explanation, comparison, and code that is intentionally not interactive. Python and JavaScript/TypeScript fences are syntax-checked by `scripts/course_stats.py`; other languages are currently inventory-only because many are teaching fragments rather than standalone programs. A syntax check is a brokenness check, not proof that the example is correct, useful, or pedagogically sufficient.
 
+## Screen and book authoring
+
+Every lesson is presented in two forms: an interactive screen lesson and a prerendered academic PDF book. Author content so both forms remain coherent. The PDF is not a screenshot of the browser; it is a citable, readable version of the course with interactions converted into static explanations where appropriate.
+
+Use the authoring wrappers when a section belongs to only one form:
+
+```mdx
+import BookOnly from '../../../components/BookOnly.astro';
+import ScreenOnly from '../../../components/ScreenOnly.astro';
+
+<BookOnly>
+
+### Book note
+
+This short editorial note is useful in the reference edition but would interrupt the interactive lesson.
+
+</BookOnly>
+
+<ScreenOnly>
+
+<InteractiveWidget client:load />
+
+</ScreenOnly>
+```
+
+`BookOnly` content is hidden from normal lesson pages and included in the PDF. `ScreenOnly` content is shown on normal lesson pages and omitted from the PDF. Keep either wrapper focused and meaningful; do not duplicate whole lessons or hide required explanations behind them. Use ordinary Markdown inside the wrappers. These wrappers are the preferred, explicit mechanism—do not rely on ad-hoc `no-print` classes.
+
+Native HTML `<details>` sections remain collapsible on screen, but their content is expanded in the PDF and their summary controls are omitted. Write solution, hint, and answer content so it reads naturally when expanded in sequence. Diagram source disclosure panels are intentionally excluded from books because the rendered diagram is the citable artifact; explain the diagram in surrounding prose instead.
+
+Book-oriented authoring guidelines:
+
+- Keep tables within a page-sized text column. Avoid very wide tables, unexplained abbreviations, and cells that require horizontal scrolling.
+- Treat page breaks as a reading concern: keep headings with their following paragraph, keep list items and table rows intact, and avoid placing essential context only in an interactive control.
+- Prefer a concise static explanation alongside an interactive exercise. The PDF includes the exercise’s meaningful prompt, answer, and explanation, but cannot preserve browser state or interaction.
+- Use `BookOnly` for print-specific framing, definitions, references, or worked solutions—not as a workaround for weak screen content.
+
 ## Authoring decision
 
 Start with the learning outcome, then choose the least elaborate representation:
