@@ -30,6 +30,7 @@ test('monochrome dark code exercise tokens remain readable', async ({ page }) =>
       text: token.textContent,
       color: getComputedStyle(token).color,
       background,
+      decoration: getComputedStyle(token).textDecorationLine,
     }));
   });
 
@@ -39,5 +40,12 @@ test('monochrome dark code exercise tokens remain readable', async ({ page }) =>
       contrastRatio(token.color, token.background),
       `${token.className} (${token.text}) has insufficient contrast`,
     ).toBeGreaterThanOrEqual(4.5);
+  }
+
+  const decoratedTokens = result.filter((item) => ['hl-keyword', 'hl-type', 'hl-directive'].includes(item.className));
+  expect(result.some((item) => item.className === 'hl-keyword')).toBeTruthy();
+  expect(decoratedTokens.length).toBeGreaterThan(0);
+  for (const token of decoratedTokens) {
+    expect(token.decoration, `${token.className} (${token.text}) should be underlined`).toContain('underline');
   }
 });
