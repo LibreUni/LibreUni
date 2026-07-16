@@ -87,7 +87,7 @@ test.describe('production smoke checks', () => {
   });
 
   test('interactive lesson controls hydrate together', async ({ page }) => {
-    await page.goto('/lessons/math/cosets-lagrange.html', { waitUntil: 'networkidle' });
+    await page.goto('/lessons/math/homomorphisms-isomorphisms.html', { waitUntil: 'networkidle' });
 
     const quiz = page.locator('.quiz-container').first();
     const answer = quiz.getByRole('button').first();
