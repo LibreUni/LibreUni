@@ -59,6 +59,7 @@ export default function Quiz({
     const optObj = opt as any;
     return {
       ...optObj,
+      text: optObj.text ?? optObj.label ?? '',
       id: optObj.id?.toString() || index.toString()
     };
   });
@@ -118,6 +119,7 @@ export default function Quiz({
         const optObj = opt as any;
         return {
           ...optObj,
+          text: optObj.text ?? optObj.label ?? '',
           id: optObj.id?.toString() || index.toString(),
           isCorrect: Boolean(optObj.isCorrect) || index === questionCorrectIndex
         };

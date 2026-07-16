@@ -49,6 +49,7 @@ export default function CaseStudy(props: CaseStudyProps) {
     const optObj = opt as any;
     return {
       ...optObj,
+      text: optObj.text ?? optObj.label ?? '',
       id: optObj.id?.toString() || index.toString(),
       isCorrect: Boolean(optObj.isCorrect) || index === correctIdx
     };

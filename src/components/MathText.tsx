@@ -2,7 +2,7 @@ import React from 'react';
 import katex from 'katex';
 
 interface MathTextProps {
-  children: string;
+  children?: string;
   className?: string;
 }
 
@@ -38,7 +38,7 @@ function splitMath(text: string): TextPart[] {
   return parts.length ? parts : [{ type: 'text', value: text }];
 }
 
-export default function MathText({ children, className }: MathTextProps) {
+export default function MathText({ children = '', className }: MathTextProps) {
   return (
     <span className={className}>
       {splitMath(children).map((part, index) => {
