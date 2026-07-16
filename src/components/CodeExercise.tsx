@@ -92,7 +92,7 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
                 className={`code-exercise-button
                     self-start px-10 py-4 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all shadow-xl
                     ${userInputs.every(inp => inp.trim()) 
-                        ? 'bg-primary text-white hover:scale-105 active:scale-95 shadow-primary/20' 
+                        ? 'bg-primary text-primary-foreground hover:scale-105 active:scale-95 shadow-primary/20'
                         : 'bg-light-border dark:bg-dark-border text-light-muted dark:text-dark-muted cursor-not-allowed'}
                 `}
               >

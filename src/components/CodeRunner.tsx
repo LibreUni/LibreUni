@@ -45,7 +45,7 @@ export default function CodeRunner({ code, output: initialOutput, title = "Inter
   const tabButtonClass = (tab: RunnerTab) =>
     `flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold uppercase transition-all ${
       activeTab === tab
-        ? 'bg-primary text-white shadow-sm shadow-primary/20'
+        ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/20'
         : 'text-light-muted dark:text-dark-muted hover:bg-light-bg dark:hover:bg-dark-bg hover:text-light-text dark:hover:text-dark-text'
     }`;
 

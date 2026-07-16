@@ -78,8 +78,7 @@ export default function CaseStudy(props: CaseStudyProps) {
           : 'border-light-border dark:border-dark-border hover:border-primary/60 hover:bg-light-bg dark:hover:bg-dark-bg';
 
     return [
-      'w-full rounded-lg border bg-transparent px-4 py-3 text-left transition-colors',
-      'flex items-start gap-3 break-words disabled:cursor-default',
+      'assessment-option break-words',
       resultClass
     ].join(' ');
   };
@@ -90,7 +89,7 @@ export default function CaseStudy(props: CaseStudyProps) {
   };
 
   return (
-    <div className="case-study-container my-8 rounded-lg border border-primary/20 bg-primary/[0.03] p-4 dark:border-primary/25 dark:bg-primary/[0.06] md:p-5">
+    <div className="case-study-container assessment-shell">
       <div className="print-static-assessment hidden">
         <div className="print-static-label">{title || 'Case Study'}</div>
         {scenario && <p className="print-static-scenario"><MathText>{scenario}</MathText></p>}
@@ -132,8 +131,8 @@ export default function CaseStudy(props: CaseStudyProps) {
                 disabled={submitted}
                 className={getOptionClass(option)}
               >
-                <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors ${selected === option.id ? 'border-primary bg-primary' : 'border-light-border bg-transparent dark:border-dark-border'}`}>
-                  {selected === option.id && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+                <div className={`assessment-option-marker ${selected === option.id ? 'border-primary bg-primary' : 'border-light-border bg-transparent dark:border-dark-border'}`}>
+                  {selected === option.id && <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />}
                 </div>
                 <span className={`flex-1 break-words text-sm leading-relaxed transition-colors ${selected === option.id ? 'font-medium text-light-text dark:text-dark-text' : 'text-light-muted dark:text-dark-muted'}`}>
                   <MathText>{option.text}</MathText>
@@ -161,10 +160,7 @@ export default function CaseStudy(props: CaseStudyProps) {
             onClick={() => setSubmitted(true)}
             disabled={hasOptions && !selected}
             className={`
-                w-full shrink-0 rounded-md px-4 py-2.5 text-sm font-semibold transition-colors sm:w-auto
-                ${(!hasOptions || selected) 
-                    ? 'bg-primary hover:bg-primary-dark text-white dark:text-white flex items-center justify-center'
-                    : 'bg-light-border text-light-muted dark:bg-dark-border dark:text-dark-muted cursor-not-allowed flex items-center justify-center'}
+                assessment-action-primary w-full shrink-0 sm:w-auto
             `}
           >
              {hasOptions ? 'Check answer' : 'Reveal analysis'}
@@ -172,10 +168,10 @@ export default function CaseStudy(props: CaseStudyProps) {
         ) : (
           <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
             {showFeedback && (
-              <div className={`rounded-lg border p-4 transition-colors ${hasOptions ? 'border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-primary/20 bg-primary/5 text-primary'}`}>
+              <div className={hasOptions ? 'feedback-success' : 'feedback-info'}>
                 {!hasOptions && (
                     <div className="mb-2 flex items-center gap-2">
-                        <div className="rounded-md bg-primary p-1.5 text-white">
+                        <div className="rounded-md bg-primary p-1.5 text-primary-foreground">
                             <Eye size={16} strokeWidth={3} />
                         </div>
                         <span className="text-sm font-semibold">Analysis</span>
@@ -194,7 +190,7 @@ export default function CaseStudy(props: CaseStudyProps) {
               <div className="flex items-center justify-end">
                 <button
                     onClick={reset}
-                    className="flex items-center gap-2 rounded-md border border-light-border px-3 py-2 text-sm font-medium text-light-muted transition-colors hover:bg-light-bg hover:text-light-text dark:border-dark-border dark:text-dark-muted dark:hover:bg-dark-bg dark:hover:text-dark-text"
+                    className="assessment-action-secondary"
                 >
                     <RefreshCw size={14} strokeWidth={2.5} /> Try again
                 </button>

@@ -84,8 +84,7 @@ export default function Quiz({
           : 'border-light-border dark:border-dark-border hover:border-primary/60 hover:bg-light-surface dark:hover:bg-dark-bg';
 
     return [
-      'w-full rounded-lg border bg-transparent px-4 py-3 text-left transition-colors',
-      'flex items-start gap-3 disabled:cursor-default',
+      'assessment-option',
       resultClass
     ].join(' ');
   };
@@ -133,7 +132,7 @@ export default function Quiz({
     });
 
   return (
-    <div className="quiz-container my-8 rounded-lg border border-primary/20 bg-primary/[0.03] p-4 dark:border-primary/25 dark:bg-primary/[0.06] md:p-5">
+    <div className="quiz-container assessment-shell">
       <div className="print-static-assessment hidden">
         <div className="print-static-label">Knowledge Check</div>
         {allQuestions.map((quizQuestion, index) => (
@@ -162,8 +161,8 @@ export default function Quiz({
             disabled={submitted}
             className={getOptionClass(option)}
           >
-            <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors ${selected === option.id ? 'border-primary bg-primary' : 'border-light-border bg-transparent dark:border-dark-border'}`}>
-                {selected === option.id && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+            <div className={`assessment-option-marker ${selected === option.id ? 'border-primary bg-primary' : 'border-light-border bg-transparent dark:border-dark-border'}`}>
+                {selected === option.id && <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />}
             </div>
             <span className={`text-sm leading-relaxed transition-colors ${selected === option.id ? 'font-medium text-light-text dark:text-dark-text' : 'text-light-muted dark:text-dark-muted'}`}><MathText>{option.text}</MathText></span>
             
@@ -188,10 +187,7 @@ export default function Quiz({
             onClick={() => setSubmitted(true)}
             disabled={!selected}
             className={`
-                w-full rounded-md px-4 py-2.5 text-sm font-semibold transition-colors sm:w-auto
-                ${selected 
-                    ? 'bg-primary text-white hover:bg-primary-dark'
-                    : 'bg-light-border dark:bg-dark-border text-light-muted dark:text-dark-muted cursor-not-allowed'}
+                assessment-action-primary sm:w-auto
             `}
           >
              Check answer
@@ -199,7 +195,7 @@ export default function Quiz({
         ) : (
           <div className="flex flex-col gap-4">
             {showFeedback && (
-              <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-4 text-emerald-700 transition-colors dark:text-emerald-300">
+              <div className="feedback-success">
                 {currentQuestion.explanation && (
                     <div className="leading-relaxed">
                         <p className="text-sm"><MathText>{currentQuestion.explanation}</MathText></p>
@@ -212,14 +208,14 @@ export default function Quiz({
                 {isCorrect && currentQuestionIndex < quizQuestions.length - 1 ? (
                     <button
                         onClick={handleNext}
-                        className="w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-dark sm:w-auto"
+                        className="assessment-action-primary w-full sm:w-auto"
                     >
                         Next question
                     </button>
                 ) : !isCorrect ? (
                     <button
                         onClick={retryCurrent}
-                        className="flex w-fit items-center gap-2 rounded-md border border-light-border px-3 py-2 text-sm font-medium text-light-muted transition-colors hover:bg-light-bg hover:text-light-text dark:border-dark-border dark:text-dark-muted dark:hover:bg-dark-bg dark:hover:text-dark-text"
+                    className="assessment-action-secondary"
                     >
                         <RefreshCw size={14} strokeWidth={2.5} /> Try again
                     </button>
