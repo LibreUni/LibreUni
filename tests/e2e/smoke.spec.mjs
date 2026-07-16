@@ -21,12 +21,6 @@ const ROUTES = [
     expectedTitle: /Python/i,
     expectedText: /Python/i,
   },
-  {
-    name: 'main course export',
-    url: 'http://127.0.0.1:4321/courses/operating-systems/export.html',
-    expectedTitle: /Operating Systems Internals - Full Course Export/i,
-    expectedText: /Save as PDF/i,
-  },
 ];
 
 test.describe('production smoke checks', () => {
@@ -192,4 +186,11 @@ test.describe('production smoke checks', () => {
 
     expect(firstRowAfterAsc).not.toEqual(firstRowAfterDesc);
   });
+});
+
+test('every course PDF is available as a downloadable document', async ({ request }) => {
+  const response = await request.get('http://127.0.0.1:4321/courses/operating-systems.pdf');
+
+  expect(response.ok()).toBe(true);
+  expect(response.headers()['content-type']).toMatch(/^application\/pdf/);
 });

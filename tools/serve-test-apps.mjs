@@ -11,6 +11,7 @@ const CONTENT_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.woff2': 'font/woff2',
+  '.pdf': 'application/pdf',
 };
 
 function createStaticServer({ name, root, port }) {

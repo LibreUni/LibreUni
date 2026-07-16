@@ -2,7 +2,6 @@ import { getCollection } from 'astro:content';
 import type { CollectionEntry } from 'astro:content';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 
 interface CourseManifest {
@@ -33,8 +32,10 @@ function loadCourseManifest(courseId: string) {
   }
 
   if (!manifestCache.has(manifestName)) {
-    const manifestPath = fileURLToPath(
-      new URL(`../data/course-manifests/${manifestName}.yml`, import.meta.url)
+    const manifestPath = path.resolve(
+      process.cwd(),
+      'src/data/course-manifests',
+      `${manifestName}.yml`,
     );
     manifestCache.set(
       manifestName,
