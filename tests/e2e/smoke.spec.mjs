@@ -86,6 +86,23 @@ test.describe('production smoke checks', () => {
     await expect(mobileMenu.getByRole('link', { name: /Career Paths/i })).toBeVisible();
   });
 
+  test('interactive lesson controls hydrate together', async ({ page }) => {
+    await page.goto('/lessons/math/cosets-lagrange.html', { waitUntil: 'networkidle' });
+
+    const quiz = page.locator('.quiz-container').first();
+    const answer = quiz.getByRole('button').first();
+    await answer.click();
+    await expect(answer).toHaveClass(/border-primary bg-primary\/10/);
+
+    const themeToggle = page.getByRole('button', { name: /Choose theme/ });
+    await themeToggle.click();
+    await expect(page.getByRole('dialog', { name: 'Theme settings' })).toBeVisible();
+
+    const search = page.getByRole('textbox', { name: /Search courses, modules, and topics/ }).first();
+    await search.fill('galois');
+    await expect(search).toHaveValue('galois');
+  });
+
   test('development quality page renders charts and supports table sorting', async ({ page }) => {
     const browserErrors = [];
     page.on('pageerror', (error) => browserErrors.push(error.message));
