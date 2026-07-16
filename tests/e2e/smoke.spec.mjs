@@ -1,4 +1,12 @@
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
+
+const SEARCH_INDEX_PATH = fileURLToPath(new URL('../../dist/search-index.json', import.meta.url));
+const LESSON_ROUTES = JSON.parse(fs.readFileSync(SEARCH_INDEX_PATH, 'utf8'))
+  .filter((entry) => entry.type === 'lesson')
+  .map((entry) => ({ title: entry.title, url: `/${entry.url}` }));
+const LESSON_BATCH_SIZE = 20;
 
 const ROUTES = [
   {
@@ -49,6 +57,42 @@ test.describe('production smoke checks', () => {
         contentType: 'application/json',
       });
       expect(toleratedExternalNoise).toEqual([]);
+    });
+  }
+
+  for (let start = 0; start < LESSON_ROUTES.length; start += LESSON_BATCH_SIZE) {
+    const batch = LESSON_ROUTES.slice(start, start + LESSON_BATCH_SIZE);
+    const batchNumber = Math.floor(start / LESSON_BATCH_SIZE) + 1;
+
+    test(`all lesson pages in batch ${batchNumber} render and hydrate`, async ({ page }) => {
+      test.setTimeout(120_000);
+      const failures = [];
+      const browserErrors = [];
+      page.on('pageerror', (error) => browserErrors.push(error.message));
+      page.on('console', (message) => {
+        if (message.type() === 'error') browserErrors.push(message.text());
+      });
+
+      for (const lesson of batch) {
+        browserErrors.length = 0;
+
+        const response = await page.goto(lesson.url, { waitUntil: 'domcontentloaded' });
+        await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+
+        const article = page.locator('article');
+        const articleText = (await article.innerText().catch(() => '')).trim();
+        const toleratedErrors = browserErrors.filter(
+          (message) => !/Failed to load resource: net::ERR_(BLOCKED_BY_CLIENT|ABORTED)/i.test(message),
+        );
+        const unhydratedIslands = await page.locator('astro-island[ssr]').count();
+
+        if (!response?.ok()) failures.push(`${lesson.url}: HTTP ${response?.status()}`);
+        if (articleText.length < 100) failures.push(`${lesson.url}: article is empty or truncated`);
+        if (unhydratedIslands > 0) failures.push(`${lesson.url}: ${unhydratedIslands} island(s) did not hydrate`);
+        if (toleratedErrors.length) failures.push(`${lesson.url}: ${toleratedErrors.join(' | ')}`);
+      }
+
+      expect(failures, failures.join('\n')).toEqual([]);
     });
   }
 
