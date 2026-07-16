@@ -2,14 +2,13 @@
 
 Always follow these rules when repairing or editing course content:
 
-1. Read `docs/RULES.md`.
-2. Read `docs/SKILLS/SOURCING.md`.
-3. Read `docs/UX.md`.
+1. Read `docs/agent-rules/GENERAL.md` and `COURSE_WORK.md`.
+2. Read `docs/agent-rules/RESEARCH.md` when adding or checking sources.
+3. Read `docs/agent-rules/UI.md` only when the repair changes layout, styling, interaction, or accessibility.
 4. Never mass-rewrite lessons with scripts.
-5. Work file by file.
-6. Preserve existing course intent.
-7. Validate with the narrowest relevant command.
-8. Utilize `scripts/course_stats.py`
+5. Work file by file and preserve existing course intent.
+6. Validate with the narrowest relevant command from `docs/agent-rules/VALIDATION.md`.
+7. Use `scripts/course_stats.py` for course-content smoke tests.
 
 ## Task Guidelines
 

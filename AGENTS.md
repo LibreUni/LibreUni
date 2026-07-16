@@ -1,88 +1,34 @@
-# LibreUni Agent Instructions
+# LibreUni agent router
 
-First stop for agents in this repo. Read before editing files, generating lesson content, researching sources, or changing UI.
+This file is the single repository entrypoint for every coding harness: OpenCode, Codex, Gemini, Antigravity, Copilot, and similar tools. Read it first. Do not infer a different workflow from the harness being used.
 
-## Primary course workflow
+## Route every task
 
-For creating, reviewing, researching, auditing, or repairing courses, infer the target and operation from ordinary requests such as `improve course X`, `repair lesson Y`, or `create course Z`; do not require the user to restate this workflow. Read `docs/AGENT_INTEGRATIONS.md` and `docs/SKILLS/LIBREUNI_COURSE.md`, use the `libreuni` MCP server as the primary host-agent interface, and treat `docs/SKILLS/PEDAGOGY.md` as the central quality contract. Use `save_proposal` / `save_course_proposal` to validate proposals, then apply directly with `git add -A && git commit -m "[Verb] Short description"`. No user approval needed — apply and commit. Use a pedagogical reviewer when available. The older `libreuni-agent` LangGraph CLI remains available for batch experiments and deterministic checks.
+1. Read [`docs/agent-rules/GENERAL.md`](docs/agent-rules/GENERAL.md).
+2. Identify the task category and read only the applicable rule file or files:
 
-In OpenCode, load the discoverable `libreuni-course` skill for this workflow. “Improve course X” means a whole-course audit and substantive redesign proposal; cosmetic-only edits do not satisfy the request.
+   - Course, module, or lesson creation, review, repair, or research → [`docs/agent-rules/COURSE_WORK.md`](docs/agent-rules/COURSE_WORK.md), [`docs/agent-rules/COURSE_PEDAGOGY.md`](docs/agent-rules/COURSE_PEDAGOGY.md), and [`docs/agent-rules/COURSE_REPAIR.md`](docs/agent-rules/COURSE_REPAIR.md) for repair work.
+   - Course components → [`docs/agent-rules/COURSE_COMPONENTS.md`](docs/agent-rules/COURSE_COMPONENTS.md).
+   - Research, new factual material, explanations, or citations → [`docs/agent-rules/RESEARCH.md`](docs/agent-rules/RESEARCH.md).
+   - Layout, styling, interaction, accessibility, or visual design → [`docs/agent-rules/UI.md`](docs/agent-rules/UI.md).
+   - PlantUML → [`docs/agent-rules/PLANTUML.md`](docs/agent-rules/PLANTUML.md).
+   - Documentation-only work → read [`docs/agent-rules/HOSTS.md`](docs/agent-rules/HOSTS.md) for agent documentation or the relevant rule file named by the document’s subject.
+   - Any edit → use [`docs/agent-rules/VALIDATION.md`](docs/agent-rules/VALIDATION.md) to choose the narrowest useful check before finishing.
 
-## Startup
+3. Inspect the current files and existing changes before editing. Keep the change scoped to the request.
+4. Follow the applicable rule files as one shared policy. The host harness does not change the policy or the expected output.
+5. Validate the result, report checks run and any external blocker, and do not claim that an unrun check passed.
 
-1. Read `docs/RULES.md` before any content or code change.
-2. Task involves research, sources, or lesson writing → read `docs/SKILLS/SOURCING.md`.
-3. Changes layout, styling, interaction, a11y, or visual design → read `docs/UX.md`.
-4. Adds or changes PlantUML → read `docs/PUML.md`.
-5. Before finishing → run the narrowest useful validation.
+## Course routing
 
-## Content Rules
+For a course request, infer whether the user wants a course audit, module review, lesson repair, or new lesson. Read the complete target lesson set and manifest when the scope is course- or module-wide. Use ordinary repository tools and direct edits; do not invoke a custom repository workflow or host-specific course process.
 
-- Lessons are hand-authored (no scripts/generation). Self-contained, university level.
-- No lesson numbers in filenames, headers, or text.
-- Structure: theory → example → exercise.
-- Banned filler: "welcome", "let's dive in", "in this lesson", "as you have learned before", "congratulations on finishing", "you have completed", "next up", "previously", "before we move on", "let's explore", "let's take a look at".
-- Interactive React components in MDX must use `client:load` (e.g. `<Quiz client:load />`).
-- Canonical component props — use exactly these, no aliases:
-  - `<Quiz>`: `question`, `options`, `correctIndex`, `explanation`, `questions`, `title`
-  - `<CodeRunner>`: `code`, `output`, `language`, `title`
-  - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`
-  - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title`
-- Lesson order/modules are set in `src/data/course-manifests/<course-id>.yml`, not in frontmatter.
-- Smoke-test data is generated with `python3 scripts/course_stats.py --write-quality`; it is not a course-quality badge.
-- `docs/COURSE_COMPONENTS.md` is the canonical component guide for all course authors and agents.
-- `scripts/course_stats.py` is a smoke-test/inventory tool. It does not rate course quality; a pass only means checked structure and supported code syntax were not found broken.
-- Course agents must treat every smoke-test error as unfinished work and continue until all supported code blocks and structural checks pass, or clearly report an external blocker.
-- Banned: fake source-tracking comments to bypass `course_stats.py` checks. Every citation must be genuine.
+“Improve course X” means a whole-course pedagogical audit and substantive redesign. Cosmetic cleanup alone is not completion.
 
-## Commands
+## Change and commit policy
 
-```bash
-npm install
-npm run dev              # dev server on :4321
-npm run build:all        # build only (skips UX tests)
-npm run build            # full: build + UX tests + copy report
-npm test                 # full gate: build → e2e → ux → lighthouse
-npm run test:e2e         # build + Playwright smoke tests (chromium + mobile)
-npm run test:ux          # build + UX report (contrast, spacing, overflow)
-npm run test:visual      # build + capture screenshots to reports/visual/
-npm run test:lighthouse  # build + Lighthouse CI budgets
-npm run test:report      # open last Playwright HTML report
-# focused validation:
-python3 scripts/course_stats.py                     # course smoke tests & inventory
-python3 scripts/course_stats.py --write-quality     # regenerate smoke-test data
-python3 scripts/course_stats.py <course-id>         # smoke-test one course
-npm run build:all && npm run test:e2e:run           # quick e2e after build
-npm run build:all && npm run test:ux:run            # quick ux after build
-```
+Make requested repository changes directly. Show the rationale and diff when the host supports it. Commit only when the user or the surrounding workflow asks for a commit. Use `[Verb] Short description` for commit messages when committing.
 
-## Architecture Notes
+## Host compatibility files
 
-- **Single application** at the repository root.
-- **Build quirk**: the build uses `node --max-old-space-size=8192` and runs `tools/fix-static-paths.mjs` on the output (rewrites absolute paths to relative for file-served deployments).
-- **Math rendering**: KaTeX configured with `output: 'mathml'` (faster, no JS hydration for math).
-- **Build caches**: `puml-cache/`, `python-diagram-cache/`, `tikz-cache/` under `src/`. Delete to force rerender.
-- **Test server**: Playwright/Lighthouse use `tools/serve-test-apps.mjs` (serves built `dist/` folders), not the Astro dev server.
-- **CI**: `.github/workflows/quality.yml` runs `npm test` on push/PR to main.
-- **Dockerfile**: multi-stage build with Nginx for deployment.
-
-## Project Map
-
-- `src/content/lessons/` — MDX lessons by course slug
-- `src/content/courses/` — JSON course metadata
-- `src/data/course-manifests/` — YAML lesson order & module grouping
-- `src/data/course-quality.json` — generated smoke-test records and descriptive counts
-- `src/components/` — React components (Quiz, CodeRunner, CodeExercise, CaseStudy, etc.)
-- `docs/` — rules, sourcing, UX, PlantUML, testing references
-- `scripts/` — content validation and stats
-- `tools/` — monorepo build/test helpers
-- `tests/e2e/`, `tests/ux/`, `tests/visual/` — Playwright test suites
-- `GEMINI.md`, `CODEX.md` — agent config files (both point back here)
-
-## Finish Criteria
-
-- Confirm relevant docs above were followed.
-- Run the validation that matches the risk of the change, or explain why not.
-- For UI/styling changes: run `npm run test:visual`, inspect `reports/visual/` for overlap, clipping, contrast, responsive issues; fix before handoff.
-- Do not bypass MDX, type, build, a11y, or UX failures.
-- Keep changes scoped to the user's request.
+`CODEX.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and `opencode.json` are thin host adapters. They must point back to this file and must not introduce a competing workflow.

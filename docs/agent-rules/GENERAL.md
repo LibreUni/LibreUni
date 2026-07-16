@@ -22,7 +22,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 ## Core Rules
 
 - Lessons are created by hand — no Python scripts or auto-generation.
-- Use interactive components where they add real value; never add them to satisfy a quota. See `docs/COURSE_COMPONENTS.md`. In Astro/MDX, all interactive React components **must** use `client:load` (e.g. `<Quiz client:load ... />`).
+- Use interactive components where they add real value; never add them to satisfy a quota. See `docs/agent-rules/COURSE_COMPONENTS.md`. In Astro/MDX, all interactive React components **must** use `client:load` (e.g. `<Quiz client:load ... />`).
 - Use `<Quiz client:load>` for knowledge validation; `<CaseStudy client:load>` for scenario-based problems with setup context.
 - **Canonical component props** — use exactly these names, no aliases:
   - `<Quiz>`: `question`, `options`, `correctIndex`, `explanation`, `questions`, `title`
@@ -30,7 +30,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
   - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`
   - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title`
 - Write new custom components when existing ones don't fit.
-- Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/PUML.md` for troubleshooting.
+- Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/agent-rules/PLANTUML.md` for troubleshooting.
 - Lessons must be self-contained — no lesson should require reading another first.
 - No lesson numbers in filenames, headers, or text. Lessons can be taken in any order.
 - Lesson order and module grouping must be edited in `src/data/course-manifests/<course-id>.yml`, not in lesson frontmatter.
@@ -72,13 +72,13 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
    - Run `python3 scripts/course_stats.py --write-quality` to regenerate the smoke-test data used by development tooling.
 2. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams. Note: use `$$` for display math, not `\[` — remark-math does not support LaTeX-style `\[ ... \]` delimiters.
 
-Automated metrics do not certify course quality. Pedagogy, correctness, sourcing, and exercise value require human or agent review under `docs/SKILLS/PEDAGOGY.md`.
+Automated metrics do not certify course quality. Pedagogy, correctness, sourcing, and exercise value require human or agent review under `docs/agent-rules/COURSE_PEDAGOGY.md`.
 
 ---
 
 ## Design & UX
 
-See `docs/ux.md` for the full UX vision. Key points:
+See `docs/agent-rules/UI.md` for the full UX vision. Key points:
 
 - Primary color: blue (`#3b82f6` / Tailwind `blue-500`).
 - Minimalism: clean lines, ample whitespace, clear typography.

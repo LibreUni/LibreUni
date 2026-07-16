@@ -116,7 +116,7 @@ npm run test:install
 npm test
 ```
 
-The pipeline builds the static site, runs Playwright smoke tests on desktop/mobile, generates a UX report with color-blind contrast and element spacing analysis, and runs Lighthouse CI budgets on main branch pushes. See [docs/TESTING.md](docs/TESTING.md) for the full command list and report locations.
+The pipeline builds the static site, runs Playwright smoke tests on desktop/mobile, generates a UX report with color-blind contrast and element spacing analysis, and runs Lighthouse CI budgets on main branch pushes. See [docs/agent-rules/VALIDATION.md](docs/agent-rules/VALIDATION.md) for the full command list and report locations.
 
 ### CI Pipeline
 
@@ -175,11 +175,11 @@ If you prefer Coolify's source/static flow instead of Docker:
 We welcome contributions from the community! Whether it's fixing a typo, adding a new lesson, or improving the platform's features, your help is appreciated.
 
 **Before you start:**
-Please read our [RULES.md](docs/RULES.md) carefully. It contains the complete set of rules for lesson structure, writing style, and quality standards that ensure LibreUni maintains its tone.
+Please read our [agent router](AGENTS.md) first. It sends each task to the relevant rules under [docs/agent-rules](docs/agent-rules/), including the general rules for lesson structure, writing style, and quality standards.
 
 AI agents and coding assistants must also start with [AGENTS.md](AGENTS.md), which points to the required project rules, sourcing workflow, UX guidance, and validation commands.
 
-For durable, evidence-driven course authoring and auditing, see [docs/AGENT_WORKFLOWS.md](docs/AGENT_WORKFLOWS.md). The LangGraph runner separates research, drafting, deterministic checks, adversarial review, bounded revision, and final repository validation.
+All coding harnesses use the same repository router. Course work, research, UI changes, PlantUML, and validation each have focused guidance under [docs/agent-rules](docs/agent-rules/); the harness does not select a different LibreUni workflow.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
