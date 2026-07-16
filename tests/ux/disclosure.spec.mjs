@@ -21,6 +21,7 @@ test('lesson disclosures have consistent markers and vertical content flow', asy
       markerContent: markerStyle.content,
       markerWidth: markerStyle.width,
       contentBelowSummary: !contentBox || contentBox.top >= summaryBox.bottom,
+      orderedItemCount: details.querySelectorAll(':scope > div ol > li').length,
     };
   }));
 
@@ -31,4 +32,6 @@ test('lesson disclosures have consistent markers and vertical content flow', asy
     expect(disclosure.markerWidth).not.toBe('0px');
     expect(disclosure.contentBelowSummary).toBe(true);
   }
+
+  expect(result[0].orderedItemCount).toBe(3);
 });
