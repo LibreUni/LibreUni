@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Check, X, RefreshCw } from 'lucide-react';
+import MathText from './MathText';
 
 interface Option {
   id: string;
@@ -135,18 +136,18 @@ export default function Quiz({
         <div className="print-static-label">Knowledge Check</div>
         {allQuestions.map((quizQuestion, index) => (
           <div className="print-static-item" key={`${quizQuestion.question}-${index}`}>
-            <p className="print-static-question">{quizQuestion.question}</p>
+            <p className="print-static-question"><MathText>{quizQuestion.question}</MathText></p>
             {quizQuestion.answerText && (
-              <p className="print-static-answer"><strong>Answer:</strong> {quizQuestion.answerText}</p>
+              <p className="print-static-answer"><strong>Answer:</strong> <MathText>{quizQuestion.answerText}</MathText></p>
             )}
             {quizQuestion.explanation && (
-              <p className="print-static-explanation">{quizQuestion.explanation}</p>
+              <p className="print-static-explanation"><MathText>{quizQuestion.explanation}</MathText></p>
             )}
           </div>
         ))}
       </div>
 
-      <h3 className="mb-4 text-lg font-semibold leading-snug text-light-text dark:text-dark-text">{currentQuestion.question}</h3>
+      <h3 className="mb-4 text-lg font-semibold leading-snug text-light-text dark:text-dark-text"><MathText>{currentQuestion.question}</MathText></h3>
       
       <div
         className="grid gap-2.5"
@@ -162,7 +163,7 @@ export default function Quiz({
             <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors ${selected === option.id ? 'border-primary bg-primary' : 'border-light-border bg-transparent dark:border-dark-border'}`}>
                 {selected === option.id && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
             </div>
-            <span className={`text-sm leading-relaxed transition-colors ${selected === option.id ? 'font-medium text-light-text dark:text-dark-text' : 'text-light-muted dark:text-dark-muted'}`}>{option.text}</span>
+            <span className={`text-sm leading-relaxed transition-colors ${selected === option.id ? 'font-medium text-light-text dark:text-dark-text' : 'text-light-muted dark:text-dark-muted'}`}><MathText>{option.text}</MathText></span>
             
             {submitted && selected === option.id && option.isCorrect && (
                 <div className="ml-auto rounded-md bg-emerald-500/10 p-1 text-emerald-500">
@@ -199,7 +200,7 @@ export default function Quiz({
               <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-4 text-emerald-700 transition-colors dark:text-emerald-300">
                 {currentQuestion.explanation && (
                     <div className="leading-relaxed">
-                        <p className="text-sm">{currentQuestion.explanation}</p>
+                        <p className="text-sm"><MathText>{currentQuestion.explanation}</MathText></p>
                     </div>
                 )}
               </div>

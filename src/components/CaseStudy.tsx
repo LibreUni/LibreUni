@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Check, X, RefreshCw, BookOpen, Eye } from 'lucide-react';
+import MathText from './MathText';
 
 interface Option {
   id: string;
@@ -91,12 +92,12 @@ export default function CaseStudy(props: CaseStudyProps) {
     <div className="case-study-container my-8 rounded-lg border border-primary/20 bg-primary/[0.03] p-4 dark:border-primary/25 dark:bg-primary/[0.06] md:p-5">
       <div className="print-static-assessment hidden">
         <div className="print-static-label">{title || 'Case Study'}</div>
-        {scenario && <p className="print-static-scenario">{scenario}</p>}
-        {qText && <p className="print-static-question">{qText}</p>}
+        {scenario && <p className="print-static-scenario"><MathText>{scenario}</MathText></p>}
+        {qText && <p className="print-static-question"><MathText>{qText}</MathText></p>}
         {correctAnswer && (
-          <p className="print-static-answer"><strong>Answer:</strong> {correctAnswer.text}</p>
+          <p className="print-static-answer"><strong>Answer:</strong> <MathText>{correctAnswer.text}</MathText></p>
         )}
-        {exp && <p className="print-static-explanation">{exp}</p>}
+        {exp && <p className="print-static-explanation"><MathText>{exp}</MathText></p>}
       </div>
 
       <div className="mb-4 flex items-center justify-between">
@@ -110,14 +111,12 @@ export default function CaseStudy(props: CaseStudyProps) {
 
       {(scenario) && (
         <div className="mb-4 rounded-lg border border-light-border bg-light-bg p-4 dark:border-dark-border dark:bg-dark-surface">
-          <p className="text-sm leading-relaxed text-light-text dark:text-dark-text">
-            {scenario}
-          </p>
+          <p className="text-sm leading-relaxed text-light-text dark:text-dark-text"><MathText>{scenario}</MathText></p>
         </div>
       )}
 
       {qText && (
-        <h3 className="mb-4 break-words text-lg font-semibold leading-snug text-light-text dark:text-dark-text">{qText}</h3>
+        <h3 className="mb-4 break-words text-lg font-semibold leading-snug text-light-text dark:text-dark-text"><MathText>{qText}</MathText></h3>
       )}
       
       {hasOptions ? (
@@ -136,7 +135,7 @@ export default function CaseStudy(props: CaseStudyProps) {
                   {selected === option.id && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
                 </div>
                 <span className={`flex-1 break-words text-sm leading-relaxed transition-colors ${selected === option.id ? 'font-medium text-light-text dark:text-dark-text' : 'text-light-muted dark:text-dark-muted'}`}>
-                  {option.text}
+                  <MathText>{option.text}</MathText>
                 </span>
                 
                 {submitted && selected === option.id && option.isCorrect && (
@@ -184,7 +183,7 @@ export default function CaseStudy(props: CaseStudyProps) {
                 
                 {exp && (
                     <div className={`break-words leading-relaxed ${!hasOptions ? 'mt-3 pt-3' : ''}`}>
-                        <div className="text-sm whitespace-pre-wrap">{exp}</div>
+                        <div className="text-sm whitespace-pre-wrap"><MathText>{exp}</MathText></div>
                     </div>
                 )}
               </div>
