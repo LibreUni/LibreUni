@@ -81,7 +81,7 @@ export default function Search({ baseUrl, variant = 'compact' }: { baseUrl: stri
                 <input 
                     type="text" 
                     placeholder="Search courses, modules, and topics" 
-                    className={`input-field ${variant === 'hero' ? 'pl-16 pr-6 !py-5 text-base md:text-lg shadow-2xl shadow-primary/10 !rounded-2xl' : 'pl-11 !py-2.5'}`}
+                    className={`input-field ${variant === 'hero' ? 'pl-16 pr-6 !py-5 text-base md:text-lg shadow-2xl shadow-primary/10 !rounded-2xl' : 'pl-11 !py-3'}`}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     onFocus={() => query.length > 1 && setIsOpen(true)}
