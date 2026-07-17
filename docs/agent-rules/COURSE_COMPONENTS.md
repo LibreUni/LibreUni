@@ -89,8 +89,33 @@ These are Astro components and do not need `client:load`.
 | `PythonDiagram` | A Python-generated SVG/PNG visualization where the figure is part of the explanation | `code`, optional `format`, `title` |
 | `TikZ` | Precise mathematical or geometric diagrams | `code`, optional `packages` |
 | `Math` | A KaTeX-rendered inline or display formula | `math`, optional `block` |
+| `MathStatement` | A semantic definition, lemma, theorem, proposition, corollary, example, or remark with stable linking | `id`, `title`, optional `kind`, `number`, `proofId`, `dependsOn` |
+| `MathProof` | A proof linked back to its statement, optionally collapsible | `id`, `for`, optional `title`, `collapsible`, `open` |
 
 Prefer a diagram when it communicates relationships more clearly than prose. Keep source code deterministic and bounded. A diagram is not a substitute for explaining the model it represents.
+
+### Interconnected mathematical statements and proofs
+
+Use `MathStatement` when a formal claim should be visually identifiable and linkable. Give it a stable `id`; set `proofId` when a proof is authored separately. Use `dependsOn` to expose the lemmas or definitions that a theorem consumes. Links to a statement anchor, including ordinary Markdown links, show a compact preview on hover and keyboard focus while retaining normal anchor behavior. Pair it with `MathProof`, whose `for` prop points back to the statement. A proof may be collapsible when the learner should first inspect the claim, but it must remain readable when expanded in the PDF.
+
+```mdx
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+
+<MathStatement
+  id="lagrange"
+  kind="theorem"
+  title="Lagrange's theorem"
+  proofId="lagrange-proof"
+  dependsOn={[{ id: "coset-partition", label: "coset partition lemma" }]}
+>
+If $H \le G$ and $G$ is finite, then $|H|$ divides $|G|$.
+</MathStatement>
+
+<MathProof id="lagrange-proof" for="lagrange" collapsible open>
+The cosets partition $G$ into equally sized sets, so $|G|$ is an integer multiple of $|H|$.
+</MathProof>
+```
 
 ### Diagram types and usage
 
