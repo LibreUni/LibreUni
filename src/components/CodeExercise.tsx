@@ -9,6 +9,16 @@ interface CodeExerciseProps {
   explanation?: string;
 }
 
+// Blanks test the code token, not a user's choice of harmless whitespace.
+// Keep punctuation and operators meaningful while accepting forms such as
+// `x+h`, `x + h`, and `f ( x )` interchangeably.
+function normalizeAnswer(value: string) {
+  return value
+    .replace(/[−–—]/g, '-')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
 export default function CodeExercise({ title = "Complete the Code", code, answers, explanation }: CodeExerciseProps) {
   const actualCode = code || '';
   const actualAnswers = answers || [];
@@ -33,7 +43,7 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
 
   const checkAnswers = () => {
     const correct = userInputs.every((input, index) => 
-      input.trim() === (actualAnswers[index] || '').trim()
+      normalizeAnswer(input) === normalizeAnswer(actualAnswers[index] || '')
     );
     setIsCorrect(correct);
     setSubmitted(true);
@@ -75,7 +85,7 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
                     className={`code-exercise-blank
                       mx-1.5 px-2 py-0 h-[22px] rounded border-2 font-black text-center focus:outline-none transition-all duration-300 text-sm
                       ${submitted 
-                        ? (userInputs[index]?.trim() === (actualAnswers[index] || '').trim() ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 border-rose-500 text-rose-600 dark:text-rose-400') 
+                        ? (normalizeAnswer(userInputs[index] || '') === normalizeAnswer(actualAnswers[index] || '') ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 border-rose-500 text-rose-600 dark:text-rose-400')
                         : 'bg-light-surface dark:bg-dark-surface border-light-border dark:border-dark-border text-light-text dark:text-dark-text focus:border-primary focus:bg-light-bg dark:focus:bg-dark-surface'}
                     `}
                   />
@@ -96,7 +106,7 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
                         : 'bg-light-border dark:bg-dark-border text-light-muted dark:text-dark-muted cursor-not-allowed'}
                 `}
               >
-                Compile & Run
+                Check answer
               </button>
             ) : (
               <div className="space-y-4">
@@ -106,12 +116,12 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
                         {isCorrect ? <Check size={18} strokeWidth={3} /> : <X size={18} strokeWidth={3} />}
                     </div>
                     <span className="font-black uppercase tracking-tighter text-xl">
-                      {isCorrect ? "Integration Successful" : "Compilation Error"}
+                      {isCorrect ? "Correct" : "Not quite"}
                     </span>
                   </div>
                   {!isCorrect && (
                     <div className="text-[10px] font-mono opacity-80 p-4 bg-rose-500/10 rounded-lg border border-rose-500/10 mt-1">
-                      <span className="text-rose-500 uppercase text-[9px] font-black tracking-[0.2em] block mb-1.5">Expected Stack Trace</span>
+                      <span className="text-rose-500 uppercase text-[9px] font-black tracking-[0.2em] block mb-1.5">Expected token</span>
                       {actualAnswers.map((ans, i) => (
                         <div key={i} className="flex gap-3">
                            <span className="opacity-40">[{i}]</span>

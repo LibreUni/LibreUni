@@ -27,7 +27,7 @@ function lessonStem(lesson: LessonEntry) {
 
 function loadCourseManifest(courseId: string) {
   let manifestName = courseId;
-  if (courseId.startsWith('math-') && courseId !== 'math-stats' && courseId !== 'math-algebra') {
+  if (courseId.startsWith('math-') && !['math-stats', 'math-algebra', 'math-calculus'].includes(courseId)) {
     manifestName = 'math';
   }
 

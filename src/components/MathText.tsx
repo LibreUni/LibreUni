@@ -46,7 +46,11 @@ export default function MathText({ children = '', className }: MathTextProps) {
           return <React.Fragment key={index}>{part.value}</React.Fragment>;
         }
 
-        const html = katex.renderToString(part.value, {
+        // JSX string attributes preserve backslashes literally. Accept a
+        // doubled slash here as a forgiving authoring form so math is not
+        // accidentally displayed as `mathbbR`/`setminus` text.
+        const mathValue = part.value.replace(/\\\\/g, '\\');
+        const html = katex.renderToString(mathValue, {
           displayMode: part.display,
           output: 'mathml',
           throwOnError: false,
