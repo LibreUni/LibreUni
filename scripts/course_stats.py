@@ -280,6 +280,42 @@ def smoke_lesson(path):
                     f"{path.relative_to(ROOT)}: Diagnostic solutions contain literal quote wrapper (line {line_idx})"
                 )
 
+    # Cryptography lessons contain compact symbolic expressions throughout
+    # their prose. Keep those expressions in KaTeX delimiters so they are
+    # readable and so the authoring convention remains testable. This is
+    # intentionally course-wide: a filename-specific check would miss the
+    # same authoring failure in neighboring lessons.
+    if path.parent.name == "cryptography-security":
+        math_lines = re.compile(
+            r"(?:\b(?:[A-Za-z0-9]+)\s+(?:congruent\s+to|divides)\s+[A-Za-z0-9]"
+            r"|\b(?:[0-9]+|[A-Za-z])\s+times\s+(?:[0-9]+|[A-Za-z])"
+            r"|\bgcd\s*\(|\b(?:phi|gcd)\s*\(|"
+            r"\b[A-Z]\s*=\s*[A-Za-z][A-Za-z0-9]*|"
+            r"\b(?:[A-Za-z]|[0-9]+)\s*[*/]\s*[A-Za-z0-9(]|"
+            r"\b(?:[A-Za-z]|[0-9]+)\s*\^\s*[A-Za-z0-9({]|"
+            r"\b(?:q|p|n|N|H|X|Y)\s*\([^)]*\)|"
+            r"\bH[-_ ]?infinity\s*\(|\b(?:divided\s+by|logarithm\s+of)\s+(?:[0-9A-Za-z])|"
+            r"\binverse\s+times\b)",
+            re.IGNORECASE,
+        )
+        for line_idx, line in enumerate(body.splitlines(), start=1):
+            if line.lstrip().startswith("```") or line.lstrip().startswith("#") or "<" in line:
+                continue
+            line_without_links = re.sub(r"\[[^\]]*\]\([^)]*\)", "", line)
+            plain_line = re.sub(r"\$[^$]*\$", "", line_without_links)
+            if math_lines.search(plain_line):
+                errors.append(
+                    f"{path.relative_to(ROOT)}: mathematical expression must use $...$ TeX (line {line_idx})"
+                )
+            if r"\[" in line or r"\]" in line:
+                errors.append(
+                    f"{path.relative_to(ROOT)}: use $$...$$ for display TeX, not \\[...\\] (line {line_idx})"
+                )
+            if line.count("$") % 2:
+                errors.append(
+                    f"{path.relative_to(ROOT)}: unbalanced $...$ TeX delimiters (line {line_idx})"
+                )
+
     return errors
 
 
