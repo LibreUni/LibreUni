@@ -135,7 +135,6 @@ def verify_lesson(path, check_links=False):
         errors.append("Completely unsourced lesson (no References heading and no source-tracking comments)")
     elif not ref_heading:
         warnings.append("Has source tracking comments but lacks a visible 'References & Further Reading' section")
-
     # 6. Extract URLs for checking
     urls = URL_RE.findall(body)
     checked_urls = []
@@ -150,6 +149,33 @@ def verify_lesson(path, check_links=False):
                     errors.append(f"Dead or invalid reference URL: {url} ({status})")
                 else:
                     checked_urls.append(url)
+
+    # 7. Visible Technical Comments Check
+    # Strip code blocks, inline code, and JSX to avoid false positives
+    clean_body = re.sub(r"^```[^\n]*\n.*?^```\s*$", " ", body, flags=re.MULTILINE | re.DOTALL)
+    clean_body = re.sub(r"`[^`]*`", " ", clean_body)
+    
+    # Strip JSX braces recursively
+    prev_len = -1
+    while len(clean_body) != prev_len:
+        prev_len = len(clean_body)
+        clean_body = re.sub(r"\{[^{}]*\}", " ", clean_body)
+        
+    # Strip HTML-like JSX tags
+    clean_body = re.sub(r"<[^>]+>", " ", clean_body)
+    
+    # Check for visible block comments /* and */
+    if "/*" in clean_body:
+        errors.append("Contains visible block comment start '/*' (must be wrapped in curly braces: '{/* comment */}')")
+    if "*/" in clean_body:
+        errors.append("Contains visible block comment end '*/' (must be wrapped in curly braces: '{/* comment */}')")
+        
+    # Check for visible single-line comments //
+    for line_idx, line in enumerate(clean_body.splitlines(), start=1):
+        stripped_line = line.strip()
+        if stripped_line.startswith("//"):
+            if not re.match(r"^//\S+\.\S+", stripped_line):
+                errors.append(f"Contains visible single-line comment '//' (line {line_idx}: '{stripped_line}')")
 
     return errors, warnings, checked_urls
 

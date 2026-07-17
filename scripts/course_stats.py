@@ -236,6 +236,34 @@ def smoke_lesson(path):
         error = run_source(code, language, path.relative_to(ROOT), body[:match.start()].count("\n") + 1)
         if error and error not in errors:
             errors.append(error)
+
+    # Visible Technical Comments Check
+    # Strip code blocks, inline code, and JSX to avoid false positives
+    clean_body = re.sub(r"^```[^\n]*\n.*?^```\s*$", " ", body, flags=re.MULTILINE | re.DOTALL)
+    clean_body = re.sub(r"`[^`]*`", " ", clean_body)
+    
+    # Strip JSX braces recursively
+    prev_len = -1
+    while len(clean_body) != prev_len:
+        prev_len = len(clean_body)
+        clean_body = re.sub(r"\{[^{}]*\}", " ", clean_body)
+        
+    # Strip HTML-like JSX tags
+    clean_body = re.sub(r"<[^>]+>", " ", clean_body)
+    
+    # Check for visible block comments /* and */
+    if "/*" in clean_body:
+        errors.append(f"{path.relative_to(ROOT)}: Contains visible block comment start '/*' (must be wrapped in curly braces: '{{/* comment */}}')")
+    if "*/" in clean_body:
+        errors.append(f"{path.relative_to(ROOT)}: Contains visible block comment end '*/' (must be wrapped in curly braces: '{{/* comment */}}')")
+        
+    # Check for visible single-line comments //
+    for line_idx, line in enumerate(clean_body.splitlines(), start=1):
+        stripped_line = line.strip()
+        if stripped_line.startswith("//"):
+            if not re.match(r"^//\S+\.\S+", stripped_line):
+                errors.append(f"{path.relative_to(ROOT)}: Contains visible single-line comment '//' (line {line_idx}: '{stripped_line}')")
+
     return errors
 
 
