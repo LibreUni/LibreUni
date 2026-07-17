@@ -264,6 +264,22 @@ def smoke_lesson(path):
             if not re.match(r"^//\S+\.\S+", stripped_line):
                 errors.append(f"{path.relative_to(ROOT)}: Contains visible single-line comment '//' (line {line_idx}: '{stripped_line}')")
 
+    # Diagnostic solutions are ordinary Markdown. Literal quote wrappers and
+    # quote-only separator lines render as visible artifacts instead of
+    # paragraphs, so reject them in the solution section.
+    diagnostic = re.search(
+        r"^#{2,3}\s+Diagnostic solutions\s*$\n(.*?)(?=^#{1,3}\s|\Z)",
+        body,
+        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    if diagnostic:
+        for line_idx, line in enumerate(diagnostic.group(1).splitlines(), start=1):
+            stripped_line = line.strip()
+            if stripped_line == "''" or re.fullmatch(r"'\d+\..*'", stripped_line):
+                errors.append(
+                    f"{path.relative_to(ROOT)}: Diagnostic solutions contain literal quote wrapper (line {line_idx})"
+                )
+
     return errors
 
 
