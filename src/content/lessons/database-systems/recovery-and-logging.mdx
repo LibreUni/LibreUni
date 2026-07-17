@@ -1,0 +1,91 @@
+---
+title: "Recovery and Logging"
+course: "database-systems"
+description: "Write-ahead logging, checkpoints, undo, and redo."
+---
+# Recovery and Logging
+
+Write-ahead logging requires the log record describing a change to reach durable storage before the changed data page. After a crash, recovery redoes committed effects not present on disk and undoes incomplete effects according to the engine’s protocol.
+
+Checkpoints bound recovery work but do not remove the need for a durable ordering argument. Acknowledging commit before durable log violates durability.
+
+## Failure model and recovery goals
+
+Recovery begins by stating what survives a failure. A process crash may lose memory and in-flight state while preserving storage; a machine crash may lose volatile caches and interrupt writes; media corruption can alter durable pages; a distributed failure may leave replicas and logs at different prefixes. Atomicity requires incomplete transactions not appear committed, while durability requires committed transactions remain recoverable. The mechanism and proof depend on the model.
+
+A database page and its log record may reach durable storage in different orders. Write-ahead logging imposes two rules: before a dirty data page is flushed, the log records describing its updates must be durable; before a commit is acknowledged, the commit record must be durable. Page LSNs let recovery determine whether a page already contains a log record’s effect. Violating WAL can make redo impossible or allow an uncommitted effect to survive without an undo record.
+
+## Log records
+
+A log record identifies transaction, page or logical object, previous and next log sequence numbers, operation type, before and after information or a logical action, and possibly compensation metadata. Physical redo stores enough bytes to repeat an update; physical undo stores enough to restore old bytes. Logical logging records operations such as insert key or delete row and may require page and schema context. Physiological logging combines page identity with a logical change within that page.
+
+The log is an ordered durable history. A transaction’s commit position determines when it may be treated as durable; an abort or end record determines cleanup. Log sequence numbers and page LSNs support idempotent redo: if a page’s LSN is at least the record’s LSN, the effect is already present and should not be applied twice. Idempotence is essential because recovery may repeat after another crash.
+
+## Undo and redo
+
+A simple deferred-write system keeps uncommitted changes out of data pages and writes committed changes later; recovery primarily redoes committed operations. An immediate-write system may flush uncommitted data, so recovery must undo losers and redo winners. Steal permits uncommitted pages to be evicted; no-force permits committed pages to remain in memory after commit. Steal/no-force is flexible and fast but requires both undo and redo.
+
+At crash, classify transactions as winners with durable commit records and losers without commit. Redo repeats history from an appropriate point, including changes of losers if they reached pages; undo rolls back loser effects in reverse dependency order. Compensation log records describe undo actions and prevent an interrupted rollback from being mistaken for the original update.
+
+## ARIES-style phases
+
+ARIES recovery has analysis, redo, and undo phases. Analysis starts from the last checkpoint, reconstructs the transaction table and dirty-page table, identifies active losers, and finds a redo starting LSN based on the earliest recLSN of a dirty page. Redo repeats history for operations whose page state shows they are not already applied. Undo uses a priority queue of loser transaction LSNs, follows prevLSN chains, writes compensation records, and ends each transaction.
+
+The exact details depend on the implementation, but the reasoning pattern is general: reconstruct state from the log, redo idempotently using page LSN and record ordering, then undo incomplete work while logging the undo itself. Checkpoints reduce analysis and redo scope but can be fuzzy; a checkpoint need not stop all transactions or flush every dirty page.
+
+## Checkpoints and truncation
+
+A checkpoint records enough information to restart recovery from a known log position, such as active transactions and dirty pages. A fuzzy checkpoint can be taken while the system runs, reducing pause time but requiring recovery to account for operations before and after the checkpoint. Log truncation is safe only when no active transaction, replication consumer, backup, or recovery process may need an older record.
+
+An old snapshot can keep versions or log records alive. Replication slots, long-running transactions, and stalled backups can prevent truncation and cause unbounded storage growth. Monitor oldest-needed LSN, dirty-page age, checkpoint duration, redo rate, and archive availability. Recovery is an operational subsystem with capacity and alerting requirements.
+
+## Group commit and durability
+
+Several transactions can share a log flush. A transaction waits until its commit record reaches the durable point, then acknowledges; group commit amortizes the flush cost. Asynchronous commit may reduce latency but weakens crash durability. Applications must choose whether losing acknowledged work is acceptable. A database cannot provide a guarantee stronger than the storage and replication configuration behind its commit response.
+
+## Interaction with concurrency and MVCC
+
+Recovery must preserve visibility and lock or version metadata. An undone insert should not remain visible to snapshots; a committed version must survive until it is safe for every reader. In MVCC, old versions may be retained for active snapshots, while WAL or undo information may be needed for crash repair. Garbage collection cannot remove a version or log record needed by recovery, replication, or a still-running transaction.
+
+## Worked log analysis
+
+Consider log: begin T1, T1 updates page P from 10 to 20, begin T2, T2 updates page Q from 5 to 7, T1 commit, checkpoint, T2 updates P from 20 to 25, crash. T1 is a winner and T2 a loser. Redo begins from the appropriate dirty-page recLSN and repeats T1 and T2 updates that are absent from pages; then undo T2’s Q and P effects in reverse order, writing compensation records. If the log lacks page LSNs, flush policy, or commit durability assumptions, the exact redo set is ambiguous; a correct answer states the missing assumptions.
+
+## Corruption and backups
+
+WAL protects logical consistency from crash but does not by itself provide independent backup or protection from media corruption, operator deletion, or malicious writes. Use checksums, archived logs, full and incremental backups, replicas, restore verification, and retention policy. A backup is useful only if it can be restored with keys, schema, extensions, and compatible application expectations. Test point-in-time recovery and measure recovery point and recovery time objectives.
+
+## Exercises
+
+1. Explain steal/no-force and which recovery operations it requires.
+2. Classify winners and losers at a crash point.
+3. Show why redo must be idempotent.
+4. Explain fuzzy checkpoints and safe log truncation.
+5. Design a group-commit durability statement.
+6. Create a point-in-time restore test.
+
+### Diagnostic solutions
+
+
+1. Steal allows uncommitted dirty pages to flush, requiring undo; no-force allows committed pages to remain unflushed, requiring redo. Together they improve flexibility but need both histories.
+2. Transactions with durable commit records are winners; active transactions without commit records are losers. The exact classification depends on the crash-visible log, not the client’s intention.
+3. Recovery may encounter a record whose update already reached the page or may restart after partial recovery. Page LSN comparison lets redo skip an applied record without changing the result.
+4. A fuzzy checkpoint records active and dirty state while transactions continue. Truncate only before the oldest LSN needed by active recovery, replicas, backups, or transactions; otherwise a required history is lost.
+5. “Commit acknowledgment means the commit record and all required key metadata are durable on the configured quorum; losing only volatile memory after acknowledgment does not lose the transaction.” If asynchronous commit is allowed, state the weaker guarantee.
+6. Take a full backup, archive WAL, perform known writes, record a target timestamp, delete or corrupt the primary, restore the backup and WAL to that timestamp, verify constraints and application-level invariants, and measure RPO/RTO.
+
+
+
+## Recovery experiment
+
+Build a small log simulator with page LSNs, dirty-page table, transaction table, commit and abort records, and a crash point. Generate histories with committed and incomplete transactions, flush some dirty pages before the crash, and restart repeatedly. Assert that every committed update appears exactly once in the recovered logical state, every loser effect is absent, and a second crash during recovery produces the same result. Vary checkpoint position, log truncation, page flush ordering, and partial writes.
+
+The report should distinguish what is guaranteed by WAL from what requires checksums, replicas, backups, or application reconciliation. Include recovery duration, log volume, oldest-needed LSN, and the failure behavior when an archived segment or encryption key is unavailable. A green recovery test on one clean disk is not evidence for media-loss or regional-failure recovery.
+
+**Exercise.** Given log records for two transactions and a crash point, classify which records must be redone and which transaction must be undone. State the missing assumption if the answer is ambiguous.
+
+## References & Further Reading
+
+* [PostgreSQL WAL](https://www.postgresql.org/docs/current/wal-intro.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL Continuous Archiving and Point-in-Time Recovery](https://www.postgresql.org/docs/current/continuous-archiving.html)

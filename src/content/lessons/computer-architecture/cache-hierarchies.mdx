@@ -1,0 +1,116 @@
+---
+title: "Cache Hierarchies"
+course: "computer-architecture"
+description: "Locality, mapping, replacement, and write policies."
+---
+# Cache Hierarchies
+
+The processor can execute many arithmetic operations in the time required for one main-memory access. A cache hierarchy reduces the effective cost by keeping recently or nearby used data in smaller, faster storage close to the core. The hierarchy is not a magical “fast memory”; it is a carefully specified prediction mechanism. A cache contains copies of lower-level data, decides whether a request hits, chooses where a block may reside, and defines how writes propagate. Its performance depends on an access trace, its correctness depends on coherence and permission rules, and its cost includes area, energy, refill bandwidth, and miss handling.
+
+## Locality and the two-level model
+
+Temporal locality means that an address recently used is likely to be used again. Spatial locality means that addresses near a recently used address are likely to be used. A cache exploits both by transferring a *block* or *line* containing several adjacent bytes, not just the requested word. The block size is a design compromise: larger lines capture more spatial locality but consume bandwidth and may evict useful data; smaller lines reduce overfetch but increase tag and refill overhead.
+
+In a two-level model, let hit time be $t_h$, miss rate be $m$, and miss penalty be the additional time to obtain the block from the next level. The average memory access time is
+
+$$
+AMAT=t_h+m\cdot t_{penalty}.
+$$
+
+If the lower level’s access time includes the first level’s lookup, some texts instead write $AMAT=t_h+(1-h)t_{lower}$; the variables must be defined before numbers are substituted. For a hierarchy with L1 and L2, one useful form is
+
+$$
+AMAT=t_{L1}+m_{L1}\bigl(t_{L2}+m_{L2}t_{mem}\bigr).
+$$
+
+The L2 miss rate is usually conditional on an L2 access, while a global miss rate is relative to all processor accesses. Confusing local and global rates is a frequent source of apparently impressive but incorrect performance calculations.
+
+**Worked AMAT example.** Suppose L1 hit time is 1 cycle and its miss rate is 5%. L2 takes 8 cycles on a hit and has a local miss rate of 20%; DRAM costs 80 cycles after an L2 miss. Then $AMAT=1+0.05(8+0.2\cdot80)=2.2$ cycles. The L2 contributes 0.08 cycles per processor access through the L1 miss path, while DRAM contributes 0.8 cycles. Improving L1 hit time from 1 to 0.8 cycles saves 0.2; halving the DRAM penalty saves only $0.05\cdot0.2\cdot40=0.4$ cycles under this workload. The bottleneck is identified by the product of frequency and cost, not by the largest raw latency alone.
+
+## Address decomposition
+
+For a cache with capacity $C$ bytes, line size $B$ bytes, and $A$ ways, the number of sets is $S=C/(B\cdot A)$. Assuming powers of two, a byte address divides into block offset bits, set-index bits, and tag bits. The offset has $\log_2B$ bits; the index has $\log_2S$ bits; the remaining address bits form the tag.
+
+**Worked decomposition.** A 32-bit byte address accesses a 16 KiB, 4-way cache with 64-byte lines. There are $16384/(64\cdot4)=64$ sets. The line offset is 6 bits, the set index is 6 bits, and the tag is $32-6-6=20$ bits. Address `0x12345678` has a block offset equal to its low 6 bits, a set selected by the next 6 bits, and a tag made from the high 20 bits. Two addresses with the same index but different tags compete for the same set; they may conflict even if the cache has ample total free capacity elsewhere.
+
+Alignment is part of this arithmetic. A word spanning two lines can require two tag lookups and two transfers, or the ISA may forbid the access. If a structure is aligned to a line boundary, its fields may still cross lines if its size and offsets are not chosen carefully. Performance analysis should use actual byte addresses and strides rather than assume every element maps independently.
+
+## Mapping organizations
+
+A direct-mapped cache has one possible line per set. It is inexpensive and fast to index, but two frequently alternating blocks mapping to one set cause conflict misses. A fully associative cache allows a block anywhere and minimizes conflict misses, but comparing its tag against every line is expensive. A set-associative cache is a compromise: each block maps to one set but can occupy one of $A$ ways.
+
+Associativity does not eliminate capacity or compulsory misses. A compulsory miss occurs on the first access to a block. A capacity miss occurs because the working set exceeds the cache’s usable capacity. A conflict miss occurs because the mapping forces competing blocks into too few locations. The same trace can exhibit all three at different cache sizes and associativities.
+
+**Worked conflict trace.** A direct-mapped cache with four lines receives accesses to blocks 0, 4, 0, 4. Both block numbers map to set `block mod 4 = 0`. Every access misses, even though only two blocks are needed and the cache holds four. A 2-way cache with four total lines has two sets; blocks 0 and 4 map to set 0 but can occupy its two ways, so after warm-up the alternating trace hits. If a third block 8 is added, the two-way set again thrashes. Associativity is a targeted response to mapping conflicts, not a universal capacity increase.
+
+## Replacement policy
+
+When a set is full, the cache needs a replacement policy. Least recently used (LRU) evicts the line whose most recent access is farthest in the past; it exploits temporal locality but becomes expensive to track as associativity grows. Pseudo-LRU approximates LRU with fewer bits. Random replacement is simple and can avoid adversarial patterns that defeat a deterministic policy. The policy affects performance, not the abstract contents that must eventually be returned, provided coherence and validity are correct.
+
+Replacement metadata is itself state and must be reset or initialized consistently. A valid bit distinguishes an unused way from a line whose tag happens to match a reset value. A dirty bit records whether a write-back line differs from the lower-level copy. A coherence state may add shared, exclusive, modified, or invalid information in a multiprocessor.
+
+## Write policies
+
+A write-through cache sends every write to the lower level, simplifying consistency but increasing traffic. A write-back cache updates only the cache line and writes it back on eviction if dirty, reducing bandwidth but requiring dirty tracking and careful eviction ordering. A write-allocate cache brings a missing line into the cache before applying a write; no-write-allocate sends a write miss directly downward. Common pairings are write-back/write-allocate and write-through/no-write-allocate, but the choice is workload- and coherence-dependent.
+
+Write buffers decouple a processor from lower-level write latency. They introduce ordering obligations: a later load cannot observe stale data if an older buffered store targets the same address, and a memory barrier must drain or order the buffer as the ISA requires. Memory-mapped I/O often uses uncached or specially ordered regions because caching a device register can turn one device operation into repeated reads of an old copy.
+
+**Worked write example.** A write-back cache has a dirty line for address A. A miss to another block mapping to the same set selects that way for replacement. The controller must first write the dirty line to the lower level, wait for acceptance or record a safe buffered transaction, install the new tag/data, and then satisfy the new request. If it overwrites the line first, the old value is lost. A write-through cache avoids this particular dirty eviction but can still require ordering if multiple writes are outstanding.
+
+## Miss handling and nonblocking caches
+
+A blocking cache stalls the requesting pipeline until a miss is complete. A nonblocking cache can continue serving hits and track outstanding misses with miss-status holding registers (MSHRs). It must know which requests depend on which refill, merge multiple accesses to one missing line, and preserve ordering for stores and fences. Multiple outstanding misses improve memory-level parallelism but increase control-state complexity.
+
+The refill path may receive critical words first, allowing the processor to resume before the entire line arrives. This is useful when the requested word is available early but creates hazards if a later word is consumed before refill completion. The cache’s valid/ready protocol must make partial data visible only under a defined rule.
+
+## Arrays, loops, and locality
+
+Row-major traversal of a matrix stored with rows contiguous accesses neighboring elements and uses each fetched line efficiently. Column-major traversal jumps by the row stride; if the stride exceeds line size and the working set exceeds the cache, each access may fetch a line whose other words are not used. Loop interchange can transform the trace without changing the mathematical result.
+
+**Worked stride calculation.** With 64-byte lines and 4-byte integers, a sequential loop uses 16 integers per line and approaches one miss per 16 accesses after warm-up. A stride-16 loop touches one integer per line; it gets little spatial benefit and can cause one miss per access if the active lines do not fit. A stride of 1024 bytes maps to the same set periodically in a power-of-two cache, potentially causing conflict thrashing. Cache behavior is a property of line size, capacity, associativity, and address mapping together.
+
+Data layout also controls locality. An array of structures is convenient when every field of one record is used together. A structure of arrays is better when a loop scans one field across many records, because each line contains more useful values and vector loads can be contiguous. Padding can prevent false sharing between cores, but increases footprint and may alter index mapping.
+
+## Coherence and consistency
+
+In a shared-memory multiprocessor, each core may cache a copy of a line. Cache coherence answers whether writes to one location eventually become visible consistently and whether a reader can obtain the latest value under the protocol’s rules. A protocol such as MESI tracks whether a line is modified, exclusive, shared, or invalid and sends invalidations or updates over an interconnect.
+
+Coherence is per cache line, not per language object or field. Two independent variables in one line can cause false sharing: cores repeatedly invalidate each other’s copies even though they never access the same variable. Coherence also does not define all cross-address ordering; the ISA memory model and synchronization operations determine whether a flag becoming visible implies that preceding data is visible.
+
+Atomic read-modify-write and fences interact with caches. An atomic operation may acquire exclusive ownership of a line, perform the update without an intervening conflicting write, and impose ordering. A fence may prevent a compiler or processor from reordering specified memory operations, but it does not magically flush every cache on every architecture. The precise semantics belong to the ISA.
+
+## Security and correctness boundaries
+
+Caches can create timing side channels because hits and misses have different latency. Isolation mechanisms may partition cache ways, flush state on context switch, use constant-access patterns, or accept a residual risk. A correct cache from the functional viewpoint can still leak access patterns. Security analysis must distinguish architectural data returned by loads from microarchitectural observations such as timing and replacement state.
+
+The cache must also respect virtual memory permissions. A line fetched under one mapping cannot be reused for another address merely because its physical bytes match; tags, address-space identifiers, permission checks, and invalidation rules prevent stale or unauthorized aliases. The order of translation and cache lookup—physically indexed, virtually indexed, synonym handling—belongs to the implementation and must be proven equivalent to the architectural memory model.
+
+## Independent practice
+
+1. Derive tag, index, and offset bits for a 64-bit address, 32 KiB, 8-way cache with 64-byte lines.
+2. Compute AMAT for a three-level hierarchy with explicit local miss rates and explain the difference between local and global L2 miss rate.
+3. Construct a trace that produces conflict misses in a direct-mapped cache but hits in a 2-way cache. Then add a third competing block.
+4. Compare write-through/no-write-allocate and write-back/write-allocate for a streaming store and a repeatedly updated small object.
+5. Explain why a dirty line must be written back before replacement and what state a write buffer must preserve.
+6. Design a loop transformation that improves locality for a matrix operation. State the cache assumptions under which it helps.
+7. Distinguish coherence, consistency, and false sharing using one two-core example for each.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. A 64-byte line needs 6 offset bits. There are $32768/(64\cdot8)=64$ sets, requiring 6 index bits. The remaining $64-6-6=52$ bits are tag bits.
+2. Substitute the defined rates recursively, e.g. $t_1+m_1(t_2+m_2(t_3+m_3t_m))$. A local miss rate is conditional on reaching that level; a global rate counts misses per original processor reference and equals the product of preceding miss rates and the local rate.
+3. Blocks 0 and 4 alternate in a four-line direct-mapped cache and both map to set 0, so every access misses after each replacement. A 2-way cache can retain both; adding block 8 makes three blocks contend for two ways and can thrash under LRU.
+4. A streaming store may waste a read-for-ownership under write-allocate and benefit from write-through or no-write-allocate; a hot object benefits from write-back because repeated writes stay local. The answer changes with reuse, bandwidth, durability, and coherence assumptions.
+5. The dirty data is the only current copy. Replacement must preserve its address tag and bytes until lower-level acceptance; a write buffer must also preserve order relative to later loads, stores, fences, and device accesses.
+6. Interchange loops so the innermost dimension follows contiguous storage. For row-major data, iterate columns inside rows. The benefit assumes lines are larger than one element and the working set or tile fits enough cache to exploit reuse.
+7. Coherence: two cores write the same line and must see a protocol-defined latest value. Consistency: a producer writes data then a flag, and an acquire reader must see the data when it sees the flag. False sharing: cores write different variables sharing a line and cause invalidation traffic without a shared logical variable.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: cache and memory-hierarchy notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [UC Berkeley CS 61C: memory hierarchy and AMAT](https://notes.cs61c.org/content/caches-intro/memory-hierarchy/)
+* [UC Berkeley CS 61C: cache terminology](https://notes.cs61c.org/content/caches-ii/)
+* [UC Berkeley CS 61C: AMAT](https://notes.cs61c.org/content/caches-intro/amat/)

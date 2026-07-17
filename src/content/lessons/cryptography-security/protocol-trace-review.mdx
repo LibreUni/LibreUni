@@ -1,0 +1,102 @@
+---
+title: "Protocol Trace Review"
+course: "cryptography-security"
+description: "Analyze state transitions under replay and compromise."
+---
+# Protocol Trace Review
+
+## Trace notation
+
+Represent each message as sender -> receiver: fields, and annotate which fields are encrypted, authenticated, fresh, or derived from earlier state. A trace is not merely a sequence of packets; it is a sequence of state transitions under an adversary’s scheduling choices. Record each participant’s local state, outstanding challenges, accepted keys, identities, authorization context, and replay window.
+
+Start with an honest login. The client initiates a session with a fresh nonce and supported protocol parameters. The server returns its identity evidence, an ephemeral key share, a transcript-bound signature or authentication tag, and a confirmation value. The client validates identity, parameters, transcript, and confirmation before sending a request. The server validates the client’s credential and binds its authorization to this session and operation. State the exact belief gained after each verification.
+
+## Adversarial traces
+
+### Replay
+
+Record a valid challenge and response, complete the login, then replay the response in a new session. If the server accepts, the challenge was not bound to a session or consumed atomically. Repair by issuing a fresh challenge, storing its intended identity and operation, enforcing expiration and one-time use, and including those fields in the signed or MACed response. Test concurrent replays so a race cannot accept the same challenge twice.
+
+### Reflection
+
+If both roles sign or MAC the same message format, an attacker may send a message received from one role back to that role or use it as a response to the other. Add explicit role and direction labels, distinct keys or transcript branches, and state-specific message types. The verifier must reject a valid cryptographic object if its role label is wrong.
+
+### Downgrade
+
+An attacker deletes strong algorithms or extensions from an initial offer. If the final authenticated transcript contains only the selected weak option, both endpoints may accept a choice the attacker forced. Bind the full offer, selected parameters, version, and policy into the transcript and reject a selection below the configured minimum. Test both an active deletion and a passive unsupported-peer case.
+
+### Delayed and reordered messages
+
+Delay a close or key-update message while delivering application data, or deliver a response from an earlier phase after a new phase begins. State guards must reject messages not valid in the current state. Sequence numbers, transcript hashes, and explicit epochs distinguish old messages. A timeout is not proof that a delayed message cannot later arrive; the protocol must define whether late messages are ignored, rejected, or handled idempotently.
+
+## Key compromise traces
+
+Analyze compromise at different times. If a long-term signing key is stolen after an ephemeral session completes, forward secrecy may protect the old traffic secret but forged future handshakes remain possible until revocation propagates. If an endpoint’s traffic key is stolen during a session, confidentiality and integrity for that session are lost. If a KMS wrapping key is compromised, identify all dependent data keys and backups. If a refresh token is stolen, session rotation and reuse detection determine the blast radius.
+
+A trace review should not claim that compromise is prevented when the design only detects or limits it. Record the first unauthorized event, what evidence is available, which credentials can be revoked, and whether historical artifacts remain trustworthy. This is where protocol analysis connects to key management and incident response.
+
+## State table
+
+Build a table with columns: state, incoming message, required fields, cryptographic check, freshness check, authorization check, state transition, effect, and error. For an authenticated state, require that the transcript and peer identity are established. For a permission-changing state, require current authorization and a unique request identifier. For a closing state, reject new effects but allow safe acknowledgments. The table is a compact proof obligation and a test plan.
+
+## Exercises
+
+1. Write a replay trace for a reusable login challenge.
+2. Repair a reflection attack with role labels.
+3. Identify the missing transcript field in a downgrade trace.
+4. Design a concurrent one-time challenge test.
+5. Analyze what a stolen long-term signing key reveals after a forward-secret session.
+6. Construct a state table for a password-reset token.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Capture challenge c and valid response r, allow the first session to complete, start a second session, send r, and observe acceptance. The repair binds c to the second session or rejects it as consumed.
+2. Include “client-to-server” or “server-to-client” in authenticated bytes, use separate role keys or transcript labels, and reject a message whose label is not valid for the current transition.
+3. The full client offer or downgrade-protection signal is missing. Authenticate offered and selected parameters and enforce the minimum policy.
+4. Send two requests with the same valid response concurrently through different replicas, then assert exactly one effect, one consumed state, and an idempotent or safe failure for the other.
+5. It may permit future impersonation and forged transcripts, but a properly implemented ephemeral exchange should prevent deriving completed session secrets from the long-term key alone. Validate the actual protocol’s forward-secrecy assumptions.
+6. States are issued, pending, consumed, expired, revoked, and invalid. Require high-entropy token, account binding, purpose, expiry, and one-time atomic consumption; any successful password change transitions to consumed and revokes existing sessions.
+
+</details>
+
+## From trace to proof
+
+Finite traces illustrate attacks; invariants establish that the repair works for all traces allowed by the model. State an invariant such as: an application effect is possible only after the receiver has authenticated the peer, verified the transcript, checked authorization for this resource and action, and accepted a fresh request identifier not previously consumed in this session. Prove the initial state satisfies it. For every valid transition, show that either the invariant remains true or the transition is rejected. A cryptographic verification equation alone is not enough because the application effect may occur before or after that equation.
+
+For a sequence protocol, define an accepted window and a state transition for each sequence number. Reject numbers below the lower bound, accept new numbers only once, and advance the window atomically. If packets may arrive out of order, retain enough replay state to distinguish a delayed valid packet from a duplicate. If state is lost on restart, derive a new epoch or key before accepting old sequence values; otherwise restart can make a previously valid nonce or message valid again.
+
+## Message encoding review
+
+Use a canonical encoding with explicit lengths and algorithm identifiers. Check that concatenation is injective: fields (ab, c) and (a, bc) must not produce the same authenticated bytes. Reject duplicate map keys, alternate integer encodings, unknown critical fields, and trailing bytes unless the grammar explicitly permits them. A trace that displays semantic fields but omits their byte encoding cannot establish what a signature or MAC actually covers.
+
+## Recovery review
+
+Every failed transition should specify whether the session is closed, the credential is throttled, the challenge remains pending, or the operation can be retried. Recovery must not reset freshness state or restore an old authorization snapshot without a version check. Test network timeout, process crash after authentication but before commit, duplicate client retries, queue redelivery, and identity-provider outage. Safe retry requires an idempotency key or a transaction that couples authentication, authorization, and effect.
+
+## References & Further Reading
+
+## Automated trace testing
+
+Implement a bounded model of the honest state machine and an adversarial scheduler. Generate honest sessions, then mutate by duplicating, dropping, delaying, reordering, reflecting, and crossing messages between sessions. Check safety properties—no unauthorized effect, no duplicate non-idempotent effect, no acceptance of an invalid transcript—and liveness properties separately—an honest run eventually completes when the network and dependencies satisfy their assumptions. A bounded checker can find counterexamples but cannot replace an invariant proof.
+
+For each counterexample, minimize the trace while preserving the failure. The smallest trace normally reveals the missing state field: an unbound role, absent audience, reusable nonce, stale epoch, or non-atomic consume operation. Add the minimized trace as a regression test and update the protocol proof, not only the implementation.
+
+* [RFC 8446, TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+* [RFC 5116, Authenticated Encryption Interface](https://www.rfc-editor.org/rfc/rfc5116)
+* [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/)
+
+Draw an authenticated login trace, then add replay, key compromise, dropped messages, and a downgrade attempt. For each trace state what the honest parties believe and whether the protocol can safely recover.
+
+**Exercise.** Identify a state that accepts a message without freshness evidence and repair it.
+
+## References & Further Reading
+* [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446)
+
+Review the trace tests after every change to message grammar or state persistence, and preserve minimized counterexamples as permanent regression cases.
+
+This is part of protocol maintenance.
+
+Include it in review.
+
+Always.

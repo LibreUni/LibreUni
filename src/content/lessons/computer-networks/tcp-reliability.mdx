@@ -1,0 +1,119 @@
+---
+title: "TCP Reliability"
+course: "computer-networks"
+description: "Byte streams, sequence spaces, acknowledgements, retransmission timers, and connection state."
+---
+# TCP Reliability
+
+TCP presents an ordered, reliable byte stream over an IP service that can lose, duplicate, delay, reorder, or corrupt packets. The abstraction is deliberately narrower than “remote procedure call”: TCP delivers bytes in order to the receiving socket, but it does not preserve application message boundaries, guarantee application progress, or make a repeated side effect happen once. Reliability is implemented through sequence numbers, acknowledgements, checksums, retransmission timers, flow control, and connection state. Congestion control is related but distinct: it protects the shared network rather than the receiver’s buffer.
+
+## Byte-stream semantics
+
+An application writes bytes into a send buffer and reads bytes from a receive buffer. TCP segments the stream for transmission and may combine multiple writes into one segment or split one write across several segments. The receiver’s `read` returns whatever contiguous bytes are currently available subject to the API; it does not return one write or one message. Applications needing boundaries must encode them with length prefixes, delimiters, fixed-size records, or a self-describing format.
+
+**Worked framing example.** A protocol sends a 32-bit big-endian length followed by a body. The receiver may get two bytes of the length, then the remaining two plus part of the body, then the rest. It must maintain parser state across reads, reject lengths above a policy limit before allocation, and retain exactly the unconsumed bytes. A timeout or connection close in the middle of a body is a truncated message, not an empty message.
+
+TCP sequence numbers count bytes, not segments. If a connection begins with an initial sequence number $ISN$, the first data byte has sequence $ISN+1$ after the SYN consumes one sequence number. A segment carrying $L$ bytes starting at sequence $x$ covers $[x,x+L)$ under half-open interval notation. Acknowledgement number $a$ conventionally means “all bytes before $a$ have arrived contiguously; the next byte expected is $a$.”
+
+## Checksums and corruption
+
+IP may deliver a packet with a damaged payload or discard it; TCP uses a checksum over a pseudo-header, TCP header, and data to detect corruption. A checksum is an error detector, not a cryptographic authenticator. If the checksum fails, the receiver discards the segment and does not acknowledge its data as successfully received. The sender eventually retransmits when duplicate acknowledgements or a timer provide evidence of loss.
+
+Checksum validation must include the pseudo-header fields that bind the segment to its endpoints and protocol. An implementation that omits a field can accept a segment in the wrong context. The checksum’s one’s-complement arithmetic and odd-length padding are protocol details; a correct implementation must specify them rather than reuse an unrelated integer checksum.
+
+## Reliable data transfer as a state machine
+
+A minimal reliable sender maintains the next sequence number, unacknowledged data, a retransmission timer, and connection state. A receiver maintains the next contiguous sequence number expected, a buffer for out-of-order data if permitted, and acknowledgement policy. Events include application data, segment arrival, checksum failure, duplicate data, acknowledgement, timeout, and close.
+
+Stop-and-wait sends one segment and waits for an acknowledgement. It is easy to reason about but has throughput bounded by segment size divided by RTT. A lost data segment or acknowledgement causes timeout and retransmission. Sequence numbers distinguish an acknowledgement for the current segment from a delayed acknowledgement of an earlier one; without them, a delayed message can be mistaken for a new transaction.
+
+**Worked stop-and-wait trace.** Sender transmits segment sequence 100 with 500 bytes and starts a timer. The receiver accepts it, delivers bytes 100–599, and sends ACK 600. If the ACK is lost, the sender retransmits sequence 100. The receiver recognizes a duplicate, does not deliver the bytes again, and repeats ACK 600. The protocol has delivered bytes once to the application despite duplicate network traffic. If the receiver delivered duplicates, the abstraction would not be reliable byte-stream delivery.
+
+## Pipelining and sliding windows
+
+To use a high-delay path, a sender permits multiple unacknowledged segments. A send window bounds data in flight; sequence numbers identify each segment. Cumulative acknowledgements acknowledge the highest contiguous prefix. Selective acknowledgements or an equivalent receiver report identify additional out-of-order blocks so the sender need not retransmit data already received.
+
+Go-Back-N retransmits the oldest unacknowledged segment and potentially all later segments after a loss. It needs a sender window and a receiver that discards or minimally buffers out-of-order data. Selective Repeat buffers out-of-order data and retransmits only missing segments, but both endpoints need more state and sequence-number ambiguity must be controlled. TCP’s cumulative ACK behavior with selective acknowledgment options combines aspects of both: the receiver can report blocks, while the protocol’s ordinary ACK number still denotes the contiguous prefix.
+
+**Worked window calculation.** A sender has 10 segments in flight, segment size 1,000 bytes, and RTT 100 ms. If the bottleneck and receiver permit it, the window-limited throughput is $10,000/0.1=100,000$ bytes/s, or 0.8 Mb/s. To fill a 100 Mb/s path with 100 ms RTT, the flight size must approach 1.25 MB, about 1,250 such segments, subject to congestion and receiver limits.
+
+Sequence spaces wrap. A receiver must distinguish an old segment from a new segment with the same sequence number. The window must be small enough relative to the sequence-number space and packet lifetime, or timestamps/extended sequence reasoning must disambiguate. “Sequence numbers are 32 bits” is not sufficient analysis without considering wrap time, window size, and delayed duplicate lifetime.
+
+## TCP connection establishment
+
+The three-way handshake synchronizes initial sequence numbers, confirms bidirectional reachability, and negotiates options such as maximum segment size and scaling. A client sends SYN with an initial sequence number; the server responds SYN-ACK acknowledging the client’s sequence and offering its own; the client acknowledges the server. Each endpoint enters the established state only after the relevant evidence arrives.
+
+The handshake does not prove that the application is ready, that a user is authenticated, or that a request will be executed. It also consumes state and can be abused by spoofed SYN floods; SYN cookies, backlog policy, and rate limiting address resource exhaustion without changing byte-stream semantics.
+
+## Retransmission timeout estimation
+
+A fixed timeout is either too short, causing spurious retransmissions on long paths, or too long, delaying loss recovery. TCP estimates smoothed RTT and variation. One common model maintains $SRTT$ and $RTTVAR$; the retransmission timeout is approximately
+
+$$
+RTO=SRTT+4\cdot RTTVAR,
+$$
+
+with lower and upper bounds. The exact update equations and timer behavior are standardized, but the principle is general: track both central delay and variability, and back off after timeout.
+
+Karn’s algorithm avoids using a retransmitted segment’s ambiguous acknowledgement as an RTT sample. If an ACK could correspond to the original or retransmitted transmission, its timing does not identify a clean path sample. Timestamps can improve measurement and protect against wrapped sequence ambiguity, but they require negotiation and validation.
+
+**Worked estimator intuition.** If the smoothed RTT is 80 ms and variation 10 ms, an RTO estimate is 120 ms before protocol minimums. A sudden queueing episode raises measured RTT and variation; a sender that keeps 80 ms would timeout prematurely and add traffic to an already congested path. A sender that never adapts would wait unnecessarily after a real loss.
+
+## Flow control
+
+The receiver advertises a window representing how much additional data it can accept. The sender’s usable flight is bounded by both the congestion window and receive window:
+
+$$
+Flight\le\min(cwnd,rwnd).
+$$
+
+Flow control prevents a fast sender from overflowing the receiver’s buffers. It does not protect intervening routers; congestion control does that. A zero receive window can pause data while allowing window-probe behavior and connection management. Window scaling is negotiated because a small header field cannot express a large bandwidth-delay product directly.
+
+The receiver should not advertise space that the application has not actually made available. Shrinking a window below already transmitted data creates ambiguity; modern implementations avoid unsafe shrink behavior and use sequence-space rules. Buffer autotuning must account for memory pressure, application read rate, and bandwidth-delay product.
+
+## Connection teardown and half-close
+
+TCP supports independent directions. A FIN says an endpoint will send no more bytes in that direction; it does not mean the peer cannot continue sending. The endpoint that receives FIN delivers end-of-stream after all preceding bytes and may still send a response. RST aborts more abruptly and can discard buffered data. TIME-WAIT retains state after active close to absorb delayed duplicates and ensure a final acknowledgement can be retransmitted.
+
+Application protocols must decide whether EOF is a valid message boundary, whether a half-close is supported, and how to handle a reset. Closing a socket after writing does not guarantee the peer processed the bytes; it only participates in transport state transitions. Application acknowledgements are needed for durable or semantic completion.
+
+## Loss, reordering, and acknowledgement policy
+
+A receiver may acknowledge every segment, delay ACKs briefly to combine them, or send duplicate ACKs when an out-of-order segment reveals a gap. Duplicate ACKs provide fast-loss evidence before the retransmission timer expires, but reordering can produce duplicate ACKs without actual loss. The sender’s fast retransmit logic must balance recovery speed and false retransmission.
+
+Out-of-order data may be buffered, but the application receives only the contiguous prefix under ordinary stream semantics. A later segment cannot be delivered while an earlier byte is missing because exposing a hole would violate ordering. This creates head-of-line blocking even when later data has arrived.
+
+## Security and protocol robustness
+
+TCP’s handshake and sequence numbers are not application authentication. Blind attackers may inject or reset traffic if they can guess sequence windows or exploit endpoint behavior; cryptographic transport such as TLS authenticates and protects application data above TCP. TCP options, timestamps, and reset handling have their own threat models. Resource limits prevent a peer from exhausting memory through many incomplete or out-of-order segments.
+
+The application must treat connection closure, timeout, and reset as ambiguous network failures. A timeout does not prove the server did not act; a successful ACK does not prove a database commit. Idempotency keys, transaction status queries, and explicit application acknowledgements close that semantic gap.
+
+## Independent practice
+
+1. Frame a length-prefixed message over a byte stream and trace partial reads.
+2. Trace stop-and-wait loss of data and loss of acknowledgement without duplicate delivery.
+3. Compute window-limited throughput for a long-delay path.
+4. Compare Go-Back-N and Selective Repeat state after one lost segment and two out-of-order arrivals.
+5. Explain RTT sampling ambiguity after retransmission and the role of Karn’s algorithm.
+6. Calculate the effective send window from `cwnd` and `rwnd` and diagnose a zero-window stall.
+7. Trace a TCP half-close and distinguish FIN, RST, transport delivery, and application completion.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Accumulate bytes until the fixed-size length is complete, validate it before allocation, then accumulate exactly that many body bytes. Reads may split or combine any boundaries; only the parser’s state defines a message.
+2. Sequence numbers make a retransmitted data segment recognizable; the receiver delivers it once and repeats the cumulative ACK. A lost ACK causes retransmission but not duplicate application delivery.
+3. Use $throughput\le\min(R,W/RTT)$ and convert units. Include header and ACK overhead if the question asks for goodput rather than raw window-limited payload rate.
+4. Go-Back-N may retransmit the lost segment and later arrivals; Selective Repeat buffers later segments and retransmits only the gap. Both need sequence-space and acknowledgement invariants.
+5. An ACK after retransmission could acknowledge the original or retry, so its elapsed time is not a valid RTT sample. Ignore ambiguous samples or use timestamp information under the protocol’s rules.
+6. Usable flight is `min(cwnd,rwnd)`. If `rwnd=0`, the receiver’s application or buffer policy is the limit; congestion control cannot repair a receiver that is not consuming data.
+7. FIN closes one send direction; the peer may continue sending. RST aborts and may discard bytes. Neither means the application performed its semantic side effect; an application-level response or status query is needed.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 9293: Transmission Control Protocol](https://www.rfc-editor.org/rfc/rfc9293)
+* [Kurose and Ross: transport-layer knowledge checks](https://gaia.cs.umass.edu/kurose_ross/knowledgechecks/index.php)
+* [Kurose and Ross: network programming assignments](https://gaia.cs.umass.edu/kurose_ross/programming/)

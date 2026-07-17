@@ -1,0 +1,87 @@
+---
+title: "Protocol Design Review"
+course: "computer-networks"
+description: "A rigorous framework for specifying states, messages, invariants, failure handling, and deployability of network protocols."
+---
+# Protocol Design Review
+
+Designing a protocol means defining behavior under incomplete, delayed, duplicated, reordered, corrupted, and adversarial messages. A message diagram showing the successful exchange is not a specification. A useful specification identifies participants, state, message grammar, timing assumptions, safety invariants, liveness assumptions, resource bounds, versioning, and observability. This lesson supplies a review method that can be applied to a transport extension, service protocol, or control-plane mechanism.
+
+## Begin with claims and assumptions
+
+Write the desired properties as propositions. “Every accepted request has an authenticated origin.” “No operation ID commits more than once.” “Under a functioning channel and a live peer, a valid request eventually receives a result.” “A receiver never allocates more than B bytes from one peer.” Each proposition has assumptions. If clocks may be wrong, a timestamp cannot alone guarantee freshness. If messages can be lost forever, eventual response is impossible. Explicit assumptions make a proof honest.
+
+Separate safety from liveness. Safety says that nothing bad happens in any execution, including executions with crashes and arbitrary delay: no duplicate commit, no unauthorized acceptance, no parser out-of-bounds. Liveness says that something good eventually happens under a fair-enough execution: a request completes, a route converges, or a retransmission succeeds. A protocol can preserve safety by rejecting everything, but that is not a useful live service.
+
+## State machines and message grammar
+
+Represent each participant as a finite or bounded state machine. For every state, list accepted messages, state changes, outputs, timers, and invalid-message behavior. Define whether a message is ignored, rejected, logged, or causes a connection close. “The server handles a response” is insufficient unless the protocol says which response is valid in which state.
+
+Use a grammar with explicit field widths, byte order, encoding, maximum lengths, and version. Distinguish absent, empty, zero, and unknown values. Length fields must be checked before arithmetic or allocation. If extensions are allowed, define whether unknown fields are ignored, rejected, or authenticated. Canonical serialization is necessary when signatures, hashes, or cache keys depend on bytes.
+
+**Worked state example.** A client has `Idle`, `Outstanding(id)`, `Completed(id)`, and `Failed` states. It sends a request only in `Idle`; a matching authenticated response moves to `Completed`; a timeout retransmits only if the operation is safely retryable; an old response in `Idle` is discarded; a response for another ID in `Outstanding(id)` is rejected or logged. The state machine prevents a delayed message from being treated as a new result.
+
+## Invariants and proof sketches
+
+An invariant is a predicate true initially and preserved by every transition. For at-most-once commit, let `Committed` be the set of operation IDs durably recorded by the server. The invariant is that each ID appears at most once and that the state transition for an ID is guarded by membership in `Committed`. The proof examines first execution, duplicate request, crash recovery, and concurrent requests. A memory-only set does not preserve the invariant across restart; durability is part of the proof obligation.
+
+For reliable ordered delivery, let `expected` be the next sequence number and `delivered` the set of delivered numbers. The receiver delivers only a valid packet with sequence `expected`, then increments `expected`; packets below `expected` are duplicates and packets above it are buffered or rejected according to the protocol. Induction over receive events proves no sequence number is delivered twice, provided sequence wraparound cannot make an old packet fall inside the current acceptance window.
+
+Proof sketches should identify what the implementation must expose. A claim about atomic acknowledgment requires an ordering between durable state and emitted response. A claim about authenticated context requires the exact fields covered by the MAC or signature. A claim about no cycles requires the route graph and update order, not just a local table. If a proof relies on an unmentioned component, the specification is incomplete.
+
+## Timers and failure detectors
+
+A timeout is evidence of missing progress, not proof of failure. The peer may be slow, the response may be delayed, or the return path may be broken. Protocols use timeouts to trigger retransmission, failover, or suspicion, but should avoid irreversible action based on one expiration unless the safety risk is understood.
+
+Timer rules need bounds and backoff. A retransmission schedule should state initial timeout, maximum timeout, retry limit, jitter, and behavior after exhaustion. Multiple independent timers can interact: a transport timeout may fire while a link layer is retrying, and an application deadline may expire while a secure handshake is progressing. The specification should define which timer owns the user-visible failure and how lower layers cancel work.
+
+## Compatibility and evolution
+
+A deployed protocol has old and new implementations operating together. Version negotiation must be authenticated or bound to the handshake so an attacker cannot force a weaker version. New fields need a compatibility rule. Removing a message or changing the meaning of an existing value can create silent misinterpretation rather than a clean failure.
+
+Migration should have a mixed-version state. Test old client/new server, new client/old server, proxies, retries, cached responses, and rollback. Feature flags must fail closed for security-sensitive features. A parser should reject a version it cannot interpret rather than guess. Observability should identify negotiated versions and extension choices without logging secrets.
+
+## Resource and abuse analysis
+
+For every untrusted field, ask how much CPU, memory, disk, connection state, and outbound traffic it can induce. A small request that causes an expensive public-key operation can be amplified. A peer that advertises a huge window can force buffering unless limits exist. A response that reflects a request to a spoofed source creates an amplification risk.
+
+Use budgets: maximum message, outstanding operations, retries, body size, queue age, and per-principal rate. Make overload behavior explicit. Rejecting early may preserve the service; accepting unbounded work makes timeouts and retry storms more likely. Security limits must be tested under legitimate high load so they do not accidentally deny normal traffic.
+
+## Review checklist
+
+1. Can every message be parsed unambiguously and within bounded resources?
+2. Are identity, authorization, freshness, and integrity claims distinct and verified before action?
+3. Are duplicate, delayed, reordered, truncated, and invalid messages specified?
+4. Are state transitions and durable ordering sufficient for safety claims?
+5. Are liveness assumptions, timers, backoff, and failure behavior explicit?
+6. Are sequence spaces, nonces, key lifetimes, and replay windows bounded correctly?
+7. Can old and new implementations interoperate safely?
+8. Can an operator observe, roll back, and diagnose the protocol without leaking secrets?
+
+## Exercises
+
+1. Write a four-state machine for a request/response protocol with retries and a non-idempotent operation.
+2. State and prove an invariant preventing duplicate commits after a client retransmission.
+3. Identify the missing assumption in the claim “the timeout proves the peer is down.”
+4. Review a message containing a 32-bit length field and list parser checks before allocation.
+5. Design a mixed-version negotiation that prevents downgrade.
+6. Give three resource-amplification attacks and a bounded defense for each.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Use `Idle`, `Outstanding(id)`, `Committed(id)`, and `UnknownOutcome(id)`; permit retry in `Outstanding` only with the same ID, and move to `UnknownOutcome` when the deadline expires without knowing whether the server committed. A later authenticated query can resolve the outcome.
+2. Initially `Committed` contains no ID. A request commits only if an atomic check-and-insert finds the ID absent; a duplicate finds it present and returns the stored result without applying the transition. Crash recovery restores the durable set before accepting requests, preserving the invariant by induction.
+3. The claim assumes bounded delay, a functioning return path, synchronized failure semantics, and no peer scheduling or congestion delay beyond the timeout. Without those assumptions, a timeout is only lack of observed progress.
+4. Check that the field is present, byte order is defined, length is below protocol and resource limits, addition of headers cannot overflow, the complete body is available before parsing, and truncation/extra bytes are handled unambiguously.
+5. Authenticate the negotiated version and supported-feature transcript, reject versions below the security minimum, and make the server abort rather than silently selecting a weaker option. Test an attacker who deletes the new-version offer.
+6. Oversized length causes memory allocation: enforce maximum and streaming limits. Repeated handshakes consume CPU: use admission cookies and rate limits. One request causes many reflected bytes: authenticate or cap responses and avoid spoofable reflection.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 2119: Key Words for RFCs](https://www.rfc-editor.org/rfc/rfc2119)
+* [RFC 8446: TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+* [RFC 9293: Transmission Control Protocol](https://www.rfc-editor.org/rfc/rfc9293)
+* Kurose and Ross, *Computer Networking: A Top-Down Approach*, protocol layering and reliable transport chapters.

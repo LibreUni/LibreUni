@@ -1,0 +1,95 @@
+---
+title: "SQL Querying"
+course: "database-systems"
+description: "Declarative queries, grouping, joins, and three-valued logic."
+---
+# SQL Querying
+
+SQL states the desired relation; the optimizer chooses how to compute it. `WHERE` filters rows before grouping, `HAVING` filters groups after aggregation, and an outer join preserves unmatched rows from one side. Explicit column lists and join predicates prevent accidental results.
+
+`COUNT(*)` counts rows; `COUNT(column)` ignores nulls. This difference is semantic, not cosmetic.
+
+## Logical query processing
+
+Although SQL is written SELECT-FROM-WHERE-GROUP BY-HAVING-ORDER BY, reason about a logical pipeline. FROM and JOIN form a row source; WHERE removes rows; GROUP BY partitions the remaining rows; aggregates compute values per group; HAVING removes groups; SELECT projects expressions; DISTINCT removes duplicate output rows; ORDER BY sorts; LIMIT and OFFSET choose a final window. The optimizer may execute a different physical order only when semantics are preserved.
+
+This model explains common errors. A SELECT alias is usually unavailable to WHERE because WHERE logically precedes projection. A nonaggregated selected column must be functionally determined by grouping columns or be included in GROUP BY, depending on the DBMS. A predicate on the nullable side of a left join in WHERE removes NULL-extended rows, while the same predicate in ON restricts matches and preserves the left row.
+
+## Joins and cardinality
+
+An inner join returns combinations satisfying the join predicate. If one key value occurs m times on the left and n times on the right, that value contributes m times n rows. A primary-key-to-foreign-key join is at most one parent per child but may still produce zero rows for a dangling or filtered relation. A many-to-many join can multiply dramatically, so select only required columns and understand the intended grain of every intermediate relation.
+
+Use explicit JOIN ... ON syntax. A comma join with a forgotten predicate creates a Cartesian product, which may look valid but produce incorrect aggregates and a huge execution cost. Join on declared keys where possible. If columns have the same name but different meanings, qualify them and avoid NATURAL JOIN because future schema changes can silently change its predicate.
+
+Outer joins preserve rows from the preserved side. A left join with no match creates one row with NULL right attributes, not zero rows. To find unmatched rows, test a non-nullable right key with IS NULL. To count matches, COUNT(right.primary_key) counts matched rows while COUNT(*) counts the preserved left row even when no match exists. This distinction is essential for zero-count reports.
+
+## Subqueries and quantifiers
+
+EXISTS tests whether at least one correlated row exists and usually maps naturally to an existential quantifier. NOT EXISTS expresses “for all” through the absence of a counterexample. A correlated subquery can be evaluated conceptually once per outer row, but the optimizer may transform it into a semijoin or antijoin. Prove transformations by comparing the set of qualifying outer rows, including NULL behavior.
+
+IN tests membership, but NOT IN has a trap: if the subquery contains NULL, comparisons can become UNKNOWN and no rows may pass. Prefer NOT EXISTS with an explicit equality predicate when the subquery column is not guaranteed non-null. Scalar subqueries must return at most one row; if zero rows are possible, the result is NULL, and if multiple rows appear the query may fail.
+
+## Grouping and aggregation
+
+GROUP BY partitions rows by grouping expressions. COUNT(*) counts input rows per group; COUNT(x) counts non-null x; COUNT(DISTINCT x) counts distinct non-null values. SUM, AVG, MIN, and MAX have NULL and empty-input semantics that must be tested. An average is not generally the average of subgroup averages unless weighted by subgroup counts.
+
+HAVING filters after aggregation. Put row predicates in WHERE when they should reduce input before grouping; put aggregate predicates in HAVING. Moving a predicate can change both result and performance. Conditional aggregation uses CASE or FILTER to compute several measures over one grouping pass, but ensure that the conditions are mutually exclusive when adding counts.
+
+Window functions compute over a related set of rows without collapsing them. PARTITION BY defines the window groups; ORDER BY defines sequence; a frame such as rows between unbounded preceding and current row defines which rows contribute. ROW_NUMBER assigns a unique sequence but ties are resolved arbitrarily unless a total order is supplied. RANK leaves gaps after ties; DENSE_RANK does not. Frame defaults can differ in effect for peer rows, so specify them when cumulative results matter.
+
+## Set operations and ordering
+
+UNION removes duplicates while UNION ALL preserves them. INTERSECT and EXCEPT also have distinct versus all variants in systems that support them. Inputs must be union-compatible by number and compatible type. Ordering is not guaranteed without ORDER BY, even if a plan happens to return rows in index or insertion order. ORDER BY inside a subquery usually has no effect unless paired with a limiting operation or consumed by an order-sensitive construct.
+
+Pagination with OFFSET can become expensive and unstable under concurrent inserts or deletes. Keyset pagination uses a strict ordering key and a predicate such as (created_at,id)  greater than  (last_created_at,last_id), with a unique tie breaker. The ordering and continuation token must be authenticated or bound to the user’s query context if it carries authority or sensitive filters.
+
+## Common table expressions and recursion
+
+A common table expression improves structure and can express recursive traversals. It is not automatically a materialized temporary table; the optimizer may inline or materialize it according to semantics and cost. Recursive queries need a termination condition, cycle handling, and a bound on depth or rows. A graph traversal that does not track visited nodes can loop or return exponentially many paths.
+
+## Query correctness workflow
+
+State the intended grain: one row per course, enrollment, student, or student-course-term. Write a small fixture containing duplicates, NULLs, unmatched rows, multiple matches, and ties. Compute the expected result manually or with a reference script. Then write SQL and compare. Use EXPLAIN to inspect the physical plan, but do not substitute a fast plan for a correctness proof. Check permissions, parameters, and transaction behavior in the deployed context.
+
+## Example
+
+To report every course and enrollment count, begin with Course c and LEFT JOIN Enrollment e ON e.course_id=c.course_id and e.term='2026S'. Group by c.course_id and c.title, and compute COUNT(e.student_id). The term predicate belongs in ON because courses with no enrollment in that term must remain. If placed in WHERE, NULL-extended rows fail the predicate and the query becomes an inner join for that condition.
+
+## Exercises
+
+1. Explain the logical order of WHERE, GROUP BY, HAVING, and SELECT.
+2. Give a query for rows with no matching child using NOT EXISTS and a left join.
+3. Explain the NOT IN and NULL trap.
+4. Compare COUNT(*), COUNT(column), and COUNT(DISTINCT column).
+5. Design a stable keyset pagination query.
+6. Write a window query for each student’s running enrollment count.
+7. Create a fixture that distinguishes INNER JOIN from LEFT JOIN.
+
+### Diagnostic solutions
+
+
+1. FROM/JOIN creates rows, WHERE filters, GROUP BY partitions, aggregates compute, HAVING filters groups, SELECT projects, then DISTINCT/order/limit apply. Physical execution may differ under equivalence rules.
+2. Use SELECT p FROM parent p WHERE NOT EXISTS (SELECT 1 FROM child c WHERE c.parent_id=p.id). The left-join form preserves parents and filters WHERE c.parent_id IS NULL, using a non-nullable child key.
+3. x NOT IN (values including NULL) is UNKNOWN for values not equal to any non-null member, so WHERE rejects them. NOT EXISTS makes the absence of a matching counterexample explicit.
+4. COUNT(*) counts rows including NULL-extended outer-join rows; COUNT(column) ignores NULL; COUNT(DISTINCT column) counts unique non-null values.
+5. Order by (created_at,id) with a unique tie breaker, remember the last pair, and request WHERE (created_at,id)  greater than  (last_time,last_id), with an index matching the order.
+6. Use COUNT(*) OVER (PARTITION BY student_id ORDER BY term, enrollment_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), adding a total tie-breaker to make the order deterministic.
+7. Include a parent with no child, a parent with two children, and a child whose attributes may be NULL. The inner join omits the first; the left join preserves it with NULL child fields.
+
+
+
+## Query review checklist
+
+Before shipping a query, write its intended grain and cardinality. List every join relationship and whether it is one-to-one, one-to-many, or many-to-many. Test duplicates, NULLs, empty input, unmatched outer rows, ties, and concurrent changes. Check that predicates are placed in the correct logical phase, that authorization predicates cannot be removed by a rewrite, and that parameters are bound rather than concatenated into SQL text.
+
+Use EXPLAIN and execution statistics to investigate cost, but compare plans only after correctness is established. A query that returns the right answer on a convenient fixture may fail when a relationship becomes one-to-many or a nullable attribute is introduced. Add constraints and tests that preserve the assumptions used in the query’s reasoning.
+
+## References & Further Reading
+
+**Exercise.** Write a query returning each course and its enrollment count, including courses with zero enrollments. Explain why an inner join would lose those courses.
+
+## References & Further Reading
+
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL 18 SQL Queries](https://www.postgresql.org/docs/current/queries.html)

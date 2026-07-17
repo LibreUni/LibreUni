@@ -1,0 +1,88 @@
+---
+title: "Database Security"
+course: "database-systems"
+description: "Authorization, least privilege, injection resistance, and data lifecycle."
+---
+# Database Security
+
+Use separate identities and least-privilege roles for application, migration, reporting, and administration. Parameterized queries preserve syntax/data separation. Row-level policies can enforce tenant boundaries, but policy bypass paths and privileged maintenance must be audited.
+
+Encryption at rest protects stolen media, not an attacker with a live query credential. Backups, replicas, exports, logs, and deletion workflows belong to the data lifecycle.
+
+## Database threat model
+
+Identify data assets, principals, trust boundaries, and failure assumptions. Principals may include application runtime, migration tool, reporting service, background worker, administrator, analyst, backup operator, replica, and external client. An attacker may inject query parameters, steal a service credential, exploit a vulnerable function, read a backup, abuse an export, or cause a privileged job to act on attacker-controlled identifiers. Security requirements differ for confidentiality, integrity, availability, privacy, and auditability.
+
+A database is not automatically a trust boundary merely because it is on a private network. A compromised application identity can issue legitimate queries with excessive authority. A read replica can leak sensitive data even if the primary is protected. A backup may have weaker access controls and longer retention. Include connection pools, query logs, slow-query samples, temporary files, caches, logical replication streams, and development copies in the data-flow diagram.
+
+## Authentication and authorization
+
+Authentication establishes which service or user is connecting; authorization determines which schema, table, row, column, function, and operation that principal may use. Use separate identities for application reads and writes, migrations, reporting, administration, backups, and break-glass recovery. Avoid sharing one superuser credential across services. Rotate credentials, use short-lived or managed authentication where possible, and audit privilege grants and revocations.
+
+Least privilege should be expressed in database roles and application policy. A web role may execute a narrow stored procedure or access views rather than arbitrary tables. A migration role may alter schema only during a controlled deployment. A reporting role may read masked or aggregated data but not raw secrets. Administrative access should require stronger authentication, approval, session recording, and time-bounded elevation. Superuser and security-definer functions can bypass ordinary checks; review ownership, search paths, dynamic SQL, and caller validation.
+
+## Row and column protection
+
+Row-level security can enforce that tenant_id matches the authenticated context, but the context must come from a trusted session setting or role, not a client-supplied query parameter. Test policies for SELECT, INSERT, UPDATE, DELETE, subqueries, joins, views, functions, bulk operations, and privileged owners. A policy that filters reads but permits changing tenant_id can enable cross-tenant writes. Add constraints that make tenant movement impossible or explicitly authorized.
+
+Column protection can use views, column privileges, masking, tokenization, or encryption. A view is safe only if underlying tables and alternate paths cannot bypass it. Dynamic masking may protect ordinary queries but not privileged analysts or inference from aggregates. Encryption reduces exposure for media and selected application layers, but keys, plaintext in memory, searchable metadata, and query credentials remain part of the threat model.
+
+## SQL injection and dynamic SQL
+
+Parameterized queries keep values separate from SQL syntax and are the primary defense against injection. Quoting a value manually is fragile because encoding, character sets, and context differ. Parameterization does not safely substitute identifiers, sort directions, or arbitrary clauses; those must come from a strict allowlist or typed query builder. Stored procedures can be vulnerable when they concatenate dynamic SQL or use unsafe search paths.
+
+Validate type, range, length, and permitted structure before query construction. Do not let user input select a table, column, or schema without an allowlist tied to authorization. Use least privilege to limit damage if injection occurs, but do not present it as a replacement for parameterization. Test errors, encodings, comments, nested queries, bulk endpoints, report filters, and asynchronous jobs.
+
+## Integrity and audit
+
+Database constraints enforce structural integrity across all clients. Use foreign keys, unique constraints, checks, exclusion constraints, and appropriate transaction isolation. Audit security-relevant actions with actor, subject, operation, resource, decision, time, transaction or request ID, and source context. Store audit records in a separate protected stream or table with append-only or cryptographic integrity properties; a compromised application should not be able to silently rewrite its history.
+
+Audit logs themselves may contain personal or sensitive data. Define retention, access, redaction, export, and deletion policy. Log denied high-risk actions and privilege changes, not only successful reads. Make timestamps and time synchronization assumptions explicit. A log that cannot be correlated across application, database, KMS, and identity systems is difficult to use during incident response.
+
+## Data lifecycle
+
+Classify data at creation and propagate classification through tables, derived views, exports, replicas, caches, backups, and analytics. Apply retention and deletion consistently. Logical deletion can preserve data for audit but must prevent ordinary reads; physical deletion may be required by policy but is difficult with backups and replicas. Encryption key destruction can provide cryptographic erasure only when every usable copy of the key is gone and plaintext is not retained elsewhere.
+
+Backups should be encrypted, access controlled, immutable or protected from ransomware where appropriate, monitored, and restored in a quarantined environment. A restore may contain old credentials, old policies, and sensitive data that is no longer present in production. Reconcile schema, key versions, authorization policy, and audit state before making restored data available.
+
+## Availability and abuse
+
+Security includes protecting availability. Expensive queries, unbounded exports, Cartesian products, lock contention, connection exhaustion, and large temporary sorts can be denial-of-service vectors. Limit query time, result size, concurrency, memory, and export scope per identity and workload. Use statement cancellation and resource groups carefully so an attacker cannot cancel another tenant’s work or starve recovery.
+
+Database security controls can fail during outage. Decide whether the identity provider, policy service, KMS, audit sink, or replica being unavailable causes fail-closed rejection, read-only operation, cached bounded policy, or emergency access. Emergency access needs approval, narrow scope, expiration, and post-event review; it must not become an undocumented permanent bypass.
+
+## Worked tenant design
+
+A multi-tenant orders database uses an application role that can execute parameterized order procedures, a reporting role that reads masked views, a migration role used only by deployment, and an administrator role requiring elevation. Every order row has tenant_id and a database policy obtains the trusted tenant context from the authenticated connection. A unique constraint on (tenant_id, order_number) prevents cross-tenant collisions while allowing tenant-local numbering.
+
+Tests attempt to change tenant_id, use a guessed order ID, join through an unprotected view, call a security-definer function, invoke a bulk export, and connect with a reporting credential to raw tables. Backups are encrypted under a wrapping key with restricted restore, audit records flow to a separate sink, and credentials are rotated after a simulated compromise. The report states that a compromised application role may still read authorized tenant orders; database encryption at rest does not remove that live-query risk.
+
+## Exercises
+
+1. Design database roles for application, migration, reporting, and backup.
+2. Explain a row-level policy bypass.
+3. Distinguish parameterizing values from allowlisting identifiers.
+4. Design a retention and backup deletion policy.
+5. Give evidence for audit-log integrity.
+6. Analyze database security during KMS outage.
+
+### Diagnostic solutions
+
+
+1. Give application only required procedures or tables, migrations schema-change privilege during deployment, reporting masked read views, and backup a narrowly scoped export/restore capability. None should be a shared superuser.
+2. A policy checks reads but permits updates to tenant_id, or a security-definer function queries the base table without validating caller context. Test every operation and privileged path.
+3. Values use bind parameters; identifiers cannot normally be bound and must be selected from a server-side allowlist tied to policy. Concatenating either without safe handling is injection-prone.
+4. Set data-class retention, delete or anonymize production records, expire exports and caches, rotate or destroy keys where cryptographic erasure is valid, and apply backup retention with verified deletion or legal hold.
+5. Use append-only protected storage, restricted writers, chained or signed events where appropriate, independent timestamps and correlation IDs, tamper alerts, and a test that an application identity cannot rewrite history.
+6. Reject new encrypted writes or operate in a documented read-only mode unless a bounded emergency key is approved. Never silently log plaintext or use an untracked fallback; alert and exercise recovery.
+
+
+
+**Exercise.** Design roles for a service that reads public catalog data and edits private orders. State which operations must be impossible from the web identity.
+
+## References & Further Reading
+
+* [PostgreSQL SQL Privileges](https://www.postgresql.org/docs/current/ddl-priv.html)
+* [OWASP SQL Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html)
+* [PostgreSQL Row Security Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
+* [NIST SP 800-57 Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final)

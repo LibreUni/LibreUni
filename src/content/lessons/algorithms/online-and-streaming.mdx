@@ -1,0 +1,105 @@
+---
+title: "Online and Streaming Algorithms"
+course: "algorithms"
+description: "Limited memory and future knowledge, competitive analysis, sketches, sampling, and stream-specific guarantees."
+---
+# Online and Streaming Algorithms
+
+An online algorithm must make decisions as input arrives without knowing future items. A streaming algorithm processes a potentially enormous sequence using memory much smaller than the input, often making one or a few passes. These constraints require different guarantees from offline exact algorithms: competitive ratio against an optimal offline adversary, approximation error with probability, or frequency/space bounds. The model and adversary are part of the problem.
+
+## Online versus offline
+
+An offline algorithm sees the complete input and can sort, reorder, or defer decisions. An online algorithm receives requests sequentially and may commit resources irreversibly. The online cost is compared with OPT, the best offline solution for the same sequence, often plus an additive constant. A c-competitive algorithm satisfies (ALG(sigma) at most  c,OPT(sigma)+b) for every sequence sigma.
+
+The adversary may be oblivious, choosing a sequence before randomness, or adaptive, observing choices as they occur. Deterministic online algorithms can be forced into bad choices by an adversary that knows their state. Randomization can improve competitive ratio against an oblivious adversary, but the guarantee must state what the adversary observes.
+
+## Ski-rental problem
+
+Rent costs 1 per day; buying costs B; the season length is unknown. An online algorithm rents for B days then buys. If the season ends before B, cost equals OPT; if it lasts longer, cost at most B+B-1 while OPT is B, giving a ratio below 2. A randomized strategy chooses a buy threshold from a distribution and can improve the competitive ratio against an oblivious adversary.
+
+The proof compares cases by the unknown stopping time. The example illustrates an unavoidable cost of uncertainty: an offline algorithm knows whether a long season justifies buying. The online algorithm’s policy must be evaluated over all possible stopping times, not only typical ones.
+
+## Paging and caching
+
+With cache capacity k and page requests, an online algorithm decides which page to evict on a miss. LRU evicts the least recently used page and is k-competitive; marking algorithms and randomized paging offer other guarantees. A phase partition proof divides a request sequence into maximal phases containing k distinct pages. LRU faults at most k per phase, while OPT faults at least one on each pair of consecutive phases, yielding a ratio.
+
+Competitive analysis is not average latency. A workload with a strong locality distribution may make LRU excellent, while an adversarial cycle can cause many misses. The cache model also specifies whether a requested page is always inserted, whether prefetching is allowed, and whether cache size is known.
+
+## Streaming frequency estimation
+
+A stream of item updates may be too large to store. Exact distinct counting or frequency maps require space proportional to the number of possible items in general. Sketches use randomized hashing to estimate with controlled error. Count-Min Sketch stores counters in d rows; update increments one counter per row, and query takes the minimum. With suitable pairwise-independent hashing, estimates never undercount for nonnegative updates and overcount by at most epsilon N with probability at least 1-delta when width and depth are chosen from epsilon,delta.
+
+The proof uses one row’s expected collision mass and Markov’s inequality, then a union bound over rows. Querying the minimum reduces overestimation because at least one row has small collision noise. Signed updates require different sketches or assumptions; Count-Min’s one-sided guarantee relies on nonnegative frequencies.
+
+## Sampling and reservoir sampling
+
+Reservoir sampling chooses a uniform sample of k items from an unknown-length stream using O(k) memory. Store the first k; for item i greater than k, select it with probability k/i and, if selected, replace a uniformly random reservoir position. Induction proves each of the first i items is present with probability k/i: an old item survives the step with probability (1-k/i), while the new item is selected with k/i.
+
+Weighted sampling requires a different method, such as exponential keys or weighted reservoirs. A naïve probability proportional to weight can bias the sample because total future weight is unknown. State whether sampling is with or without replacement and what statistical guarantee is required.
+
+## Streaming lower bounds and passes
+
+Memory limits impose information-theoretic lower bounds. Exact membership, distinct count, or equality may require remembering enough information to distinguish many prefixes. Randomization and approximation reduce space but cannot eliminate all error/space tradeoffs. Multiple passes can improve accuracy or solve tasks impossible in one pass; count passes as a resource.
+
+Streaming algorithms should define update model, turnstile versus insertion-only, item universe, word size, failure probability, and mergeability. A mergeable sketch can combine summaries from partitions, enabling distributed processing, but its merge operation must preserve the estimator’s error guarantee.
+
+## Heavy hitters and quantiles
+
+The heavy-hitters problem asks for items whose frequency is unusually large. In an insertion-only stream with total length N, an item is an epsilon-heavy hitter when its frequency is at least epsilon N. A full dictionary is exact but can use space proportional to the universe. Misra-Gries keeps at most k-1 candidate counters: on an unseen item, add a counter if space exists; otherwise decrement every counter and delete zeros. Any item with frequency greater than N/k cannot be absent from the final candidates, because every deletion event can be charged to k distinct occurrences and therefore removes at most N/k net support from an item.
+
+The guarantee is a candidate filter, not an exact answer. If the final counter for x is c(x), then the true frequency lies between c(x) and c(x)+N/k. A second pass, or a Count-Min estimate, can verify candidates. This separation between finding candidates and estimating them is an important design pattern: first control the number of possible answers, then spend precision only where needed.
+
+Quantiles require a different summary. A rank-r answer is an item with approximately rN observations below it. Greenwald-Khanna summaries store tuples with value, rank lower bound, and allowable rank gap; compression merges adjacent tuples when the invariant permits it. Randomized sketches such as KLL obtain strong rank accuracy with compact memory, but their guarantees depend on the sampling and merge analysis. When choosing a quantile structure, specify whether the stream is weighted, whether values arrive sorted or adversarially, whether exact endpoints matter, and whether summaries must merge across workers.
+
+## Online primal-dual reasoning
+
+Many online allocation and covering algorithms can be understood through a primal-dual argument. The offline problem has a linear-programming relaxation. When a request arrives, the online algorithm raises dual variables until some resource constraint becomes tight, then commits to an action. Weak duality gives a lower bound on OPT; if the algorithm's cost is at most alpha times the dual objective, the competitive ratio is alpha.
+
+This method is useful because it turns an irrevocable decision into a locally checkable certificate. For online set cover, one may increase the dual variable of an uncovered request and buy sets when a weighted cost threshold is reached. The analysis must account for shared purchases: charging each purchase to the dual growth prevents counting the same resource independently for every request. A plausible greedy rule without a charging invariant is not an online proof.
+
+Randomization changes the object being compared. Against an oblivious adversary, take expectation over the algorithm's random bits for each fixed request sequence. Against an adaptive adversary, future requests may depend on observed choices, so conditional expectations and filtration arguments are needed. State this model explicitly; otherwise a claimed competitive ratio is underspecified.
+
+## Engineering a distributed sketch
+
+Suppose a stream is split across p workers. A summary is safely mergeable only if the merge operation represents the same mathematical summary that a sequential run would have produced, or if a separate theorem bounds the merge error. Workers should share hash-function seeds when sketches depend on compatible counters; independently chosen dimensions can make naïve coordinate-wise addition meaningless. Counters need overflow policy, and the summary must record N or another scale used by its error bound.
+
+A production interface should expose update, merge, estimate, memory footprint, serialization, and reset. Tests should include one worker versus many workers, repeated merges, empty streams, a single dominant key, uniform keys, and adversarial hash inputs. The measured error should be reported separately from the probabilistic failure event. A benchmark that reports only average latency but not rank or frequency error is incomplete.
+
+## Model-selection checklist
+
+Before selecting an online or streaming algorithm, write down: the arrival order; whether deletion occurs; the maximum stream length; the allowed number of passes; memory in words or bytes; exact versus approximate output; confidence probability; adversary model; merge requirement; and query timing. Then identify the lower bound that makes the target plausible. For example, an exact distinct count over a huge universe cannot generally fit in a tiny summary, whereas an approximate count with relative error may be possible.
+
+Finally, distinguish a theorem from an engineering expectation. “At most epsilon N additive error with probability 1-delta” is a theorem only under the stated update and hash assumptions. “Works well on logs” is an empirical claim requiring a workload, seed policy, confidence interval, and comparison baseline. This discipline prevents online algorithms from becoming vague collections of heuristics.
+
+## Exercises
+
+1. Prove ski-rental’s deterministic competitive bound.
+2. Explain phase analysis for LRU paging.
+3. Derive Count-Min width/depth intuition.
+4. Prove reservoir sampling uniformity.
+5. Distinguish insertion-only and turnstile streams.
+6. State adversary assumptions in online randomized analysis.
+7. Design a mergeable streaming summary.
+
+### Diagnostic solutions
+
+
+1. If season length t less than B, rent cost t=OPT. If t at least B, rent B-1 days then buy, cost 2B-1 at most 2B while OPT=B, so ratio  less than 2.'
+'2. Partition at each request that would introduce a (k+1)th distinct page. LRU faults at most k per phase; OPT must fault at least once across each pair of consecutive phases because their distinct-page sets force a page absent from any k-page cache.'
+''
+'3. With width w=O(1/epsilon) times total scale and depth d=O(log(1/delta)), a row’s expected collision noise is small; Markov bounds a row’s bad overestimate, and the probability all rows are bad falls exponentially. Query minimum gives a one-sided estimate under nonnegative updates.'
+''
+'4. Base first k items are included. At item i, a fixed old item is present with probability k/(i-1) and survives replacement with 1-1/i, yielding k/i; item i enters with k/i. Induct all items have equal inclusion probability.'
+''
+'5. Insertion-only updates never decrement frequencies, enabling one-sided Count-Min estimates. Turnstile updates can be negative and require cancellation-aware sketches and different norm/error analyses; an insertion-only proof does not transfer.'
+''
+'6. Say whether the sequence is fixed before random bits, whether the adversary observes choices, and whether it can adapt future requests. Competitive ratios differ under oblivious and adaptive adversaries.'
+''
+'7. Use a linear sketch or a composable counter summary whose merge is addition. Prove expectation/variance or tail bounds after merging, account for hash seed consistency, and specify error probability across all queried outputs.'
+'
+
+## References & Further Reading
+
+* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
+* Alon, Matias, and Szegedy, “The Space Complexity of Approximating the Frequency Moments.”
+* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.

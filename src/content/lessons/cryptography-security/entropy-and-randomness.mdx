@@ -1,0 +1,95 @@
+---
+title: "Entropy and Randomness"
+course: "cryptography-security"
+description: "Unpredictability, min-entropy, nonces, and random-bit generation."
+---
+# Entropy and Randomness
+
+## Randomness as a security resource
+
+Cryptographic security often depends on values that an adversary cannot predict before they are used: keys, salts, nonces in randomized constructions, authentication challenges, signature nonces, and session identifiers. “Random-looking” is not a formal requirement. The generator must be unpredictable under the attacker’s observation model and must maintain that property after partial output, process restart, state compromise, and concurrent use.
+
+Entropy is a property of a distribution relative to an observer. Min-entropy H-infinity(X) is minus the logarithm of the largest probability of any value; it captures the worst-case predictability relevant to guessing. Shannon entropy measures average uncertainty and can be misleading when one value is disproportionately likely. A password dictionary may have considerable Shannon entropy while a high-probability first guess makes it poor as a key.
+
+## Entropy sources and conditioning
+
+Operating systems collect environmental events, hardware noise, and device-specific sources, then condition them into a random pool. An application should normally use the operating system cryptographic random API rather than attempting to combine timestamps, process IDs, mouse movements, or network packets on its own. If an application-specific source is required, document its entropy estimate, health checks, conditioning function, and failure behavior.
+
+A cryptographic random generator expands a short unpredictable seed into a long stream. Expansion does not create entropy; if the seed is known or predictable, all output is predictable. Reseeding limits the amount of output exposed after a state compromise and supports recovery after an attacker temporarily observes internal state. A generator must also address prediction resistance before and after compromise, not only pass statistical tests on output.
+
+## Nonce uniqueness versus unpredictability
+
+A nonce may require uniqueness without secrecy. AEAD counter nonces, sequence numbers, and database identifiers can be public if no pair repeats under the same key. A random nonce provides probabilistic uniqueness and requires a collision bound; a 96-bit random nonce may be appropriate under a specified message budget, but the bound must be calculated. A counter provides deterministic uniqueness but needs durable, coordinated state across processes and restarts.
+
+Challenges often need unpredictability as well as freshness. An attacker who can predict a login challenge may precompute or replay a response, depending on the protocol. A signature nonce must be secret and unique enough that reuse or bias cannot expose the private key. A salt need not be secret or unpredictable against every observer, but it should be unique and generated independently to prevent collisions and precomputation.
+
+## Probability calculations
+
+For q independent random values from a space of size N, the probability of at least one collision is approximately 1-exp(-q(q-1)/(2N)) when q is much smaller than N. The union bound gives the simpler upper bound q(q-1)/(2N). Use the actual number of values per key, sender, tenant, and lifetime rather than quoting a nonce size in isolation. If a system has many independent domains, sum their collision budgets or domain-separate them.
+
+If a tag has t bits and an attacker makes q independent verification attempts, a generic forgery component is roughly q/2^t. If a random token has k bits and the attacker makes q guesses, generic success is roughly q/2^k. Rate limiting reduces q but does not change the primitive’s entropy. Use a margin because attempts may be parallel, distributed, or made through multiple endpoints.
+
+## Failure modes
+
+Common failures include seeding a generator with the current time, using a language-level random function intended for simulation, cloning a virtual machine after seeding, resetting a counter after restore, sharing a nonce prefix between workers, using the same random value for two protocol roles, and logging seeds or generated secrets. A generator can also fail closed in a way that causes developers to substitute a predictable fallback. Define an explicit availability and incident policy for random-source failure.
+
+Forking and container orchestration require special care. A child process may inherit generator state and produce the same stream as its parent unless the runtime reseeds or derives a unique fork identity. Snapshot and restore may duplicate counters and secret state. Worker identifiers must be unique under the key lifetime, not merely unique in one process launch.
+
+## Randomized cryptographic protocols
+
+In a randomized encryption proof, fresh randomness makes encryptions of the same plaintext computationally indistinguishable. In a signature proof, nonce randomness prevents algebraic reuse and makes transcripts difficult to correlate. In a password system, a salt prevents identical verifiers and precomputed tables. The randomness must be bound to the operation and serialization; drawing a random value and then omitting it from the ciphertext or record can prevent decryption or create ambiguity.
+
+Deterministic alternatives can be safe when they derive values from a secret key, message, and domain-separated context using a specified construction. Deterministic signatures reduce dependence on an external RNG but must protect against key-dependent side channels and include the exact message. Deterministic nonces for AEAD require a proof of uniqueness under all state transitions; “hash the message” is unsafe if equal messages, cross-context reuse, or key changes are possible.
+
+## Testing randomness
+
+Statistical tests can detect gross bias but cannot prove unpredictability. Test the API contract: output length, failure behavior, reseeding, fork behavior, restart behavior, concurrent access, and separation between test and production keys. Use a deterministic injectable source only in tests and make it impossible to enable remotely. Published cryptographic test vectors should specify expected outputs for fixed seeds or keys without suggesting that fixed test values are suitable for production.
+
+Monitor health signals without logging raw output. A repeated nonce detector should be scoped by key and sender and should trigger incident response rather than silently continuing. Alert on generator failures, unexpected reseeds, counter rollback, clock or epoch anomalies, and unusually high authentication failures.
+
+## Exercises
+
+1. Distinguish min-entropy from Shannon entropy in an attacker-guessing context.
+2. Calculate a rough collision bound for q random nonces in a 96-bit space.
+3. Explain why a nonce may be public but still require uniqueness.
+4. List failures caused by VM snapshot or process fork.
+5. Compare random and deterministic signature nonces.
+6. Explain what statistical randomness tests cannot prove.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Min-entropy is controlled by the most likely outcome and therefore bounds the best single guess; Shannon entropy is an average measure and can hide a dominant value.
+2. Use the union-bound approximation q(q-1)/(2 times 2^96), then compare the result with the system’s acceptable risk and total messages per key across all senders.
+3. AEAD decryption can use a transmitted nonce, but repeating it under the same key can repeat a keystream or authenticator state. Secrecy is unnecessary; uniqueness is essential.
+4. A child may inherit the same generator state, a restored VM may repeat counters and keys, and two cloned workers may emit identical nonce prefixes. Reseed and allocate durable unique epochs or ranges.
+5. Random nonces need a secure RNG and are safe only when never reused; deterministic nonces can be reliable under a specified keyed construction but require strict message, key, and context binding.
+6. They can reveal bias or implementation bugs in samples but cannot establish that an adversary lacking the internal state cannot predict future output. That requires a cryptographic construction and state-compromise analysis.
+
+</details>
+
+## Worked nonce budget
+
+Suppose a service uses a random 96-bit nonce for each record under one key and emits at most 2^32 records over its complete cryptoperiod. The collision union bound is approximately 2^64 divided by 2^97, or 2^-33. If the service has 100 tenants and multiple independent workers, the total budget must include all records sharing that key; alternatively, use tenant- or worker-specific key separation so a collision in one domain cannot create a same-key collision in another. If that risk is too high, use a durable counter or rotate keys before the budget is exhausted.
+
+Now consider a counter nonce. The sender stores an epoch and counter, derives or assigns a unique prefix per sender, and increments atomically before encryption. On restart it must not reuse an epoch and counter pair. A backup restore that rolls the state backward requires a new key or a new epoch obtained from a monotone external authority. The proof is a system invariant over failures, not merely a loop invariant in the encryption function.
+
+## Review checklist
+
+For every random or nonce value record whether it needs secrecy, unpredictability, uniqueness, freshness, or merely public diversity. Identify the generator, seed source, fork and snapshot behavior, persistence, collision budget, key scope, logging policy, and response to failure. Review the entire lifecycle before approving a cryptographic protocol.
+
+## References & Further Reading
+
+* [NIST SP 800-90A, Recommendation for Random Number Generation](https://csrc.nist.gov/pubs/sp/800/90/a/r1/final)
+* [NIST SP 800-90B, Entropy Sources](https://csrc.nist.gov/pubs/sp/800/90/b/final)
+* [RFC 8446, TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+
+Cryptographic keys need unpredictability, not merely statistical variety. Min-entropy measures the hardest-to-guess outcome: $H_\infty(X)=-\log_2\max_xP[X=x]$. A predictable timestamp is not a secure nonce source.
+
+Nonces need uniqueness under a key; keys need secrecy and sufficient entropy. Reusing a nonce in a stream-like encryption mode can reveal relationships between plaintexts.
+
+**Exercise.** Compare a 32-bit counter and a random 96-bit nonce for uniqueness. State the failure mode if the counter resets and the random generator is weak.
+
+## References & Further Reading
+
+* [NIST SP 800-90A](https://csrc.nist.gov/pubs/sp/800/90/a/r1/final)

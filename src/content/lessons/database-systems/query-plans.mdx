@@ -1,0 +1,91 @@
+---
+title: "Query Plans"
+course: "database-systems"
+description: "Cost-based choices among scans, joins, and intermediate results."
+---
+# Query Plans
+
+A query plan is an executable operator tree. Sequential scans, index scans, hash joins, nested-loop joins, and sort operators have different costs depending on cardinality, selectivity, memory, and data distribution.
+
+An index is not automatically faster: reading most of a table through random lookups can cost more than a sequential scan. Estimates drive choices, so stale statistics can produce poor plans.
+
+## Operator trees
+
+A query plan is a tree of physical operators with an output schema, cardinality, ordering, and cost. A sequential scan reads table pages and applies filters. An index scan navigates an access path and fetches matching tuples; a bitmap strategy may collect heap locations and visit pages in a more locality-friendly order. A sort materializes or streams rows into order. An aggregate groups or accumulates values. A plan’s correctness follows from each operator’s contract and composition; its performance depends on data and resource assumptions.
+
+Plans may be pipelined or blocking. A filter can emit a row as soon as it arrives; a sort usually must consume all input before producing the first ordered row. Hash aggregation and hash join build a hash table and may spill when memory is insufficient. Blocking operators affect latency, memory, parallelism, and failure recovery. A plan with low total cost may have unacceptable first-row or tail latency.
+
+## Cost models
+
+A cost model estimates CPU operations, sequential and random page I/O, memory, network transfer, and sometimes parallel coordination. It is not a direct prediction of milliseconds unless calibrated to the deployment. Sequential scans benefit from prefetch and locality; random heap fetches may be much more expensive when pages are not cached. A plan choice depends on estimated rows, row width, selectivity, correlation, available memory, and output ordering.
+
+Statistics include table row count, number of distinct values, null fraction, histograms, most-common values, correlation, and extended multicolumn relationships. Independence assumptions multiply selectivities even when columns are correlated. For example, country and postal code are not independent. A cardinality estimate error at an early join can multiply through later operators and choose a disastrous join order.
+
+## Join algorithms
+
+Nested-loop join scans an outer input and probes the inner input for each outer row. With an index on the inner join key and a small outer relation, it can be excellent. Without an index, it may rescan a large inner relation and become quadratic. A block nested loop batches outer pages to improve locality. The plan should identify which side is outer and whether parameterized index probes are supported.
+
+Hash join builds a hash table on the smaller input and probes it with the larger input. It is effective for equality joins and can be linear in input size when memory fits. If the build side exceeds memory, partitioned or grace hash join spills both inputs into buckets and joins corresponding partitions, adding I/O. Hash join cannot directly support arbitrary inequality predicates or ordered output.
+
+Sort-merge join sorts both inputs by join key and merges them. It supports equality and some ordered predicates, can exploit preexisting order, and may produce sorted output. External merge sort divides data into memory-sized runs, sorts each, then performs multiway merges; the number of passes determines I/O. Sort-merge can be preferable when later operators require the same order.
+
+## Aggregation and sorting
+
+Hash aggregation stores groups in a hash table and updates aggregate state. It is efficient for unsorted input but may spill or suffer from skew. Sort aggregation sorts by grouping keys and scans runs, using predictable external-memory behavior. A query with ORDER BY and GROUP BY may share sorting only when the required order and grouping semantics align. DISTINCT is an aggregation or sort problem and can be expensive for wide rows.
+
+Top-k queries can use an index ordered by the requested keys or a bounded heap when no full sort is needed. LIMIT without ORDER BY has no deterministic semantic order. A plan that returns the first ten rows quickly may not be stable across executions or replicas. Keyset pagination provides a predicate that reduces work and establishes continuation semantics.
+
+## Plan transformations
+
+Predicate pushdown reduces rows before expensive joins or aggregation, but outer joins, volatile functions, security policies, and NULL semantics restrict movement. Join reordering can reduce intermediate results, but outer and lateral joins constrain associativity. Projection pushdown reduces tuple width and memory while retaining all attributes needed later. Subquery decorrelation can transform a correlated EXISTS into a semijoin but must preserve duplicate and NULL behavior.
+
+A cost-based optimizer searches a space of equivalent expressions, often using dynamic programming for smaller join graphs and heuristics or randomized search for larger ones. It prunes plans with dominated cost or interesting properties such as ordering. Hints can force a plan but may become stale as data changes; fixing statistics or schema is usually more robust.
+
+## Parallel and distributed plans
+
+Parallel scans divide pages or ranges among workers, then combine partial aggregates or join results. Parallelism adds startup, synchronization, memory, and skew costs. A group with one extremely frequent key can make one worker do most of the work. Distributed plans also pay network shuffle. Partition data by join or grouping key to avoid movement where possible, but account for skew and hot partitions.
+
+## EXPLAIN workflow
+
+Read a plan from leaves upward. Compare estimated and actual rows at every node, inspect loops and buffers, find the first major estimate error, and identify whether the resulting join or scan choice follows from it. Do not jump directly to the slowest-looking node; a node may be expensive because an upstream estimate caused it to execute many times. Use EXPLAIN ANALYZE cautiously in production because it executes the query and may write data or impose load.
+
+Collect statistics after representative changes and compare plans with cold and warm cache. Check parameter-sensitive plans, skewed tenants, empty and huge result sets, and concurrent load. A query plan is a decision under assumptions, not a universal property of the SQL text.
+
+## Example
+
+Join a million-row Events table to a ten-row Tenant table on tenant_id. If the query selects one tenant and Events has an index on tenant_id, a nested loop with an index probe may read only matching events. If it selects every tenant and returns most Events, a sequential scan plus hash or merge strategy may be cheaper. If statistics estimate one matching event but the tenant actually owns half the table, the optimizer can choose repeated random probes and perform badly. Refresh statistics and inspect distribution, not just the index definition.
+
+## Exercises
+
+1. Choose nested loop, hash join, or merge join for three scenarios.
+2. Explain a cardinality error cascading through a plan.
+3. Compare hash and sort aggregation.
+4. Identify a legal and illegal predicate pushdown.
+5. Read an EXPLAIN plan by locating the first estimate error.
+6. Explain why EXPLAIN ANALYZE can be dangerous for writes.
+
+### Diagnostic solutions
+
+
+1. Small outer plus indexed inner favors nested loop; large equality inputs with enough memory favor hash; already sorted large inputs or later order requirements favor merge. Data distribution and spills can change the choice.
+2. If a filter is estimated at 1 row but returns 100, a nested loop may execute an inner probe 100 times rather than once, multiplying I/O and later join rows. The first estimate error is the diagnostic target.
+3. Hash aggregation avoids sorting but needs memory and spill handling; sort aggregation has external sort cost but predictable order and can share a required ordering property.
+4. Push a predicate on a base table below an inner join when it references only that table. Do not push a right-side predicate from WHERE below a left join when doing so would remove NULL-extended rows.
+5. Compare estimated rows with actual rows at each node from the leaves upward. The first large divergence often explains downstream plan choices and should guide statistics or query fixes.
+6. It executes the statement, so an UPDATE, DELETE, or side-effecting function can change data. Use a transaction rollback or a safe read-only copy only when the DBMS and query make that behavior explicit.
+
+
+
+## Plan experiment
+
+Create tables with uniform, skewed, correlated, empty, and highly selective data. Run equivalent queries with and without indexes, after statistics refresh and after deliberate statistics staleness. Capture estimated and actual rows, buffers, loops, memory, spills, planning time, execution time, and tail latency. Compare cold-cache and warm-cache runs, but do not call a plan “better” from one timing: explain its resource behavior and correctness assumptions.
+
+For a join, vary the outer relation size and matching fraction. Observe when nested loop changes to hash or merge, when a hash table spills, and how a stale estimate delays or prevents the change. Store the SQL, schema, data generator, DBMS version, configuration, and raw plans so another student can reproduce the conclusion.
+
+**Exercise.** Choose a join strategy for a million-row table joined to a ten-row table. State the assumptions under which a nested loop is preferable to a hash join.
+
+## References & Further Reading
+
+* [PostgreSQL Using EXPLAIN](https://www.postgresql.org/docs/current/using-explain.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL Planner Statistics](https://www.postgresql.org/docs/current/planner-stats.html)

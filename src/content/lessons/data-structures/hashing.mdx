@@ -1,0 +1,93 @@
+---
+title: "Hash Tables and Expected-Time Dictionaries"
+course: "data-structures"
+description: "Hash functions, chaining, open addressing, load factors, universal hashing, resizing, and adversarial behavior."
+---
+# Hash Tables and Expected-Time Dictionaries
+
+A hash table implements a dictionary by mapping a key to an array location. It can provide expected constant-time lookup, insertion, and deletion, but only under explicit assumptions about hash behavior, load factor, resizing, and key immutability. Hashing is not magic randomness: a poor function or adversarial key distribution can collapse performance to linear time. This lesson derives the operations and the conditions behind their bounds.
+
+## Dictionary abstraction
+
+A dictionary stores a finite set of key-value pairs with unique keys. Operations include put(k,v), get(k), contains(k), and remove(k). Decide whether put replaces an existing value, whether keys are compared by equality or identity, and whether iteration order is specified. A key’s equality and hash behavior must agree: if (k_1=k_2), then hash(k1)=hash(k2). The converse is not required; collisions are expected.
+
+The table has m slots and a hash function (h:Uto()0,ldots,m-1()). A collision occurs when distinct keys map to the same slot. Uniform hashing heuristically spreads keys across slots, but an implementation usually uses a deterministic function. Security-sensitive services may randomize a seed so an attacker cannot cheaply construct collisions from a known function.
+
+## Separate chaining
+
+In separate chaining, each slot stores a bucket, often a linked list or dynamic array. To get k, compute h(k), scan its bucket, and compare keys. If n keys are distributed uniformly among m buckets, the expected chain length is the load factor (alpha=n/m). Expected lookup is O(1+alpha); keeping (alpha=O(1)) yields expected O(1).
+
+The expected bound is not a worst-case guarantee. All keys can collide in one bucket, producing O(n) operations. A balanced tree in each bucket supplies O(log n) worst-case per bucket, while a collision-resistant or keyed hash reduces the chance of accidental or adversarial concentration. Bucket representation affects memory, locality, and constant factors.
+
+**Worked example.** With m=8 and hash values 0, 3, 3, 7, 3, the table has chain lengths 1 at slot 0, 3 at slot 3, and 1 at slot 7. For a successful search in the length-3 chain, expected comparisons depend on insertion/order distribution; an unsuccessful search scans all 3. The global load factor is 5/8, but the particular operation’s cost depends on its bucket.
+
+## Open addressing
+
+Open addressing stores entries directly in the table. A probe sequence (p(k,i)) gives the slot checked on attempt i. Linear probing uses (h(k)+ibmod m), quadratic probing changes the offset, and double hashing uses a second hash. Lookup follows exactly the same sequence until it finds the key, an empty slot, or a termination condition.
+
+Deletion cannot simply clear a slot: a later key may have collided through it, and clearing would make lookup stop early. Use a tombstone marker or backward-shift deletion with a proof that probe reachability is preserved. Tombstones increase unsuccessful-search cost and require rebuilding. An empty slot means no future key in that probe sequence lies beyond it; a tombstone means a key may lie beyond but the slot itself is available for insertion.
+
+Open addressing needs (alpha less than 1), and performance worsens as (alpha) approaches one. Under simple uniform hashing, expected unsuccessful probes are approximately (1/(1-alpha)), while successful probes depend on the occupied cluster. Linear probing suffers primary clustering: contiguous runs attract more keys and grow. Quadratic probing reduces some clustering but has coverage constraints; double hashing can approximate independent sequences if the second hash is suitable.
+
+## Resizing and amortization
+
+When load exceeds a threshold, allocate a new table and reinsert every live entry using the new modulus or seed. Do not copy entries to the same index blindly: h(k) generally changes with m. A resize costs O(n) actual time but occurs only after a linear number of insertions under geometric capacity growth, so insertion is expected O(1) amortized under the hashing assumption.
+
+Resizing invalidates references to buckets or table slots. Iterators need a policy: snapshot, fail-fast, or traversal across a stable table. If deletion shrinks a table, use hysteresis to avoid grow-shrink oscillation. During incremental rehashing, operations may consult old and new tables and migrate a bounded number of entries per operation; the invariant must specify where every key can reside.
+
+## Hash-function design
+
+A hash function should mix key bits so structured inputs do not collide. For strings, a polynomial rolling hash treats characters as coefficients modulo a large range; overflow arithmetic must be defined. Combining fields should avoid commutative operations if field order matters. Hash equality must remain stable while a key is stored; mutating a key’s fields can make it unreachable in its original bucket.
+
+Universal hashing chooses a hash function randomly from a family with bounded collision probability for every distinct key pair. If a family is 2-universal, (Pr[h(x)=h(y)]le1/m). The expected number of colliding pairs can then be bounded without assuming keys are random. This is a mathematical guarantee over the seed choice, not necessarily over every fixed seed.
+
+Cryptographic hashing and dictionary hashing have different goals. A cryptographic hash seeks preimage and collision resistance; a table hash seeks fast distribution and may use a secret seed. A cryptographic hash can be slower than needed, while a fast non-cryptographic hash may be vulnerable to chosen-key attacks. Choose according to threat model and workload.
+
+## Load factor is a policy variable
+
+The load factor threshold is a tradeoff, not a theorem. Chaining can tolerate (alpha greater than 1) while preserving expected constant time if bucket lengths remain well behaved, but memory references and tail latency grow. Open addressing must leave empty slots and usually selects a lower threshold. A service should monitor not only average load but maximum bucket length, probe counts, tombstone fraction, resize duration, and memory headroom.
+
+If a hash table is used for untrusted request keys, an attacker can send many distinct keys designed to collide or force repeated resizing. Bound per-request work, cap table growth, rate-limit creation, randomize the hash seed, and consider a balanced-tree fallback. A randomized seed changes the attack’s required knowledge, while resource limits provide a defense even if the distribution is unfavorable.
+
+## Deletion and iteration edge cases
+
+A remove operation must distinguish absent keys, live entries, and tombstones. In chaining, unlink exactly one equal key and decrement size; removing a node while an iterator points to it requires an invalidation or continuation rule. In open addressing, tombstones may be reused for insertion but must not terminate a search. Rebuilding after too many tombstones restores probe performance and can be charged to updates using the same amortization reasoning as resizing.
+
+## Correctness and complexity
+
+For chaining, the RI is that every live pair appears in exactly one bucket at the index determined by the current hash function and table state, no duplicate key exists, and size counts live pairs. For open addressing, every live key lies somewhere in its probe sequence before the first never-used slot, and tombstones are interpreted consistently. Prove put, get, remove, and resize preserve these properties.
+
+Expected-time analysis must state the probability space. Is the randomness in keys, hash seed, or algorithmic choices? Worst-case guarantees require additional assumptions or structures. A benchmark on random keys does not prove expected behavior for production traffic if inputs are correlated or attacker-controlled.
+
+## Exercises
+
+1. Specify a dictionary RI for separate chaining and prove lookup correctness.
+2. Compute chain lengths and load factor for a given bucket assignment, then estimate expected comparisons.
+3. Explain why clearing an open-addressing slot on deletion breaks lookup.
+4. Compare linear probing, quadratic probing, and double hashing.
+5. Prove geometric resizing gives amortized O(1) rehash work per insertion.
+6. State the equality/hash contract and give a mutable-key failure.
+7. Explain why keyed hashing can mitigate adversarial collisions but does not make every operation worst-case constant.
+
+### Diagnostic solutions
+
+
+1. RI: each live key-value pair occurs once in bucket h(k), key equality has no duplicates, and size equals live-pair count. get computes the same h(k) for an unchanged key and scans that bucket; it finds the pair iff it is present, by the RI.
+
+2. Count entries per slot; (alpha=n/m). Under uniform hashing, expected bucket length is (alpha), so an unsuccessful scan is expected O(1+alpha); a successful scan depends on where within its bucket the key is found, but remains expected O(1+alpha).
+
+3. Suppose key B collided after A in A’s probe sequence. If A’s slot is cleared, lookup for B stops at the empty slot and falsely reports absence. A tombstone preserves the fact that probing must continue.
+
+4. Linear probing is simple and cache-friendly but clusters. Quadratic probing reduces primary clustering but may not visit every slot and can have secondary clustering. Double hashing gives more independent sequences when the second hash and table size satisfy coverage conditions.
+
+5. If capacity grows by factor u03b1 greater than 1, rehash costs at capacities C, u03b1C, ...; the total cost before m insertions is a geometric sum O(m). Thus total rehash work over m updates is O(m), giving O(1) amortized rehash cost, in addition to expected constant ordinary insertion.
+6. Equal keys must have equal hashes. If a key is mutated after insertion so its hash changes, get computes a different bucket and misses it; remove and contains fail even though the pair remains stored.
+7. A secret seed prevents an attacker from preparing collisions without knowing the seed, but a particular seed can still have a bad input set, and operations in one heavily colliding bucket remain linear. Use bucket trees, limits, or a different structure when worst-case bounds are required.
+
+
+
+## References & Further Reading
+
+* [Open Data Structures: hash tables](https://opendatastructures.org/)
+* [Cornell CS 2110 hashing lecture](https://www.cs.cornell.edu/courses/cs2110/2025fa/lectures/lec20/)
+* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)

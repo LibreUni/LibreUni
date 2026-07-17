@@ -1,0 +1,103 @@
+---
+title: "Minimum Spanning Trees"
+course: "algorithms"
+description: "Cut and cycle properties, Kruskal, Prim, Boruvka, correctness exchange proofs, and implementation tradeoffs."
+---
+# Minimum Spanning Trees
+
+Given a connected undirected weighted graph (G=(V,E)), a spanning tree connects all vertices with no cycles. A minimum spanning tree (MST) minimizes the sum of edge weights among all spanning trees. MST algorithms are a canonical setting for greedy proofs: the local edge choice is safe because cuts and cycles constrain how any optimal tree can be exchanged. Negative edge weights are allowed; the objective is a sum, and acyclicity prevents repeatedly taking a negative cycle.
+
+## Tree and cut facts
+
+A tree on n vertices has exactly n-1 edges, is connected, and has a unique simple path between every pair. Removing any edge disconnects it; adding any non-tree edge creates a cycle. These equivalent characterizations support MST proofs and validators. A forest with n-c components has n-c edges if each component is a tree.
+
+A cut partitions V into S and VS. An edge crosses the cut if one endpoint lies in each side. The cut property says a lightest edge crossing a cut is safe: some MST contains it. If ties exist, any lightest edge is safe, though different MSTs may result. The cycle property says a heaviest edge on a cycle is not required in some MST; with strict heaviest weight it belongs to no MST.
+
+**Cut exchange proof.** Let e be a lightest crossing edge and T an MST. If e is already in T, done. Otherwise adding e creates a cycle; that cycle contains another edge f crossing the cut. Since w(e) at most w(f), replace f with e. The result is a spanning tree with no larger weight, so it is also an MST containing e.
+
+## Kruskal’s algorithm
+
+Kruskal sorts edges by nondecreasing weight and scans them. Add edge (u,v) if u and v are currently in different forest components; otherwise skip it. Union-find maintains component membership. The forest invariant is acyclic, and after each accepted edge it can be extended to an MST by the cut property applied to the components.
+
+**Worked example.** Edges sorted are (A,B,1),(C,D,1),(B,C,2),(A,C,3),(D,E,4),(B,E,5). Accept the first three, which connect A,B,C,D without a cycle; accept D,E with weight 4. The forest has five vertices and four edges, hence is a spanning tree. Edge (A,C,3) would close a cycle and is rejected. A tie at weight 1 can choose either order without changing optimal weight.
+
+Sorting costs O(E log E); union-find costs O(Ealpha(V)) amortized, so total is O(E log E). If weights are small integers, specialized sorting can change the edge-order cost. Kruskal is attractive when the graph is given as an edge list or is sparse.
+
+## Prim’s algorithm
+
+Prim grows one tree from an arbitrary start. For each outside vertex v, maintain the lightest edge connecting v to the current tree, called key[v], and a parent. Repeatedly extract the outside vertex with minimum key, add its parent edge, and relax outgoing edges. The cut between the current tree and outside vertices makes the chosen edge safe.
+
+With a binary heap and adjacency lists, Prim is O(E log V); with an array queue it is O(V^2), useful for dense graphs. A lazy heap may contain stale key entries; compare extracted key with current key or use a visited set. Decrease-key implementations need a position map. Disconnected graphs produce a minimum spanning forest if Prim is restarted for each unvisited component; a routine claiming an MST must reject or specify this case.
+
+## Boruvka’s algorithm
+
+Boruvka repeatedly selects, for every current component, its cheapest outgoing edge and adds all safe choices, avoiding duplicates/cycles as union-find merges components. Each nontrivial component chooses an edge, and the number of components at least halves after a phase under standard conditions, giving O(log V) phases. Scanning all edges per phase gives O(E log V), with parallel opportunities because component choices can be computed independently.
+
+Boruvka’s proof applies the cut property separately to each component cut. Multiple components may choose the same edge or edges may form a cycle among components; union-find accepts only those that connect distinct current roots. The phase invariant is a forest extendable to an MST.
+
+## Uniqueness and ties
+
+If all edge weights are distinct, the MST is unique. Suppose two different MSTs exist; their symmetric difference contains a cycle-like exchange, and the first edge of differing weight would allow a strictly cheaper tree, contradiction. With equal weights, multiple trees can be optimal. An implementation’s deterministic edge ID tie-breaker gives reproducibility but does not change the objective.
+
+Negative edges do not break Kruskal or Prim because neither algorithm assumes nonnegative weights. A negative non-tree edge may be safe to add if it connects components; a negative edge already inside a cycle is not automatically included because a tree cannot contain cycles. Do not import Dijkstra’s nonnegative-edge condition into MST reasoning.
+
+## Verification and output
+
+Validate a candidate tree has n-1 edges, no cycle, and connects all vertices. Union-find can check acyclicity; DFS/BFS checks connectivity. To verify optimality, compute maximum edge on the tree path between endpoints for each non-tree edge e; if w(e) is less than that maximum, the tree is not an MST. This cycle-based certificate can be accelerated with LCA structures but is useful as a small-graph checker.
+
+The MST may not preserve shortest paths, minimize maximum degree, or minimize latency under a different metric. An MST minimizes total chosen edge weight only. If edges represent unreliable links, the application may need a constrained or robust spanning tree problem with different algorithmic properties.
+
+## A matroid perspective
+
+The independent sets of a graphic matroid are forests. Heredity is immediate: removing an edge from a forest cannot create a cycle. The exchange axiom follows because if forest A has fewer edges than forest B, some edge of B connects two different components of A; otherwise every B edge would lie within an A component and B could not have more edges without creating a cycle. The general matroid greedy theorem therefore explains Kruskal’s correctness as a maximum-weight independent-set algorithm after reversing weights or selecting a minimum basis.
+
+This abstraction also clarifies why MST can accept a local edge safely while many graph optimization problems cannot. The feasible family has an exchange structure. Adding constraints such as degree limits or hop bounds generally destroys the matroid property, and simply sorting edges can fail. A modified objective requires a new proof or an approximation guarantee.
+
+## Implementation edge cases
+
+If vertex IDs are sparse or objects, map them to dense indices before union-find and retain the reverse map for output. Reject NaN weights or define their ordering; a comparator that is not transitive can make edge sorting invalid. Parallel edges are separate candidates and the lighter one may be safe while the heavier one is rejected. Self-loops always create a cycle of length one and cannot belong to a spanning tree.
+
+For disconnected input, Kruskal naturally returns a minimum spanning forest with one tree per component. Prim from one source visits only one component. A production API should return a forest explicitly or report disconnectedness rather than silently labeling a partial tree an MST.
+
+## Dynamic and incremental settings
+
+If edges are inserted over time, union-find can maintain the minimum spanning forest only under restricted update models; a new lighter edge may require replacing a heavier edge on a path. The cycle property identifies the replacement: add the new edge and remove the maximum-weight edge on the resulting cycle if that improves the forest. Supporting this efficiently requires dynamic-tree structures. Deleting edges is harder because a replacement edge must be found across a cut.
+
+The static greedy proof remains useful as a certificate even when updates require advanced structures. After each update, check that every non-tree edge is at least the maximum path edge in the current forest, subject to component connectivity. This invariant separates optimality from a particular construction history.
+
+## Testing strategy
+
+For small graphs, enumerate all spanning trees, compute minimum weight, and compare the algorithm’s output. Include equal/negative weights, parallel edges, self-loops, disconnected components, and sparse vertex IDs. For larger graphs, validate tree shape and cycle/cut certificates, and compare Kruskal with Prim under identical weights. Random tests should preserve the weight domain and record seeds; a graph generator that almost always produces distinct weights will not exercise tie behavior.
+
+## Exercises
+
+1. Prove the cut property by exchange.
+2. Trace Kruskal on a weighted graph and identify rejected cycle edges.
+3. Prove Prim’s selected edge is safe.
+4. Compare Kruskal, Prim, and Boruvka by graph representation.
+5. Explain MST behavior with negative weights and ties.
+6. Give a certificate for a candidate MST.
+7. Distinguish MST objective from shortest-path tree objective.
+
+### Diagnostic solutions
+
+
+1. Add a lightest crossing edge e to an MST T. If absent, its cycle contains another crossing edge f. Replace f with e; connectivity and acyclicity remain, and weight does not increase. Thus an MST containing e exists.'
+'2. Sort edges, maintain roots, accept only distinct-root edges, and stop after V-1 acceptances. Each rejection closes a cycle in the current forest; record the endpoints’ common representative.'
+''
+'3. The current tree defines a cut against all outside vertices. The minimum-key edge is lightest crossing that cut, so the cut property says some MST contains it together with the already safe edges.'
+''
+'4. Kruskal favors edge lists and sorting; Prim with heaps favors adjacency lists and sparse graphs; array Prim can suit dense matrices; Boruvka scans edges in phases and parallelizes component choices. Give costs under the chosen representation.'
+''
+'5. Negative weights are valid because trees have no cycles; the greedy cut proof uses comparisons, not nonnegativity. Ties permit multiple MSTs; a deterministic tie order selects one without changing minimum total weight.'
+''
+'6. Check n-1 edges, connectivity, acyclicity, then for every non-tree edge compare its weight with the maximum tree-path edge. No smaller replacement proves MST optimality by the cycle property.'
+''
+'7. An MST minimizes total edge sum and may route a pair along a long path. A shortest-path tree minimizes distances from one source and can have larger total edge weight. The objectives and exchange proofs differ.'
+'
+
+## References & Further Reading
+
+* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
+* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
+* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.

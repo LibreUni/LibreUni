@@ -1,0 +1,91 @@
+---
+title: "Authenticated Encryption"
+course: "cryptography-security"
+description: "Confidentiality and integrity as one nonce-disciplined interface."
+---
+# Authenticated Encryption
+
+## Security interface
+
+Authenticated encryption with associated data, or AEAD, takes a key, nonce, plaintext, and associated data and returns ciphertext plus an authentication tag. Decryption either returns the exact plaintext or a failure indication. The associated data is authenticated but not encrypted, which is useful for packet headers, object identifiers, protocol versions, and sequence metadata. The security goal is confidentiality and integrity under chosen-plaintext and chosen-ciphertext interaction, with explicit nonce-use assumptions.
+
+The nonce is normally public and must be unique for each key. It does not need to be secret. Reusing a nonce can destroy both confidentiality and authenticity depending on the construction. A protocol must define how nonces are generated, transmitted, persisted across crashes, and divided among senders. Random nonces need a collision analysis; counters need durable state and partitioning; derived nonces need a unique message number and domain separation.
+
+## Encrypt-then-authenticate reasoning
+
+A common conceptual composition is encrypt-then-MAC: compute ciphertext with a semantically secure encryption scheme, then authenticate the algorithm identifier, nonce, associated data, and ciphertext under an independent MAC key. Verification must occur before plaintext is released or parsed. Encrypting and then checking a tag over only the plaintext leaves the receiver unable to authenticate the ciphertext before decryption and can create malleability or padding-oracle behavior.
+
+Modern AEAD algorithms integrate these steps. The security proof depends on the primitive’s assumptions and a nonce-respecting adversary. “The ciphertext looks random” is not an integrity argument; an attacker may alter it while preserving distribution. “The tag is secret” is not required; the key must remain secret and the tag length must make forgery infeasible under the number of verification attempts.
+
+## GCM structure and failure modes
+
+GCM combines counter-mode encryption with a polynomial authenticator in a binary field. Counter mode is parallelizable and does not require padding, but repeating a counter block under the same key repeats the keystream. The authenticator’s security also degrades as nonce misuse and total authenticated data grow. Implementations must enforce the construction’s length limits and use the specified nonce processing rather than inventing a shorter format.
+
+A catastrophic operational error is nonce reuse. If two messages use the same counter-mode keystream, XORing ciphertexts cancels the keystream and reveals the XOR of plaintexts. Known or predictable structure can then recover content. Reuse can also expose relationships between authentication polynomials and permit tag forgery. The correct response is key separation or key rotation with a formally tracked nonce budget; merely hiding the nonce does not repair reuse.
+
+## ChaCha20-Poly1305
+
+ChaCha20 is a stream cipher based on an add-rotate-xor function, and Poly1305 is a one-time authenticator keyed from the cipher stream. The AEAD construction derives a one-time Poly1305 key from the nonce and master key, encrypts with ChaCha20, and authenticates padded associated data and ciphertext along with their lengths. The length encoding prevents ambiguity between concatenated fields and binds the exact framing.
+
+The one-time-key condition is fundamental. Reusing a nonce reuses the authenticator key and can make polynomial equations in the secret authenticator parameters available to an attacker. Implementations should use a standard, audited library and test against RFC vectors rather than reimplementing the primitive from prose.
+
+## Error handling and side channels
+
+Decryption must be atomic from the caller’s perspective: verify the tag before returning plaintext to application logic. Distinguish internal diagnostics from external responses so an attacker cannot learn whether failure occurred during parsing, padding, tag verification, or authorization. Timing differences between invalid cases can create a decryption oracle.
+
+Associated data must be included consistently on both sides. Omitting a protocol version, tenant identifier, direction bit, or object identifier can permit cross-context substitution: a valid ciphertext from one context is accepted in another. Bind algorithm identifiers and key version into associated data or key derivation. Verify lengths before allocation to prevent memory-exhaustion attacks.
+
+## Key and nonce lifecycle
+
+A key should have an owner, purpose, algorithm, creation time, activation interval, retirement policy, and destruction or archival rule. Derive separate encryption keys for directions, tenants, and protocol layers. If a sender counter can reset after crash, include an epoch stored durably or derive a new key. In a distributed system, allocate non-overlapping nonce ranges or derive a nonce from a unique sender identifier and message counter.
+
+Rotation must be compatible with replay policy. A receiver may need to accept old keys for in-flight messages but must not accept indefinite replay. Store key identifiers with ciphertext and authenticate them. Do not infer key identity from an unauthenticated header before tag verification.
+
+## Worked packet format
+
+Consider a record with version, key identifier, sender identifier, sequence number, ciphertext, and tag. Derive a nonce from a key epoch and sequence number, and authenticate version, key identifier, sender identifier, and sequence number as associated data. Encrypt only the payload. The receiver rejects unknown versions, malformed lengths, duplicate or out-of-window sequence numbers according to the replay policy, and invalid tags. The proof obligations are: unique nonce per key and sender, unambiguous associated-data encoding, atomic verification, and authorization of the sender before accepting the record’s effect.
+
+## Exercises
+
+1. State what AEAD hides and what associated data protects.
+2. Explain the confidentiality failure from nonce reuse in counter mode.
+3. Design a crash-safe counter nonce scheme for two senders.
+4. Identify a cross-context attack caused by unauthenticated associated data.
+5. Explain why plaintext must not be released before tag verification.
+6. List fields that belong in a secure packet’s authenticated associated data.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Plaintext is hidden; associated data remains visible but any change causes verification failure. The nonce is normally visible as protocol metadata and must be unique.
+2. Reusing the nonce repeats the keystream. XORing two ciphertexts yields the XOR of plaintexts, and known structure can reveal each message. Authentication may also fail catastrophically.
+3. Give each sender a unique prefix and maintain a durable monotone counter within that prefix, or allocate disjoint counter ranges from a coordinator. Rotate the key if state cannot be recovered safely.
+4. If a tenant or object identifier is not authenticated, an attacker can copy a valid ciphertext into another tenant or object context and obtain acceptance there.
+5. Invalid ciphertext may be crafted to exploit parser, padding, oracles, or state changes. Verification first ensures only authenticated bytes reach the application.
+6. Version, algorithm/key identifier, direction, sender and recipient context, object identifier, sequence number, and any framing or tenant fields that affect interpretation.
+
+</details>
+
+## Testing and formal review
+
+Test every published vector and compare independent implementations. Include empty plaintext and associated data, maximum permitted lengths, nonces at boundary values, truncated tags, altered ciphertext, altered associated data, wrong keys, wrong key identifiers, and replayed records. A successful test must assert both acceptance of the exact valid record and rejection of every one-field mutation. Fuzz the parser separately from the cryptographic core, and ensure malformed lengths cannot trigger unbounded allocation.
+
+Review the nonce proof as a system invariant: for every encryption invocation under key K, the pair (K,nonce) is unique. Review the framing proof: serialization is injective, and all fields that affect interpretation are authenticated. Review the failure proof: invalid records cause no plaintext release or externally distinguishable oracle. If any invariant depends on a process-local counter, include restart, replication, backup restore, and key rotation in the threat model.
+
+The tag length is a security parameter. If an attacker gets q independent verification attempts and the tag has t bits, a rough forgery bound includes q divided by 2^t, plus construction-specific terms. Rate limiting and lockout reduce q but do not replace a suitable tag. Record failed verifications for detection without logging keys, plaintext, or reusable ciphertext in unsafe channels.
+
+## References & Further Reading
+
+* [RFC 5116, An Interface and Algorithms for Authenticated Encryption](https://www.rfc-editor.org/rfc/rfc5116)
+* [RFC 8439, ChaCha20 and Poly1305 for IETF Protocols](https://www.rfc-editor.org/rfc/rfc8439)
+* [NIST SP 800-38D, Galois/Counter Mode](https://csrc.nist.gov/pubs/sp/800/38/d/final)
+
+Authenticated encryption with associated data (AEAD) protects plaintext confidentiality and detects modification. Associated data is authenticated but visible, such as a protocol version or record identifier. Decryption must reject before exposing unauthenticated plaintext to security-sensitive logic.
+
+Nonce uniqueness is a contract. Reusing a nonce under the same key can catastrophically violate confidentiality or authenticity depending on the construction.
+
+**Exercise.** Design an AEAD record containing version, sequence number, ciphertext, and tag. State which fields are associated data and how nonce uniqueness is enforced.
+
+## References & Further Reading
+
+* [NIST SP 800-38D](https://csrc.nist.gov/pubs/sp/800/38/d/final)

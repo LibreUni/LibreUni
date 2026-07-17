@@ -1,0 +1,83 @@
+---
+title: "Database Capstone"
+course: "database-systems"
+description: "A complete logical, physical, and operational database design."
+---
+# Database Capstone
+
+This capstone is a complete database engineering project. You are responsible for the semantic model, executable schema, query behavior, physical evidence, concurrent correctness, recovery story, and security boundary. Treat the database as a component with contracts. A polished submission says what is guaranteed, under which failure model, and how a reader can test the claim.
+
+## Product contract
+
+Design a multi-tenant order system serving organizations with stores, customers, products, warehouses, orders, payments, shipments, refunds, and audit events. A tenant may reuse an SKU used by another tenant. An order line records the product identity and price at purchase time. Inventory reservation is atomic and cannot make available stock negative. An order can be paid only once for a given provider charge, but the provider may retry notifications. A shipment can contain lines from one order and can be split into packages. Analysts may read aggregates for assigned tenants but must not infer another tenant's customer identities.
+
+Write a short consistency contract before writing DDL. Strong guarantees are required for ownership, keys, money, inventory, and payment idempotency. Eventual consistency is acceptable for search and dashboards if the lag is observable and a repair job exists. State whether an order is allowed to remain `pending` when an external payment call is unavailable. Define time semantics, currency, rounding, deletion, retention, and whether audit events are immutable. Every later design choice must refer back to this contract.
+
+## Domain and relational design
+
+Provide a domain model and then a relational schema. A robust core might include `tenant`, `store(tenant_id, store_id)`, `customer(tenant_id, customer_id)`, `product(tenant_id, product_id, sku)`, `price_version(product_id, valid_from, valid_to, currency, unit_minor)`, `warehouse`, `stock(tenant_id, warehouse_id, product_id, on_hand, reserved)`, `orders`, `order_line`, `payment`, `shipment`, `shipment_line`, `refund`, `outbox`, and `audit_event`. This is a starting vocabulary, not a required naming scheme; explain every table you add or omit.
+
+Use composite tenant-aware foreign keys where a child must belong to the same tenant. Declare candidate keys explicitly: `(tenant_id, sku)` is likely unique, while a generated `product_id` is an efficient reference. Add checks for `on_hand  at least  0`, `reserved  at least  0`, `reserved  at most  on_hand` if that is the chosen invariant, positive line quantity, nonnegative money, and legal state transitions where expressible. Explain which transition rules require a transaction or trigger because a check constraint is row-local.
+
+Analyse functional dependencies and normalization. Product description depends on product, not on order line; purchase price depends on the selected immutable price version, not on the current product price. Show a lossless decomposition for one relation that contains tenant, order, product, and line attributes. Discuss BCNF versus dependency preservation and identify intentional denormalizations such as cached order totals or a search document. For each cache, identify the source of truth, update transaction, rebuild query, staleness bound, and mismatch alarm.
+
+## DDL and executable invariants
+
+Submit portable DDL plus engine-specific details separately. Use exact numeric money or integer minor units, explicit collations where SKU comparison matters, and UTC-aware timestamps. Make nullability deliberate: an unknown shipment tracking number differs from a shipment with no tracking number yet. Use a unique provider event ID and a unique payment charge ID. If a state machine is represented by text or an enum, document allowed transitions and test invalid transitions.
+
+Include seed fixtures that expose errors: two tenants with equal SKUs, a product with two price versions, an order with two lines, a customer with no orders, a NULL optional timestamp, duplicate webhook delivery, zero available inventory, and a failed shipment. Write assertions for tenant boundaries and totals. Use a transaction to load interdependent fixtures or defer constraints only when you explain why. Avoid relying on insertion order as a correctness mechanism.
+
+## Query portfolio
+
+Implement at least twelve queries: tenant-scoped order detail; open orders by age; daily revenue with zero-activity days; top products per store; inventory below reorder point; unfulfilled paid lines; customers with no completed order; refund rate by product; payment events needing retry; shipment fill rate; audit history for an order; and an analyst aggregate that cannot return raw identities. State the grain and cardinality expectation for every query. Include tests for duplicate lines, missing optional relations, NULLs, and empty tenants.
+
+For one query, give a relational-algebra expression and show safe selection and projection pushdown. For one, explain why a left join is required and how a predicate in `WHERE` can turn it into an inner join. For one, use a window function and defend the tie policy. For one, use `NOT EXISTS` and explain NULL-sensitive `NOT IN`. Include parameterized forms and a security test proving that changing `tenant_id` cannot broaden the result.
+
+## Physical design and measurement
+
+Choose indexes from query predicates and ordering: likely candidates include `(tenant_id, created_at, order_id)`, `(tenant_id, status, created_at)`, `(tenant_id, warehouse_id, product_id)`, and a unique `(tenant_id, sku)`. Do not blindly create all of them. For each index, show the query it serves, expected selectivity, whether it enables an index-only access, write amplification, storage estimate, and what measurement would justify removal.
+
+Capture `EXPLAIN` and `EXPLAIN ANALYZE` for representative small and large fixtures. Read the plan bottom-up and compare estimated versus actual rows. Investigate one deliberately bad estimate caused by skew or stale statistics. Compare a nested-loop and hash-join workload, and explain why a plan that wins at 100 rows may lose at 10 million. If you partition, show pruning evidence, partition maintenance, uniqueness scope, and the behavior of a query whose predicate omits the partition key. A benchmark must declare scale, warm-up, concurrency, cache state, and percentile latency.
+
+## Transactions and concurrent workload
+
+Implement order placement as short transactions. Verify tenant and price version, reserve inventory with an atomic conditional update or protected row, insert line snapshots, create the order, and enqueue an outbox record. Never keep locks while waiting for a payment provider. Give an idempotency key for client retries and a unique constraint that makes the key effective. Explain the result if the client times out after commit but before receiving a response.
+
+Construct traces for two buyers competing for one unit, two workers consuming the same outbox row, two simultaneous refunds, and two doctors or warehouse managers satisfying a predicate independently. For each trace, name the isolation level, visible versions, locks, waits, commits, and possible abort. Draw both a precedence graph and a wait-for graph for one history. If using snapshot isolation, explicitly test for write skew; do not claim serializability from the absence of row-level conflicts.
+
+## Recovery, replication, and scale
+
+Define RPO and RTO for orders, payments, search, and analytics. Describe full backups, WAL archiving, point-in-time recovery, restore verification, and retention. A replica can reduce failover time but is not a historical backup; an accidental delete may replicate immediately. Specify promotion, client fencing, split-brain prevention, sequence/identity behavior, and reconciliation of in-flight outbox work.
+
+Separate scaling dimensions. Read replicas help read-heavy workloads but introduce replica lag. Partitioning can improve maintenance and pruning while complicating global uniqueness. Sharding by tenant can isolate noisy neighbors but makes cross-tenant reporting and tenant moves harder. Explain how a tenant is assigned, how a transaction avoids crossing shards, how migrations move data safely, and what happens when one shard is unavailable. Do not call asynchronous replication “zero data loss” without a synchronous durability argument.
+
+## Security and incident runbook
+
+Threat-model the browser/API, application role, analyst, support operator, database administrator, provider webhook, and stolen credential. Use parameterized statements and least-privilege roles; separate migration ownership from runtime ownership; rotate secrets; encrypt transport; and audit changes to prices, inventory, refunds, and permissions. Row-level security may provide defense in depth, but document the trusted session identity and privileged bypass cases. Never place provider secrets or raw payment data in ordinary order tables.
+
+Write runbooks for: a leaked application credential, a failed migration, a primary crash, a replica lag spike, a negative inventory alarm, and a suspected cross-tenant query. Each runbook contains detection, containment, evidence preservation, integrity checks, recovery, customer communication boundary, and a regression test. For a negative inventory alarm, do not merely edit the row: freeze affected reservations, identify the first invariant-breaking event, reconcile from order and audit records, and repair the root cause.
+
+## Deliverables and grading
+
+**Deliverable.** Submit an ER/domain model, DDL, query set, transaction traces, threat model, benchmark plan, and an incident runbook for a failed primary and a corrupted migration. Add a README that runs the fixture and test suite from a clean database. Include a design decision record for every denormalization, isolation choice, index, partition, and consistency relaxation.
+
+Grade the capstone on semantic correctness (25%), executable constraints and tests (15%), query and physical evidence (20%), concurrency/recovery design (20%), and security/operations (20%). A design that is elegant but not runnable is incomplete. A runnable design that hides tenant leakage, NULL behavior, retry duplication, or restore assumptions is unsafe. Full credit requires a counterexample for each rejected alternative and evidence that the stated guarantees survive the defined failures.
+
+## Exercises with diagnostic solutions
+
+1. Design the key and constraints for a tenant-scoped SKU and prove that equal SKUs in different tenants are allowed while duplicates in one tenant are rejected.
+2. Show how mutable catalog prices corrupt historical revenue and repair the model with immutable price versions.
+3. Write the atomic inventory reservation statement and explain what the affected-row count means under contention.
+4. Construct a payment webhook arriving before the original request commits. Design a state machine and idempotency strategy.
+5. Choose a partition key for orders and give a query that fails to prune. Explain the operational repair.
+6. Define an RPO/RTO pair and design a restore drill that measures both.
+7. Give a cross-tenant attack query and the database/application controls that make it return zero rows.
+
+The diagnostic answers should be included in the student report, not hidden behind “the ORM handles it.” For 1, use a composite unique key and tenant-aware foreign keys. For 2, store the purchased unit price or immutable version reference on each line. For 3, update only when `on_hand-reserved  at least  requested` and reject or retry when no row is affected. For 4, persist the provider event under a unique ID, accept only legal monotonic transitions, and process retries idempotently. For 5, partitioning by time does not prune a tenant-only query; add a suitable tenant access path or choose a tenant-aligned design. For 6, restore a known backup into isolation, replay logs to a timestamp, validate checksums and business invariants, and time the operation. For 7, bind tenant identity server-side and enforce it again with policy or composite predicates.
+
+For every denormalization or consistency relaxation, state the invariant it risks and the repair or reconciliation process. For every index, state the query it serves and its write cost. Treat these statements as acceptance criteria: if a later benchmark or failure drill contradicts one, revise the design rather than weakening the evidence.
+
+## References & Further Reading
+
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+* [PostgreSQL Documentation](https://www.postgresql.org/docs/current/)

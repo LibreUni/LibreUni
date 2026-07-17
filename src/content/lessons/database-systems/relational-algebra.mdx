@@ -1,0 +1,99 @@
+---
+title: "Relational Algebra"
+course: "database-systems"
+description: "Selection, projection, joins, and equivalence-preserving transformations."
+---
+# Relational Algebra
+
+## Algebraic foundation
+
+Relational algebra is a closed, compositional language: each operator consumes relations and returns a relation. Closure lets complex queries be built from smaller expressions and lets an optimizer reason about equivalent operator trees. Under classical set semantics, a relation has no duplicate tuples; SQL usually uses bags, so every algebraic rewrite must state whether duplicate elimination is present.
+
+Selection sigma-p(R) retains tuples satisfying predicate p. Projection pi_A(R) retains attributes A and removes duplicate tuples. Rename rho_(B less than -A)(R) changes attribute names to make schemas compatible or distinguish self-joins. Cartesian product R times S pairs every tuple, with schema consisting of both attributes; its cardinality is |R| times |S|. A theta join is product followed by selection, and an equijoin uses equality predicates.
+
+## Joins and outer semantics
+
+Natural join matches all same-named attributes and removes duplicate copies of join columns. It is concise but fragile: adding an unrelated same-named attribute changes its meaning. Prefer explicit join predicates in schema and query design. Semijoin R semijoin S returns R tuples with at least one matching S tuple; antijoin returns R tuples with no match. In distributed systems, semijoins can reduce shipped data before a full join.
+
+Left outer join preserves every tuple from R and adds NULLs for unmatched S attributes. Right and full outer joins preserve the analogous sides. An outer join is not equivalent to an inner join plus a marker unless NULL and duplicate behavior are defined. Selection after an outer join can remove preserved rows if it tests nullable attributes; selection before or in the ON condition may preserve them. This placement is a semantic decision.
+
+## Set operations
+
+Union, intersection, and difference require union-compatible schemas. Union is commutative and associative under set semantics; difference is neither generally commutative nor associative. SQL UNION removes duplicates, while UNION ALL preserves them. Set difference corresponds to EXCEPT and can be expressed using NOT EXISTS, but NULL comparison and duplicate multiplicity need analysis before claiming equivalence.
+
+Division expresses universal quantification. For R(X,Y) and S(Y), R divided by S contains x values such that every y in S appears paired with x in R. An equivalent expression is pi_X(R) minus pi_X((pi_X(R) times S) minus R), under compatible set semantics. The inner difference finds required pairs missing from R; the outer difference removes x with any missing pair. SQL commonly encodes the same idea with double NOT EXISTS.
+
+## Algebraic laws
+
+Selection operations commute when their predicates are independent and can be combined with AND. A selection can be pushed below a join when its predicate references only the corresponding input and the join is inner. Projection can be pushed below an operator if all attributes needed later, including join and filter attributes, are retained. These laws reduce intermediate cardinality and width.
+
+Join is commutative and associative under inner equijoins in a compatible set model, but outer joins and non-equality predicates require care. Cartesian product distributes over union under appropriate schemas. Difference and projection do not freely commute: projecting away an attribute used to distinguish tuples or evaluate a predicate can change the result. SQL bags further restrict these laws because duplicate counts may change.
+
+## Relational calculus connection
+
+Tuple relational calculus describes which tuples satisfy a logical predicate, while relational algebra describes how to construct them. A safe calculus query has a finite domain of values drawn from the database or constants; unrestricted logic can express noncomputable or infinite results. Codd’s relational completeness result connects expressive query languages to relational algebra and safe calculus, but practical SQL adds aggregation, null, recursion, and updates with semantics beyond the classical model.
+
+## Query translation example
+
+Given Student(sid,name), Course(cid,title), Enrollment(sid,cid,term), and Required(cid), find students who completed every required course. First form Completed = sigma_term='2026S'(Enrollment). Then CandidatePairs = Student times Required. Join CandidatePairs with Completed on sid and cid, project students who have missing pairs using difference, and subtract them from all students. The algebra makes the universal condition visible and exposes where duplicates or NULL values would alter an SQL translation.
+
+## Optimization reasoning
+
+An optimizer applies equivalent rewrites before choosing physical algorithms. Push selections toward base relations, project away unused attributes, choose join order that limits intermediate results, and use constraints to eliminate impossible branches. A key-foreign-key constraint can prove that an inner join preserves or filters a particular side; a contradiction with a check constraint can produce an empty result. Every rewrite must preserve the logical result under the DBMS’s actual semantics.
+
+## Exercises
+
+1. Translate a three-table SQL query into algebra.
+2. Prove or refute a selection-pushdown rule.
+3. Express “students in every required course” using division.
+4. Construct an outer-join example where predicate placement differs.
+5. Explain a bag-semantics counterexample to projection pushdown.
+6. Use a constraint to infer an empty or bounded result.
+
+### Diagnostic solutions
+
+
+1. Start with a product or explicit join, apply selections, project required attributes, then grouping or duplicate elimination as SQL requires. Preserve every attribute needed by a later predicate.
+2. Push sigma_p below R join S only if p references R alone and the join is inner or the equivalence’s outer semantics are proven. A predicate on a nullable preserved side can invalidate the rule.
+3. Use pi_student(Enrollment join Required) minus pi_student((pi_student(Enrollment) times Required) minus Enrollment), adapting attributes and term predicate. The inner difference identifies missing required pairs.
+4. Put S.status='active' in ON of R LEFT JOIN S to retain R rows with no active S; put it in WHERE to remove NULL-extended rows. The results differ whenever R has no active match.
+5. If two projected tuples differ only in an attribute removed before a join, early projection can collapse duplicates or change join multiplicity under SQL bags. Retain join keys and distinguishers or use DISTINCT with proof.
+6. If a check constraint says amount  greater than  0 and the query asks amount  less than  0, the result is empty. A primary-key equality join bounds matches to at most one parent per child.
+
+
+
+## Equivalence-proof method
+
+To prove two relational expressions equivalent, show that an arbitrary tuple belongs to the left result exactly when it belongs to the right result. Unpack membership in each operator: selection supplies a predicate, projection supplies an originating tuple, join supplies a matching pair, and difference supplies membership in one relation and absence from another. This tuple-by-tuple method avoids relying on a visual similarity between operator trees.
+
+For optimization, annotate each intermediate relation with schema, set or bag semantics, possible NULL values, cardinality bounds, and required ordering. Then test a rewrite against a fixture containing duplicate keys, unmatched outer rows, NULLs, and multiple join matches. A rewrite that is valid in the classical algebra may need DISTINCT, null-safe predicates, or an additional key under SQL semantics.
+
+## Practical exercise protocol
+
+Implement a tiny reference evaluator for selection, projection, join, difference, and grouping over finite Python-like tuples or a spreadsheet. Generate small random relations and compare candidate rewrite results exhaustively. When a mismatch appears, minimize the relations and identify the semantic condition that was omitted. The minimized counterexample becomes both a proof-debugging aid and an optimizer regression test.
+
+## Tuple-calculus perspective
+
+For a query such as “students with no enrollment,” the calculus form says select a student tuple s for which there does not exist an enrollment e with e.sid=s.sid. The algebra form uses antijoin or difference. The two descriptions should agree on empty relations, duplicate source rows, and NULL identifiers under the chosen model. Writing both forms is a useful exam check because it separates the logical predicate from one implementation plan.
+
+The optimizer may choose an index probe, hash anti-join, sort-based difference, or a materialized intermediate result. None changes the logical set or bag result when its operator contract and null behavior are correct. Performance analysis begins only after semantic equivalence is established.
+
+Record the model assumptions beside every rewrite.
+
+Test them with duplicates and NULLs.
+
+Then prove.
+
+Again.
+
+Selection filters tuples, projection chooses attributes, and join combines compatible tuples according to a predicate. Algebra gives a formal semantics for SQL and permits query rewrites that preserve results.
+
+Pushing a selective predicate below a join can reduce intermediate rows, but only when the predicate references attributes available at that point and null semantics remain equivalent.
+
+**Exercise.** Express “names of students enrolled in databases” using selection, projection, and joins. Identify a safe predicate pushdown.
+
+## References & Further Reading
+
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL SQL Queries](https://www.postgresql.org/docs/current/queries.html)

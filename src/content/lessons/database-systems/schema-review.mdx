@@ -1,0 +1,96 @@
+---
+title: "Schema Review"
+course: "database-systems"
+description: "Review keys, dependencies, normalization, and intentional redundancy."
+---
+# Schema Review
+
+Audit a schema for candidate keys, foreign keys, functional dependencies, null semantics, lossless decompositions, and indexes. For each denormalization, record the invariant and the write path that maintains it.
+
+## Review sequence
+
+Begin by stating what one row in each table means. Ambiguous grain is the root of many schema defects: a row that simultaneously represents a customer, an order, and an order line will repeat facts with different determinants. List entities, relationships, events, and snapshots separately. Identify which facts may change, which history must remain stable, and which attributes are optional versus unknown.
+
+For every relation, list candidate keys rather than only the chosen primary key. Compute closures under domain functional dependencies and test minimality. Record natural uniqueness rules even when a surrogate ID is used. Ask whether uniqueness is global, per tenant, per time period, case-sensitive, or collation-dependent. A declared key should match the business identity and the encoding used by queries and references.
+
+Inspect foreign keys and actions on update/delete. Every reference should have an intentional policy: restrict, cascade, set null, or a controlled transition. Test insertion of a dangling child, deletion of a parent with children, and concurrent creation or deletion. A nullable foreign key represents an optional relationship only if NULL has that meaning; it should not be a way to hide missing data.
+
+## Dependency and normal-form audit
+
+Write functional dependencies from domain rules and mark their scope. A rule may require tenant_id, term, version, or effective date. Compute partial and transitive dependencies and identify update, insertion, and deletion anomalies. Test whether each decomposition is lossless and dependency preserving. If BCNF is sacrificed for 3NF key or dependency preservation, state the trade-off.
+
+A normalized schema is not automatically correct. It can omit a constraint, misrepresent a many-to-many relationship, or lose historical facts. A denormalized relation can be correct if its redundancy has a clear owner, transactionally maintained invariant, repair process, and tests. Write the invariant as an equation or predicate, such as cached_count equals the number of committed child rows in the specified scope.
+
+## NULL, types, and temporal meaning
+
+For each nullable column, document whether NULL means unknown, not applicable, not yet measured, or absent relationship. Test predicates, aggregates, joins, unique constraints, and indexes with NULL. Choose types that preserve domain semantics: numeric amounts need scale and currency, timestamps need timezone policy, identifiers need canonical encoding, and free text should not be used as a hidden key.
+
+If facts change over time, decide whether the table stores current state, event history, or a bitemporal record. A current instructor column cannot answer “who taught this course last term” unless history is stored elsewhere. Effective and recorded time differ when data arrives late or is corrected. Add version or validity constraints and test overlapping intervals.
+
+## Index and workload audit
+
+For every important query, state its grain, predicates, joins, ordering, expected cardinality, and freshness requirement. Map it to an index or justify a sequential scan. Composite index order must match equality, range, and ordering access. Check whether a partial or covering index is valid under the policy and NULL semantics. Count write amplification, storage, vacuum or compaction work, and replication cost.
+
+Do not add indexes solely because a column appears in WHERE. Low-selectivity predicates, skew, wide rows, and cache state may favor a scan. Test plans with representative and adversarial data. An index that helps one tenant may hurt a large tenant or create a hot write path.
+
+## Security and operations
+
+Review tenant isolation in keys, foreign keys, views, row policies, functions, exports, and background jobs. Ensure application roles cannot bypass the intended views or call security-definer functions with attacker-controlled search paths or identifiers. Classify sensitive columns and trace them through backups, replicas, logs, analytics, and deletion.
+
+Review migration safety: backfill, constraint validation, index build, lock duration, dual-read or dual-write period, rollback, replication, and restore. A schema change is complete only when old clients, new clients, queries, plans, constraints, and recovery paths have been tested. Record owner, evidence, unresolved risks, and retest date.
+
+## Worked review
+
+A table OrderLine(order_id, product_id, product_name, unit_price, quantity, tenant_id) uses (order_id,product_id) as a key. Product name and current price are repeated, while the line’s historical sale price may need to remain stable. Move current product facts to Product(tenant_id,product_id,name,current_price) and keep unit_price in OrderLine as the transaction-time fact. Add tenant-aware foreign keys and a check quantity greater than 0, but decide how products are deleted after historical sales. Index OrderLine(tenant_id,order_id) for retrieval and Product(tenant_id,product_id) for lookup. Test cross-tenant IDs, price changes, duplicate lines, and order cancellation.
+
+## Exercises
+
+1. Find the grain and candidate keys of a mixed-fact table.
+2. Identify a functional dependency and anomaly.
+3. Decide whether a denormalized count is safe and state its invariant.
+4. Audit NULL meanings and a temporal attribute.
+5. Map queries to indexes and assess write cost.
+6. Write a migration and rollback checklist.
+
+### Diagnostic solutions
+
+
+1. State what one row records, compute closures under domain dependencies, and test every candidate for minimality. If a row mixes order and product facts, split the grains.
+2. If product_id determines current product_name, repeating it in order lines creates update and deletion anomalies. Preserve historical price separately and reference current product data through a key.
+3. It is safe only if a transactionally maintained invariant equates the count with the specified committed child set, with retry, repair, and crash handling. Otherwise it is a cache requiring reconciliation.
+4. State whether NULL is unknown, inapplicable, or absent; test comparisons and constraints. For temporal data, distinguish current, effective, and recorded time and prevent overlapping versions if required.
+5. Describe predicates, joins, ordering, cardinality, and skew; choose composite order and measure reads, size, build, update, and replication costs.
+6. Include compatibility, backfill, validation, lock and resource limits, index/constraint build, dual operation, monitoring, rollback, backup, replica, and restore testing.
+
+
+
+## Review artifact
+
+Submit a schema diagram with cardinalities and optionality, a table of candidate keys and dependencies, a normal-form decision, DDL with constraints, representative data fixtures, query and index matrix, authorization path, migration plan, and evidence of tests. For each finding state severity, affected asset or invariant, reproduction, minimal repair, owner, and retest. “Add an index” or “normalize this” is not a complete recommendation until the workload and correctness effect are stated.
+
+## Counterexample-driven review
+
+Create the smallest data set that could expose each suspected defect. Use two tenants with the same local identifier, two orders for one product, NULL and non-NULL alternatives, an empty parent or child set, duplicate timestamps, a late-arriving event, and concurrent updates. Execute queries and constraints against this fixture, then minimize any unexpected result. The counterexample should be preserved as a regression test.
+
+Review schemas under failure as well as normal operation. Ask what happens if a migration stops halfway, a replica lags, a worker retries, a key is rotated, a parent is deleted, or a backup is restored under an old policy. A schema is an operational contract whose constraints, identifiers, and history must remain interpretable across these states.
+
+## References & Further Reading
+
+**Exercise.** Find one update anomaly and one missing constraint, then propose a minimal repair.
+
+## Oral defense prompts
+
+Explain why every key is minimal, which dependency motivates every decomposition, and whether the join is lossless. Show a foreign-key violation and the database response. Demonstrate a NULL predicate that changes a query. Identify one physical index and its write cost. Describe which authorization path protects a tenant and what happens when the policy service is unavailable. Finally, state one intentional denormalization and the transaction or repair process that maintains it.
+
+These prompts test transfer rather than memorization: a student should be able to review a new schema by applying the same definitions and counterexample method.
+
+## Review report template
+
+Use sections for scope and data meaning, keys and constraints, dependencies and normal forms, NULL and temporal semantics, query/index workload, security and tenant boundaries, migrations and recovery, findings, evidence, owners, and retest. For each recommendation identify what becomes impossible, what remains possible, and which operational failure could reopen the defect. Include before-and-after fixtures and explain every changed result.
+
+The strongest review reports distinguish logical correctness, performance, security, and operational resilience. A schema may be normalized but slow, indexed but unauthorized, constrained but unrecoverable, or fast but semantically lossy. Treat each dimension separately and then analyze their interactions.
+
+## References & Further Reading
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)

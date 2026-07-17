@@ -1,0 +1,110 @@
+---
+title: "Datapath and Control"
+course: "computer-architecture"
+description: "How instruction execution is organized into datapath operations and control signals."
+---
+# Datapath and Control
+
+A processor is not an instruction-shaped black box. It is a coordinated network of storage elements, combinational operators, multiplexers, decoders, and control state. The *datapath* carries and transforms values; the *control unit* determines which values move, which operation an arithmetic unit performs, which registers are written, and how the next program counter is selected. Separating these roles makes a design analyzable: the datapath can be checked against value-flow equations, while control can be checked against an instruction-state transition table.
+
+This chapter builds a small single-cycle and multicycle processor model. The exact ISA is abstract, but the method applies to RISC-V, MIPS-like teaching processors, and custom embedded cores. The objective is not to memorize a block diagram. It is to derive the minimum hardware needed by a set of instruction semantics, identify resource conflicts, and prove that control signals cause no unintended architectural side effects.
+
+## From instruction semantics to resources
+
+Consider four instruction families: register arithmetic `rd ← rs1 op rs2`, load `rd ← Mem[rs1+imm]`, store `Mem[rs1+imm] ← rs2`, and conditional branch `if rs1=rs2 then PC←PC+offset`. Their semantic equations identify the required resources:
+
+* a program counter and instruction-memory read for fetch;
+* an instruction register or equivalent decode path;
+* a register file with two read ports and at least one write port;
+* an immediate generator that extracts and extends encoding fields;
+* an ALU for arithmetic, effective-address calculation, comparison, and target calculation;
+* data memory with read and write controls;
+* multiplexers selecting ALU operands, write-back data, and next PC;
+* a control decoder deriving signals from opcode and function fields.
+
+The list is a design hypothesis, not yet an implementation. One ALU may serve every role in a single-cycle design if all operations fit in the cycle; a multicycle design can reuse it across cycles. A register file may read combinationally and write on a clock edge, or both operations may be pipelined. The architecture is defined by the visible transition, while the implementation chooses resource sharing under timing, area, and power constraints.
+
+**Worked example: register arithmetic.** The instruction fetches from address `PC`, decodes `rs1`, `rs2`, and `rd`, reads both operands, computes `ALU(rs1,rs2)`, writes the result to `rd` at the clock edge, and sets `PC←PC+4`. The control signals include `RegWrite=1`, `ALUSrc=0`, `MemRead=0`, `MemWrite=0`, `MemToReg=0`, and `PCSrc=sequential`. If `MemWrite` were accidentally high, the instruction would have an unintended store side effect even though its arithmetic result was correct. Correctness includes negative behavior: controls for irrelevant resources must disable them.
+
+## Single-cycle organization
+
+In a single-cycle processor, one instruction completes between two clock edges. The path includes instruction memory, decode, register read, immediate generation, ALU, data memory if needed, write-back selection, and state updates. The clock period must exceed the longest instruction path plus register overhead. A load usually determines the period because it needs fetch, decode, address calculation, memory access, and write-back.
+
+Single-cycle timing makes the control truth table easy to understand but wastes hardware time for short instructions. An add waits for the load-sized cycle even though it does not access data memory. The design also needs enough combinational resources to perform all phases without intermediate storage. A branch needs both a comparison and a target calculation; if the same ALU cannot do both in the cycle, the design adds hardware or changes the timing model.
+
+**Worked timing comparison.** Suppose instruction fetch is 300 ps, register read 150 ps, ALU 200 ps, data memory 400 ps, register setup and clock overhead 100 ps, and multiplexing adds 50 ps. A load path may be $300+150+200+400+50+100=1200$ ps, so the clock cannot be shorter than 1.2 ns. An add may use only $300+150+200+50+100=800$ ps but still completes once every 1.2 ns. The throughput is one instruction per cycle; the latency is one cycle. Improving the add unit does not raise the clock until the load path or another critical path changes.
+
+## Multicycle organization
+
+A multicycle design inserts state registers between conceptual phases: fetch, decode/register read, execute or address calculation, memory access, and write-back. Each phase can use a shorter clock period, and expensive resources such as one ALU or one memory port can be reused. The price is multiple cycles per instruction and a finite-state control machine that must preserve temporary values.
+
+The program counter, instruction register, memory-data register, operand registers, and ALU-result register hold intermediate state. Fetch loads the instruction and increments the PC. Decode reads operands into registers. Execute computes an arithmetic result, effective address, or branch decision. A load’s memory phase reads data into a temporary register; write-back then writes that value to the destination. A store ends after memory write, while an add can write back directly from the ALU-result register.
+
+Control is now a temporal sequence, not a single opcode table. A state transition may depend on the decoded instruction class. The invariant is that each temporary register has a defined meaning in each control state. If an `ALUOut` register contains a branch target in one path and an arithmetic result in another, the write-back control must select it only under the corresponding instruction class.
+
+**Worked sequence: load.** In `FETCH`, set memory address to PC, assert instruction-register write, select `PC+4` for the ALU, and update PC. In `DECODE`, read register operands and sign-extend the immediate. In `MEM_ADDR`, select base and immediate for the ALU and write the effective address to `ALUOut`. In `MEM_READ`, use `ALUOut` as data-memory address and load `MDR`. In `LOAD_WB`, select `MDR`, assert register-file write, and choose `rd`. A store follows the same address state but transitions to `MEM_WRITE`; an add transitions from execute to `ALU_WB`.
+
+## Control signals as a typed interface
+
+Control signals are often presented as bits, but their meanings are typed choices. `ALUSrc` may select register or immediate; `ResultSrc` may select ALU result, memory data, or PC-relative value; `PCSrc` may select sequential PC, branch target, jump target, or exception vector. Treating multi-way choices as independent Boolean bits creates illegal combinations. A decoded control record or enumerated signal makes illegal states easier to identify.
+
+For an instruction class, build a control table with columns for every potentially side-effecting resource. A register arithmetic instruction writes exactly one destination, a load writes one destination from memory, a store writes memory and no register, and a branch writes no data state but may write PC. The table should include exceptions and illegal encodings. An unimplemented opcode must not inherit `RegWrite=1` from a neighboring decode row.
+
+**Worked control table reasoning.** For a store, `RegWrite=0`, `MemWrite=1`, `MemRead=0`, `ALUSrc=1`, and `ResultSrc` is irrelevant because no write-back occurs. The data-memory address is the ALU result; store data comes from the second register operand. For a branch, `RegWrite=0`, `MemWrite=0`, `ALUSrc` may be 0 for comparison, and `PCSrc` is conditional on the ALU equality result. Marking irrelevant controls as “don’t care” can help synthesis, but verification should constrain them to safe values where a malformed decode could otherwise cause an effect.
+
+## ALU sharing and operation encoding
+
+The ALU must support the operations required by the ISA: addition, subtraction, Boolean functions, shifts, comparisons, and perhaps address generation. Subtraction often supplies equality and signed/unsigned less-than predicates. A control field selects the operation. The decoder should derive ALU control from the instruction’s primary opcode and function bits, while defaulting to a harmless operation for invalid combinations.
+
+Address generation deserves special attention. A load and store use addition, but they differ in memory direction and write-back. Reusing the same ALU reduces area but means the control state must ensure its result is captured before another operation overwrites it. In a single-cycle design, no intermediate register is needed; in a multicycle design, `ALUOut` must be written in the address state and held through memory access.
+
+## Next-PC logic and control flow
+
+The next PC is a selection problem. Common candidates are sequential `PC+instruction_length`, a conditional branch target, an unconditional jump target, a register-indirect target, and an exception vector. A branch target may be computed as `PC + sign_extend(offset << alignment)`; the shift encodes the fact that instruction addresses are aligned. The architecture must define whether the base is the current PC or the already incremented PC.
+
+Branch condition and target selection must be coordinated. A not-taken branch chooses sequential PC even if the target arithmetic was computed. A taken branch must commit the target and suppress any unintended register or memory write from the branch itself. In a pipelined implementation, younger instructions may already be in flight; in a single-cycle or multicycle implementation, the control state can choose directly.
+
+Exceptions add another PC candidate. A faulting load should record a restart address or faulting instruction address according to the ISA and transfer to a privileged handler. An asynchronous interrupt may be taken between instructions. The next-PC mux is therefore part of the protection boundary, not just a branch convenience.
+
+## Memory interfaces and side effects
+
+An instruction or data memory interface has an address, read/write request, write data, read data, and completion or fault signal. A simple teaching model may respond in one cycle; a realistic memory can stall. The control unit must not advance state as though data arrived if `ready` is low. A load’s destination write enable must be delayed until data is valid, and a store must not be repeated merely because the surrounding state was re-entered after a wait.
+
+Idempotence matters. Repeating an instruction fetch is usually harmless; repeating a store to an ordinary memory location may not be if the store is a memory-mapped device write. A multicycle controller should use a transaction state or handshake protocol that distinguishes “request issued” from “response received.” The ISA may define precise restart behavior, but the microarchitecture must ensure that a partially completed external side effect is not silently duplicated.
+
+## Verification by refinement and traces
+
+Start with a reference transition for each instruction class. For every control state, write an assertion about which architectural state may change and which temporary values are valid. A trace table should show PC, instruction register, operand registers, ALU result, memory request, and write-back controls at each cycle for representative instructions.
+
+For an add, prove that no memory write is asserted and that the value written to `rd` equals the reference ALU operation. For a load, prove that the address sent to memory is base plus properly extended immediate and that the eventual write-back occurs only after a successful read. For a fault, prove that the destination register remains unchanged and the next PC enters the handler with the documented cause.
+
+Equivalence is not merely output comparison at the final cycle. A design that writes a wrong intermediate value then overwrites it before the end can pass a shallow test while violating a bus or side-effect contract. Observe memory requests, register write enables, privilege transitions, and handshake boundaries. Directed traces should include `rd=x0` or an architecturally ignored destination, maximum offsets, branch taken/not taken, memory stall, and illegal opcode.
+
+## Independent practice
+
+1. Derive the minimal resources needed for register arithmetic, load, store, branch, and jump. For each, distinguish required from irrelevant controls.
+2. Draw a multicycle state machine for load, store, add, and branch using one ALU and one memory port. State which temporary register holds each intermediate value.
+3. Compute the single-cycle clock bound for a processor whose load path is 250 ps fetch, 180 ps decode, 220 ps ALU, 500 ps memory, 80 ps muxing, and 100 ps register overhead.
+4. Explain why a memory stall must not allow a load’s write-back control to remain asserted across multiple cycles without a response qualifier.
+5. Write a trace for a taken branch and a not-taken branch. Include the PC base convention and prove that the branch instruction itself writes no general register.
+6. Design safe default controls for an illegal opcode. Explain why “all don't care” is unsafe when the decoder output feeds write enables.
+7. Give a refinement argument connecting a multicycle load implementation to the abstract ISA load transition.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Arithmetic needs two register reads, ALU operation, one register write, and sequential PC. Load additionally needs effective-address ALU use, memory read, and memory-to-register selection. Store needs effective address, memory write, and store-data path but no register write. Branch needs comparison and target/PC selection but no data-state write. Jump needs target formation and PC selection.
+2. A sound sequence is `FETCH → DECODE →` instruction-specific execute. Load goes through `ADDR → MEM_READ → LOAD_WB`; store goes `ADDR → MEM_WRITE`; add goes `EXEC → ALU_WB`; branch goes `BRANCH`. `IR`, `MDR`, operand registers, and `ALUOut` preserve values between states.
+3. The bound is $250+180+220+500+80+100=1330$ ps, so the maximum ideal frequency is about 752 MHz. The path is load-sized; optimizing only the add path does not change this bound.
+4. Without response qualification, the destination can be written repeatedly with stale or invalid data, and a stalled request may be duplicated. Write enable must be a conjunction of the write-back state and a valid successful response, with state advancing exactly once.
+5. If PC denotes the current instruction address, target is `PC+offset`; if it denotes the already incremented address, target is `PC+4+offset`. A taken branch selects target, a not-taken branch selects sequential PC. Both set `RegWrite=0` and `MemWrite=0`.
+6. Set all side-effecting enables low, select a benign ALU operation, choose sequential PC or a defined illegal-instruction trap, and prevent privileged state changes. Leaving enables as don’t-cares permits synthesis or a transient decode to activate a register or memory write.
+7. Show that after `FETCH` and `DECODE`, `ALUOut` equals the effective address; after `MEM_READ`, `MDR` equals the memory value or the machine enters the prescribed fault state; after `LOAD_WB`, only `rd` changes to the sign- or zero-extended `MDR` and PC is the correct next instruction. All other architectural state remains unchanged.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: lecture notes and examinations](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [MIT 6.004 learning objectives](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)

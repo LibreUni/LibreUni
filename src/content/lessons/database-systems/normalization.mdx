@@ -1,0 +1,85 @@
+---
+title: "Normalization"
+course: "database-systems"
+description: "1NF through BCNF as controlled redundancy elimination."
+---
+# Normalization
+
+Normalization decomposes relations to reduce update, insertion, and deletion anomalies while preserving dependencies and enabling lossless reconstruction. 3NF tolerates some dependencies for key preservation; BCNF requires every nontrivial determinant to be a superkey.
+
+Decomposition is not automatically safe: a lossy split can invent tuples when joined. Losslessness and dependency preservation are separate tests.
+
+## Why redundancy creates anomalies
+
+Suppose Enrollment(student, course, instructor, room) stores one row per student-course offering while course and term determine instructor and room. The same offering fact is repeated for every student. If an instructor changes, every copy must change; missing one creates contradictory answers. A course offering cannot be inserted until at least one student enrolls if the schema has no separate offering relation. Deleting the last enrollment can erase the only record that the offering existed. These update, insertion, and deletion anomalies are symptoms of multiple independent facts sharing one relation.
+
+Normalization separates facts according to their determinants. It does not mean “split every table as far as possible.” A decomposition must preserve the intended information, avoid spurious tuples when relations are joined, and ideally preserve dependencies so constraints can be checked without reconstructing the original relation. Performance-driven denormalization may be correct when its redundancy is maintained transactionally and its trade-offs are explicit.
+
+## First, second, and third normal forms
+
+First normal form is commonly understood as atomic, domain-valued attributes rather than repeating groups or nested sets in a relation. Atomicity depends on the application’s operations: an address string may be atomic for one system and a structured object for another. First normal form alone does not remove functional-dependency redundancy.
+
+Second normal form requires no non-prime attribute be functionally dependent on a proper subset of a candidate key, primarily relevant when keys are composite. If Enrollment(student, course, term, student_name, course_title) has key (student,course,term), then student_name depends only on student and course_title only on course, creating partial dependencies. Decompose Student, Course, and Enrollment so each fact is stored with its determinant.
+
+Third normal form requires for every nontrivial dependency X - greater than  A, either X is a superkey or A is prime, meaning part of some candidate key. The prime-attribute exception allows a dependency needed to preserve a key in some schemas. 3NF synthesis can produce a dependency-preserving, lossless decomposition, though it may not satisfy BCNF.
+
+## Boyce–Codd normal form
+
+BCNF requires every nontrivial functional dependency X - greater than  A to have X as a superkey. It eliminates more redundancy than 3NF but can sacrifice dependency preservation. Consider a relation Teaching(student, course, instructor) with dependencies (student,course)- greater than instructor and instructor- greater than course, where an instructor teaches only one course but many students take it. Instructor is not a superkey because it does not determine student, so the second dependency violates BCNF. A decomposition into InstructorCourse(instructor,course) and StudentInstructor(student,instructor) may be lossless but may require a join to check all original dependencies.
+
+BCNF is about all dependencies implied by the domain, not only the ones listed in a schema document. If a hidden business rule changes, the normal-form analysis may change. Conversely, a dependency that holds only accidentally in current data should not drive decomposition.
+
+## Lossless-join decomposition
+
+A decomposition of R into R1 and R2 is lossless with respect to F if joining the projections of every valid r reconstructs exactly r. For a binary decomposition, a sufficient and necessary condition is that the common attributes R1 intersect R2 functionally determine all attributes of R1 or all attributes of R2 under F. In Enrollment decomposition, course - greater than  instructor and the common attribute course determines the instructor relation’s attributes, so the join is lossless.
+
+The chase generalizes losslessness tests. Start with a tableau representing a hypothetical tuple and mark symbols shared according to projection. Apply dependencies to equate symbols until a row becomes all distinguished symbols; that result demonstrates that no spurious tuple is forced. The chase is mechanical but requires careful treatment of functional and join dependencies.
+
+A lossy decomposition can create a tuple that never existed. If R(A,B,C) is decomposed into AB and BC without A- greater than B or B- greater than C, joining projections can pair an A from one original tuple with a C from another through the same B. The result satisfies each projection but invents a combination. Losslessness is therefore a semantic guarantee, not a visual intuition about shared columns.
+
+## Dependency preservation
+
+A decomposition preserves dependencies if the dependencies projected onto the decomposed schemas imply every original dependency. If a dependency is not preserved, enforcing it may require joining relations or using a transaction-level check, which can be expensive and vulnerable to concurrency races if implemented only in application code. Dependency preservation is distinct from losslessness: a decomposition may be lossless but require cross-relation checks, or preserve dependencies but be lossy.
+
+The 3NF synthesis algorithm starts with a minimal cover, creates a relation containing each dependency’s determinant and dependent attributes, removes schemas contained in others, and adds a relation containing a candidate key if none contains one. It preserves dependencies by construction and is lossless under the standard assumptions. The result may contain redundant schemas or require practical index and constraint choices.
+
+BCNF decomposition repeatedly finds a violating dependency X - greater than  Y in relation S, replaces S by S-Y and XY, and recurses. The decomposition is lossless because X is a determinant of one component, but dependency preservation is not guaranteed. A design review should choose whether local constraint enforcement or stronger normal form has higher value for the workload and operational model.
+
+## Multivalued dependencies
+
+A multivalued dependency X - greater than  greater than  Y says that for a fixed X, the set of Y values is independent of the remaining attributes. A relation StudentLanguageHobby(student, language, hobby) may repeat every language-hobby combination if languages and hobbies are independent. Fourth normal form decomposes independent multivalued facts. This is distinct from a functional dependency, where X determines one value of Y.
+
+Over-normalization can increase joins, latency, and implementation complexity. Denormalization can be justified for read performance, historical snapshots, materialized aggregates, or distributed locality, but every redundant copy needs an owner, update path, repair process, and invariant. A materialized count is not correct merely because it was once computed correctly; concurrent updates and failures must preserve or reconcile it.
+
+## Worked Enrollment decomposition
+
+Let R(student, course, term, instructor, room) with F containing (course,term)- greater than instructor and (course,term)- greater than room, and (student,course,term)- greater than instructor,room by transitivity. A candidate key is student,course,term if every enrollment is identified by that offering. The offering determinant is not a superkey because it does not determine student, so R violates BCNF. Decompose Offering(course,term,instructor,room) and Enrollment(student,course,term). The common attributes course,term determine Offering, making the join lossless; the original dependency is enforced locally in Offering.
+
+## Exercises
+
+1. Identify partial and transitive dependencies in a relation.
+2. Test a binary decomposition for losslessness.
+3. Construct a spurious tuple from a lossy decomposition.
+4. Compare 3NF and BCNF on dependency preservation.
+5. Run the 3NF synthesis outline on a minimal cover.
+6. Explain a justified denormalization and its maintenance invariant.
+
+### Diagnostic solutions
+
+
+1. A dependency from part of a composite key is partial; a dependency through a non-key determinant is transitive. Move each independent fact to a relation whose key is its determinant.
+2. Compute the common attributes’ closure under F. If it contains every attribute of one component, the binary decomposition is lossless; otherwise construct or chase a possible counterinstance.
+3. Use R(A,B,C) decomposed into AB and BC with no dependency. Original tuples (a1,b,c1) and (a2,b,c2) project to rows that join into (a1,b,c2) and (a2,b,c1), which were not present.
+4. 3NF may retain a dependency whose right side is prime, helping preserve dependencies and keys. BCNF rejects every nontrivial dependency whose determinant is not a superkey, but its decomposition may lose local dependency preservation.
+5. For each minimal-cover dependency X- greater than A, create XA; remove contained schemas and add a key schema if needed. Show dependency preservation and invoke the synthesis losslessness argument.
+6. Store a cached count for fast reads, but maintain it in the same transaction as inserts/deletes, reconcile periodically, and define behavior after crash or missed event. The invariant is count equals the specified committed subset.
+
+
+
+**Exercise.** Decompose `Enrollment(student, course, instructor)` under `course→instructor`. Explain the join key and which anomaly disappears.
+
+## References & Further Reading
+
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [Database System Concepts, Functional Dependencies](https://pages.cs.wisc.edu/~dbbook/openAccess/thirdEdition/slides/slides3ed-english/Ch19-FDs-95.ppt)

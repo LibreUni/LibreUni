@@ -1,0 +1,95 @@
+---
+title: "Congestion Control"
+course: "computer-networks"
+description: "Shared bottlenecks, feedback, windows, AIMD, fairness, and queueing."
+---
+# Congestion Control
+
+Congestion occurs when the offered load into a shared network resource exceeds its ability to serve traffic without unacceptable queueing, loss, or delay. The resource may be a link, router buffer, wireless channel, CPU, or service queue. Transport flow control protects one receiver; congestion control protects the path and the other users sharing it. A sender that increases traffic whenever packets are acknowledged can drive queues into persistent delay or cause collapse. Congestion control uses feedback to probe available capacity, respond to loss or explicit signals, and share a bottleneck according to a policy.
+
+## Bottlenecks and queues
+
+For a path with serial capacities, the narrowest effective capacity is a bottleneck. If two senders offer 80 Mb/s each to a 100 Mb/s bottleneck, the excess 60 Mb/s must queue, be dropped, or be shaped. A finite buffer turns excess load into loss; a large buffer turns it into delay. The bandwidth-delay product describes the in-flight data needed to keep a path busy, but filling every buffer is not a goal: queueing delay can make interactive traffic unusable.
+
+A queue is stable in the long run only when average arrival rate is below service rate under the relevant stochastic assumptions. As utilization approaches one, waiting time can grow sharply. Bursty arrivals can overflow a finite buffer even when the long-run mean is below capacity. Congestion control therefore reacts to observations over time rather than a single rate calculation.
+
+**Worked bottleneck example.** A sender transmits at 150 Mb/s into a 100 Mb/s link for 2 seconds. Ignoring other traffic, 100 Mb/s is served and 50 Mb/s accumulates, so the queue would grow by 100 Mb over 2 seconds. If the buffer holds 40 Mb, loss begins after $40/50=0.8$ seconds. Reducing the sender to 90 Mb/s drains the queue only if the existing backlog is considered; a rate below capacity is not instantly equivalent to an empty queue.
+
+## Feedback signals
+
+Packet loss can indicate buffer overflow, wireless corruption, route failure, or intentional policing. Delay increase can reveal queue growth before loss but also changes with propagation and scheduling. Explicit congestion notification (ECN) lets a router mark packets instead of dropping them when queues cross a threshold; endpoints must negotiate and honor the signal. Acknowledgement timing provides an indirect signal but is confounded by reordering, receiver delay, and application behavior.
+
+A good feedback signal has a defined meaning and response. “No ACK yet” is not identical to “congestion”: the packet may be delayed, the receiver may be slow, or a path may have failed. Congestion-control algorithms use timers, duplicate ACKs, ECN marks, delivery rate, and RTT trends together. The algorithm’s stability and fairness depend on the response function.
+
+## Window-based control
+
+A sender’s congestion window `cwnd` limits unacknowledged data. Approximate sending rate is $cwnd/RTT$, bounded by the receiver’s advertised window and the bottleneck. The sender increases `cwnd` when feedback suggests capacity is available and reduces it when congestion is inferred. The window is a control state, not merely a buffer size: it determines the offered load into the path.
+
+Slow start begins with a small congestion window and increases rapidly, often approximately doubling each RTT until a threshold or congestion signal. Congestion avoidance increases more cautiously. The initial phase discovers capacity quickly on short transfers but can overshoot a small bottleneck; modern protocols tune initial windows and use pacing to reduce bursts.
+
+**Worked window growth.** If `cwnd` starts at 1 MSS and slow start doubles once per RTT, after five RTTs the nominal window is 32 MSS, absent loss or a receiver limit. If the path supports only 12 MSS in flight, the 16-MSS attempt creates a congestion signal. The response must reduce the window and enter a cautious phase; continuing exponential growth would repeatedly overshoot.
+
+## AIMD and fairness
+
+Additive increase/multiplicative decrease (AIMD) increases the congestion window gradually when no congestion is observed and reduces it sharply after congestion. If two identical flows share one bottleneck, additive increase moves both rates toward the capacity boundary while multiplicative decrease moves them toward a fairer lower point. The classic intuition uses a rate plane: efficiency is near the capacity line, and fairness is near the equality line.
+
+The fairness result depends on assumptions: flows have comparable RTTs, respond to the same signals, share one bottleneck, and use compatible increase/decrease rules. A flow with shorter RTT may increase more often and obtain more bandwidth under per-ACK algorithms. A nonresponsive UDP flow can dominate a responsive TCP flow. Fairness is therefore a policy and measurement property, not an automatic consequence of “using congestion control.”
+
+**Worked AIMD trace.** Two flows have windows 10 and 20 MSS and add 1 MSS per RTT. If the shared bottleneck signals congestion at total 32, multiplicative decrease by one-half yields 5 and 10. Repeated additive increase raises both by equal absolute amounts, while the larger flow remains larger; the system moves toward the fairness/efficiency region but may not reach perfect equality when RTTs and losses differ.
+
+## Loss-based TCP behavior
+
+Classic TCP interprets three duplicate ACKs as evidence of a missing segment and triggers fast retransmit before the RTO. Fast recovery reduces `cwnd` without returning to the smallest initial window, because duplicate ACKs also indicate that later data is arriving. A timeout is stronger evidence of severe congestion or an idle path and usually causes a more substantial reduction with exponential backoff.
+
+Selective acknowledgements improve the sender’s view of which ranges arrived. Without them, cumulative ACKs can cause unnecessary retransmission under multiple losses. Receiver delayed-ACK policy and reordering affect duplicate-ACK signals, so a sender must avoid treating every out-of-order event as congestion. Loss-based control also struggles on wireless paths where corruption is not caused by queue congestion.
+
+## Delay-based and explicit signaling
+
+Delay-based algorithms compare observed RTT with a baseline propagation RTT. A growing difference suggests queueing and causes the sender to reduce or stop increasing before loss. This can preserve low latency but may yield bandwidth to aggressive loss-based flows. ECN marks provide a more direct router signal when configured consistently; endpoints must negotiate capability and apply a documented response.
+
+Active queue management (AQM) marks or drops before a buffer is full to control queue length and avoid synchronized tail drops. Fair queueing or weighted scheduling can isolate flows or classes, preventing one bulk sender from monopolizing a bottleneck. These are router mechanisms; end-to-end congestion control and router scheduling compose into a larger policy.
+
+## Pacing and bursts
+
+A window update can release a burst of packets, causing transient queue overflow even when the average rate is safe. Pacing spreads transmissions across an RTT or link service interval. It reduces burst-induced loss and improves coexistence with other flows, but requires timers, rate estimates, and accurate delivery feedback. Pacing cannot exceed a receiver or bottleneck without eventually creating a queue.
+
+Short flows may finish during slow start and have little opportunity to converge to a fair steady state. Large flows dominate a bottleneck for longer. Interactive traffic may value low tail latency over maximum bulk throughput. Congestion control must therefore be evaluated by completion time, goodput, queueing delay, loss, fairness, and coexistence—not one scalar rate.
+
+## High-bandwidth-delay paths
+
+On a high-bandwidth, long-RTT path, the bandwidth-delay product can be large. A small congestion window underutilizes capacity, while a large window with a small buffer can overshoot dramatically. Window scaling, pacing, selective acknowledgements, and robust RTT estimation become important. A single packet loss can represent a small fraction of a large window, so the reduction policy affects utilization and recovery time.
+
+## Application and transport interaction
+
+Applications can defeat congestion control by opening many parallel connections, using an unregulated datagram stream, or retrying aggressively after timeouts. A service’s retry policy should use exponential backoff and jitter, respect response status, and make side effects idempotent. A CDN, proxy, or load balancer may aggregate many clients into one upstream flow, changing fairness and burst shape.
+
+Flow control and congestion control interact. A receiver window smaller than `cwnd` limits sending and can make the path appear underutilized without congestion. An application that does not read its socket creates a receive-window bottleneck. Diagnosing low throughput requires measuring both windows, ACKs, RTT, loss/marks, queueing, and application consumption.
+
+## Independent practice
+
+1. Compute the queue growth and overflow time for a given offered load and buffer.
+2. Trace slow start and congestion avoidance over several RTTs with a loss event.
+3. Use the AIMD rate plane to explain efficiency and fairness assumptions.
+4. Compare timeout, duplicate ACK, ECN, and delay feedback.
+5. Compute bandwidth-delay product and the window required for line rate.
+6. Design a retry policy that does not amplify congestion or duplicate side effects.
+7. Diagnose low throughput when `cwnd` is large but `rwnd` is small.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Excess rate is offered minus service rate; queue growth is excess times duration until capacity. Compare accumulated bits with buffer size and state what happens after overflow.
+2. Slow start grows rapidly until threshold or congestion; congestion avoidance grows cautiously. A timeout and a duplicate-ACK event need not produce the same reduction. State the exact algorithm assumed before calculating.
+3. Additive increase approaches the capacity boundary; multiplicative decrease moves rates inward. Fairness requires comparable RTTs, response rules, bottleneck, and non-adversarial flows.
+4. Timeout indicates missing evidence for a longer interval; duplicate ACKs indicate a gap while later data arrives; ECN is explicit router marking; delay is an early but ambiguous queue signal. Each has false-positive and deployment assumptions.
+5. BDP is $R\cdot RTT$ bits. To reach rate $R$, the flight window must be at least this size, subject to receiver, congestion, MSS, and protocol overhead.
+6. Use bounded exponential backoff with jitter, idempotency keys or transaction status, retry only transient errors, and cap attempts/deadlines. A transport timeout alone is not proof that the operation did not execute.
+7. The receive window is the limiting term because flight is bounded by $\min(cwnd,rwnd)$. The receiver or application must consume data or advertise more capacity; increasing congestion window will not help.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 5681: TCP Congestion Control](https://www.rfc-editor.org/rfc/rfc5681)
+* [MIT 6.033: TCP congestion control lecture outline](https://ocw.mit.edu/courses/6-033-computer-system-engineering-spring-2018/pages/week-6/lecture-11-outline/)
+* [MIT 6.829: Computer Networks readings](https://ocw.mit.edu/courses/6-829-computer-networks-fall-2002/pages/readings/)

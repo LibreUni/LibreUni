@@ -1,0 +1,125 @@
+---
+title: "Hazards and Branches"
+course: "computer-architecture"
+description: "Data, structural, and control hazards in an overlapped pipeline."
+---
+# Hazards and Branches
+
+Pipelining creates overlap, and overlap creates situations in which an instruction cannot safely use a resource or value at the moment its ideal schedule requests it. These situations are *hazards*. A data hazard concerns dependence between values, a structural hazard concerns competition for hardware, and a control hazard concerns uncertainty about which instruction should execute next. Hazard handling is not an optimization layered on correctness; it is the mechanism that preserves the sequential architectural contract while internal work is concurrent.
+
+## Dependence graphs and hazard names
+
+For instructions $I_i$ and $I_j$ with $i<j$, a true read-after-write (RAW) dependence exists when $I_i$ writes a location that $I_j$ reads. $I_j$ must see the value produced by $I_i$. A write-after-read (WAR) anti-dependence occurs when an earlier instruction reads a location that a later instruction writes; the later write cannot occur before the earlier read. A write-after-write (WAW) output dependence occurs when both write the same location and program order determines the final value.
+
+An in-order, single-issue five-stage pipeline reads registers in ID and writes in WB, so RAW hazards are the dominant register hazard. WAR and WAW do not arise when all reads happen before all writes in program order. An out-of-order or multi-issue machine can encounter all three and uses register renaming, issue constraints, and in-order retirement to preserve the architectural result.
+
+The dependence graph is not the same as a hazard schedule. A dependence becomes a hazard only when the producer’s availability and consumer’s demand overlap unfavorably. Two instructions may be dependent but execute without a stall if forwarding provides the value in time. Conversely, a structural hazard can occur between independent instructions.
+
+## Forwarding and interlocks
+
+Consider:
+
+```text
+add  r1, r2, r3
+sub  r4, r1, r5
+```
+
+The `add` computes its result at the end of EX. In the next cycle, `sub` needs `r1` at the beginning of EX. A pipeline register such as EX/MEM already holds the result, so a forwarding mux can choose that value instead of the stale register-file read. The hazard unit compares the consuming source register with destination registers in older stages and selects the newest value that is known to be available.
+
+The newest match wins. For:
+
+```text
+add r1, r2, r3
+add r1, r1, r4
+add r5, r1, r6
+```
+
+the third instruction must receive the second instruction’s result, not the first’s. A forwarding network that checks only whether “some older instruction writes r1” can silently select stale data. The control priority must prefer the closest producing stage, subject to validity and register-zero conventions.
+
+Forwarding is a form of dynamic bypass around the architectural register file. It does not change the ISA’s register semantics; it changes where the implementation obtains a value. The proof obligation is observational: the consumer’s ALU input must equal the value that a sequential execution would have read at that point.
+
+## The load-use hazard
+
+A load has a later availability point than an ALU instruction. In a basic five-stage pipeline, address calculation occurs in EX, memory returns data in MEM, and write-back occurs in WB. The instruction immediately after the load reaches EX before the data has returned:
+
+```text
+lw   r1, 0(r2)
+add  r3, r1, r4
+```
+
+Forwarding from EX/MEM cannot help because EX/MEM contains the load’s address, not its loaded data. A one-cycle interlock is necessary unless the implementation has an earlier memory or special load-use path. The controller freezes the PC and IF/ID register, injects a bubble into ID/EX, and permits the load to advance. After the bubble, the dependent add reaches EX when the loaded value is available for forwarding from MEM/WB.
+
+The stall is a temporal transformation of the schedule, not an alteration of the instruction stream. The load remains exactly once; the add remains exactly once; the bubble has no architectural identity. A common bug is to freeze the load in ID/EX as well as the dependent instruction, repeating the load indefinitely. Another is to freeze only the PC, allowing the fetched instruction to be overwritten or duplicated. A correct interlock identifies which pipeline registers represent the consumer and which represent older work that must advance.
+
+## Structural hazards and resource contracts
+
+Suppose instruction fetch and data access share one single-ported memory. When a load is in MEM, the processor cannot simultaneously fetch the next instruction. The instructions are independent, but the resource is not. The controller must stall fetch, or the implementation must provide separate instruction/data paths, a second port, banking, or a cache hierarchy that permits both requests.
+
+Resource conflicts should be specified as ownership contracts. A memory port may accept one request per cycle, or accept a request and return a response later. A multiplier may be pipelined and accept one operation per cycle, or be iterative and remain busy for several cycles. The hazard unit must use the actual valid/ready/busy protocol rather than assume every unit has one-cycle latency.
+
+Structural and data hazards can interact. A load-use stall may coincide with a memory response stall. The controller needs a priority and a compositional invariant: older instructions retain their state, younger instructions do not pass an unavailable resource, and no request is duplicated unless the interface explicitly allows retries. The safe default is to make stalls hold all state that identifies an in-flight instruction while allowing independent older work to complete.
+
+## Control hazards
+
+A conditional branch determines the next PC from a comparison. Until the condition and target are known, fetch does not know whether the sequential instruction is correct. In a five-stage pipeline that resolves branches in EX, up to two or three younger instructions may have entered IF and ID. If the branch is taken, those instructions must be invalidated; if it is not taken, they may continue.
+
+The simplest policy stalls fetch until resolution. This avoids wrong-path work but costs cycles on every branch. Predict-not-taken fetches sequentially and flushes only taken branches. A static backward-taken/forward-not-taken rule exploits common loop behavior. A dynamic predictor records recent outcomes, perhaps with a branch-history table, two-bit saturating counters, a global history register, or a target buffer. The predictor is an implementation optimization, not part of the ordinary architectural state, unless the ISA exposes prediction hints.
+
+A two-bit saturating counter has states strongly-not-taken, weakly-not-taken, weakly-taken, and strongly-taken. A taken outcome increments toward strongly taken; a not-taken outcome decrements toward strongly not taken. The prediction changes only after crossing the middle boundary, so one anomalous outcome does not immediately reverse a stable loop prediction. This reduces oscillation on branches that are usually taken with one exit.
+
+Target prediction is separate from direction prediction. Knowing that a branch is likely taken is not enough if the target address is unavailable until decode or execute. A branch target buffer caches the target associated with a fetch PC; a return-address stack predicts procedure returns. Predictor structures trade storage and access latency for fewer front-end bubbles.
+
+## Flushes, speculation, and side effects
+
+Speculation lets the processor execute predicted-path instructions before a branch is resolved. Speculative values can occupy internal registers and caches, but architectural side effects must wait until the instruction is known to be on the correct path and older exceptions have been handled. A wrong-path store cannot write memory. A wrong-path system call cannot enter the kernel. A wrong-path register value cannot retire.
+
+The security literature shows why “not architecturally visible” is not identical to “unobservable.” Speculative execution can affect caches and other microarchitectural state, and a later measurement may infer information about a discarded path. Architectural hazard handling still requires flushing invalid instructions; security hardening may additionally constrain speculation around sensitive checks. The microarchitecture must document or mitigate such channels according to its threat model.
+
+## Renaming and out-of-order hazards
+
+In a superscalar machine, the pipeline may issue instructions out of program order. WAR and WAW hazards are name dependences: two instructions use the same architectural register name even when no true data dependence exists. Register renaming maps each architectural destination to a fresh physical register. A later write no longer destroys a physical register that an earlier read still needs, and two independent writes no longer contend for one storage location.
+
+The rename map changes on dispatch; a reorder buffer or retirement map commits the architectural mapping in program order. If an instruction faults or a branch mispredicts, speculative mappings are discarded and the older committed map is restored. Renaming removes false dependences but cannot remove RAW dependence: a consumer still waits for the physical register produced by its true predecessor.
+
+**Worked dependence analysis.** For `r1=r2+r3; r2=r4+r5; r6=r1+r2`, the second instruction has a WAR relationship with the first because it overwrites `r2` after the first reads it; renaming gives the second result a new physical register and preserves the first’s source. The third instruction has true RAW dependencies on both earlier results and cannot execute until both physical values are ready. It may issue after the second result even if unrelated instructions between them are still waiting.
+
+## Recovery and precise ordering
+
+When a branch prediction fails, the processor identifies the branch’s younger instructions, cancels them, restores the rename state or checkpoint associated with the branch, and redirects fetch to the correct target. When an exception occurs, all younger instructions are discarded while older instructions retire. The recovery mechanism must also restore predictor or speculative state sufficiently to prevent a stale instruction from committing.
+
+The cost of recovery includes detection latency, cancellation, rename-map restoration, front-end redirection, instruction-cache access, and pipeline refill. A deeper machine may have a shorter clock but a larger recovery window. This is why branch prediction accuracy is a first-order performance variable rather than a minor implementation detail.
+
+## Verification by adversarial traces
+
+Hazard verification should use traces designed to defeat the common case. Include chains of dependent ALU instructions, alternating destinations, load-use pairs, destination register zero, taken and not-taken branches, back-to-back stores, memory stalls, simultaneous hazards, and exceptions immediately after branches. For each trace, record stage occupancy, source values, forwarding selections, stall signals, valid bits, and committed state.
+
+Assertions can state that a consumer never enters EX with an unavailable source, a memory request is issued only once per transaction, a flushed instruction never asserts a side-effect enable, and a retired instruction’s operands equal the reference-model operands. A performance counter can measure stalls but cannot establish correctness; a processor may be fast because it silently uses wrong values.
+
+## Independent practice
+
+1. Classify every dependence in `add r1,r2,r3; sub r4,r1,r5; xor r1,r6,r7; add r8,r1,r9` and identify forwarding sources.
+2. Design the exact stall/forward behavior for a load followed by two consumers, one immediately adjacent and one separated by an independent instruction.
+3. Give a structural hazard trace for a unified memory and compare separate caches, multiporting, and stalling.
+4. Derive the expected branch penalty for a predictor with frequency 18%, accuracy 94%, and resolution penalty 6 cycles.
+5. Explain how two-bit prediction behaves on a loop with nine taken outcomes followed by one not-taken exit.
+6. Rename a sequence containing WAR and WAW hazards, then identify the remaining RAW dependencies.
+7. State the invariants required to prove that a mispredicted branch cannot commit a store.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. The first-to-second pair is RAW on r1; the second-to-third pair is a WAW on r1 if the third writes it, while the third also reads r1 from the second? Here `xor r1,r6,r7` overwrites the first result, so the fourth consumer must receive the third result. The implementation must prioritize the newest valid producer. A careful solution distinguishes the architectural names from the actual instruction order.
+2. The adjacent consumer requires one bubble in a basic five-stage machine; after the bubble, forwarding from the load’s data-producing stage supplies it. The second consumer may use the first loaded value if one independent instruction provides enough separation, but the exact answer depends on the implementation’s memory and forwarding timing; state that assumption instead of applying a universal rule.
+3. A load in MEM conflicts with instruction fetch in the same cycle. Separate instruction/data caches remove the conflict, multiporting duplicates access hardware and bandwidth, and stalling preserves correctness at lower throughput. The choice is architectural only if latency or ordering is exposed; otherwise it is a microarchitectural trade-off.
+4. Misprediction frequency is $0.18(1-0.94)=0.0108$ per instruction; multiplied by 6 cycles gives 0.0648 CPI, before other stalls.
+5. A two-bit predictor may begin weakly not-taken, become taken after two outcomes, and remain strongly taken through the loop. The exit moves it back one or two states but does not necessarily make the next loop iteration mispredict. The exact first-iteration behavior depends on initial state.
+6. Give each architectural destination a fresh physical register. Reads retain the physical versions visible at their dispatch time; WAR and WAW disappear, while a later read of a value produced by an earlier instruction remains RAW and waits for readiness.
+7. Every wrong-path instruction has a valid bit that becomes false on flush; memory write enable is gated by valid and retirement/commit permission; the store queue or memory system accepts only committed stores; recovery removes younger entries. Together these establish that a mispredicted store can be computed internally but never changes architectural memory.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: lecture notes and examinations](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [MIT 6.004 learning objectives](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [UC Berkeley CS 61C: five-stage pipeline notes](https://notes.cs61c.org/content/pipeline/five-stage-pipeline/)

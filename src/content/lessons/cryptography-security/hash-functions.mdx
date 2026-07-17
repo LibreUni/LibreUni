@@ -1,0 +1,110 @@
+---
+title: "Hash Functions"
+course: "cryptography-security"
+description: "Preimage resistance, collision resistance, and domain separation."
+---
+# Hash Functions
+
+A cryptographic hash maps arbitrary input to fixed-length output. Preimage resistance makes recovering an input difficult; second-preimage resistance protects a chosen input; collision resistance makes finding any two equal-output inputs difficult.
+
+Hashes do not encrypt. A password hash must also resist offline guessing with a salt and a deliberately expensive password KDF; a fast general hash is unsuitable for that role.
+
+## Hash functions as interfaces
+
+Let H map arbitrary-length bit strings to fixed-length n-bit strings. A cryptographic hash is expected to resist preimages, second preimages, and collisions under specified resource limits. Given y, finding any x with H(x)=y is a preimage attack. Given x, finding a different x-prime with the same digest is a second-preimage attack. Finding any distinct pair with equal digest is a collision attack. A birthday strategy finds collisions in roughly 2^(n/2) evaluations, so an n-bit digest does not provide n bits of collision security.
+
+Hashing is not encryption: there is no secret key and no general inverse. A hash is also not automatically a password storage scheme. Passwords are low-entropy and attackers can test guesses offline, so storage requires a memory-hard, salted password KDF with a calibrated work factor. A random salt prevents equal passwords from sharing a digest and defeats precomputed tables, but it does not make a weak password strong.
+
+## Merkle–Damgard and domain separation
+
+Many hashes process blocks through a compression function and maintain a chaining value. Padding must encode the message length so distinct parses do not collide trivially. A naive prefix-MAC H(key || message) can be vulnerable to length-extension behavior in Merkle–Damgard designs. HMAC avoids this through nested keyed hashing with distinct inner and outer pads; it is a MAC, not merely a hash with a secret prepended.
+
+Domain separation prevents one use of a hash from being confused with another. Prefix distinct labels for transcript hashing, key derivation, signatures, and application identifiers. A protocol should specify encoding unambiguously: concatenating variable-length fields without lengths can make two tuples encode identically. Use canonical serialization or length-prefix fields before hashing.
+
+## Hash-based constructions
+
+In a commitment scheme, commit to a message with a random opening value and later reveal both. Hiding depends on the randomness and message entropy; binding depends on collision or second-preimage resistance. In a Merkle tree, internal nodes hash domain-separated child encodings. A membership proof contains sibling hashes along a path; verification costs logarithmic tree height and requires the root to be authenticated.
+
+Hash tables and Bloom filters are not cryptographic proofs. Their collision behavior may be acceptable for performance but must not be treated as evidence of authenticity. A digital signature over a digest authenticates the digest only if the exact message encoding and hash algorithm are fixed and the verifier recomputes them.
+
+## Testing and migration
+
+Use published test vectors, empty input, one-block and two-block messages, boundary lengths, binary encodings, and incremental-versus-one-shot hashing. Differential tests should compare an independent implementation. During algorithm migration, include the algorithm identifier and digest length in stored records or signatures; otherwise an attacker may exploit ambiguity or downgrade behavior.
+
+Do not truncate a digest without analyzing the resulting security level. If a protocol uses a digest as a key, apply a KDF with domain separation rather than assuming the digest’s distribution and context are sufficient. If a digest is compared as an authentication token, use a constant-time comparison and protect the token’s entropy and transport.
+
+## Exercises
+
+1. Distinguish preimage, second-preimage, and collision resistance.
+2. Explain the birthday bound for an n-bit digest.
+3. Why is a salt public and unique rather than secret and shared?
+4. Explain why H(key || message) is not a general MAC construction.
+5. Design a domain-separated encoding for a pair of variable-length byte strings.
+6. Give a Merkle membership proof size for a tree with N leaves.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Preimage fixes an output; second preimage fixes one input; collision fixes neither input but asks for any equal-output pair.
+2. About 2^(n/2) random outputs produce a constant-probability collision because the number of pairs grows quadratically.
+3. A public unique salt prevents cross-record equality and precomputation. Secrecy is unnecessary; the password KDF work factor and memory hardness address guessing cost.
+4. Merkle–Damgard length extension can let an attacker derive a valid hash for an extended message without knowing the key, depending on the construction. HMAC’s nested pads avoid this naïve composition.
+5. Encode a context label, length(x), x, length(y), y using self-delimiting lengths and prove decoding is unique.
+6. A proof contains one sibling digest per tree level, so O(log N) digests, plus the leaf and left/right position information.
+
+</details>
+
+**Exercise.** Explain why storing `hash(password)` without a unique salt permits identical passwords to be recognized and rainbow-table reuse.
+
+## References & Further Reading
+
+* [NIST Secure Hash Standard](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
+* [NIST FIPS 180-4 Secure Hash Standard](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
+* [NIST SP 800-132 Recommendation for Password-Based Key Derivation](https://csrc.nist.gov/pubs/sp/800/132/final)
+
+## Security reductions and parameter choices
+
+Hash properties are idealized through games, and a protocol claim must identify which property it uses. A commitment that needs binding relies on the difficulty of finding a collision or second preimage under the particular encoding. A Merkle tree relies on collision resistance for internal nodes and on authentication of the root. A KDF relies on pseudorandomness under the keying assumptions of its construction, not simply on the fact that its output “looks random.” Reusing a hash in a new role without domain separation can invalidate a proof even when the primitive itself remains sound.
+
+The birthday bound explains why collision security is roughly half the digest length. After q independent evaluations of an n-bit random function, there are about q squared over 2 pairs; each pair collides with probability 2 to the minus n. When q is around 2 to the n/2, the expected number of colliding pairs is constant. Preimage guessing instead has success about q divided by 2 to the n for a random target. This distinction determines whether a 256-bit digest provides approximately 256-bit preimage security but approximately 128-bit collision security.
+
+## KDFs and extract-then-expand
+
+A key derivation function turns input keying material into one or more context-specific keys. HKDF separates extraction from expansion. Extract uses a salt and input material to produce a pseudorandom key; Expand uses that key, an info label, and a requested length to derive outputs. Extraction is useful when input material has uneven entropy or multiple sources. Expansion is useful for key separation: derive independent client and server keys, encryption and authentication keys, or traffic and exporter keys from one master secret.
+
+The info field must bind protocol context and roles. If two callers request the same output from the same secret with indistinguishable labels, a key intended for one purpose may be accepted in another. Include a protocol name, version, direction, algorithm, session identifier, and purpose where relevant. Do not use a raw hash of concatenated secrets as an ad hoc KDF without analyzing ambiguity, entropy, and related-key behavior.
+
+## Password hashing in depth
+
+Password storage differs from ordinary hashing because the attacker can verify guesses offline after obtaining a database. A salt must be unique per record and stored with the verifier. The password KDF should be deliberately expensive in time and memory, with parameters calibrated on the deployment hardware and revisited as hardware changes. A server-side pepper can add a separate secret factor if it is protected independently, but it complicates rotation and recovery and does not replace a salt.
+
+A verifier should perform the same parsing and cost policy for valid and invalid records where practical, compare derived values without early-exit timing, rate-limit online attempts, and avoid logging passwords or KDF inputs. Password reset and account recovery are part of the authentication boundary; an excellent password hash cannot protect an account if recovery tokens are predictable or reusable.
+
+## Collision attacks and chosen prefixes
+
+The generic birthday attack is not the only concern. If an attacker can choose structured prefixes, a weakness in a hash construction may permit chosen-prefix collisions that make two different documents share a digest. Any workflow that signs a bare digest, approves certificates, or treats a digest as a unique document identifier must consider the current algorithm’s published cryptanalytic status and migration policy. Include a format identifier and canonical document representation in signed objects so an old collision does not transfer across contexts.
+
+## Merkle trees and authenticated data
+
+An authenticated data structure lets a verifier check a value against a committed root without storing the entire collection. A binary Merkle proof contains the leaf, its index or path bits, and one sibling digest per level. The verifier hashes upward and compares the result with the trusted root. The root must be distributed or signed through an authenticated channel; a proof under an attacker-selected root proves nothing.
+
+For dynamic trees, define how empty children, duplicate keys, version numbers, and deletions are encoded. Domain-separate leaf and internal-node hashes so a leaf encoding cannot be confused with a concatenation of child encodings. To prevent rollback, bind the root to a monotonically increasing version or transparency log. To prevent equivocation, clients may need consistency proofs showing that two roots describe compatible tree histories.
+
+## Exercises
+
+7. Estimate generic collision work for a 256-bit digest and compare it with preimage work.
+8. Design HKDF labels for client-to-server and server-to-client traffic keys.
+9. Explain how a unique salt changes an offline password-guessing attack.
+10. State two invariants a dynamic Merkle tree needs beyond hash collision resistance.
+11. Give a reason to domain-separate leaf and internal-node hashes.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+7. Generic collision work is approximately 2^128 evaluations, while a random preimage target needs approximately 2^256 evaluations. Concrete attacks and security margins must still be checked for the selected algorithm.
+8. Include a protocol label, version, session or handshake context, direction string, algorithm identifier, and requested key purpose in the info field. Ensure the two direction labels are distinct.
+9. An attacker must run a separate KDF attack for each record and cannot reuse one precomputed table across salts. Equal passwords no longer reveal equality of stored verifiers, though weak passwords remain guessable.
+10. Use unambiguous canonical encodings and bind version or sequence state to prevent rollback. Also define duplicate-key, empty-subtree, and deletion semantics so two implementations compute the same root.
+11. Without separation, a byte string intended as a leaf might parse as the concatenation or framing of internal children, allowing structural ambiguity and weakening the tree’s binding argument.
+
+</details>

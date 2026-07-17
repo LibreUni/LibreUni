@@ -1,0 +1,82 @@
+---
+title: "Packet Trace Laboratory"
+course: "computer-networks"
+description: "A structured method for reconstructing DNS, TCP, TLS, and HTTP behavior from packet evidence."
+---
+# Packet Trace Laboratory
+
+A packet trace is a time-ordered sample of protocol events. The lab objective is not to memorize filter syntax; it is to construct and test a causal explanation. Start with the five-tuple and observation point, identify protocol boundaries, establish the normal sequence, and then explain deviations using sequence numbers, acknowledgments, timers, flags, and timing. A trace can show what crossed the capture point, not what happened on the other side of an invisible queue.
+
+## Lab question and evidence plan
+
+Write a question before opening the trace. Examples: “Why does the first page request take 800 ms?” “Was the TCP connection reset by the client or server?” “Did DNS return an address that was never reachable?” Each question determines the relevant packets and metrics. For the first-page question, separate DNS time, TCP handshake time, TLS handshake time, time to first byte, and object transfer time. An aggregate page duration conceals which stage is responsible.
+
+Record capture interface, timestamp source, host addresses, address family, packet-loss possibility at the capture point, and whether offload is enabled. Host captures may show large logical segments before NIC segmentation and may show checksum fields before hardware fills them. A missing packet can mean network loss, capture loss, filtering, or an interface that was not observed. The conclusion must state these limits.
+
+## DNS transaction reconstruction
+
+Match a query and response by transaction identifier, question section, source/destination endpoints, and timing. A response may contain an answer, a referral, a negative result, or an error. Caching means the client may send no query for a name that resolves successfully; absence of DNS traffic is not evidence that name resolution was irrelevant.
+
+If the response contains an address, compare its family and TTL with the subsequent connection. A client may try several addresses, abandon one after a timeout, and succeed with another. Search order and parallel connection behavior matter. A DNS server’s quick response does not prove that the selected destination is reachable; it proves only that the resolver answered the query.
+
+**Worked trace interpretation.** At time 0, a client sends an A query. At 4 ms it receives two addresses. At 5 ms it sends a TCP SYN to the first address; no SYN-ACK arrives. At 305 ms it sends a SYN to the second address and receives a SYN-ACK at 325 ms. The application’s 325 ms startup may be caused by address fallback, not slow DNS. Changing resolver software would not fix the failed first path.
+
+## TCP sequence and acknowledgment analysis
+
+TCP sequence numbers count bytes, not packets. A segment with sequence (s) and payload length (l) occupies ([s,s+l)). The acknowledgment number (a) means that bytes below (a) have arrived in order at the receiver, subject to the protocol’s interpretation. SYN and FIN consume one sequence number even without payload. A retransmission repeats a byte interval; it is not automatically evidence of an application duplicate.
+
+Build a per-direction table with time, sequence start, end, acknowledgment, advertised window, flags, and payload length. An ACK that advances to the end of a segment supports successful in-order reception at the receiver. Duplicate ACKs may indicate a gap, but can also arise from reordering, delayed capture, or protocol behavior. A fast retransmission after repeated duplicate ACKs differs from a timeout retransmission in its timing and congestion response.
+
+The receive window limits bytes the receiver is willing to accept; the congestion window limits bytes the sender should put into the network. The effective flight limit is the smaller of the two. A sender that has data but no transmission may be receiver-window-limited, congestion-window-limited, application-limited, or blocked by a local scheduler. Identify the limiting signal rather than labeling every idle interval “network delay.”
+
+## TLS and HTTP boundaries
+
+After TCP establishment, TLS records carry encrypted application data. A trace can still reveal handshake messages, record sizes, retransmissions, and timing, but not normally the HTTP method or response body. A certificate failure can occur after transport succeeds. A TLS handshake that completes proves a cryptographic session was negotiated with some peer; hostname validation and application authorization are separate checks.
+
+HTTP/1.1 request and response messages share a byte stream; packet boundaries do not equal message boundaries. A request header can span segments, and several responses or body chunks can occupy one segment. HTTP/2 and HTTP/3 multiplex streams, so one delayed object need not correspond to one transport flow in the intuitive way. A packet trace should map encrypted records and stream behavior cautiously when payload is unavailable.
+
+## Timing and retransmission diagnosis
+
+Compute intervals from packet timestamps but state which event each interval represents. SYN to SYN-ACK estimates a round trip to the responder plus processing and return delay. Request to first response byte includes server queueing and computation. A gap between a client’s transmission and an acknowledgment may be propagation, receiver delay, queueing, loss, or capture loss. Compare repeated transactions and both directions.
+
+If a retransmission appears after a nearly constant interval, compare that interval with the sender’s retransmission timer and look for an acknowledgment of the original data. If a duplicate acknowledgment arrives before the retransmission, fast recovery is plausible. If the receiver advertises a zero window, sender silence can be flow control rather than packet loss. If the connection ends with a reset, inspect which endpoint sent it and whether an application or middlebox likely generated it.
+
+Be precise about negative evidence. If no packet appears at a capture point, the packet may not have been sent, may have been discarded before the point, may have taken another interface, or may have been lost by the capture mechanism. A trace is strongest when two points can be correlated: the client’s transmitted sequence range with the server’s received range, or the server’s response with the client’s received range. Correlation should use stable identifiers and bounded clock uncertainty. If clocks are not synchronized, compare order and relative retransmission behavior rather than claiming an exact one-way delay.
+
+A useful lab report includes a packet excerpt or table, a diagram of the observed path, hypotheses considered, fields that support or contradict each hypothesis, and a confidence statement. “The trace proves a broken router” is usually too strong. “The client retransmits the same range three times, while no corresponding packet appears at the server-side capture; this localizes the loss to the client-to-server path or capture boundary, with middlebox filtering and capture loss still unresolved” is testable and actionable.
+
+## Lab procedure
+
+1. Identify endpoints, protocol, capture point, and time range.
+2. Isolate one transaction using addresses, ports, identifiers, and stream indices.
+3. Draw the expected state machine before interpreting anomalies.
+4. Construct direction-specific tables for sequence, acknowledgment, flags, size, and timing.
+5. Mark missing evidence separately from observed failure.
+6. Test at least two competing explanations using another field or another vantage point.
+7. State the smallest repair that addresses the established cause and the uncertainty that remains.
+
+## Exercises
+
+1. A SYN is sent at 0 ms, SYN-ACK at 80 ms, ACK at 82 ms, request at 83 ms, and first response byte at 410 ms. Partition the startup delay and name what the trace does not prove.
+2. A segment carries sequence 10,000 and 1,000 bytes. What acknowledgment indicates complete in-order receipt? What does an ACK of 10,000 indicate?
+3. A sender transmits segments 0, 1, 2; the receiver ACKs through 0 repeatedly while 2 is present. Give two explanations besides “segment 1 was lost.”
+4. Design a trace table that distinguishes receiver-window blocking from congestion-window blocking.
+5. Explain why packet boundaries cannot be used to reconstruct HTTP requests.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. TCP handshake is about 82 ms; request-to-first-byte is about 327 ms. The latter includes server and path effects. The trace does not by itself prove whether the server computed slowly, the response was queued, or packets were lost outside the capture point.
+2. The next in-order acknowledgment is 11,000. An ACK of 10,000 means no byte in that interval has been cumulatively accepted after the prior prefix; it may reflect a gap, reordering, or a receiver/capture condition.
+3. Segment 1 may be lost or corrupted; it may be delayed and segment 2 arrived out of order; or the capture point may have missed segment 1 while the receiver did not. Inspect retransmission timing, receiver buffering, and a second capture point.
+4. Record advertised receive window, inferred bytes in flight, sender transmissions, ACKs, and application writes. A zero or persistently small advertised window with available congestion headroom indicates receiver limitation; a growing RTT/loss response with a larger receive window suggests congestion limitation.
+5. TCP is a byte stream and segmentation depends on buffering, offload, MSS, and timing. One HTTP header can span segments, and one segment can contain several messages or body fragments. Reassemble the stream before parsing application framing.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 9293: Transmission Control Protocol](https://www.rfc-editor.org/rfc/rfc9293)
+* [RFC 8446: The Transport Layer Security Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+* [RFC 9112: HTTP/1.1](https://www.rfc-editor.org/rfc/rfc9112)
+* Kurose and Ross, *Computer Networking: A Top-Down Approach*, protocol tracing and transport chapters.

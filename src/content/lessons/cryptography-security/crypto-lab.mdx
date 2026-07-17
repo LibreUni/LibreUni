@@ -1,0 +1,102 @@
+---
+title: "Cryptography Lab"
+course: "cryptography-security"
+description: "Inspect nonce, key, and encoding failures in a protocol sketch."
+---
+# Cryptography Lab
+
+## Lab objective
+
+Audit a deliberately small file-transfer protocol and produce a corrected design. The lab connects primitive properties to system invariants. You must identify every key, nonce, random value, encoding, authenticated field, state transition, failure path, and recovery assumption. The deliverable is a threat model, message format, trace table, proof obligations, implementation test plan, and a short incident analysis for each injected failure.
+
+Assume a sender uploads a file to a recipient through an untrusted relay. The sender has a signing key, the recipient has a public encryption key, and both use a KMS for long-lived material. The relay can observe, delay, reorder, duplicate, drop, and modify messages, but cannot break the cryptographic primitives. Users may retry uploads, keys may rotate, workers may restart, and the recipient may revoke the sender after an upload begins.
+
+## Initial protocol sketch
+
+The sender generates a random file key K and nonce N, encrypts plaintext P with AEAD, encrypts K to the recipient’s public key, and sends version, recipient ID, file ID, encrypted K, N, ciphertext, and tag. The sender signs file ID and ciphertext. The relay stores the record. The recipient decrypts K, verifies the AEAD tag, verifies the signature, and writes the plaintext to storage.
+
+Do not assume this sketch is safe. Ask whether the signature covers the recipient, version, nonce, encrypted key, associated data, and algorithm identifiers. Ask whether the recipient validates the sender’s identity before accepting the signature. Ask whether a valid record can be copied to another file, tenant, or protocol endpoint. Ask whether the nonce is unique under the AEAD key across retries and process restarts.
+
+## Formal message format
+
+Define a canonical encoding with fixed or self-delimiting fields: protocol name and version, sender identity, recipient identity, tenant, file ID, file version, key identifier, algorithm identifiers, nonce, encrypted data key, associated-data bytes, ciphertext, tag, and signature. Authenticate the exact encoding or a transcript hash. Reject duplicate fields, noncanonical integers, unknown critical versions, trailing bytes, and lengths exceeding policy before allocation.
+
+The AEAD associated data should include every visible field that changes interpretation of the ciphertext: tenant, file ID, version, recipient, key identifier, algorithm, chunk number, and length. The signature should bind the sender’s authorization statement and the complete cryptographic transcript, not merely the ciphertext. If the relay can replace metadata after signature verification, the application may act on a statement different from the one signed.
+
+## Invariants
+
+1. For each data-encryption key K, every encryption uses a unique nonce N.
+2. A record is accepted only when its canonical bytes authenticate under the intended recipient, sender, file, tenant, and protocol context.
+3. No plaintext reaches parsing or persistent application state before AEAD verification.
+4. A sender signature is accepted only for the intended sender, action, recipient, and current policy.
+5. A retry has one idempotent effect and cannot create two grants, versions, or billing events.
+6. A revoked sender cannot create a new accepted effect, even if an old message is cryptographically valid.
+7. Key rotation does not cause readers to use a key for the wrong purpose or reuse a nonce.
+
+For each invariant specify state and enforcement. Invariant 1 belongs to nonce allocation and key lifecycle, not only the cipher call. Invariant 3 belongs to the decryption API and caller ordering. Invariant 5 needs a transaction or idempotency store. Invariant 6 needs a current authorization check and a rule for in-flight messages.
+
+## Trace exercises
+
+### Nonce reuse
+
+Let a worker encrypt a retry with the same key and nonce. In counter-mode AEAD, the keystream may repeat, so XORing ciphertexts exposes the XOR of plaintexts. The authenticator may also become forgeable. Repair by generating a new data key per retry, using a durable unique counter, or ensuring the retry reuses the exact prior ciphertext rather than re-encrypting. Test a process crash between nonce allocation and record commit.
+
+### Metadata substitution
+
+The relay copies a valid encrypted record from tenant A or file X and presents it as tenant B or file Y. If those fields are not authenticated, the recipient may store valid plaintext under the wrong object or disclose it to the wrong principal. Repair by binding all interpretation-critical fields to AEAD associated data and the sender signature, and verify the expected recipient and tenant before decryption or effect.
+
+### Replay
+
+The relay submits a valid upload twice. If the system creates two versions, sends two notifications, or charges twice, cryptographic integrity has not provided application freshness. Add a unique file version or request identifier, store it atomically with the effect, and define whether a duplicate returns the original result or fails. If uploads are intentionally versioned, bind the expected predecessor and use compare-and-swap semantics.
+
+### Key rotation
+
+A reader receives a record carrying old key version k after the service has rotated to k+1. It may retain k for decryption during the documented migration period but must authenticate the key identifier and ensure k is valid for this tenant and data purpose. New writes use k+1. After re-encryption or retention expiry, k is retired and the reader rejects it. A rollback must not reactivate a revoked or compromised key.
+
+### Revocation and queues
+
+The sender creates a queued upload, then the recipient revokes the sender before the worker executes it. Decide whether authorization is checked at enqueue time, execution time, or both. For sensitive sharing, recheck at execution and bind the job to a grant version. The queue message must be authenticated and idempotent; redelivery after success must not repeat the effect.
+
+## Threat analysis
+
+Passive relay observation should not reveal plaintext or the file key. An active relay should not alter bytes, metadata, recipient, tenant, or operation without rejection. A malicious sender may possess a valid signing key but should not exceed its authorization scope. A compromised API process may request decryption through its KMS authority; reduce this blast radius with per-tenant keys, operation-level KMS policy, short-lived grants, and anomaly detection. A compromised recipient endpoint can read its own plaintext; encryption at rest cannot solve endpoint compromise.
+
+Consider side channels and errors: tag failure versus signature failure, unknown key ID versus expired grant, response timing, record size, logs, and retry behavior. Unify external failures where practical, bound parsing, and preserve safe internal evidence. A lab report should distinguish confidentiality, integrity, authenticity, freshness, authorization, and availability findings rather than calling every rejection “secure.”
+
+## Implementation plan
+
+Use an audited AEAD and public-key KEM or encryption library. Generate keys and nonces through approved interfaces, use typed canonical serializers, and keep secrets out of strings and logs. Verify all bounds before allocation, authenticate associated data, verify AEAD before releasing plaintext, and perform authorization before irreversible effects. Use a KMS handle rather than exporting long-lived keys where possible.
+
+Tests should include published vectors, empty and maximum payloads, altered every field, wrong tenant and recipient, wrong key version, invalid public-key encoding, nonce collision detection, process restart, concurrent retry, queue redelivery, revocation race, rotation overlap, backup restore, and KMS outage. Run differential serialization tests and maintain a minimized regression trace for each discovered failure.
+
+## Deliverable rubric
+
+The threat model and assets are 15 percent; canonical message and key/nonce inventory 20 percent; invariants and correctness reasoning 25 percent; attack traces and repairs 20 percent; implementation tests and failure handling 15 percent; references and exposition 5 percent. A working demo without invariants is incomplete. A formal invariant without a test that exercises the failure boundary is also incomplete.
+
+## Exercises
+
+1. Construct the smallest nonce-reuse trace and explain two consequences.
+2. List every field that should be authenticated as associated data.
+3. Repair a double-charge caused by queue redelivery.
+4. Analyze a relay that substitutes a recipient identifier.
+5. Define key-version behavior during rotation and revocation.
+6. Write one invariant and its implementation test.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Encrypt two different plaintexts under the same K,N and transmit both. Counter-mode XOR reveals plaintext XOR, while authenticator reuse may enable forgery. Repair allocation or reuse the original ciphertext on retry.
+2. Include protocol version, tenant, sender, recipient, file and version IDs, key and algorithm IDs, chunk and length fields, and any flag that changes parsing or authorization. Use one canonical encoding.
+3. Store an idempotency key with the charge transaction under a unique constraint; a redelivery finds the prior result and returns it without a second charge. Authenticate the queue message and bind it to the account and amount.
+4. If recipient is not authenticated, a valid record may be delivered under another identity or trigger the wrong key lookup. Bind recipient and tenant to AEAD data and signature, then compare against the current request context before effect.
+5. New writes use k+1; readers accept k only during an explicit migration interval; compromised or revoked k is rejected immediately for the affected purpose; re-encryption and rollback behavior are documented.
+6. Invariant: no accepted record has a repeated (K,N) pair. Test concurrent workers, restart from a snapshot, and retry after a crash while recording nonsecret key ID and nonce identifiers; assert uniqueness and safe failure.
+
+</details>
+
+Audit a message format using AEAD, signatures, and key exchange. Enumerate keys, nonces, associated data, canonical bytes, and failure handling. Treat every uniqueness and authentication claim as a testable invariant.
+
+**Exercise.** Construct the smallest trace that breaks the design if a nonce is reused.
+
+## References & Further Reading
+* [NIST Cryptographic Standards](https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines)

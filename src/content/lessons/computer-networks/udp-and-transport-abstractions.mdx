@@ -1,0 +1,84 @@
+---
+title: "UDP and Transport Abstractions"
+course: "computer-networks"
+description: "Ports, demultiplexing, datagrams, application responsibility, and the limits of transport-layer guarantees."
+---
+# UDP and Transport Abstractions
+
+The transport layer sits between applications and the network. Its useful abstraction is not “the network becomes reliable”; it is a contract about how one process sends data to another process across an internetwork. Different applications need different contracts. A live voice stream may prefer timely loss over retransmitting stale audio. A DNS query may need a short request and response but can retry at the application layer. A file transfer needs ordered, complete bytes. UDP supplies a deliberately small datagram abstraction, leaving reliability, ordering, pacing, and security to higher layers.
+
+## Process-to-process delivery
+
+IP identifies an interface, not a process. A transport endpoint adds a port number and protocol identifier. A UDP datagram contains source and destination ports, a length, and a checksum, followed by application data. The destination host uses the protocol and destination port to select a socket. A server binds a well-known or configured port; a client normally receives an ephemeral source port so replies can be demultiplexed.
+
+The conceptual demultiplexing key depends on the implementation and protocol. A UDP socket commonly receives datagrams for a local port, with address information supplied alongside each datagram. A connected UDP socket can restrict accepted traffic to a particular peer and let the kernel associate replies with that peer. The application must still handle messages arriving from an unexpected source if it uses an unconnected socket.
+
+The checksum covers a pseudo-header containing selected network-layer fields, the UDP header, and payload. This catches delivery to the wrong endpoint or some misrouted packets that a payload-only check would miss. A checksum detects accidental corruption with high probability, but it is not a cryptographic integrity mechanism. An adversary can modify data and recompute it.
+
+## What a datagram does and does not promise
+
+UDP preserves message boundaries: one send corresponds conceptually to one datagram, subject to size and implementation limits. It does not promise delivery, ordering, duplicate suppression, congestion fairness, or retransmission. A datagram can be dropped by a full queue, filtered by a firewall, fragmented and lost, or delivered after a later datagram. A receiver may also reject it because the checksum is invalid or the application is not listening.
+
+These omissions are design dimensions, not defects. If an application sends independent telemetry samples, retransmitting a missing old sample may consume capacity needed for fresh data. If a protocol has its own sequence and recovery scheme, using UDP avoids duplicating a transport policy that does not fit. The cost is that the application designer must specify and test the missing behavior.
+
+## Building a protocol over UDP
+
+An application protocol over UDP should state at least:
+
+* message types and encoding, including maximum size and canonical representation;
+* request identifiers and peer binding, so delayed responses cannot satisfy a new request;
+* integrity and authentication requirements, not merely a checksum;
+* timeout, retry, and backoff behavior;
+* duplicate, reorder, and replay handling;
+* flow and congestion behavior appropriate to the shared network;
+* error responses and version negotiation.
+
+Consider a request/response service. The client sends request identifier 41, starts a timer, and retransmits with bounded exponential backoff if no response arrives. The server may receive the request twice. If the operation is not idempotent, it needs a durable operation identifier and a duplicate-result table, or it must expose an explicit “unknown outcome” state. A client timeout does not prove that the server did nothing; the request may have committed while the response was lost.
+
+**Worked failure trace.** A payment client sends `debit(account=A, amount=10, id=41)`. The server debits the account but its response is dropped. The client retransmits. A naïve server debits again. An idempotent server stores that id 41 already committed and returns the original result. The protocol’s safety property is “at most one state transition per operation identifier,” while its liveness property is “a committed or rejected result is eventually returned if retries and storage remain available.”
+
+## Datagram size and fragmentation
+
+Large UDP datagrams are fragile because they may require fragmentation. If one fragment is lost, the complete datagram is unusable. The loss probability rises with the number of fragments: if each fragment independently succeeds with probability (p), an (n)-fragment datagram succeeds with (p^n). At (p=0.99), one fragment succeeds with 99%, but 20 fragments succeed only about 81.8% of the time. This is one reason applications commonly choose a path-safe payload size and perform their own chunking.
+
+Path MTU discovery can learn a usable size, but paths change and some networks filter the control messages used by discovery. A robust protocol treats an oversize or too-large response as recoverable. It should avoid assuming that the local interface MTU is the end-to-end MTU. Chunking also makes selective recovery possible: a missing chunk can be requested without retransmitting an entire object.
+
+## Fairness, rate control, and congestion
+
+UDP itself does not reduce its sending rate when queues overflow. A UDP application that sends at a fixed high rate can harm competing TCP flows and can harm itself through increasing loss and delay. “It is connectionless” is not a justification for ignoring congestion. A responsible protocol measures loss, delay, receiver capacity, and available rate, then applies an explicit controller.
+
+A simple token bucket permits bursts up to bucket capacity (B) while limiting long-term rate to (r). Tokens accumulate at rate (r) up to (B); sending a packet consumes tokens proportional to its size. This controls application output but does not guarantee a congestion-fair response. A real-time protocol may instead use a congestion controller designed for media, with feedback and a target rate. The controller must avoid oscillation and must define behavior under missing feedback.
+
+## UDP APIs and operational boundaries
+
+The API boundary affects semantics. A datagram receive may return one complete message, truncate it, or report an error depending on the API. A successful local send normally means the operating system accepted the data, not that the peer received it. ICMP or other errors may be delivered asynchronously, but applications cannot treat their absence as proof of reachability.
+
+NATs and stateful firewalls may create temporary mappings based on outbound traffic. A server behind a NAT may be unreachable until a mapping exists, and idle mappings can expire. Keepalives consume bandwidth and can preserve reachability, but they should be authenticated and rate-limited. Source ports are not identities: an attacker may spoof packets, and a NAT may rewrite them.
+
+## Exercises
+
+1. Explain the difference between a port, a socket, an IP address, and a process. Give a demultiplexing example with two clients using the same server port.
+2. With independent fragment success probability 0.995, compare complete-datagram success for 1, 8, and 40 fragments. Interpret the result.
+3. Design a safe retry protocol for a non-idempotent operation. List the persistent state the server needs and explain what happens after a crash.
+4. A service sends 200-byte telemetry samples at 1,000 samples/s. A token bucket has (r=100) kB/s and (B=20) kB. Determine the maximum immediate burst and the long-run deficit rate.
+5. Identify which guarantees are provided by UDP, which must be added by the application, and which cannot be guaranteed without assumptions about the network.
+6. A client receives a valid response with an old request identifier. Give two attacks or failures this prevents and the rule the client should follow.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. An IP address identifies a network interface; a port identifies a transport endpoint number; a socket is an OS object representing communication state; a process owns or uses sockets. Two clients can send to server port 53 from distinct source address/port tuples; the server receives both on its port and can distinguish their return destinations.
+2. (0.995^1=0.995), (0.995^8\approx0.9607), and (0.995^{40}\approx0.8185). Even a high-quality per-fragment channel makes large fragmented messages substantially less reliable because every fragment is required.
+3. Require a unique operation ID, authenticate the client, durably record `ID → result` before acknowledging commitment, and return the stored result for retries. After a crash, recovery must replay or inspect durable state before accepting a duplicate; otherwise “unknown outcome” is safer than performing the operation twice.
+4. A burst of 20,000 bytes can be sent immediately. The offered rate is 200,000 bytes/s, exceeding the 100,000-byte/s refill by 100,000 bytes/s, so the bucket drains at that rate until the application reduces its rate or the bucket is empty.
+5. UDP provides port-based datagrams and checksum-based corruption detection subject to its specification. Ordering, reliable delivery, duplicate suppression, authentication, replay defense, rate control, and application meaning must be added. Eventual delivery needs assumptions such as a functioning peer and a channel that eventually succeeds; no protocol can force a permanently disconnected peer to respond.
+6. Delay can make an old response arrive after a retry, and an attacker can replay a previously valid response. The client should accept a response only if its authenticated request ID, peer context, and freshness state match an outstanding request; otherwise discard or log it.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 768: User Datagram Protocol](https://www.rfc-editor.org/rfc/rfc768)
+* [RFC 8085: UDP Usage Guidelines for Application Designers](https://www.rfc-editor.org/rfc/rfc8085)
+* [RFC 9000: QUIC Transport Protocol](https://www.rfc-editor.org/rfc/rfc9000)
+* Kurose and Ross, *Computer Networking: A Top-Down Approach*, transport-layer principles and UDP case study.

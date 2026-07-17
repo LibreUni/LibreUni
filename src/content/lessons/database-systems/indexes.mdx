@@ -1,0 +1,93 @@
+---
+title: "Indexes"
+course: "database-systems"
+description: "B-trees, composite keys, selectivity, and write amplification."
+---
+# Indexes
+
+An index is an auxiliary access path. B-trees support ordered lookup and range scans with logarithmic navigation; a composite index is ordered lexicographically, so its leading columns matter. Indexes accelerate reads while consuming space and adding write maintenance.
+
+An index on `(tenant_id, created_at)` supports filtering by tenant and ordering within tenant, but not necessarily an efficient query filtering only by `created_at`.
+
+## Access paths and correctness
+
+An index is a derived structure that maps search keys to tuple locations or covering payloads. The table remains the logical source of truth; an index is correct only when every visible table row that should be indexed has a corresponding entry and every entry resolves to a row satisfying the index predicate. Updates must maintain both structures atomically or through a recoverable log. A stale or corrupt index can return missing or wrong rows unless the executor rechecks predicates and the system can rebuild it.
+
+Index choice begins with workload predicates and ordering, not with the table’s largest column. Equality, range, prefix, ordering, grouping, uniqueness, and join access have different requirements. An index may help locate a small fraction of rows but hurt a query that returns most of the table because random heap access costs more than a sequential scan. Measure selectivity, clustering, visibility, and cache state.
+
+## B-tree structure
+
+A B-tree or B+ tree maintains sorted keys in nodes sized near a page. Internal nodes contain separator keys and child pointers; leaf nodes contain keys and tuple references, often linked for range scans. The tree is balanced: all leaves are at the same depth. Search descends one path in logarithmic height. Insert finds a leaf, adds an entry, and splits a full node; the separator propagates upward, possibly creating a new root. Delete may remove entries and merge or redistribute nodes depending on policy.
+
+The fanout is high because nodes hold many keys per page, so height remains small even for large tables. Page splits must be crash-safe and concurrency-safe. A latch protects tree structure for short operations; transaction locks and predicate semantics control logical conflicts. Right-edge growth, monotonically increasing keys, and random keys create different split and locality patterns. Fill factors reserve space for updates and reduce immediate splits at the cost of storage.
+
+Leaf ordering supports range predicates and ORDER BY. A composite index orders lexicographically: (a,b) groups equal a values and orders b within each group. It efficiently supports equality on a and range or ordering on b, but a query on b alone generally cannot navigate directly to its matching entries. Skip-scan or bitmap strategies may help in some systems but should not be assumed. Column order is a workload decision.
+
+## Hash indexes and filters
+
+Hash indexes map a key to a bucket and support equality lookup but not ordered range scans. Collisions require chaining, overflow pages, or open addressing. Resizing and crash recovery complicate a disk-resident hash index. A Bloom filter is not an index that returns locations; it is a probabilistic negative filter. It may say “possibly present” for a missing key, but it must never say “absent” for a present key. Use it to skip immutable segments or remote lookups, not as the final answer.
+
+## Covering and index-only scans
+
+An index-only scan can answer a query from index entries without fetching heap pages when all required columns are present and visibility information proves the tuple is visible. Including extra payload columns makes an index covering for a query but increases size, write cost, cache pressure, and update amplification. A covering index is beneficial only when the saved heap I/O exceeds these costs under the workload.
+
+Visibility is subtle under MVCC. An index entry may point to an old or dead tuple version, so the engine may need a heap or visibility-map check. Vacuum and cleanup can improve index-only scan rates. An index-only plan is therefore data-state dependent, not guaranteed merely because the SELECT columns appear in the index.
+
+## Composite and partial indexes
+
+For queries filtering by tenant and ordering by time, an index on (tenant_id, created_at, id) supports a tenant-restricted ordered scan with a unique tie breaker. If most rows have status “active” and queries almost always ask for active rows, a partial index with a predicate can reduce size and maintenance, but the optimizer must prove that the query predicate implies the index predicate. If a parameter or NULL semantics prevents proof, the partial index may not be used.
+
+Expression indexes store a computed expression such as lower(email), date bucket, or a normalized key. The expression must be deterministic and match query syntax or an equivalent recognized form. Collation, timezone, Unicode normalization, and function version changes can affect correctness. An index on a raw column does not necessarily support a predicate on a transformed expression.
+
+## Uniqueness and constraints
+
+A unique index can enforce a uniqueness constraint, but NULL treatment differs by DBMS and configuration. Decide whether multiple NULLs are allowed, whether uniqueness is per tenant, and whether case or collation differences matter. A unique composite index on (tenant_id, email_normalized) enforces per-tenant uniqueness; a global unique index enforces a different invariant. Concurrent inserts must coordinate through the index or constraint so a read-then-insert race cannot create duplicates.
+
+## Write amplification and maintenance
+
+Every insert may update every index. An update may touch an index if an indexed column changes and may create new tuple versions even if it does not. Indexes consume memory and disk, slow bulk loads, and increase WAL or replication volume. Too many overlapping indexes can make writes disproportionately expensive. Remove unused indexes only after observing workload over a representative period and considering rare but critical queries.
+
+Index maintenance interacts with vacuum, compaction, and replication. Dead entries may remain until cleanup; long transactions can delay reclamation. Replicas need compatible index build and update behavior. Online index creation may take locks or require multiple phases; plan for failure, cancellation, and consistency during the build.
+
+## Index selection example
+
+Suppose a multi-tenant events table serves: events for one tenant in time order; events with one status across all tenants; lookup by event ID; and a dashboard counting recent active events. Choose a primary key or unique index for event ID, (tenant_id, created_at, event_id) for tenant pagination, and perhaps a partial index on (tenant_id, created_at) WHERE status='active' if the dashboard is tenant-scoped and active rows are sparse. A status-only index may be useful only if status is selective or combined with a time predicate; otherwise it may scan a large fraction of the table.
+
+Use EXPLAIN and workload measurements. Compare cold and warm cache, insert and update throughput, index size, p95 latency, and plan stability after statistics changes. A plan that is fast for one tenant may be poor for a skewed tenant; extended statistics or separate workload treatment may be needed.
+
+## Exercises
+
+1. Explain B+ tree search, split, and range scan.
+2. Choose column order for three composite predicates.
+3. Compare a hash index with a B-tree.
+4. Explain when an index-only scan still visits the heap.
+5. Design a per-tenant uniqueness index.
+6. Analyze index write amplification.
+
+### Diagnostic solutions
+
+
+1. Descend internal separators to a leaf, find the key, and follow linked leaves for ranges. Split a full leaf and propagate a separator; split the root by creating a new level.
+2. Put equality and high-partitioning columns first when they constrain navigation, then range and ordering columns, with a unique tie breaker for stable pagination. Test the actual workload because selectivity and ordering can change the choice.
+3. Hash supports equality and may have direct bucket access, but not order or range scans. B-tree supports equality, ranges, ordering, and prefix navigation with logarithmic descent.
+4. MVCC visibility may not be known from the index, the index may omit a needed column, an included tuple may be dead, or the visibility map may not mark the heap page all-visible.
+5. Create a unique index on (tenant_id, normalized_email), define normalization and collation explicitly, and decide NULL behavior. Enforce it in the database rather than with a pre-insert query.
+6. Each indexed insert and relevant update performs additional page writes, splits, logging, and cache work. Measure index size and write latency; drop or consolidate indexes only after verifying rare query requirements.
+
+
+
+## Index experiment
+
+Build a representative table with uniform and skewed keys, duplicates, NULLs, and realistic row widths. Compare no index, single-column, composite, partial, and covering indexes for point lookup, range, ordering, join, and write workloads. Record table and index size, build time, insert/update throughput, buffer reads, plan choice, and tail latency. Repeat after statistics refresh and cache warm-up. The report must explain not only which plan won but why its cardinality and I/O assumptions held or failed.
+
+**Exercise.** Propose indexes for queries by account ID, by timestamp range within account, and by status alone. Discuss overlap and write cost.
+
+## Synthesis checkpoint
+
+An index recommendation is complete only when its workload, selectivity, ordering requirement, maintenance cost, and measured plan are named. Check both the winning query and the writes it slows. Re-run the plan after statistics change, because an index that was useful for a selective tenant may be wasteful for a broad analytical scan.
+
+## References & Further Reading
+
+* [PostgreSQL Indexes](https://www.postgresql.org/docs/current/indexes.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL Using EXPLAIN](https://www.postgresql.org/docs/current/using-explain.html)

@@ -1,0 +1,87 @@
+---
+title: "Key Management"
+course: "cryptography-security"
+description: "Key generation, storage, rotation, compromise, and lifecycle."
+---
+# Key Management
+
+Security is bounded by key lifecycle: generate with an approved source, restrict access, use for one purpose, rotate under a defined policy, revoke when compromised, and destroy when no longer needed. Key hierarchy can limit blast radius by deriving data keys from protected key-encryption keys.
+
+Rotation does not erase already exposed plaintext or make an old key safe after compromise; it limits future exposure only when old keys are retired correctly.
+
+## Key inventory and ownership
+
+Every production key should have an inventory record: purpose, algorithm, parameters, owner, custodian, creation time, activation time, retirement time, destruction policy, storage boundary, permitted callers, associated data classes, and recovery dependencies. A key that exists but has no owner is an unreviewed authorization path. Inventory must include application secrets, certificate private keys, signing keys, KMS wrapping keys, database encryption keys, backup keys, API credentials, and temporary session or export keys.
+
+Separate key identity from key material. A key identifier selects a version and policy; it should not itself reveal a secret or allow an untrusted caller to choose an arbitrary algorithm. Store identifiers with ciphertexts, signatures, and audit events, and authenticate them where they affect interpretation. During rotation, old identifiers may remain readable for a bounded migration period but should not be accepted for new writes after retirement.
+
+## Generation and entropy
+
+Generate keys with a cryptographically secure random generator appropriate to the operating environment. Entropy quality must be considered during early boot, container cloning, virtual-machine snapshots, and embedded deployment. Never derive production keys from timestamps, process identifiers, predictable test fixtures, or ordinary pseudo-random generators. For public-key generation, validate parameter requirements and reject weak or duplicate parameters.
+
+A key-generation ceremony may require multiple operators, independent approvals, recorded checks, and an offline or hardware-protected environment. The ceremony is part of the threat model for root signing keys and high-value wrapping keys. Record evidence without logging the key itself. Test that backups and restores preserve exact key identity and metadata without creating untracked copies.
+
+## Key hierarchy and separation
+
+A key-encryption key can wrap data-encryption keys, allowing many data keys to be rotated or revoked without exposing a long-lived root. A hierarchy commonly includes a root or master key, service or tenant wrapping keys, and short-lived data keys. Each layer should have a distinct purpose and access policy. Derive keys with a KDF only when the derivation is part of the design; do not treat a hash of one key as an independent key without domain separation.
+
+Separate encryption, authentication, signing, key agreement, password, backup, and token-signing keys. Separate production, staging, development, tenant, region, and protocol-version contexts. Key reuse across contexts permits an oracle or compromise in one application to affect another and makes incident scoping difficult. A hierarchy reduces blast radius only if access to parent keys is more restricted than access to children.
+
+## Storage boundaries
+
+Plaintext key material should remain inside a hardware security module, trusted execution boundary, or tightly controlled process for as long as the design requires. An HSM can enforce nonexportability, rate limits, quorum approval, and audit, but it does not automatically protect callers that can ask it to sign arbitrary messages or unwrap attacker-chosen ciphertexts. Define operation-level policy, input validation, and authorization outside or inside the module as appropriate.
+
+If keys must be exported, wrap them under a separate key-encryption key using an authenticated format, bind purpose and destination to the wrapped record, and control unwrap permissions. Protect memory, crash dumps, swap, logs, metrics, and debugging interfaces. Avoid string conversions that create uncontrolled copies. Zeroization is difficult in managed runtimes and compilers; the design should minimize key lifetime and rely on supported secure primitives rather than assuming a manual overwrite is sufficient.
+
+## Rotation and cryptoperiods
+
+A cryptoperiod has an activation interval, use limit, and retirement rule. Rotation may be time-based, volume-based, event-based, or triggered by algorithm deprecation. A key should not continue signing or encrypting new data after its cryptoperiod, but it may need to remain available for verifying historical signatures or decrypting data until re-encryption. Distinguish verify, decrypt, encrypt, and sign permissions by state.
+
+Rotation in a distributed system requires consistent rollout. New producers may write version k+1 while readers accept k and k+1. After migration and monitoring, retire k for new use, then remove decryption or verification access according to retention and legal requirements. A rollback plan must not silently restore a compromised key or create nonce reuse. Include caches, queues, replicas, backups, offline clients, and long-running jobs in the plan.
+
+## Revocation and compromise
+
+Revocation is a statement that a key must no longer be trusted for a specified purpose. It does not delete ciphertexts or undo already verified signatures. Define whether revocation is checked online, through a signed status object, at token issuance, or at each use. A long-lived offline verifier may not learn revocation promptly, so sensitive operations may require short-lived credentials or an online authorization check.
+
+When compromise is suspected, preserve evidence, stop new use, identify affected data and signatures, revoke or quarantine the key, rotate dependent wrapping keys if necessary, invalidate sessions or tokens, and notify owners. Determine whether old ciphertexts must be re-encrypted and whether signatures require revalidation under a trusted timestamp. Rotate only the affected scope where possible, but assume parent-key compromise affects descendants and backup copies.
+
+## Backup, recovery, and destruction
+
+Key backup creates another copy and therefore another attack surface. Encrypt backups under an independently protected key, split high-value recovery authority among operators or locations when justified, test restoration regularly, and audit every restore. Availability and revocation trade off: destroying a key may make data unrecoverable, while retaining it extends compromise exposure. Make the business owner choose a documented retention and recovery policy.
+
+Destruction must cover active stores, HSM objects, replicas, caches, backup media, exported wrapping files, and test copies. Cryptographic erasure can be effective for data encrypted under a unique data key, but only if every copy of that key is destroyed and plaintext is not retained elsewhere. A deletion flag is not evidence of destruction. Keep an auditable record of the destruction event without retaining the destroyed material.
+
+## Worked encrypted-backup design
+
+Generate a per-backup data key and encrypt the archive with AEAD. Authenticate backup identifier, tenant, creation time, algorithm, key version, and chunk sequence as associated data. Wrap the data key under a tenant wrapping key held by a controlled KMS. Store the wrapped key beside the archive, but authorize unwrap only for the backup service and recovery workflow. Rotate the wrapping key by rewrapping data keys; rotate data keys when the archive is rewritten or a cryptoperiod expires.
+
+For recovery, require an approved job, verify archive metadata and authentication before writing restored data, and record the operator, key versions, and result. If a wrapping key is compromised, stop unwrap, rotate the parent or affected tenant key, identify accessible backups, and rewrap or re-encrypt according to the exposure. If the key is destroyed before retention ends, recovery fails by design; that is an availability consequence to accept explicitly rather than discover accidentally.
+
+## Exercises
+
+1. Design an inventory record for a tenant data-encryption key.
+2. Explain why a KMS does not automatically make arbitrary signing safe.
+3. Distinguish key rotation, revocation, and destruction.
+4. Give a distributed rollout for accepting two key versions.
+5. Analyze the blast radius of a compromised wrapping key.
+6. Explain the recovery trade-off for encrypted backups.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Record purpose, tenant, algorithm, version, owner, creation and activation times, cryptoperiod, permitted operations, storage boundary, parent key, dependent data, rotation and destruction policy, and audit references.
+2. A caller authorized to request arbitrary signatures can abuse the HSM as a signing oracle. Enforce message type, domain, authorization, rate, and approval policy; nonexportability alone does not constrain misuse.
+3. Rotation introduces a new key for future use; revocation removes trust or use permission; destruction removes recoverability of material. They may occur at different times and have different evidence.
+4. Deploy readers accepting k and k+1, deploy writers using k+1, migrate or rewrap old data, monitor failures, retire k for writes, then remove read access after retention and rollback conditions are satisfied.
+5. The attacker may unwrap every child data key protected by it, so all dependent ciphertexts and backup copies are in scope. Rotate the wrapping key, inventory descendants, and re-encrypt or rewrap based on whether plaintext exposure is possible.
+6. Keeping recovery keys improves availability but extends exposure and compliance scope. Destroying them limits future compromise but makes encrypted data unrecoverable; choose retention, quorum, and restoration tests explicitly.
+
+</details>
+
+**Exercise.** Design a key lifecycle for encrypted backups. Include recovery, rotation, access logging, compromise response, and the trade-off between availability and revocation.
+
+## References & Further Reading
+
+* [NIST Key Management Guidelines](https://csrc.nist.gov/projects/key-management)
+* [NIST SP 800-57 Part 1, Recommendation for Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final)
+* [NIST SP 800-130, A Framework for Designing Cryptographic Key Management Systems](https://csrc.nist.gov/pubs/sp/800/130/final)

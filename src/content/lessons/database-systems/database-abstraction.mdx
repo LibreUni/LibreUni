@@ -1,0 +1,97 @@
+---
+title: "Database Abstraction"
+course: "database-systems"
+description: "Why a DBMS separates logical data from storage and access mechanisms."
+---
+# Database Abstraction
+
+A database management system provides a logical model, query language, transaction boundary, and physical storage layer. Data independence means changing physical layout need not change applications; the optimizer can choose a different plan under the same query semantics.
+
+The abstraction is not free: constraints, statistics, locks, logs, and indexes must be maintained. A useful design makes those costs visible.
+
+## Levels of abstraction
+
+A DBMS separates external views, the logical schema, and physical storage. An external view exposes the subset and shape needed by an application. The logical schema describes relations, attributes, constraints, and relationships without specifying pages or indexes. The physical schema describes files, pages, tuple layout, indexes, compression, buffer policies, and replication. The separation lets a query remain semantically stable while physical implementation changes.
+
+Data independence has two directions. Physical data independence means changing indexes, page layout, compression, partitioning, or storage location should not change the logical result of a query. Logical data independence means changing the logical schema or adding an abstraction layer can preserve external views and application contracts where the change is compatible. Neither means every change is invisible: performance, locking, NULL behavior, constraint timing, privileges, and operational failure can change.
+
+## Declarative semantics and execution
+
+SQL declares a result, while the optimizer chooses an operator tree. The executor may use a sequential scan, index, hash join, sort, materialization, parallel worker, or remote partition. A query’s correctness follows from logical semantics and constraints; the plan’s cost depends on statistics, memory, cache state, data distribution, and concurrency. Applications should not depend on incidental row order, physical identifiers, insertion order, or a plan that happens to be chosen today.
+
+The optimizer is an abstraction boundary only if transformations preserve actual DBMS semantics. SQL bags, NULL, collations, volatile functions, outer joins, security policies, and transaction snapshots constrain rewrites. A physical change may preserve the mathematical relation but alter visibility timing or lock behavior. Treat performance and concurrency as documented contracts when applications rely on them.
+
+## Constraints as declarative programs
+
+Keys, foreign keys, checks, unique constraints, generated columns, and exclusion constraints let the DBMS enforce invariants across all clients. They also provide information to the optimizer and recovery system. An application-only check can race: two transactions both observe available inventory and decrement it. A database constraint or atomic transaction establishes the conflict boundary centrally.
+
+Constraints have timing semantics. An immediate constraint rejects a statement or transaction at the point specified; a deferred constraint can allow temporary inconsistency and check at commit. Cascades can update or delete many rows and interact with locks and triggers. A design should document error behavior, transaction scope, and whether clients can safely retry after a conflict.
+
+## Transactions as an abstraction
+
+The transaction boundary hides intermediate writes from other transactions according to the chosen isolation level and exposes a commit or abort result. It does not hide external side effects automatically. Sending an email, charging a card, publishing a message, or calling an API inside a transaction can happen even if the transaction later aborts. Use an outbox, idempotency key, or post-commit dispatcher to connect database state to external effects.
+
+A connection pool can make session state surprising. Transaction isolation, temporary tables, role settings, prepared statements, and session variables may persist across borrowers unless reset. A tenant context used by row-level security must be set safely and cleared on release. The logical abstraction is a transaction or request, while the physical resource is a reusable connection; bridge them with explicit lifecycle rules.
+
+## Physical changes and proof obligations
+
+Adding an index should preserve query results but can change lock duration, write cost, vacuum behavior, and plan choice. Partitioning should preserve logical rows but can change uniqueness, foreign-key support, pruning, and cross-partition transactions. Compression should preserve values and ordering semantics but can change CPU and memory cost. Replication should preserve the specified consistency model but can expose lag and failover behavior.
+
+For each physical change, write a compatibility checklist: logical schema and constraints, query results, ordering, NULL and collation behavior, transaction anomalies, authorization policies, backup and recovery, monitoring, migration and rollback, and performance under representative data. Run differential query tests against old and new layouts. Compare plans and actual results, not only schema definitions.
+
+## Catalog and statistics
+
+The system catalog describes tables, columns, constraints, indexes, privileges, functions, partitions, and statistics. It is metadata used by parser, optimizer, executor, access-control checks, and administration. Catalog changes need transactional and recovery semantics; a half-created index or table must not appear as a valid object to ordinary queries.
+
+Catalog correctness is part of the abstraction contract.
+
+Audit it.
+
+Statistics are summaries rather than truth. Row counts, histograms, distinct estimates, correlation, and most-common values guide cost-based planning. Stale statistics can choose a poor plan while preserving correctness. Statistics can also leak information about sensitive data distributions, so access to catalog views and monitoring output belongs in the security model.
+
+## Views and abstraction contracts
+
+A view defines a logical interface over base tables. It can hide columns, rename fields, present joins, or enforce some access policy. Views may be updatable only under conditions, and triggers or rules can create surprising write semantics. A view is not automatically a security boundary: owners, definer rights, underlying privileges, functions, and alternate tables require review.
+
+An application-facing view should specify field meanings, NULL behavior, duplicate semantics, ordering guarantees, pagination, error behavior, and authorization. Version the contract when changing a column or interpretation. A view that hides a normalized schema can preserve application compatibility while allowing storage and decomposition to evolve.
+
+## Cost of abstraction
+
+Abstraction reduces coupling but adds metadata, translation, validation, locks, logging, indexes, and sometimes network hops. An ORM may generate correct parameterized SQL but can create N+1 queries, accidental eager loads, or transactions with the wrong scope. A service API may hide a distributed transaction and make retries ambiguous. Inspect generated SQL, plans, transaction boundaries, and failure behavior rather than assuming a high-level abstraction is free.
+
+## Worked physical redesign
+
+An orders application currently scans a heap table for tenant and time queries. Add a composite index on (tenant_id, created_at, order_id), refresh statistics, and measure plans. Then partition by tenant or time only if data volume, retention, and workload justify migration complexity. Preserve the unique order constraint, row-level policy, backup and restore, and key version metadata. Test that the same SQL returns identical rows under duplicates, NULLs, and concurrent writes, while separately measuring write amplification and failover.
+
+## Exercises
+
+1. Distinguish logical and physical data independence.
+2. List physical changes that can alter performance but not logical results.
+3. Explain why a transaction does not roll back an email automatically.
+4. Design a view contract for a reporting client.
+5. Identify connection-pool state leakage.
+6. Write a physical-migration proof checklist.
+
+### Diagnostic solutions
+
+
+1. Physical independence hides storage and access-path changes behind the logical schema; logical independence hides compatible schema evolution behind views or interfaces. Both have performance, privilege, and operational caveats.
+2. Indexes, compression, page layout, buffer policy, partitioning, and replicas can change I/O, latency, locks, and failure behavior while preserving rows and constraints.
+3. The database transaction controls database state, while an email service observes an external effect immediately. Use an outbox or post-commit dispatcher with idempotency and retry rules.
+4. Specify columns and meanings, null and duplicate behavior, time zone, freshness, authorization, ordering or pagination, version compatibility, and whether the view is read-only.
+5. A tenant session variable, isolation mode, role, temporary table, prepared statement, or transaction can remain when a pooled connection is returned. Reset or scope every stateful setting.
+6. Compare logical results, constraints, security policies, query plans, transaction behavior, backups, restore, replication, monitoring, migration, rollback, and performance under representative and adversarial data.
+
+
+
+**Exercise.** List three facts an application should not need to know about a table’s physical layout, and one physical change that should improve a query without changing its result.
+
+## Synthesis checkpoint
+
+When changing a physical choice, preserve the logical contract and rerun both correctness and performance evidence. A view can hide joins but not remove their cost; an ORM can generate SQL but not choose the right transaction boundary. Record the invariant, the abstraction boundary that protects it, and the observation that would reveal a violated assumption.
+
+## References & Further Reading
+
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL System Catalog Information](https://www.postgresql.org/docs/current/catalogs.html)

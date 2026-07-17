@@ -1,0 +1,99 @@
+---
+title: "Instruction-Set Architecture"
+course: "computer-architecture"
+description: "The contract between software and a processor implementation."
+---
+# Instruction-Set Architecture
+
+An instruction-set architecture (ISA) is the stable contract presented by a processor to software. It specifies the programmer-visible state, instruction semantics, encodings, addressing rules, memory-access behavior, privilege boundaries, and exceptional events. A microarchitecture may execute instructions in one cycle, in a deep pipeline, out of order, or through translation into internal operations; as long as it preserves the ISA’s specified observations, it remains a valid implementation. This abstraction is what lets one binary run across generations of hardware and lets compilers target a machine without knowing its transistor-level organization.
+
+The contract is narrower than “what the hardware happens to do.” Timing, cache size, branch-predictor state, and speculative execution are usually not architectural state, although they affect performance and can create side channels. Conversely, the exact behavior of an unaligned access, an overflow flag, a memory ordering operation, or an illegal instruction is architectural if software can observe it. A rigorous ISA lesson therefore separates *functional semantics* from *implementation accidents* and states what is guaranteed, permitted, or undefined.
+
+## Programmer-visible state
+
+The architectural state commonly includes a program counter (PC), a register file, memory, status/control registers, and privileged state. A register file has a finite set of named registers with a defined width. Some ISAs reserve a register whose reads always produce zero; others expose a stack pointer, link register, condition-code register, or vector register bank. The PC identifies the next instruction according to the ISA’s fetch convention. It may advance by a fixed instruction width, by an instruction-length decoder, or by a branch/jump target.
+
+An instruction is a state transition. If architectural state before execution is $\sigma$, instruction bytes decode to operation $op$, and the memory system supplies the required values, then execution defines $\sigma'=\llbracket op\rrbracket(\sigma)$. The notation hides important partiality: an access may be misaligned, a privilege check may fail, a page may be absent, or a divide may have an invalid operand. In those cases, the ISA specifies an exception transition rather than an ordinary result.
+
+**Worked example: load/store semantics.** A RISC-style load word `lw r1, 12(r2)` computes an effective address $EA=R[r2]+12$, checks alignment and access permission, reads four bytes according to the memory endianness, sign- or zero-extends the word as specified, writes it to `r1`, and advances the PC. A store computes the same kind of address but writes register data to memory and does not update a general-purpose destination. The assembler syntax is short; the architectural transition includes address arithmetic, width, alignment, permission, and exception behavior.
+
+## RISC and CISC as design families
+
+A load/store ISA restricts memory access to explicit load and store operations; arithmetic instructions operate on registers. This regularity simplifies decode, register allocation, pipeline staging, and formal reasoning. It may increase instruction count for operations that could be expressed as memory-to-memory work. A more instruction-rich ISA can encode complex addressing modes or multi-step operations, reducing code size at the cost of decoding and implementation complexity.
+
+The labels RISC and CISC describe tendencies, not a complete classification. Modern “complex” ISAs may translate instructions into simple internal operations, while a RISC ISA can contain vector, atomic, compressed, or privileged instructions with substantial semantics. The useful question is what software-visible contract is exposed and what implementation freedom it preserves.
+
+Instruction length presents a trade-off. Fixed-width encodings simplify fetch alignment and parallel decode but may waste bits for small operations. Variable-length encodings improve code density but make instruction boundaries and branch targets harder to locate. Compressed encodings add a second width while preserving a common register or operation subset. Code density affects instruction-cache pressure, so encoding is a performance design choice as well as a compiler-interface choice.
+
+## Encoding and decoding
+
+An instruction encoding partitions bits into fields: opcode, register identifiers, immediate values, function modifiers, and sometimes mode or rounding controls. Field widths constrain the number of registers and immediate range. If a register file has $2^r$ entries, a register identifier needs $r$ bits. An immediate may be sign-extended from a compact field; its range and alignment may be more important than its raw width.
+
+**Worked example: PC-relative branch.** Suppose a branch encodes a signed $k$-bit displacement in instruction units of four bytes. The signed displacement range is $[-2^{k-1},2^{k-1}-1]$ units, and the byte target is $PC+4d$ if the architecture defines the PC as the current instruction address. A compiler cannot assume that every label is reachable; the assembler or linker must synthesize a longer branch sequence when the displacement does not fit. Misunderstanding whether the base is current PC or next PC creates an off-by-one-instruction error that passes short tests and fails at range boundaries.
+
+Immediate encoding also interacts with sign extension. An instruction that adds a signed 12-bit immediate must interpret `0xFFF` as -1, not 4095. A separate unsigned-immediate instruction or zero-extension rule is needed when the latter is intended. The opcode’s semantic definition, not the bit pattern alone, determines the result.
+
+## Addressing modes and memory consistency
+
+An addressing mode defines how an instruction derives an effective address: base plus offset, base plus index times scale, PC-relative, absolute, or indirect through a register. Addressing modes are conveniences expressed in the ISA; a microarchitecture may compute them in one adder or several internal steps. The mode must specify overflow behavior, alignment, privilege checks, and whether an address is computed before or after an update.
+
+Memory is not simply an array of independent locations on a modern multiprocessor. The ISA specifies an ordering model for loads and stores. A sequentially consistent model places operations from all cores into one order consistent with each core’s program order. Weaker models permit certain reorderings and require explicit fences or atomic operations when synchronization depends on visibility order. A compiler and processor must jointly preserve the language-level memory model; a lock implemented with ordinary unordered loads and stores is not automatically a lock.
+
+An atomic read-modify-write instruction can guarantee that no competing core observes an intermediate state. Compare-and-swap typically reads a location, compares it with an expected value, and writes a replacement only if equal, returning success or failure. Its semantics must specify memory order, spurious failure if permitted, alignment, and exception behavior. Atomicity is about indivisibility at the specified granularity; it does not by itself prevent starvation, ABA problems, or incorrect higher-level invariants.
+
+## Procedure calls and ABI boundaries
+
+The ISA supplies call, jump, and return primitives, but a usable software ecosystem also needs an application binary interface (ABI). The ABI assigns arguments and return values to registers or stack locations, classifies caller- and callee-saved registers, defines stack alignment, lays out aggregate values, and specifies symbol naming and object formats. A compiler-generated function and hand-written assembly interoperate only if both obey these conventions.
+
+A call often saves a return address in a link register or stack, transfers control to a target, establishes a frame if needed, and returns through the saved address. Leaf functions may avoid a frame; recursive or reentrant functions cannot assume a single global copy of locals. The ABI’s preservation rule is an invariant across the call boundary: after the callee returns, every callee-saved register has the value the caller expects, while caller-saved registers may have changed.
+
+**Worked example: summing an array.** Suppose arguments are a pointer `p` and length `n`, and the result is returned in `r0`. A correct loop needs a pointer, remaining count, and accumulator. Each iteration loads a word, adds it to the accumulator, advances the pointer by the element size, decrements the count, and branches while nonzero. The proof invariant is: after $k$ iterations, the accumulator is the sum of the first $k$ elements and `p` points to element $k$. The machine sequence is correct only if the load width, pointer increment, signedness of the loop comparison, and return convention all match the source-level contract.
+
+## Exceptions, traps, and privilege
+
+An exception transfers control from ordinary instruction execution to a handler with architectural state saved according to the ISA. Synchronous exceptions arise from the current instruction—illegal opcode, page fault, arithmetic fault, or system call. Interrupts are asynchronous events such as a timer or device completion, though the architectural boundary may use a common entry mechanism.
+
+Precise exceptions mean the machine state appears as if all older instructions completed and no younger instruction took effect. In an in-order implementation this is natural; an out-of-order implementation needs a reorder or retirement mechanism to preserve the illusion. The exception record must identify a restart PC or faulting instruction, cause code, privilege transition, and saved status. A handler that cannot determine whether to retry or skip an instruction cannot safely recover.
+
+Privilege modes constrain access to memory, control registers, and devices. A system call deliberately enters a more privileged mode through a defined instruction; a page-protection violation enters it because an access violated a rule. The boundary is a security contract: user code should not be able to forge the saved privilege state, redirect the handler to an untrusted address, or retain access to privileged mappings after return.
+
+## Instruction semantics and compiler reasoning
+
+Compilers transform programs by proving that the transformed program has equivalent permitted observations. If an ISA defines signed overflow as trapping, the compiler cannot replace a checked addition with modular addition. If overflow is undefined at the language level, the compiler may use that assumption to eliminate impossible branches—but only within the source language’s rules. If an ISA operation wraps but the language operation is checked, the compiler must insert a range check or use a widening instruction.
+
+Alias and alignment assumptions also affect legal transformations. A load can be hoisted above another operation only if the ISA and memory model permit the reordering and no aliasing or exception behavior changes. A vectorized load may require alignment or use a defined unaligned instruction. “The hardware usually handles it” is not an architectural proof.
+
+## Verification of an ISA implementation
+
+An ISA simulator is an executable reference model, but a simulator bug can repeat the same misunderstanding as the hardware. Differential testing compares an implementation against a trusted model across random and directed programs. Directed tests target sign extension, branch boundaries, register-zero behavior, misalignment, privilege transitions, page faults, atomic races, and precise exception restart.
+
+Formal instruction proofs typically establish a refinement relation between microarchitectural state and architectural state. Internal pipeline registers, speculative values, and cache metadata are allowed to differ; at retirement, the visible state must match the reference transition. This relation explains why an implementation can execute instructions out of order while still satisfying a sequential ISA.
+
+## Independent practice
+
+1. Specify the complete architectural transition for a signed load, including address calculation, alignment, permission, byte order, sign extension, PC update, and fault behavior.
+2. Design a 32-bit fixed-width encoding for three register operands, a 12-bit signed immediate instruction, and a conditional branch. Account for opcode and function bits and state what cannot fit.
+3. Prove the array-sum invariant for the assembly loop described above. Include the empty-array case and a length large enough to overflow a 32-bit accumulator.
+4. Construct a short multiprocessor program whose result differs under sequential consistency and a weak ordering model. State the fence or atomic operation needed to establish the intended message-passing order.
+5. Explain why precise exceptions constrain out-of-order retirement. Give an example in which a younger store must not become architecturally visible before an older instruction faults.
+6. Design an ABI for a tiny language with integer arguments, a struct return value, recursion, and 16-byte stack alignment. State preservation rules and draw one stack frame.
+7. Create a differential-test suite for an instruction that sign-extends a 12-bit immediate. Include ordinary values, boundaries, negative values, and a random property.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Compute $EA$, check privilege and alignment, translate or fault, read the specified number of bytes in the specified order, sign-extend to the register width, commit the destination, and update PC. On a fault, the destination and later architectural effects must not commit, and the handler must receive a restartable PC and cause.
+2. Three 5-bit register fields consume 15 bits, leaving 17 bits for opcode/function/immediate in a 32-bit word. A 12-bit immediate format can use five opcode bits and preserve room for mode bits; a branch displacement must additionally state alignment and PC base. There is no single correct allocation without an instruction inventory, but every allocation must account for every bit.
+3. Initially $k=0$, the accumulator is the empty sum, and the pointer is the array base. One iteration adds element $k$, advances the pointer, and makes the invariant true for $k+1$. At termination, $k=n$, so the accumulator is the sum. If the accumulator wraps, the proof is valid only for modular arithmetic; a mathematical integer-sum specification requires widening or overflow detection.
+4. A producer stores data then sets a flag; a consumer reads the flag then data. Weak ordering may expose the flag before the data unless a release store and acquire load, or an appropriate fence, orders the operations. The exact instruction depends on the ISA memory model.
+5. If an older load faults while a younger store has already changed memory, the handler observes a state that could not arise from sequential execution at the fault point. A reorder buffer or equivalent mechanism delays younger stores until all older instructions are known to retire successfully.
+6. A sound ABI assigns the first arguments to registers, returns small integers in a result register, places larger struct returns in caller-provided storage, saves return address and callee-saved registers in a frame, and rounds the stack pointer to 16 bytes. Recursion works because every invocation owns a distinct frame.
+7. Test immediate 0, 1, -1, 2047, -2048, bit patterns with only the sign bit, and random 12-bit values. The property is that decoding bits $b$ equals $b$ for nonnegative values and $b-4096$ when the top bit is set, after extension to the destination width.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: lecture notes and examinations](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [MIT 6.004 learning objectives](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)

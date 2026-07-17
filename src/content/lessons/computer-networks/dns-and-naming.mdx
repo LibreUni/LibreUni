@@ -1,0 +1,96 @@
+---
+title: "DNS and Naming"
+course: "computer-networks"
+description: "Hierarchical names, delegation, records, caching, negative answers, and failure modes."
+---
+# DNS and Naming
+
+The Domain Name System (DNS) maps names to typed records through a distributed, delegated database. It is not merely a telephone book for IP addresses. DNS supports aliases, service discovery, mail routing, reverse lookup, policy, and cryptographic validation, while deliberately allowing answers to be cached for a bounded time. The trade-off is central: caching reduces latency and load but makes updates non-instantaneous and introduces stale-state behavior that applications must tolerate.
+
+## Names and delegation
+
+A domain name is a sequence of labels separated by dots, interpreted from a node toward the root. The root is represented by an empty label; top-level domains delegate subtrees such as `.com` or `.org`; an organization delegates zones such as `example.org` to authoritative name servers. A *zone* is an administrative portion of the namespace served by one authoritative system, not necessarily the same as a domain name in casual speech.
+
+Delegation is represented by NS records at the parent and glue address records when the child’s name server lies inside the delegated child. Without glue, resolving the child’s name server address could require resolving the child first, creating a circular dependency. A resolver follows referrals downward, caching both answers and delegation information with TTLs.
+
+The root and top-level servers do not normally know every host address. They provide referrals. Authoritative servers answer for their zones; recursive resolvers perform work for clients and cache results. A resolver can be configured to trust a set of recursive servers, while DNSSEC can provide data-origin authentication under a chain of trust. The client’s choice of resolver is therefore an operational and privacy decision.
+
+## Record types and meaning
+
+An A record maps a name to an IPv4 address; AAAA maps to IPv6. A CNAME says a name is an alias for another canonical name, causing another lookup rather than directly carrying the final address. MX records identify mail exchangers with preferences; TXT carries application-defined text; NS identifies authoritative servers; SOA describes zone authority, serial, and timing metadata; SRV can identify a service, protocol, port, priority, weight, and target.
+
+Records are typed because an address is not interchangeable with a mail server or alias. A zone’s owner name and record type form a lookup key, but multiple records can exist for one key. The resolver may return a set whose ordering has no universal application meaning. An application that needs health-aware load balancing must not assume round-robin DNS is a complete health system.
+
+**Worked lookup.** To connect to `www.example.org`, a resolver may first find a cached CNAME from `www.example.org` to `edge.example.net`, then query A/AAAA for the target. The final address answer can have a different TTL from the alias. If the target is unavailable but the alias remains cached, a client may continue asking for a stale target mapping. Caching each dependency independently creates useful performance but a more complex invalidation story.
+
+## Recursive resolution
+
+A stub resolver on a host usually asks a recursive resolver. If the recursive resolver lacks a fresh answer, it queries a root server, follows a TLD referral, queries an authoritative server, validates the response if configured, caches the result, and returns it to the stub. The recursive resolver may perform queries in parallel for A and AAAA, follow aliases, and reuse cached delegation data.
+
+DNS messages contain an identifier, flags, questions, answers, authority records, additional records, and response codes. A client must match a response to its outstanding query and validate that the response came from the expected transport context; an identifier alone is not a cryptographic identity. Modern transports such as DNS over TLS or HTTPS can protect the client-to-resolver channel from local observers, but they do not make authoritative data correct by themselves.
+
+**Worked timing model.** A cold resolution may require a local stub-to-resolver round trip plus resolver-to-root, resolver-to-TLD, and resolver-to-authoritative exchanges. If each remote exchange costs 20 ms and the resolver-to-client path costs 5 ms, the cold path might be around 65 ms before processing, parallelism, or cache effects. A warm cached answer can cost only 5 ms. A timeout at one authoritative server can make cold latency high even when the application server is healthy.
+
+## TTL and cache semantics
+
+The time-to-live (TTL) tells a cache how long an answer may be considered fresh under normal DNS semantics. It is not a promise that every client will stop using the old answer at the exact instant it expires: clients may have cached it at different times, stale-serving policies may exist, and downstream caches may impose behavior. A change propagates as caches expire, with worst-case ordinary freshness roughly equal to the TTL from the latest cache fetch.
+
+**Worked propagation example.** An A record has TTL 300 seconds. A recursive resolver fetches it at 11:59:30 and the operator changes the authoritative record at 12:00:00. That resolver may serve the old answer until 12:04:30. Another resolver that fetched at 12:00:10 may serve it until 12:05:10. The authoritative change is immediate at the source, but the observed system is a population of caches with different expiry times.
+
+Lowering TTL shortly before a planned change helps only clients that observe the lower value early enough. It cannot retroactively shorten an already cached high TTL. A very low TTL increases authoritative load and latency and can reduce resilience during an authoritative outage. TTL is a cost/freshness trade-off, not a universal failover guarantee.
+
+## Negative caching and failure
+
+DNS can cache negative answers such as NXDOMAIN, meaning the queried name does not exist, or NOERROR with an empty answer for a type that has no record. Negative caching uses authority information and TTL rules. If an operator creates a name shortly after a negative lookup, clients may continue receiving the cached absence. Deployment systems should account for this when provisioning names or rotating service records.
+
+NXDOMAIN applies to a name and can affect child lookups; an empty answer says the name exists but lacks the requested type. Treating both as “server down” loses information. A resolver timeout is different again: it provides no authoritative negative fact. Applications should distinguish configured absence, transient resolution failure, and malformed responses in retry and fallback policy.
+
+## Load distribution and service discovery
+
+Multiple A/AAAA records can distribute clients, but resolver and client caching, record ordering, network locality, and failure detection make distribution approximate. Weighted and latency-aware DNS services add policy but still operate through caches. SRV records can express service port and priority, but many applications ignore them or implement their own discovery.
+
+DNS-based service discovery should define health, TTL, failover, and client behavior. If a client caches a dead address for 60 seconds, a server-side health change does not guarantee immediate evacuation. Connection retries should avoid hammering all addresses simultaneously; shuffle or backoff policies matter. A DNS answer is a candidate set, not a lease that guarantees service readiness.
+
+## Security: spoofing, poisoning, and DNSSEC
+
+An attacker able to forge a resolver response can redirect traffic, deny service, or poison caches. Transaction IDs, source ports, and query randomization make blind guessing harder but do not provide cryptographic authenticity. DNSSEC signs records and constructs a chain from a trust anchor through delegation signatures to authoritative data. A validating resolver can distinguish authenticated denial from an unsigned or bogus response, subject to key management and deployment correctness.
+
+DNSSEC authenticates DNS data, not the application endpoint’s full security story. TLS certificate validation still matters. Conversely, encrypted DNS transports protect query privacy on the client-to-resolver link but do not necessarily validate the final address. The security properties are layered and should not be conflated.
+
+DNS rebinding demonstrates why resolving a name once and trusting the result forever is unsafe in some threat models. A browser or service may need to apply address and network policies at connection time, not merely at initial lookup. SSRF defenses should validate resolved destinations and redirect chains according to policy, while accounting for DNS changes and private address ranges.
+
+## Operations and diagnosis
+
+Diagnose a name failure by asking: is the local resolver configured, is the query transmitted, is a recursive response returned, is the answer authoritative or cached, is the record type correct, is the address reachable, and does the application accept the connection? Tools that show only one answer hide delegation, TTL, DNSSEC, and transport details.
+
+A reliable runbook records query name/type, resolver, response code, TTL, authority, answer set, timestamp, and path. Compare multiple resolvers and authoritative servers. A stale answer may be correct according to its cache time; a timeout may be caused by filtering; an address may be correct while routing or TLS fails. DNS is one stage in a request path, not a diagnosis for every connection error.
+
+## Independent practice
+
+1. Trace a cold recursive lookup through root, TLD, delegation, and authoritative servers.
+2. Compute TTL-based propagation for caches fetched at different times.
+3. Distinguish NXDOMAIN, empty answer, SERVFAIL, and timeout in an application policy.
+4. Design a DNS-based failover plan and identify its stale-cache limitation.
+5. Compare A/AAAA, CNAME, MX, and SRV semantics.
+6. Threat-model cache poisoning, encrypted DNS, and DNSSEC separately.
+7. Build a diagnostic sequence for “the hostname works for some users but not others.”
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. The recursive resolver queries or uses cached root/TLD delegation, follows referrals, obtains authoritative records, validates if enabled, caches each response under its TTL, and returns the result. The client does not normally query every layer itself.
+2. Expiry is fetch time plus TTL. Different caches fetched at different times can serve different answers after an authoritative update; lowering TTL later cannot shorten already cached values.
+3. NXDOMAIN is authenticated nonexistence of a name; an empty answer means the name exists without that type; SERVFAIL is an unsuccessful resolver result; timeout is missing response evidence. Retry and fallback should not treat them identically.
+4. Publish multiple addresses or a service record with health policy and bounded TTL, but acknowledge that clients retain old answers and existing connections. Application retries, health checks, and connection timeouts are still needed.
+5. A/AAAA provide addresses, CNAME aliases another name, MX selects mail exchangers, and SRV describes service target/port/priority/weight. They cannot be substituted without changing lookup semantics.
+6. Poisoning forges data into a cache; encrypted DNS protects the resolver channel; DNSSEC authenticates signed data through a trust chain. None alone provides endpoint authorization, universal privacy, or application health.
+7. Compare resolver cache/TTL and response sets, authoritative answers, DNSSEC status, address family, network path, and application/TLS behavior. Different users may use different caches, resolvers, IPv4/IPv6 paths, or stale records.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 1034: Domain Names—Concepts and Facilities](https://www.rfc-editor.org/rfc/rfc1034)
+* [RFC 1035: Domain Names—Implementation and Specification](https://www.rfc-editor.org/rfc/rfc1035)
+* [RFC 4033: DNS Security Introduction and Requirements](https://www.rfc-editor.org/rfc/rfc4033)
+* [Kurose and Ross: DNS knowledge checks](https://gaia.cs.umass.edu/kurose_ross/knowledgechecks/index.php)

@@ -1,0 +1,107 @@
+---
+title: "Forwarding and Routing"
+course: "computer-networks"
+description: "Data-plane forwarding, control-plane route computation, longest-prefix matching, and convergence."
+---
+# Forwarding and Routing
+
+Forwarding and routing are related but different activities. *Forwarding* is the local data-plane action that maps one packet to an outgoing interface or next hop. *Routing* is the control-plane process that learns topology, policy, and reachability and populates the forwarding information base (FIB). A router can forward packets using an existing table while its routing protocol is converging, and a routing process can compute a path that the data plane cannot use because an interface, neighbor, or hardware resource has failed.
+
+## The forwarding function
+
+When a router receives a packet, it validates the link frame, extracts the network-layer destination, decrements a hop-limit or TTL field, checks whether forwarding is permitted, performs a table lookup, and selects an output. The lookup commonly uses longest-prefix matching. If several routes contain the destination, the route with the greatest prefix length is more specific and wins; a default route is used only when no more specific entry exists. Equal-specificity routes may be used for equal-cost multipath or selected by policy.
+
+**Worked lookup.** A FIB contains `0.0.0.0/0 → A`, `10.0.0.0/8 → B`, `10.20.0.0/16 → C`, and `10.20.3.0/24 → D`. Destination `10.20.3.9` uses D; `10.20.8.9` uses C; `10.30.8.9` uses B; `192.0.2.9` uses A. The table is not searched by decimal numerical closeness. The bitwise prefix relation determines membership.
+
+After a route is chosen, the router resolves or already knows the link-layer next-hop address, queues the packet, and transmits it. Queue admission can drop the packet even though a valid route exists. An interface MTU can require fragmentation, packet-too-big signaling, or discard. A route lookup therefore proves only a candidate path, not delivery.
+
+## Control plane and FIB installation
+
+Routing protocols maintain a control-plane database containing learned routes, metrics, attributes, timers, and neighbor state. A route-selection process chooses among candidates, then installs one or more entries into the FIB. The FIB may be a specialized trie, TCAM, or hardware table with limited capacity. A control-plane route that cannot be installed in hardware can create a data-plane failure despite correct protocol state.
+
+The separation permits fast packet handling and slower computation, but it creates consistency problems. During an update, different routers and line cards may hold different versions. A route should carry an origin, sequence or freshness information, and withdrawal behavior. Incremental updates reduce computation and traffic but make stale state and transient loops possible.
+
+## Graph model and shortest paths
+
+For an intra-domain network, model routers as vertices and links as edges with nonnegative costs. A path cost is the sum of its edge costs. Dijkstra’s algorithm maintains a settled set whose vertices have final shortest distances under nonnegative weights. The algorithm repeatedly selects the unsettled vertex with smallest tentative distance and relaxes its outgoing edges.
+
+**Worked Dijkstra calculation.** Let edges be A–B=2, A–C=5, B–C=1, B–D=4, C–D=1. Initial distances are A=0 and others infinity. Settling A gives B=2 and C=5. Settling B improves C to 3 and gives D=6. Settling C improves D to 4. The shortest path to D is A–B–C–D with cost 4. The predecessor relation reconstructs the path, while the distance labels support forwarding-table generation.
+
+The proof relies on nonnegative edges: once the smallest tentative distance is selected, no unsettled path can later improve it through a negative edge. Real link metrics are usually configured nonnegative, but policy and multi-constraint routing may not reduce to one scalar shortest path. Equal costs can yield multiple next hops; unequal costs can encode administrative preference rather than physical delay.
+
+## Distance-vector routing
+
+Distance-vector protocols distribute each router’s estimate of distance to destinations through neighbors. The Bellman-Ford recurrence is
+
+$$
+D_x(y)=\min_{v\in N(x)}\{c(x,v)+D_v(y)\}.
+$$
+
+Each router knows its neighbor costs and the vectors received from neighbors. When an estimate changes, it may advertise the new vector. The distributed algorithm converges to shortest paths under stable topology and suitable update assumptions, but failures can cause slow or incorrect intermediate estimates.
+
+The count-to-infinity problem occurs when routers believe a failed destination remains reachable through one another. A and B may alternately increase their distance estimate, each using the other’s stale advertisement. Split horizon forbids advertising a route back through the interface from which it was learned; poisoned reverse advertises it with an explicit infinity. These reduce some loops but do not solve every multi-node failure or policy inconsistency.
+
+**Worked failure.** A reaches destination X through B, and B reaches X through A after X’s link fails. A hears B’s old finite distance and advertises a larger value; B hears A’s larger value and increases again. A finite maximum and timeout eventually declare X unreachable, but convergence is slow. Triggered updates, split horizon, and topology-aware mechanisms reduce the interval and traffic.
+
+## Link-state routing
+
+Link-state protocols distribute descriptions of local adjacencies. Each router floods link-state advertisements with sequence numbers and aging, builds a topology database, and runs a shortest-path algorithm from itself. Flooding gives every router a consistent-enough global view after convergence, but consumes bandwidth and memory and requires reliable database synchronization.
+
+Sequence numbers prevent an old advertisement from replacing a newer one; aging removes abandoned state. Flooding itself needs acknowledgements, retransmissions, neighbor state, and duplicate suppression. A router that advertises an incorrect link can cause many routers to compute bad paths, so authentication and origin policy are part of control-plane security.
+
+Link-state convergence has phases: detect adjacency failure, generate new state, flood it, receive/validate it, recompute paths, and install FIB entries. During the interval, forwarding may loop, blackhole, or use a suboptimal route. Fast failure detection reduces time but can create false failures under transient loss. A robust system balances detection speed against stability.
+
+## Policy and inter-domain routing
+
+The global Internet cannot be modeled as one cooperative shortest-path graph. Autonomous systems have business relationships, traffic-engineering objectives, address ownership, and security policies. Inter-domain routing advertises reachability with attributes such as path information, local preference, origin, and next-hop. A route can be preferred because it satisfies policy even when another has lower physical latency.
+
+Path-vector protocols include a sequence of autonomous systems to help detect loops and provide policy context. An AS may prefer customer-learned routes, reject invalid prefixes, prepend its identity to influence inbound traffic, or advertise a summary. The resulting path selection is not necessarily globally optimal; it is an outcome of distributed policy.
+
+**Worked policy case.** Provider P learns prefix X from customer C and peer Q. P may prefer the customer route because the business policy values customer traffic, even if Q’s path has fewer AS hops. If P advertises X to Q without authorization, it may become an accidental transit or announce address space it does not own. Route origin validation, prefix filters, max-prefix limits, and monitoring reduce these risks.
+
+## Loops, blackholes, and transient states
+
+A forwarding loop occurs when a packet follows a cycle of next hops. TTL/hop-limit prevents indefinite circulation but wastes capacity and delays failure discovery. A blackhole occurs when traffic is discarded without a usable alternative; a routing loop may appear as high TTL expiry and repeated interfaces. A microloop can arise during asynchronous convergence when one router updates before another.
+
+Loop-free convergence techniques order updates so downstream forwarding changes do not create a cycle, or temporarily use alternate paths. Consistent network-wide updates and versioned policies can reduce transient states but add coordination. The correct design depends on whether the objective prioritizes rapid recovery, minimal transient loss, or bounded path stretch.
+
+## Multipath and load balancing
+
+Equal-cost multipath can distribute flows over several next hops. Per-flow hashing preserves packet order within a transport flow while balancing many flows. Per-packet load balancing can reorder packets and harm transport or application performance unless the protocol tolerates it. Hash changes during topology updates can remap many flows, causing bursts and cache loss.
+
+Unequal-cost multipath and policy-aware traffic engineering require a definition of fairness and capacity. A route that looks equal in metric may share a hidden bottleneck. The control plane should expose topology and capacity assumptions to the design rather than treat a scalar metric as complete truth.
+
+## Verification and operations
+
+Routing correctness can be checked with invariants: every installed next hop is reachable on its interface; no route violates prefix ownership; forwarding decreases a loop metric or reaches a destination; withdrawals remove stale paths; and policy filters reject unauthorized advertisements. Model checking can explore small topologies and update orders, while simulation and emulation test convergence under failures.
+
+Operations uses route lookup, FIB inspection, control-plane neighbor state, interface counters, packet captures, and path probes. A traceroute reveals some forwarding behavior but can be affected by load balancing, filtered ICMP, and control-plane rate limits. Compare forward and reverse paths; asymmetric routing is normal and can make one direction work while return traffic fails.
+
+## Independent practice
+
+1. Apply longest-prefix matching to an overlapping FIB.
+2. Run Dijkstra and reconstruct predecessor paths.
+3. Trace count-to-infinity and apply split horizon.
+4. Compare link-state flooding with distance-vector exchange under a link failure.
+5. Explain path-vector policy and loop prevention.
+6. Diagnose a loop, blackhole, and asymmetric return path from observations.
+7. Design verification invariants for route installation and FIB convergence.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Select the matching prefix with greatest length, then apply equal-cost/policy selection. A default is only the fallback.
+2. Maintain tentative distances, settle the minimum under nonnegative weights, relax edges, and store predecessors. Verify every predecessor edge satisfies the final distance equation.
+3. A and B use one another’s stale route after failure, increasing estimates until infinity. Split horizon prevents advertising a route back through its learned interface; poisoned reverse makes the unreachable claim explicit.
+4. Link-state routers flood a new topology description and recompute globally; distance-vector routers exchange local estimates and may converge slowly or transiently loop. Both require failure detection and stale-state control.
+5. Path vectors carry an AS sequence and policy attributes. A router rejects a path containing its own AS and can prefer/reject routes according to business and security rules.
+6. TTL expiry and repeated hops suggest a loop; a consistent discard at one hop suggests a blackhole; forward success with reverse failure suggests asymmetric routing or a return-policy problem. Use route/FIB inspection and probes to distinguish them.
+7. Require reachable next hops, authorized prefixes, monotone freshness, no forbidden loops, atomic or safe update ordering, and eventual installation/withdrawal under stable inputs.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 1812: Requirements for IP Version 4 Routers](https://www.rfc-editor.org/rfc/rfc1812)
+* [RFC 4271: BGP-4](https://www.rfc-editor.org/rfc/rfc4271)
+* [Kurose and Ross: network-layer knowledge checks](https://gaia.cs.umass.edu/kurose_ross/knowledgechecks/index.php)

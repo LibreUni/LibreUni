@@ -1,0 +1,85 @@
+---
+title: "The Relational Model"
+course: "database-systems"
+description: "Relations, tuples, attributes, keys, and integrity constraints."
+---
+# The Relational Model
+
+A relation is a set of tuples over named attributes; set semantics imply no duplicate tuples, though SQL’s default bag behavior must be handled deliberately. A candidate key uniquely identifies a tuple; foreign keys express references subject to integrity rules.
+
+Null is not an ordinary value: three-valued logic means `x = NULL` is unknown, not true. Schema constraints should make missingness explicit where possible.
+
+## Relations and instances
+
+The relational model represents a relation schema as a name and a finite set of attributes with domains. A relation instance is a finite set of tuples, one value for each attribute, satisfying domain and constraint requirements. The set semantics matter: duplicate tuples are not part of the mathematical relation, although SQL’s default bag semantics can preserve duplicates in query results. A database state is valid only when every declared key, foreign-key, domain, and business constraint holds.
+
+An attribute name identifies a position semantically, not merely an array offset. Relational algebra is therefore most naturally defined on named attributes and compatible schemas. A tuple can be viewed as a partial function from attributes to values; projection restricts its domain, selection filters tuples, and join combines compatible tuples. Distinguish a relation schema from the current relation instance and from a physical table representation.
+
+## Keys and integrity
+
+A superkey is a set of attributes that functionally determines every attribute in the relation. A candidate key is a minimal superkey; a primary key is the chosen candidate key used as the principal identity. Minimality is set-theoretic: no proper subset may determine the whole tuple. A surrogate identifier may be a convenient primary key, but natural uniqueness constraints may still be required to prevent duplicate real-world entities.
+
+A foreign key in child relation C references a candidate or primary key in parent relation P. Referential integrity requires every non-null child reference to match an existing parent tuple, unless the schema explicitly uses deferred semantics. On delete or update, the system needs a policy: reject, cascade, set null, or set a default. Cascades can create large effects and should be audited; set null is valid only when the relationship is optional and the column permits null.
+
+Constraints are part of the data model, not merely application validation. A check constraint, unique constraint, exclusion rule, or foreign key enforced by the database protects every client and transaction path. Application checks can improve messages and performance but may race under concurrency. If a condition spans multiple rows, it may require a transaction isolation guarantee, a lock, an exclusion constraint, or a materialized summary maintained atomically.
+
+## Null and three-valued logic
+
+SQL NULL represents an unknown or missing value, not an ordinary value equal to zero, empty string, or another NULL. Comparisons with NULL produce UNKNOWN. WHERE retains only TRUE, so a predicate such as salary  less than  greater than  0 excludes NULL rows because the comparison is UNKNOWN. IS NULL and IS NOT NULL test missingness explicitly. Boolean expressions use three-valued truth tables; NOT UNKNOWN remains UNKNOWN, while FALSE AND UNKNOWN is FALSE and TRUE OR UNKNOWN is TRUE.
+
+Aggregates and joins interact with NULL. COUNT(*) counts rows; COUNT(column) ignores NULL values. SUM over no qualifying non-null values may be NULL rather than zero. An outer join introduces NULL-extended rows, and placing a filter on the nullable side in WHERE can turn a left join into an inner join. Put a predicate in ON when it should restrict matching rows while preserving unmatched left rows.
+
+## Relational algebra operations
+
+Selection sigma_p(R) keeps tuples of R satisfying predicate p. Projection pi_A(R) keeps attributes A and removes duplicate tuples under set semantics. Rename changes attribute names so relations can be joined without ambiguity. Cartesian product pairs every tuple from two relations and has multiplicative cardinality; it is usually followed by a selection or replaced by a join.
+
+Theta join combines product and a predicate. Equijoin uses equality predicates; natural join additionally matches same-named attributes and removes duplicate join columns, which can be dangerous when unrelated attributes happen to share a name. Outer joins preserve unmatched tuples with NULL extensions. Semijoin returns left tuples with a match but no right attributes and is useful in distributed query reduction; antijoin returns left tuples with no match.
+
+Set union requires union-compatible schemas and uses duplicate elimination mathematically. Difference is not commutative. Division expresses “for all” queries: R divided by S returns values of X that pair with every value in S. SQL has no primitive division operator, so such queries often use NOT EXISTS or grouped counting. Prove a division translation by showing both directions of the universal condition.
+
+## SQL bags and equivalence
+
+SQL SELECT generally uses bags, so a join can multiply duplicates and projection may retain repeated rows unless DISTINCT is requested. Rewriting a query requires preserving multiplicities, NULL semantics, ordering requirements, and side effects of volatile functions. Relational algebra equivalence under set semantics does not automatically imply SQL equivalence under bags. An optimizer needs stronger rules or proof conditions.
+
+Selection pushdown is valid when a predicate references only one input and does not alter outer-join semantics. Projection pushdown is valid when all attributes needed by predicates, joins, grouping, ordering, and output are retained. Join reordering is usually associative for inner joins under matching semantics, but outer joins and NULL-producing operations constrain reorderings. Query optimization is a semantics-preserving transformation problem, not arbitrary rearrangement.
+
+## Cardinality reasoning
+
+For a relation with N rows, a selection’s cardinality depends on predicate selectivity. An equality predicate on a uniformly distributed attribute with D distinct values is roughly N/D, but correlations and skew can make this estimate poor. An equijoin of R and S depends on value overlap and frequency distribution; a simple independence estimate can be badly wrong for correlated columns. The optimizer’s plan quality depends on statistics, histograms, distinct counts, and feedback.
+
+Constraints improve reasoning. A primary-key equality join cannot produce more than one matching parent per child. A foreign key can imply that every non-null child matches some parent, subject to NULL and deferred constraints. A predicate contradictory with a check constraint has cardinality zero. Good schema design communicates invariants to both the executor and the human reviewer.
+
+## Schema design example
+
+For a course-registration system, define Student(student_id, email, name), Course(course_id, code, title), and Enrollment(student_id, course_id, term, grade). Candidate keys may include Student.email if policy guarantees uniqueness and Course.code with version or term as appropriate. Enrollment’s primary key might be (student_id, course_id, term), with foreign keys to Student and Course. A separate CourseOffering may be needed if instructors, rooms, and capacity vary by term; forcing all facts into Course creates update anomalies.
+
+Ask what each row means and what historical facts must remain stable. A student email change should not rewrite an enrollment identity. A course code reuse policy should be explicit. A grade may be NULL because it is not yet assigned, not because the student scored zero. Constraints should prevent duplicate enrollment and invalid course references while transactions enforce capacity and waitlist rules.
+
+## Exercises
+
+1. Distinguish schema, relation instance, and physical table.
+2. Find candidate keys for a relation and prove minimality.
+3. Explain how a WHERE predicate can change a left join’s meaning.
+4. Translate a “for every required course” query using NOT EXISTS.
+5. Give a case where a set-algebra rewrite is not bag-equivalent.
+6. Design keys and foreign keys for course registration.
+
+### Diagnostic solutions
+
+
+1. The schema names attributes and domains; the instance is the current set or bag of rows satisfying constraints; the physical table is the storage and index representation used by the DBMS.
+2. Compute attribute closures under the functional dependencies. A set whose closure is all attributes is a superkey; remove each attribute and recompute to prove minimality for a candidate key.
+3. A condition in WHERE applied to a nullable right attribute rejects NULL-extended unmatched rows, effectively making the outer join inner for that condition. Put a match restriction in ON when unmatched left rows must remain.
+4. Select students s such that NOT EXISTS a required course c for which NOT EXISTS an enrollment e matching s, c, and the intended term. The nested negations encode the universal condition.
+5. Joining a relation with duplicate keys can create multiple copies. Projection without DISTINCT preserves bag multiplicity in SQL, while mathematical projection removes duplicates; the results differ.
+6. Use stable student and offering identifiers, enforce unique email or code constraints as policy requires, make enrollment’s composite or surrogate key unique per term, and declare foreign keys with an explicit delete/update policy.
+
+
+
+**Exercise.** Design relations for students, courses, and enrollments. Identify candidate keys and a foreign-key violation that the DBMS should reject.
+
+Check all constraints.
+
+## References & Further Reading
+
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)

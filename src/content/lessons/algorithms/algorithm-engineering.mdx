@@ -1,0 +1,76 @@
+---
+title: "Algorithm Engineering"
+course: "algorithms"
+description: "Bridging asymptotic guarantees, constants, data, and implementation."
+---
+# Algorithm Engineering
+
+Engineering compares candidates under realistic inputs, hardware, and correctness constraints. A benchmark is an experiment: control variables, warm up, repeat, report distributions, and inspect generated code when relevant.
+
+Changing a data structure can alter cache behavior enough to reverse an asymptotic prediction at practical sizes. Measurements explain a workload; they do not prove a universal theorem.
+
+## From an abstract algorithm to an executable system
+
+An algorithm is not finished when its recurrence is solved. An implementation has an input contract, an output contract, resource limits, failure behavior, and an environment in which operations have unequal cost. Algorithm engineering is the disciplined bridge between a proof and a dependable program.
+
+Start by writing the mathematical problem independently of the implementation. For shortest paths, specify whether edges may be negative, whether unreachable vertices are allowed, whether parallel edges exist, and whether the requested output is only a distance or also a predecessor certificate. Then state the implementation contract: accepted integer range, behavior on overflow, representation of infinity, mutation policy, and deterministic tie breaking. These details are not cosmetic. A Dijkstra implementation that silently wraps a large distance can return a path that violates the theorem’s assumptions even if its heap code is flawless.
+
+Separate three layers of correctness. The model layer asks whether the input represents a legal instance. The algorithm layer asks whether the sequence of abstract operations preserves the invariant and returns the claimed answer. The systems layer asks whether parsing, memory allocation, numeric types, concurrency, and serialization preserve the abstract state. A test that exercises only the third layer can miss an algorithmic bug; a proof that ignores the third layer cannot certify the program.
+
+## Choosing representations
+
+Representation determines both asymptotic and machine-level behavior. An adjacency matrix gives constant-time edge existence but uses Theta(V squared) storage and scans many absent edges. An adjacency list uses Theta(V+E) storage and is usually preferable for sparse graphs, but pointer-heavy lists can incur cache misses. A compressed sparse row representation stores one contiguous edge array and offsets per vertex; it improves locality and makes sequential scans fast, while updates become expensive. The correct choice follows from the operation mix, not from a slogan such as “lists are sparse.”
+
+The same question appears in priority queues. A binary heap offers logarithmic insertion and deletion, but a d-ary heap trades a more expensive sift-down comparison for fewer levels and often better cache locality. A bucket queue can beat comparison heaps when keys lie in a small integer range. An algorithm engineer records the key universe, update frequency, decrease-key behavior, and memory layout before choosing.
+
+Data layout matters even for equal Big-O bounds. An array of structures keeps fields for one record together; a structure of arrays keeps one field contiguous. The former is useful when every field is consumed together. The latter is useful when a vectorized pass touches only one or two fields. Indirection, object headers, alignment, and allocator metadata can multiply memory traffic. Measure them when the workload is bandwidth-bound.
+
+## Numeric safety and boundaries
+
+Distance algorithms commonly add values that are individually representable but whose sum is not. Use a wider accumulator where available, check before addition, and define a sentinel that cannot be confused with a legal distance. For probabilities, avoid comparing products that underflow; compare logarithms or use a stable transformation. For modular arithmetic, perform multiplication in a type wide enough for the product before reducing.
+
+Boundary conditions deserve explicit tests: empty input; one item; duplicate keys; all equal keys; already sorted and reverse-sorted data; disconnected graphs; self-loops; maximum allowed sizes; and values at numeric limits. Random tests are useful for breadth, but a small adversarial test often targets the exact branch that a proof treats as an equality case.
+
+## Interfaces and reusable components
+
+Good algorithmic components have narrow interfaces. A sorting routine should state whether it is stable, in-place, adaptive, and whether it accepts a comparator with a strict weak ordering. A graph routine should define vertex identifiers and ownership of adjacency storage. A flow routine should specify whether capacities are integers and whether the returned object includes a residual certificate.
+
+A useful interface exposes certificates where possible. A minimum spanning tree can return the selected edges and total weight; a topological sort can return an order that is checked against every edge; a matching can return matched pairs and a feasibility check. Certificates make testing independent of the implementation’s internal choices. They also turn debugging into a local question: which constraint does the output violate?
+
+Avoid accidentally changing the algorithm through convenience abstractions. Removing an item from a linked container may be constant time only when a node handle is already known. Repeatedly concatenating immutable strings can turn linear output into quadratic copying. A comparator that performs a database lookup changes a nominal O(n log n) sort into a much larger procedure. Count the actual primitive operations at the boundary where the code pays for them.
+
+## Benchmark design
+
+A benchmark begins with a question. “Which implementation is faster?” is too vague. Ask whether the question concerns throughput, tail latency, memory, energy, cold-start time, or scaling with a particular structural parameter. Choose a primary metric before looking at results. Record hardware, compiler or runtime version, optimization settings, operating-system conditions, input generator, random seeds, and repository revision.
+
+Separate setup from the timed region. Parsing, allocation, preprocessing, and output may be part of an end-to-end service but should not be silently mixed into a kernel benchmark. Conversely, excluding allocation is misleading if allocation dominates production. Report both when both are relevant. Warm up managed runtimes and caches, but also measure cold behavior if the deployment is short-lived.
+
+Use repeated trials and report a distribution rather than a single minimum. The minimum estimates an unusually interference-free run; the median describes a typical run; high percentiles matter for services. Inspect outliers instead of deleting them without a rule. Pinning a process, controlling background load, and using a fixed frequency policy can reduce noise, but those controls should be documented because they affect external validity.
+
+Input generation is part of the experiment. For sorting, vary duplicates, presortedness, key range, and run structure. For graphs, vary density, degree skew, connectedness, weight distribution, and diameter. For dynamic programming, vary dimensions and obstacle patterns. If one generator produces unusually friendly data, the result is a property of that generator, not of the algorithm in general.
+
+## Profiling and bottlenecks
+
+Profiling should follow a hypothesis. If a heap implementation appears slow, measure time in comparisons, swaps, allocations, cache misses, and branch mispredictions if tools permit. A flat profile identifies where time accumulates; a call graph explains how it was reached. Do not optimize a function merely because it has a large line count: a rarely executed parser may be irrelevant, while a tiny inner-loop branch may dominate.
+
+Use a correctness oracle while optimizing. For small instances, compare against brute force or a trusted reference implementation. For larger instances, check invariants and certificates. Differential testing is especially powerful: generate the same input for two independent implementations and minimize any disagreement. Performance changes are acceptable only if the oracle still agrees.
+
+## Parallel and external-memory concerns
+
+Parallelism changes the cost model. A divide-and-conquer algorithm may expose parallel work, but synchronization, task creation, load imbalance, and memory bandwidth limit speedup. Amdahl’s law says that a serial fraction s bounds speedup by 1 divided by s plus (1-s)/p on p processors. The bound is simple but useful: optimizing a parallel region cannot remove a serial bottleneck.
+
+External-memory algorithms count block transfers because random access is far more expensive than sequential I/O. A scan of N records may cost approximately N/B block reads, while random lookups can cost many more. Buffering, batching, and layout can therefore dominate a CPU-level comparison. In distributed settings, count communication volume, synchronization rounds, skew, and recovery work in addition to local computation.
+
+## A reproducible engineering workflow
+
+For each candidate, implement the simplest correct baseline first. Add a generator and a validator. Run tiny hand-checkable cases, randomized differential tests, and boundary cases. Only then collect performance data. If a result looks surprising, reproduce it with a fresh process and an independent seed. Change one factor at a time, keep raw measurements, and automate plots and summaries so that a conclusion can be regenerated.
+
+The final report should distinguish facts, inferences, and decisions. A fact is “the median time at n equals x under this environment.” An inference is “the heap is likely memory-latency bound because cache misses increase with n.” A decision is “we select the bucket queue for this bounded-key workload.” This vocabulary prevents a local benchmark from being misrepresented as a universal complexity theorem.
+
+## Exercises
+
+**Exercise.** Plan a benchmark for two shortest-path implementations. Include graph density, vertex counts, warm-up, timing boundary, and correctness oracle.
+
+## References & Further Reading
+
+* [MIT Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)

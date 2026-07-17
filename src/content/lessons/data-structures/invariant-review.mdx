@@ -1,0 +1,107 @@
+---
+title: "Invariant Review Workshop"
+course: "data-structures"
+description: "A structured method for proving, testing, and repairing representation invariants across core structures."
+---
+# Invariant Review Workshop
+
+Data-structure correctness is a preservation problem. A constructor establishes a representation invariant; every public operation must preserve it while implementing its abstract postcondition. This workshop turns that principle into a repeatable review method across arrays, linked lists, hash tables, trees, heaps, graphs, tries, and union-find. The goal is not to memorize isolated cases but to find the exact state predicate that makes each implementation argument compositional.
+
+## What an invariant must contain
+
+An invariant should be strong enough to imply all assumptions made by methods and weak enough to include every valid representation state. It usually contains shape, ownership, ordering, cached metadata, and boundary conditions. “The tree is valid” is too vague. “Every subtree key lies within inherited bounds, each child parent pointer is reciprocal, root.parent is null, and cached size equals one plus child sizes” is checkable.
+
+An abstraction function connects the concrete state to the ADT value. An invariant without an abstraction function may prove pointer consistency but not user-visible correctness. A hash table can have valid buckets and counts while returning the wrong value if equality or hash semantics are inconsistent. A queue can have valid indices while returning newest rather than oldest data if the AF’s order is wrong.
+
+## Review procedure
+
+For each structure, write:
+
+1. Concrete fields and ownership rules.
+2. Representation invariant.
+3. Abstraction function.
+4. Preconditions and postconditions for every operation.
+5. Initialization proof.
+6. Preservation proof for each mutation branch.
+7. Complexity assumptions and resource limits.
+8. Invalid-state, error, and iterator behavior.
+
+Then identify aliases: references held by clients, shared subtrees, handles, iterators, and concurrent readers. An operation is correct only under the aliasing model it promises. If clients can mutate a key used by a hash table or tree, key placement can become invalid even if the structure never writes the key itself.
+
+## Array and list review
+
+For a dynamic array, check logical length, capacity, occupied prefix, element ownership, resize-copy bounds, and integer overflow. The append proof has separate cases for spare capacity and resize. Removal must clear or release the old final slot if references would otherwise be retained. Shrinking must not reduce capacity below length and should use thresholds that avoid oscillation.
+
+For a doubly linked list, check head/tail endpoint conditions, reciprocal links, reachability count, and cycle absence. Insertion at front, back, and interior exercises different branches. A sentinel simplifies endpoint logic but adds a sentinel condition: the sentinel is not an abstract element and must never be returned by iteration. A cached size must change exactly once per insertion/removal.
+
+## Hash and tree review
+
+For chaining, every live key must be in the bucket computed by the current hash, and duplicate policy must be enforced. For open addressing, tombstones must not terminate search; resizing must reinsert under the new table. For trees, inherited bounds are stronger than checking each parent-child pair. For balanced trees, add height/color/rank invariants and ensure rotations update all augmented metadata.
+
+An invariant proof must follow exceptional paths. What if allocation fails after links are changed? What if a comparator throws? What if a duplicate insertion occurs? Strong exception safety may require commit-after-construction or rollback. If the language does not promise exceptions, specify whether partial mutation is visible.
+
+## Heap and graph review
+
+For a heap, shape means the array encodes a complete tree and order means each parent dominates its children. Sift-up preserves all relationships except the ancestor path; sift-down preserves all relationships except the descendant path. A heap validator checks every parent index, not merely the root. An indexed heap adds item-to-position consistency and must update it after every swap.
+
+For graphs, validate vertex identity, endpoint existence, reciprocal undirected edges, weight domain, duplicate policy, and traversal metadata scope. A transpose, vertex deletion, or bulk compaction touches multiple indexes and can leave stale references. For CSR, offsets and destination ranges are the central RI; a single incorrect offset can make every later adjacency list appear corrupted.
+
+## Proof patterns
+
+Use local-change reasoning: identify which part of the structure an operation can invalidate, then prove all other regions remain valid by framing. Use induction for recursive trees and traversals. Use potential or aggregate arguments for resizing and deferred cleanup. Use a simulation relation when comparing an optimized representation with a simple reference model. Use a temporal invariant for rollback or versioned structures.
+
+The proof should be modular. A heap delete proof can assume child subtrees are heaps because the RI says so. A graph traversal proof can assume neighbor iteration yields exactly the graph’s edges because the graph ADT validates its representation. If a helper’s contract is unspecified, the top-level proof has a gap.
+
+## Testing invariants
+
+Debug validators should run after every mutation in randomized tests. Generate operations from a model and compare abstract results. Deliberately inject boundary values: empty, singleton, full, duplicate, maximal key, collision, root deletion, rotation, resize, and rollback. Differential tests compare two representations, such as a matrix and adjacency list or a persistent version against a copied model.
+
+Property-based tests should shrink failing sequences to a minimal counterexample. A failure after hundreds of operations often reveals the first invariant violation only if validators run incrementally. Record seeds and operation traces. Performance benchmarks should not be used as correctness tests; a fast incorrect structure is still wrong.
+
+## Repairing a broken invariant
+
+When a validator fails, stop at the first operation that made it fail. Classify the failure: lost element, duplicate element, wrong order, stale metadata, broken reachability, illegal alias, or resource-policy violation. Reconstruct the smallest concrete state and compare it with the operation’s precondition. Repair the implementation and the proof together; changing code without updating the invariant can leave the same hidden gap under a different branch.
+
+A strong review distinguishes an impossible state from a valid but expensive state. A hash table with a long collision chain may satisfy correctness while violating a performance target; a dynamic array at full capacity is valid immediately before a resize; an unbalanced BST is a valid BST but not a balanced one. The RI and the performance invariant should be named separately so that diagnostics do not report normal states as corruption.
+
+## Ownership and error atomicity
+
+If a mutation can fail, specify whether it is atomic. An array resize that allocates a new buffer can construct and copy before publishing the new pointer, preserving the old state on allocation failure. A linked insertion should allocate and initialize a node before changing links. A hash-table resize should retain the old table until every entry is placed successfully. These ordering rules are part of the safety proof and prevent half-applied operations.
+
+## Exercises
+
+1. Write a complete RI/AF for a dynamic array.
+2. Review a doubly linked list deletion and identify every branch.
+3. State a hash-table invariant with tombstones.
+4. Give a tree proof that parent-child order is insufficient.
+5. Design a heap validator.
+6. Specify graph validation for an undirected multigraph.
+7. Choose a proof pattern for dynamic connectivity rollback.
+8. Design a differential test for persistent versions.
+
+### Diagnostic solutions
+
+
+1. RI: 0u2264nu2264C, valid allocation, elements exactly in slots [0,n), no client alias can mutate storage, and capacity policy holds. AF is the sequence of those n values. Every append/remove case must preserve the prefix and count.
+
+2. Empty, singleton, head, tail, and interior cases differ without sentinels. Reconnect predecessor.next to successor and successor.prev to predecessor; update head/tail when an endpoint is removed; decrement size; detach the removed node if required; verify reachability and reciprocal links.
+
+3. Each live pair occurs exactly once, is stored at its current hash location or reachable through its probe sequence, and size counts live entries. Empty and tombstone markers have distinct meanings; resizing eliminates or rebuilds tombstones.
+
+4. A node can be locally greater than its left child and less than its right child while violating an ancestor bound. For example, a value less than a root’s key can appear in a right subtree of a smaller descendant. Inherited intervals capture the global order.
+
+5. Check array length and logical size, parent(i) relations, and heap order for every internal index. For an indexed heap, verify each live item maps to its unique exact position and that position contains that item.
+
+6. Every endpoint exists; each logical undirected edge has reciprocal records; parallel edges have distinct IDs; self-loop convention is explicit; degree counts match records; weights satisfy the allowed domain. Delete and transpose tests should preserve these properties.
+
+7. Use a temporal invariant over segment-tree recursion: ancestor intervals plus current-node intervals are represented, and rollback restores the entry snapshot exactly. Union-by-size without path compression makes each mutation loggable.
+
+8. Generate a version DAG, keep random old roots, apply random updates to arbitrary allowed bases, and compare every query with a model that copies the entire abstract value. After each update, query old roots to catch accidental mutation through sharing.
+
+
+
+## References & Further Reading
+
+* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
+* [Open Data Structures](https://opendatastructures.org/)
+* Liskov and Guttag, *Program Development in Java: Abstraction, Specification, and Object-Oriented Design*.

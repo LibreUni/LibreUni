@@ -1,0 +1,97 @@
+---
+title: "Secure Implementation"
+course: "cryptography-security"
+description: "Constant-time behavior, memory safety, validation, and misuse resistance."
+---
+# Secure Implementation
+
+A mathematically sound primitive can fail through nonce reuse, key leakage, truncation, parser bugs, or side channels. Validate lengths and encodings before allocation; keep secrets out of logs; use reviewed libraries rather than inventing primitives.
+
+Constant-time code avoids branches and memory accesses whose behavior depends on secret data when timing is observable. This reduces one class of leakage but does not prove the whole system secure.
+
+## Threat model for an implementation
+
+Implementation security begins by naming what an attacker can observe or influence. A remote attacker may measure response time, packet length, error behavior, and resource exhaustion. A local attacker may measure cache hits, branch predictors, page faults, power, or electromagnetic emissions. A memory-safety attacker may control lengths, encodings, object lifetimes, and parser state. A malicious co-tenant or compromised dependency may observe calls or alter configuration. Constant-time code addresses only some observations under some machine models.
+
+Use a reviewed, maintained cryptographic library with a stable API and published test vectors. Do not implement AES, ChaCha20, elliptic-curve arithmetic, password KDFs, or signature padding for production as a learning exercise. The application still owns key lifecycle, nonce uniqueness, context binding, authorization, error handling, and serialization; using a library does not transfer those obligations.
+
+## Memory safety and parsing
+
+Parse untrusted input in bounded stages. Check total length before allocation, use integer-overflow-safe arithmetic for length calculations, reject duplicate fields and trailing ambiguity, and impose nesting, count, and decompression limits. Validate canonical integer and point encodings before expensive arithmetic. Do not let a malformed ciphertext select arbitrary algorithms, keys, or memory sizes.
+
+Keep parsing separate from cryptographic verification where possible, but ensure the parser cannot create a semantic object that differs from the bytes authenticated. A length field must be included in the authenticated encoding or be derived unambiguously from the enclosing record. Avoid parsing the same bytes with two libraries that have different treatment of whitespace, duplicate keys, integer signs, or Unicode normalization.
+
+## Constant-time boundaries
+
+Secret-dependent branches include early-exit comparisons, conditional multiplications, table lookups indexed by secret bits, and variable-time modular reduction. A constant-time equality function processes every byte and accumulates differences, but callers must also avoid returning early based on its result when that result is secret-derived. Public values may use faster variable-time paths only after the secret/public distinction is explicit and enforced.
+
+Compilers can transform source code. Use library primitives and compiler-supported techniques, inspect generated code where the threat warrants it, and test timing distributions under controlled conditions. A timing test that sees no difference on one machine is not a proof of noninterference. Network jitter may hide leakage from one observer while a local attacker can amplify it.
+
+## Secret lifetime and cleanup
+
+Minimize how long secrets exist and how many layers receive them. Keep keys in dedicated types or handles, restrict copying, avoid string conversion, and prevent secrets from entering exceptions, traces, metrics, crash reports, or structured logs. Understand whether a runtime copies objects, moves them during garbage collection, or leaves old pages in swap. Prefer APIs that perform operations inside a protected module.
+
+Zeroization is not a universal guarantee. An optimizer may remove a naïve overwrite, an immutable string cannot be cleared, and another copy may remain in a buffer. Use a supported secure-memory facility where available, design for short lifetimes, lock or protect pages when justified, and treat process compromise as a separate threat requiring rotation and incident response.
+
+## Nonces, randomness, and state
+
+Randomness failures are often state failures. A secure generator can still produce repeated nonces if a counter resets after crash or two workers share an identifier. Make nonce uniqueness an explicit invariant, allocate ranges or derive sender prefixes, persist epochs, and test restore and cloning paths. Random challenges and key material need unpredictability; nonces often need uniqueness, and these requirements should not be conflated.
+
+Use independent random streams or domain-separated derivations for unrelated purposes. Do not seed a cryptographic generator from application data unless the construction specifies it. Detect generator failure and choose a safe availability policy rather than silently using predictable fallback values.
+
+## Error handling and observability
+
+External errors should reveal no secret-dependent distinction and should not expose key identifiers, padding state, or user existence unless policy permits it. Internal telemetry must still support investigation, so log event type, request correlation, algorithm policy, and safe identifiers without plaintext, keys, tokens, or full sensitive input. Rate-limit expensive failures and make metrics resistant to attacker-controlled cardinality.
+
+Avoid logging raw cryptographic inputs in debug mode. Test builds and production builds must differ in secrets, keys, endpoints, and logging policy, not merely in a flag that an attacker can trigger remotely. Crash dumps and heap snapshots should be protected as secret-bearing artifacts.
+
+## Misuse-resistant APIs
+
+An API should make the secure path easy and the insecure path difficult. Combine ciphertext and tag in one authenticated object, require associated data and nonce policy explicitly, return a single safe decryption failure, and distinguish key purpose in types or handles. Do not expose raw primitives when callers need a higher-level protocol. Require algorithm identifiers from a policy-controlled configuration rather than accepting arbitrary strings from input.
+
+For signing, require a typed message context and canonical serialization. For key agreement, return a KDF-derived secret or session object rather than a raw group element. For password verification, parse a self-describing record and enforce parameter limits. For key storage, return opaque handles where possible and audit every privileged operation.
+
+## Testing strategy
+
+Use layered tests: known-answer vectors for primitive correctness, property tests for algebraic identities and round trips, negative tests for altered fields and invalid encodings, fuzz tests for parsers, differential tests against independent libraries, concurrency tests for nonce and challenge state, fault-injection tests for partial writes and restarts, and timing-oriented tests for accidental branches. Security tests should state the invariant they exercise and the attacker capability they simulate.
+
+Test migration and failure paths: expired keys, unknown versions, rotated certificates, revoked tokens, corrupted backups, unavailable KMS, duplicate messages, replayed records, and process restarts. A secure system must fail according to a documented policy, not merely pass the happy path.
+
+## Exercises
+
+1. List three secret-dependent implementation behaviors.
+2. Explain why length validation must precede allocation.
+3. Design a nonce test for a crash-restarting worker pool.
+4. Identify secrets that should not enter logs or crash dumps.
+5. Distinguish a timing test from a constant-time proof.
+6. Design a misuse-resistant AEAD API boundary.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Early-exit comparison, secret-indexed lookup, branch on exponent bit, variable-time inversion, and secret-dependent loop count are examples.
+2. An attacker can supply a huge or overflowing length and cause memory exhaustion or incorrect bounds before cryptographic verification. Check arithmetic and limits first.
+3. Give workers unique durable epochs and disjoint counter prefixes, simulate crash and clone restore, generate many records concurrently, and assert no repeated (key,nonce) pair.
+4. Passwords, private keys, KDF inputs, session and reset tokens, plaintext, raw ciphertext when sensitive, shared secrets, and full authenticated request bodies.
+5. A test measures behavior under chosen conditions and can find regressions; a proof requires a model and noninterference argument, and even then may not cover hardware or compiler leakage.
+6. Require an opaque key handle, explicit nonce policy, canonical associated-data encoding, one combined ciphertext/tag result, atomic verification before plaintext release, and a single safe failure.
+
+</details>
+
+## Review checklist
+
+For every secret-bearing operation ask: how is input bounded, how is the key selected, how is the nonce generated, when is integrity verified, which errors are visible, where can the value be copied, and how is compromise detected? Review the generated artifact and deployment configuration, not only the source. A secure implementation is a complete dataflow from untrusted bytes to authorized effect.
+
+That dataflow is the review unit, including deployment configuration and failure handling.
+
+## References & Further Reading
+
+* [NIST Cryptographic Standards and Guidelines](https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines)
+* [OWASP ASVS 5.0](https://owasp.org/www-project-application-security-verification-standard/)
+* [RFC 8446, TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+
+**Exercise.** Review a password check that returns on the first mismatching byte. Identify the side channel and propose a safer comparison policy.
+
+## References & Further Reading
+
+* [NIST Cryptographic Standards and Guidelines](https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines)

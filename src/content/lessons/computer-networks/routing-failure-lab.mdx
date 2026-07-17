@@ -1,0 +1,87 @@
+---
+title: "Routing Failure Investigation Lab"
+course: "computer-networks"
+description: "A rigorous lab for distinguishing withdrawal, blackhole, loop, asymmetric path, and FIB-programming failures."
+---
+# Routing Failure Investigation Lab
+
+This lab treats routing as a distributed state machine. You are given observations from several routers and hosts and must infer the smallest set of failures consistent with the evidence. A good investigation does not jump from “ping failed” to “routing is broken.” It identifies the destination prefix, source context, control-plane route, forwarding entry, next-hop resolution, packet path, return path, and time of each observation.
+
+## Scenario
+
+The service prefix is `203.0.113.0/24`. Client C is in AS 65010, provider P is AS 65020, and service S is in AS 65030. P has two edge routers, P1 and P2. Before the incident, P1 and P2 both learned the service prefix through an internal route and exported one stable path. At 10:00 UTC, an engineer changes a policy intended to prefer a new transit link.
+
+Observed facts:
+
+* C resolves the service name to `203.0.113.17`.
+* C’s SYNs enter P1, but no SYN reaches S’s edge capture.
+* P1’s control plane selects a route through P2; its FIB next hop is an interface address on the P1–P2 link.
+* P2’s route table contains the prefix through P1 because of a stale redistributed route.
+* TTL-expired probes from C show repeated P1→P2→P1 hops.
+* A host inside AS 65030 reaches S normally.
+* Removing the policy change causes C’s connection to succeed within 30 seconds.
+
+The most economical explanation is a transient inter-router loop caused by inconsistent route selection and stale redistribution. The loop consumes TTL and prevents packets from reaching S. The evidence does not imply DNS failure, service failure, or a physical link failure. The rollback experiment strengthens the policy hypothesis, while the route and TTL observations localize the data-plane behavior.
+
+## Investigation method
+
+Begin with a time-indexed timeline. Separate the moment the policy was changed, the moment each control-plane neighbor changed state, the moment FIB entries changed, and the moment application symptoms began. Control-plane convergence can precede or follow data-plane programming. If timestamps come from different devices, account for clock offset.
+
+Next, compare the route for the exact prefix and source VRF at each hop. A default route is not evidence about a more-specific route. Check route origin, administrative preference, metric, next hop, and recursion. Then compare the chosen route with the FIB. A route may be present but not installed due to unresolved next hop, table capacity, policy, or programming error.
+
+Finally, test both directions. A forward path can reach S while the return path is filtered, routed through a different provider, or using an invalid source prefix. TCP failure can therefore appear at the client even when the server saw the SYN. Capture at two boundaries when possible and correlate sequence numbers, not just timestamps.
+
+## Failure signatures
+
+A blackhole often shows a route selected in control state but no packet at the expected egress, or packets arriving at a device and being discarded because a next hop is unresolved or an ACL denies them. A loop shows repeated hops, TTL expiry, rising interface counters on a cycle, or repeated identical packets at several points. A withdrawal can produce a temporary gap followed by a new path. A stale route may remain visible after the origin has withdrawn a prefix.
+
+An asymmetric path is not automatically a fault. Many networks intentionally use different forward and return paths. It becomes a failure when the reverse path violates stateful firewall assumptions, MTU expectations, source validation, or policy. An FIB mismatch is suggested when the control-plane route is correct but hardware counters show a different next hop or no forwarding; verify with platform-specific state rather than inferring from one command.
+
+## Repair and prevention
+
+The immediate repair should remove the loop while preserving reachability: revert the policy or install a safe route with a reachable next hop. Do not “fix” a loop by adding an arbitrary static route without understanding how it interacts with the control plane. After repair, wait for convergence, clear only state that is known to be stale, and test representative prefixes and both directions.
+
+Preventive controls include route-policy validation, prefix filters, loop detection, maximum-prefix limits, next-hop reachability checks, staged deployment, and alerts on unexpected path changes. Automated verification can assert that a customer prefix cannot be exported to a forbidden neighbor, that every installed next hop resolves, and that the forwarding graph has no cycle for critical prefixes. These checks are invariants, not just dashboards.
+
+## Evidence worksheet
+
+For each device, record the exact query context: VRF or routing table, destination prefix, source address if policy is source-dependent, and timestamp. Capture both the selected route and all competing candidates. Write the next-hop chain until it terminates at a directly connected interface. A route that points to another recursive next hop can hide the real break. Also record whether the route is learned from an IGP, EGP, static configuration, redistribution, or a default.
+
+For each observation, classify it as control-plane, data-plane, or application evidence. “BGP says established” is control-plane evidence about a session, not proof that the prefix is exported or packets are forwarded. “The egress interface counter increased” is data-plane evidence, but it does not prove the packet reached the peer. “The client received a reset” is application-adjacent evidence that still needs endpoint attribution. This classification prevents evidence from one layer being used as a claim about another.
+
+## Counterfactual reasoning
+
+Ask what each hypothesis predicts. A pure DNS failure predicts no usable destination address; it does not predict a P1–P2 TTL loop. A physical P1–P2 link failure predicts link or adjacency evidence and usually prevents the specific cycle; it does not naturally explain both routers selecting one another through a functioning interface. A service failure predicts packets reaching the service edge, perhaps followed by resets or application errors. A policy-induced loop predicts route changes, repeated hops, TTL expiry, and recovery after policy rollback. The best explanation accounts for the largest set of independent observations with the fewest assumptions.
+
+Do not overfit the lab. A real incident can contain multiple simultaneous faults: a routing loop can be repaired while a return ACL still blocks traffic. After the first repair, repeat the complete path test rather than declaring victory from one successful probe. Verify no collateral route leak, changed preferred path, or new asymmetry was introduced. Record residual uncertainty and create a follow-up measurement if the immediate evidence cannot resolve it.
+
+The final report should contain a one-paragraph impact statement, a timeline, an evidence table, the forwarding graph before and after repair, the confirmed mechanism, contributing conditions, and verification results. Include commands or queries in a reproducible form without exposing secrets. The purpose of the report is to let a second engineer challenge the inference and reproduce the boundary where packets stopped, not merely to document that a configuration was changed.
+
+When evidence conflicts, preserve the conflict. For example, a route monitor may show convergence while a client capture still shows loss because FIB installation, ARP/ND resolution, or the return path lagged behind. State which clock, device, and layer each observation represents, then collect the next measurement that can separate the alternatives.
+
+This method makes the repair auditable.
+
+## Exercises
+
+1. Draw the route-selection graph in the scenario and explain why the P1↔P2 cycle can persist.
+2. Which observations distinguish a loop from a pure blackhole? Which additional counter would you collect?
+3. Explain why internal reachability from AS 65030 does not clear the inter-domain path.
+4. Design a staged policy repair and rollback condition.
+5. Give two tests that would identify an FIB programming failure after the control plane is corrected.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. P1 selects P2 and P2 selects P1 for the same prefix. Each router’s local table can look valid because the next hop is reachable, but the combined forwarding graph contains a cycle. Packets circulate until TTL expiry.
+2. Repeated P1/P2 hops and TTL expiry distinguish a loop from silent discard. Collect per-interface packet counters and a capture on both directions of the P1–P2 link; a loop should produce repeated traffic and possibly increasing TTL-expired messages.
+3. The internal host uses a different ingress and routing domain. It proves that S and at least one internal path work, not that C’s provider path reaches the service or that the return route for C is valid.
+4. Revert on one edge or apply a validated policy to P1 first; require no cycle in the computed forwarding graph, reachable next hops, stable prefix counts, and successful probes from C. Roll back if any invariant fails within a bounded convergence window.
+5. Compare hardware FIB entries with the control-plane route and inspect egress counters; send a probe with a known source and capture at the egress. If the route is selected and next hop resolves but hardware forwards elsewhere or nowhere, the programming path is implicated.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 1812: Requirements for IP Version 4 Routers](https://www.rfc-editor.org/rfc/rfc1812)
+* [RFC 4271: BGP-4](https://www.rfc-editor.org/rfc/rfc4271)
+* [RFC 7908: Route Leaks and Their Solutions](https://www.rfc-editor.org/rfc/rfc7908)

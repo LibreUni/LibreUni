@@ -1,0 +1,168 @@
+---
+title: "Digital Representation"
+course: "computer-architecture"
+description: "Binary data, signed integers, floating point, and representation error."
+---
+# Digital Representation
+
+Computer architecture begins with a contract about bits. A wire carries one of two reliably distinguishable signal ranges, but the signal itself is not intrinsically an integer, character, address, instruction, or color. Meaning is assigned by an encoding, and every later layer—from an arithmetic unit to a compiler, debugger, file format, and network protocol—must preserve that agreement. A useful architecture student therefore asks two questions for every bit pattern: “What representation is being assumed?” and “Which operations preserve its intended meaning?”
+
+This chapter develops the representations used by a small processor. It treats unsigned and signed fixed-width integers as algebraic systems, derives two’s-complement operations instead of presenting them as a memorized trick, analyzes overflow and widening, and then turns to IEEE-style floating-point numbers. The final section connects representation choices to instruction behavior, C language semantics, serialization, and testing. The examples are deliberately finite: a 4-bit or 8-bit machine makes the wraparound visible, while the same proofs scale to 32- and 64-bit words.
+
+## Bits, words, and interpretation
+
+A bit is an element of the set $\{0,1\}$. A $w$-bit word is an element of $\{0,1\}^w$. If the bits are written from most significant to least significant as $b_{w-1}\dots b_1b_0$, the conventional unsigned interpretation is
+
+$$
+U_w(b_{w-1}\dots b_0)=\sum_{i=0}^{w-1}b_i2^i.
+$$
+
+The function $U_w$ is a bijection from bit strings to the integers in $\{0,1,\dots,2^w-1\}$. Thus an unsigned 4-bit word has sixteen possible values, from `0000` through `1111`, and no 4-bit pattern can represent 16. This is not a weakness of binary notation; it is a consequence of the finite state space. The processor must define what happens when an operation mathematically asks for a value outside the representable set.
+
+The same word can have several meanings. `01000001` is 65 as an unsigned integer, 65 as a two’s-complement integer, the ASCII character `A` under one character encoding, or an opcode under a particular ISA. The bits do not carry their own type. A type is a promise made by the surrounding computation, and a bug often consists of applying an operation belonging to one promise to data governed by another.
+
+The term *word* is architectural rather than universal. An ISA may define 32-bit general-purpose registers while an implementation internally uses wider physical values. Memory is usually byte-addressed, so a 32-bit word occupies four consecutive bytes, but the byte order must also be specified. In little-endian order, the least significant byte occupies the lowest address; in big-endian order, the most significant byte does. Endianness does not change the numerical value when the bytes are reassembled correctly, but it changes the byte sequence exposed to a debugger, file format, or network peer.
+
+**Worked example: reconstructing a word.** Suppose the four bytes at increasing addresses are `78 56 34 12`. Interpreted as little-endian hexadecimal, they form `0x12345678`; interpreted as big-endian, they form `0x78563412`. A memory dump is therefore incomplete without the byte-order convention. The error is not arithmetic—the reader has used the wrong reconstruction function.
+
+## Unsigned arithmetic is modular arithmetic
+
+The hardware adder has a fixed number of output wires. If it adds two $w$-bit operands, the low $w$ output bits are naturally the residue modulo $2^w$; a possible carry-out is an additional bit and is not part of the $w$-bit result unless the ISA explicitly exposes it. Thus fixed-width unsigned addition implements
+
+$$
+(x+y)\bmod 2^w.
+$$
+
+For 4-bit words, $1111+0001$ produces a low result of `0000` and a carry-out of 1. Numerically, $15+1=16$, but the 4-bit result represents $16\bmod16=0$. This is *wraparound*, not a claim that 15 and 1 sum to 0 in the integers. It is the behavior of the projection from an unbounded mathematical result into a finite ring.
+
+Subtraction can use the same adder. In modular arithmetic, the additive inverse of $x$ modulo $2^w$ is $(-x)\bmod2^w$. The circuit computes $y-x$ as $y+(-x)$, with the same low-bit projection. For example, on 8 bits, the inverse of 3 is 253 because $3+253=256\equiv0\pmod{256}$. Subtracting 3 from 5 becomes $5+253=258\equiv2\pmod{256}$.
+
+Multiplication is also modular when only the low $w$ bits are retained. A full multiplier may produce a $2w$-bit product, and some instructions return both halves; an ordinary fixed-width multiply commonly returns the low half. The distinction matters for overflow detection, cryptographic arithmetic, array-size calculations, and compiler optimizations.
+
+**Carry versus overflow.** For unsigned addition, the carry-out is the natural overflow indicator: the mathematical sum exceeds $2^w-1$ exactly when a carry leaves the top bit. For signed two’s-complement addition, carry-out alone is not the right test. Signed overflow occurs when two operands with the same sign produce a result with the opposite sign. Equivalently, for addition, overflow is the exclusive-or of the carry into and carry out of the sign bit. The two predicates answer different questions because unsigned and signed interpretations assign different meanings to the same bit pattern.
+
+**Worked example: 8-bit addition.** Consider `01111111 + 00000001`. As unsigned values, this is $127+1=128$, which is representable, so there is no unsigned carry-out. As signed two’s-complement values, the operands are $127$ and $1$, but the result pattern `10000000` represents $-128$. The mathematical signed result 128 is outside the signed range $[-128,127]$, so signed overflow occurred. A processor may set a signed-overflow flag, an unsigned-carry flag, both, or neither depending on the ISA; software must use the flag whose definition matches the intended type.
+
+## Signed integers and two’s complement
+
+Two’s-complement representation defines the signed interpretation
+
+$$
+T_w(b_{w-1}\dots b_0)=-b_{w-1}2^{w-1}+\sum_{i=0}^{w-2}b_i2^i.
+$$
+
+The top bit has negative weight, while all lower bits retain positive powers of two. The representable range is
+
+$$
+-2^{w-1}\le T_w(x)\le 2^{w-1}-1.
+$$
+
+There is one representation of zero, `000...000`. The asymmetry—one more negative value than positive value—is forced by using one of the $2^w$ patterns for each integer and reserving the sign bit as a negative weight. For 8 bits, the range is $[-128,127]`; `11111111` is $-1$, `10000000` is $-128$, and `01111111` is $127$.
+
+To encode a negative integer $-a$ where $0<a\le2^{w-1}$, compute $2^w-a$. In bit terms, invert every bit of the positive representation and add one. For $a=5$ on 8 bits, `00000101` becomes `11111010` after inversion and `11111011` after adding one; $251$ interpreted modulo 256 is $-5$. The reason this procedure works is algebraic: $a+(2^w-a)=2^w\equiv0\pmod{2^w}$, so the bit pattern $2^w-a$ is the additive inverse of $a$ in the fixed-width ring.
+
+The two’s-complement sign rule is therefore not an independent arithmetic system bolted onto a binary adder. Signed addition can use the same modular addition as unsigned addition. If the mathematical signed result lies in range, the modular result has the correct signed interpretation. If it lies outside range, the bits still form a residue, but the signed interpretation is not the intended integer result; that is precisely overflow.
+
+**Worked example: $-6+9$ on 8 bits.** Encode $-6$ as `11111010` and 9 as `00001001`. Add:
+
+```text
+  11111010
++ 00001001
+  --------
+  00000011
+```
+
+The result is `00000011`, or 3. Both operands have different signs, so signed overflow is impossible: adding a positive and a negative value cannot exceed both ends of the signed interval in one step. This is a useful mental check, but the bit-level overflow predicate remains the authoritative one.
+
+## Sign extension, zero extension, and truncation
+
+Changing width is not a neutral operation. To preserve an unsigned value when moving from $w$ to $k>w$ bits, prepend zeros; this is *zero extension*. To preserve a two’s-complement signed value, replicate the sign bit; this is *sign extension*. For example, the 8-bit signed value `11110110` is $-10$. Sign-extending to 16 bits gives `11111111 11110110`, which is still $-10$. Zero-extending it gives `00000000 11110110`, which is 246.
+
+The same bit pattern can therefore change value solely because the type used for extension changed. This is a common source of security bugs when a signed length or index is converted to an unsigned size before bounds checking. In a C-like language, the expression’s *usual arithmetic conversions* may perform an implicit conversion that makes a negative value appear very large. A safe design makes the domain and conversion explicit, checks the sign before conversion, and checks multiplication or addition for range overflow before allocating or indexing.
+
+Truncation from $k$ bits to $w<k$ bits discards high bits and preserves the result modulo $2^w$. It does not generally preserve a signed value. For example, 16-bit `00000000 10000000` is 128, while truncating to 8 bits gives `10000000`, which is -128 under two’s complement. Truncation is safe only when the discarded bits are known to be redundant for the target interpretation: all zero bits for an unsigned value, or all copies of the sign bit for a signed value.
+
+**Exercise with solution outline.** A 16-bit register contains `0xFF80`. Interpret it as signed, sign-extend it to 32 bits, zero-extend it to 32 bits, and truncate the original bit pattern to 8 bits.
+
+The 16-bit signed value is $-128$, because the bit pattern is $65536-128$. Sign extension produces `0xFFFFFF80`, still $-128$. Zero extension produces `0x0000FF80`, which is 65408 as an unsigned 32-bit value. Truncation produces `0x80`; that is 128 unsigned or -128 signed. The final answer is intentionally two-valued until the target type is named.
+
+## Shifts and bit fields
+
+Logical left shift by $k$ positions multiplies an unsigned value by $2^k$ modulo $2^w$ when bits shifted out are discarded. Logical right shift inserts zeros and computes floor division by $2^k$ for an unsigned value. Arithmetic right shift inserts copies of the sign bit and approximates division by a power of two for negative two’s-complement values, but the exact rounding rule must be specified by the ISA.
+
+Bit fields use masks and shifts to pack several logical values into one word. To extract a field occupying bits $p$ through $p+r-1$, compute
+
+$$
+(x\mathbin{\gg}p)\mathbin{\&}(2^r-1).
+$$
+
+To insert a new unsigned field value $v$, first validate $0\le v<2^r$, clear the destination bits with the complement of the mask, then OR in $(v\ll p)$. Validation is essential: silently truncating a field can turn a valid identifier into a different identifier.
+
+**Worked example: a packed control word.** Let bit 0 be `enabled`, bits 1–3 be a mode in the range 0–7, and bits 4–7 be a priority in the range 0–15. For word `10110101`, `enabled=1`; extracting mode gives `(0xB5>>1)&0x7 = 2`; extracting priority gives `(0xB5>>4)&0xF = 11`. To set mode to 6, clear mask `0x0E` and insert `6<<1`, obtaining `0xBD`. The operation preserves all bits outside the mode field by construction.
+
+Bit-field layout creates an interface boundary. A producer and consumer must agree on width, signedness, reserved values, byte order, and whether unknown bits must be zero. The safest parser rejects impossible encodings rather than treating reserved patterns as future-compatible by accident.
+
+## Fixed-point and floating-point numbers
+
+Fixed-point representation allocates a fixed number of fractional bits. With $f$ fractional bits, an integer storage value $n$ represents $n/2^f$. It gives uniform spacing and predictable integer operations, which is valuable in embedded control and financial formats, but its range and precision are fixed globally. Multiplying two values with $f$ fractional bits produces a value scaled by $2^{2f}$ and requires a rescaling shift, with rounding policy made explicit.
+
+Floating point instead represents values approximately as
+
+$$
+(-1)^s\times m\times 2^e,
+$$
+
+where the sign $s$, significand $m$, and exponent $e$ are encoded in finite fields. IEEE 754 binary formats use normalized numbers with a biased exponent, subnormal numbers near zero, signed zero, infinities, and NaNs. The details matter because floating-point arithmetic is not ordinary real arithmetic: addition is not associative, overflow can produce infinity, and an invalid operation can produce NaN.
+
+For a normalized binary format with precision $p$, adjacent values within one exponent bin differ by a fixed *unit in the last place* (ULP). Relative spacing is approximately constant within the normal range, while absolute spacing grows with magnitude. Near zero, subnormals provide gradual underflow with a fixed smaller spacing until the representation reaches zero.
+
+**Worked example: why 0.1 is not exact in binary.** A finite binary fraction has the form $k/2^n$. If $1/10$ had such a form, then $k/2^n=1/10$, giving $10k=2^n$. The left side is divisible by 5 while the right side is not, so no such integers exist. A binary floating-point format must round 0.1 to a nearby representable value. Repeated addition of that approximation can accumulate error, and comparing a computed value directly with a decimal expectation can fail.
+
+Rounding modes define how an exact result between representable numbers is chosen. Round-to-nearest, ties-to-even is common because it avoids a systematic upward bias in repeated operations. Even with this mode, cancellation can destroy significant digits: subtracting two nearly equal large values removes the leading digits that carried reliable information and leaves mostly rounding noise.
+
+Numerical stability is therefore an architectural concern as well as a mathematical one. A program that sums a long sequence should consider pairwise summation, compensated summation, or a wider accumulator when the error budget requires it. A processor’s floating-point unit implements specified operations and rounding, but it cannot infer the application’s acceptable error or replace an error analysis.
+
+## Representation at software boundaries
+
+The representation contract becomes especially fragile at boundaries. A memory-mapped device may define bit 7 as a write-one-to-clear status flag, so a read-modify-write intended to update bit 0 can accidentally clear an event. A file format may store a 32-bit length in network byte order, while the host CPU is little-endian. A compiler may assume signed overflow is impossible in a language mode where the programmer expected modular wraparound. A cryptographic protocol may require canonical serialization so that two byte strings cannot encode the same signed message.
+
+The remedy is not “be careful” but to define boundary functions. A decoder should accept bytes, validate length and reserved fields, and return a typed value or an error. An encoder should reject values outside field ranges. Arithmetic that can cross a representational boundary should use checked, saturating, or explicitly modular operations according to the requirement. Tests should include the minimum, maximum, zero, sign transition, one-past-the-end, endian reversal, NaN, infinity, and malformed encodings where applicable.
+
+**Worked boundary example.** Suppose an image header contains width and height as unsigned 32-bit values, followed by `width*height*4` bytes of pixels. If the multiplication is performed in a 32-bit type, dimensions such as 70,000 by 70,000 wrap before allocation. A later write based on the mathematical product can overflow the allocated buffer. A safe decoder first checks each dimension against a policy limit, promotes to a wider type, checks `width <= SIZE_MAX/(height*4)`, and only then allocates. The representation lesson is that the bit width of an intermediate expression is part of the security proof.
+
+## Summary of invariants
+
+The central invariants are compact:
+
+1. A $w$-bit unsigned operation returns a residue modulo $2^w$ unless a wider result is retained.
+2. Two’s-complement signed values use the same bit patterns with a negative weight on the top bit and range $[-2^{w-1},2^{w-1}-1]$.
+3. Sign extension preserves signed value; zero extension preserves unsigned value; truncation preserves value only when discarded bits are redundant.
+4. Carry indicates unsigned overflow; signed overflow is detected from operand and result signs or equivalent carry transitions.
+5. Floating-point values are a finite, nonuniform approximation to the reals; rounding, exceptional values, and non-associativity are part of the model.
+6. Every representation crossing must specify width, signedness, byte order, validity range, reserved encodings, and failure behavior.
+
+## Independent practice
+
+1. A 5-bit two’s-complement machine adds `10110` and `01011`. Decode both operands, compute the bit result, decide whether signed overflow occurred, and decide whether unsigned carry occurred.
+2. A 12-bit word stores a 3-bit tag at bits 9–11, a 5-bit length at bits 4–8, and a 4-bit flags field at bits 0–3. Give masks and extraction expressions for each field. What must be checked before inserting a length of 31?
+3. Explain why zero-extending a negative 8-bit array index before checking it against an unsigned array length can be dangerous. Give a safe sequence of checks.
+4. Derive the maximum relative spacing in a normalized binary floating-point format with precision $p$ under round-to-nearest, ignoring subnormals. State the assumption about the exact value’s location between adjacent representable numbers.
+5. Design a byte-level serialization for a signed 24-bit integer. Specify byte order, encoding range, and the decoder’s response to out-of-range or noncanonical encodings.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. `10110` is $22-32=-10$ and `01011` is 11. The mathematical sum is 1, so the result is `00001` with no signed overflow. As unsigned values, the operands are 22 and 11, whose sum 33 is outside the 5-bit unsigned range 0–31; the low result is 1 and carry-out is 1. This contrast is the point: one bit computation supports two different overflow predicates.
+2. The tag mask is `0xE00`, the length mask is `0x1F0`, and the flags mask is `0x00F`; extraction shifts the masked value right by 9, 4, or 0 respectively. Length 31 fits the five-bit field exactly; length 32 does not and must be rejected rather than truncated to zero.
+3. A negative signed index such as -1 becomes a very large unsigned value after conversion, potentially passing a poorly ordered comparison or changing which comparison is performed. First verify that the signed index is nonnegative, then convert to an unsigned size type, then compare against the array length, and only then calculate the address.
+4. In a binade, adjacent normalized values are separated by $2^{e-(p-1)}$. The relative gap to the lower value is therefore $2^{-(p-1)}$. Round-to-nearest makes the maximum rounding error half an ULP, at most $2^{-p}$ relative to a value near the lower endpoint; the exact bound varies slightly across the binade. The assumption is that the exact value is rounded to the nearest representable neighbor, not truncated.
+5. A 24-bit signed two’s-complement value ranges from $-2^{23}$ through $2^{23}-1$. Encode its modular 24-bit pattern, choose big- or little-endian order, and require the decoder to sign-extend bit 23. A canonical decoder rejects a byte sequence of the wrong length and any alternate encoding not allowed by the format rather than silently accepting ambiguous representations.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: lecture notes and examinations](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [MIT 6.004 learning objectives](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [IEEE 754-2019, Standard for Floating-Point Arithmetic](https://ieeexplore.ieee.org/document/8766227)
+* [CERT C: INT rules](https://wiki.sei.cmu.edu/confluence/display/c/INT00-C.+Understand+the+data+model+used+by+your+implementation)

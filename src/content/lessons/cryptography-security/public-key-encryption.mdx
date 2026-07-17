@@ -1,0 +1,90 @@
+---
+title: "Public-Key Encryption"
+course: "cryptography-security"
+description: "Key pairs, hybrid encryption, and chosen-ciphertext safety."
+---
+# Public-Key Encryption
+
+Public-key encryption lets anyone encrypt to a public key while only the private-key holder decrypts. In practice, asymmetric cryptography establishes or wraps a short-lived symmetric key; bulk data uses AEAD for efficiency.
+
+Textbook RSA is deterministic and malleable, so it is not a secure general encryption interface. Modern schemes require randomized encoding and security against chosen-ciphertext attacks.
+
+## Security interface
+
+An encryption scheme has KeyGen, Enc, and Dec. KeyGen produces public key pk and secret key sk. Enc(pk,m;r) uses fresh randomness r to produce a ciphertext c; Dec(sk,c) returns m or a failure. Correctness requires honest ciphertexts to decrypt to the original message. Indistinguishability under chosen-plaintext attack, IND-CPA, says an adversary choosing equal-length messages cannot tell which one was encrypted beyond negligible advantage. IND-CCA strengthens this by giving the adversary a decryption oracle, excluding only the challenge ciphertext or an explicitly related representation.
+
+The oracle exclusion is not a minor detail. If a service returns different errors for malformed padding, invalid tags, and unknown key identifiers, it may become a decryption oracle even when the underlying primitive has a proof. A secure API returns one externally indistinguishable failure class, performs authorization and replay checks in the right order, and never exposes plaintext from a failed or unauthenticated record.
+
+## RSA encryption and OAEP
+
+RSA encryption computes a modular exponentiation, but the message must first be encoded into a representative with the correct length and structure. OAEP combines a random seed, mask generation functions, a label hash, and a delimiter so that equal messages encrypt differently and malformed representatives are rejected. The label is part of the domain: encrypting under one label must not be accepted as encryption under another unless the application explicitly permits that relation.
+
+RSA-OAEP parameters include the modulus size, hash function, mask-generation hash, label, and maximum plaintext length. A sender and receiver must agree on all of them and identify them in policy-controlled metadata. Do not put arbitrary large application data directly into RSA; its message-size bound and performance make it a key-transport primitive at most. Do not use a decryption error to reveal whether the padding or label was almost correct.
+
+## Hybrid encryption
+
+A hybrid format generates a random data-encryption key K, encrypts the payload with AEAD under K and a unique nonce, and uses a public-key mechanism to encapsulate K. The ciphertext contains an algorithm identifier, recipient key identifier, encapsulated key, nonce, associated data, and AEAD output. Every field that affects parsing or interpretation is authenticated, either as AEAD associated data or through the key-encapsulation protocol.
+
+Confidentiality for the recipient does not authenticate the sender. Anyone with the public key can create a ciphertext. To authenticate the sender, sign a canonical transcript containing sender identity, recipient identity, algorithm identifiers, encapsulated key, nonce, and ciphertext, or use an authenticated key exchange. A signature over only the plaintext may not bind the transport context and can be replayed or transplanted.
+
+## KEM–DEM abstraction
+
+Modern designs separate a key encapsulation mechanism from a data encapsulation mechanism. A KEM produces an encapsulated shared secret and supports Decaps; a DEM encrypts arbitrary data under that secret. The KEM may be classical public-key encryption or a post-quantum mechanism. The DEM is normally AEAD. A KDF derives the DEM key from the shared secret with a label and transcript context.
+
+The decapsulation path must be robust against invalid ciphertexts. Some KEMs use implicit rejection: on failure, derive a pseudorandom secret rather than returning a distinguishable error, then let the authenticated DEM ciphertext fail. This design prevents a remote caller from turning decapsulation behavior into a validity oracle. Applications still need rate limits, safe logging, and consistent failure handling.
+
+## Chosen-ciphertext attacks
+
+In an IND-CCA game, an attacker can submit modified ciphertexts to a decryption oracle. Malleability is dangerous because a transformation of a challenge ciphertext may reveal a related plaintext or a validity bit. Encrypt-then-MAC, authenticated encryption, and proven KEM constructions prevent useful decryption feedback when composed with correct key separation and verification order.
+
+An application can accidentally restore an oracle by decrypting before checking an outer signature, returning detailed parse errors, or performing different work for different failures. The secure order depends on the protocol: authenticate enough framing to identify the key and context, verify integrity before releasing plaintext, and make all failure paths safe and policy-consistent.
+
+## Key separation and context binding
+
+Never reuse one key for encryption, MAC, signatures, password derivation, or unrelated protocol roles. Derive keys with a KDF and labels such as recipient, sender, direction, version, and purpose. Bind the recipient identity and algorithm policy into the authenticated transcript. Without context binding, an attacker may copy a valid ciphertext from service A to service B, or from a request endpoint to a response endpoint, and obtain unintended acceptance.
+
+Canonical encoding is part of the security proof. Length-prefix variable fields, use fixed-width integers or self-delimiting encodings, reject duplicate fields, and define ordering. If two byte sequences can be parsed as the same semantic object, signatures and associated data may authenticate a different representation from the one the application acts upon.
+
+## Key storage and rotation
+
+Private decryption keys require access control, backup and recovery policy, memory handling, audit, and destruction. A key identifier should select an allowed algorithm and purpose; it should not be an unauthenticated user-controlled request to try arbitrary keys. During rotation, decrypting old data may require a controlled overlap, while new data should use the current key. Record the key version with the ciphertext and authenticate it.
+
+Compromise response depends on the timeline. If a private key is stolen, ciphertexts protected under it may be decryptable now and in the future; forward secrecy from an ephemeral key exchange can limit retrospective exposure for completed sessions. Revocation prevents new use only if every verifier checks it. Backups, caches, exports, and old service instances must be included in the inventory.
+
+## Exercises
+
+1. Distinguish IND-CPA from IND-CCA.
+2. Explain why public-key encryption does not authenticate the sender.
+3. Design a hybrid ciphertext format and its associated data.
+4. Identify two ways an implementation can become a decryption oracle.
+5. Explain why a KDF and domain separation are used after KEM decapsulation.
+6. List private-key lifecycle events required for a production service.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. IND-CPA grants no decryption oracle and tests resistance to passive or chosen-plaintext observation. IND-CCA grants decryption queries except the challenge and tests active malleability resistance.
+2. Anyone can compute Enc(pk,m), so a ciphertext demonstrates only that someone used the public key. Sender authentication requires a signature, authenticated channel, or credential-bound protocol.
+3. Include key and algorithm identifiers, a fresh nonce, encapsulated KEM ciphertext, ciphertext payload, and tag. Authenticate all framing and bind sender, recipient, version, and operation in associated data.
+4. Return distinguishable padding versus tag errors, or release plaintext to application code before verifying integrity. Timing differences and retry behavior can also expose validity.
+5. The KEM secret may have protocol-specific structure and must be turned into independent, context-bound DEM keys. Labels prevent cross-protocol and cross-direction key reuse.
+6. Generate, activate, distribute, use, rotate, revoke, back up, restore, audit, quarantine after compromise, and destroy or archive according to a documented retention policy.
+
+</details>
+
+## Testing and review
+
+Use published vectors and test empty, one-byte, maximum-length, and boundary-length plaintexts. Mutate every ciphertext field, associated-data field, key identifier, and algorithm parameter, and require rejection without plaintext release. Test wrong recipients, old keys, duplicate fields, noncanonical encodings, invalid KEM ciphertexts, replayed messages, and truncated tags. Differential tests against an independent implementation catch serialization and parameter mismatches; fuzzing should target the parser and failure paths as well as valid cryptographic inputs.
+
+A review should trace the data from public-key selection through KEM decapsulation, KDF, AEAD, authorization, and application parsing. At each boundary identify which secret is available, which context is authenticated, and what failure is externally observable. The public-key operation is only one component of the security argument.
+
+## References & Further Reading
+
+**Exercise.** Sketch a hybrid message format with an encapsulated session key and AEAD ciphertext. State what authenticates the sender, if anything.
+
+## References & Further Reading
+
+* [NIST Cryptographic Standards and Guidelines](https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines)
+* [RFC 8017, PKCS #1](https://www.rfc-editor.org/rfc/rfc8017)
+* [NIST SP 800-56B, Pair-Wise Key Establishment Using Integer Factorization Cryptography](https://csrc.nist.gov/pubs/sp/800/56/b/r2/final)
+* [NIST Post-Quantum Cryptography Standards](https://csrc.nist.gov/projects/post-quantum-cryptography)

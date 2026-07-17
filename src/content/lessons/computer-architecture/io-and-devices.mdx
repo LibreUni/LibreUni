@@ -1,0 +1,95 @@
+---
+title: "I/O and Devices"
+course: "computer-architecture"
+description: "Device models, interrupts, polling, and ordering at the hardware boundary."
+---
+# I/O and Devices
+
+Input/output architecture connects a general-purpose processor to components whose timing, state, and failure behavior are not controlled by the instruction pipeline. A device may be a keyboard, disk, network interface, sensor, accelerator, timer, or virtual machine endpoint. It exposes a programming interface through registers, memory-mapped queues, interrupts, DMA, or a combination. A correct driver is a protocol implementation: it establishes ownership, orders commands and data, handles backpressure and errors, and does not assume that a device responds like ordinary memory.
+
+## Device register models
+
+Programmed I/O exposes control, status, data, and interrupt registers. A control register may start an operation; a status register may report ready, busy, error, or completion; a data register may consume a byte on read or clear an event on write. These side effects make repeated reads and read-modify-write operations semantically significant. A compiler optimization that repeats an ordinary memory read cannot be applied blindly to a device register.
+
+Memory-mapped I/O assigns device registers addresses in the processor’s address space. Port I/O uses a separate instruction space on some ISAs. In either model, the ISA defines ordering, width, alignment, privilege, and caching attributes. A 32-bit load from a register documented as 8-bit may trigger an invalid access or read adjacent state. The driver must use the device’s access width and avoid speculative or prefetching accesses when the mapping forbids them.
+
+**Worked register sequence.** A device has `STATUS.BUSY`, `CONTROL.START`, and a data FIFO. To start a transaction, the driver validates the buffer, writes the command and length, executes the required device-memory barrier, and writes `START`. It then either polls `BUSY` with a bounded timeout or waits for an interrupt. On completion it reads status, checks error bits before consuming data, and acknowledges the interrupt according to the device specification. Writing `START` before the descriptor is visible can launch a transaction with stale parameters.
+
+## Polling and interrupts
+
+Polling repeatedly reads status until a condition changes. It has predictable control flow and can achieve low latency when a dedicated core polls at high frequency, but it consumes cycles and power while idle. Interrupts let a device notify the processor, reducing idle work, but entry/exit costs, prioritization, cache disruption, and interrupt storms add overhead.
+
+For an event arrival rate $\lambda$, polling period $P$ gives average detection delay roughly $P/2$ under uniform arrivals, while consuming polling work every period. An interrupt has a fixed notification cost plus queuing delay and may be cheaper for low $\lambda$. At high rates, interrupt coalescing batches events; the system accepts more notification latency to reduce per-event overhead.
+
+**Worked choice.** A 10 kHz sensor needs samples within 100 microseconds and has a small data payload. A dedicated polling loop at 20 kHz gives a nominal 25-microsecond average detection delay but consumes a core and must account for scheduling and cache effects. An interrupt per sample may meet latency at low system load but could overload the CPU if handler cost is high. A timer-driven batch or device-side FIFO may be better. A bursty disk, by contrast, benefits from interrupts or completion queues because long idle periods make continuous polling wasteful.
+
+An interrupt handler should do the minimum urgent work: identify and acknowledge the source, capture status, and schedule deferred processing. If it performs unbounded parsing or blocking I/O, it can delay higher-priority interrupts and create priority inversion. Nested interrupts require a defined masking and priority policy. A shared interrupt line requires reading each possible source and acknowledging only the one that is actually pending.
+
+## Queues and descriptors
+
+High-throughput devices use rings rather than one register per item. A descriptor contains an address, length, operation, flags, ownership, and completion status. The producer publishes descriptors by writing fields first and advancing a producer index last. The consumer reads only published descriptors, performs the operation, writes completion fields, and advances a completion index.
+
+The ring has a capacity invariant. If producer and consumer counters are monotonic, occupancy is `producer - consumer`; the producer may advance only when occupancy is below capacity, and the consumer may advance only when occupancy is positive. If counters wrap, use a sufficiently wide counter or sequence bits so full and empty are distinguishable. A single shared “valid” bit without ownership semantics can be observed in the wrong order.
+
+**Worked ownership trace.** A network transmit descriptor is `FREE`, then `READY`, then `IN_FLIGHT`, then `DONE`, then `FREE`. The CPU may write the buffer in `READY` preparation but must not modify it in `IN_FLIGHT`. The device may write completion status only in `IN_FLIGHT`. The driver checks `DONE`, validates length and error status, and returns ownership. A timeout does not prove the device stopped; reclaiming the buffer before reset or cancellation completes can cause a late DMA to corrupt a new owner.
+
+## DMA and IOMMUs
+
+DMA transfers data between a device and memory. It avoids CPU copy loops but expands the set of agents that can access a buffer. The OS must establish a device-visible mapping, set direction and permissions, synchronize caches if needed, and revoke the mapping only after all transactions complete. A device writing past a programmed length is a hardware boundary violation; an IOMMU can restrict its address range and fault the transaction.
+
+The IOMMU translates device virtual addresses to physical frames, often using page tables and permissions analogous to CPU virtual memory. It may cache translations, so invalidation and synchronization are required when mappings change. A driver must not unmap a buffer and immediately hand its frame to another process while the device can still issue an old translated request.
+
+For a CPU-to-device buffer on a noncoherent platform, dirty CPU cache lines must be cleaned to memory before device ownership. For a device-to-CPU buffer, CPU cache lines that could contain stale data must be invalidated before reading completion data. On coherent systems, the platform’s DMA API may combine or abstract these actions, but the ownership and ordering proof remains necessary.
+
+## Device state machines
+
+A driver should model the device as a state machine rather than a collection of register writes. States may include `RESET`, `CONFIGURED`, `RUNNING`, `STOPPING`, `ERROR`, and `QUIESCED`. Events include reset completion, command acceptance, completion, timeout, hot-unplug, and fatal error. Each transition must specify which queues are valid, which interrupts are enabled, and which buffers the device may access.
+
+**Worked recovery sequence.** If a network device stops responding, the driver disables new submissions, masks interrupts, records outstanding descriptors, requests a device reset, waits for reset completion with a bounded timeout, invalidates device mappings, reinitializes rings, and either reconciles or fails outstanding operations. Reusing descriptors before the device is quiesced creates a race between old and new commands. Recovery is successful only when the state machine proves no old agent retains ownership.
+
+## Timeouts and failure interpretation
+
+A timeout is evidence that an expected event did not occur by a deadline; it is not proof of device termination. The device may be slow, the interrupt may be lost, the request may be queued, or the completion may be visible but unread because of a cache/order bug. Recovery must be idempotent or use a device generation number so a late completion from an old operation cannot satisfy a new request.
+
+Generation tags are useful when descriptors are reused. A completion includes the generation that was active when submitted; the driver ignores a completion whose generation does not match the current owner. This turns a temporal ambiguity into an explicit validation check. The tag does not stop a malicious device from writing arbitrary data, so permissions and bounds remain necessary.
+
+## Virtualization and emulated devices
+
+A virtual machine may see a virtual device whose registers are implemented by a hypervisor. Traps, shared-memory queues, or paravirtual interfaces carry requests between guest and host. The guest driver still needs a device contract, but performance depends on exit frequency, batching, and shared-page synchronization. A virtual interrupt can be delayed or coalesced, so guest timeouts must account for scheduling.
+
+Device assignment to a guest requires isolation. An assigned device may DMA into guest memory only through an IOMMU context; interrupt remapping prevents it from targeting arbitrary host vectors. Reset and teardown are especially important because a device can retain in-flight state across ownership changes.
+
+## Verification and testing
+
+Test drivers with delayed responses, duplicate interrupts, out-of-order completions, malformed lengths, queue-full conditions, device reset during DMA, and concurrent teardown. A device model or simulator can inject these cases deterministically. Assertions should check ownership, descriptor bounds, index arithmetic, one-time completion, and state transitions.
+
+Observability needs event IDs, device generation, descriptor index, command, timestamp, status, and error cause without logging sensitive payloads. A trace that says “timeout” is insufficient to distinguish a lost interrupt from a device hang or ordering bug.
+
+## Independent practice
+
+1. Design a register-level protocol for a device with command, status, FIFO, interrupt, and reset registers.
+2. Derive ring-buffer full/empty invariants under wrapping producer and consumer counters.
+3. Compare polling, interrupts, coalescing, and completion queues for three workloads.
+4. Trace CPU-to-device and device-to-CPU DMA ownership on coherent and noncoherent platforms.
+5. Design a timeout/recovery state machine with generation tags.
+6. Explain how an IOMMU and interrupt remapping protect a virtual machine.
+7. Propose fault-injection tests for duplicate, delayed, and malformed completions.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. The protocol must define reset values, access widths, side effects, ordering, and error acknowledgment. The driver writes configuration before start, waits for the documented ready condition, and never treats a read of a side-effect register as a pure observation.
+2. With monotonic counters, occupancy is `prod-cons`; empty means equal, full means difference equals capacity. The implementation must prevent producer advancement at full and consumer advancement at empty, and use enough counter bits to distinguish wraparound.
+3. Polling favors a dedicated CPU and predictable low latency; interrupts favor sparse events; coalescing favors high-rate events where batching is acceptable; completion queues favor many outstanding operations and decouple notification from work. State the workload and latency objective.
+4. Transfer ownership only after buffer writes and publication ordering. Clean CPU lines before device reads on noncoherent systems; invalidate before CPU reads device-written data. Reclaim only after completion and quiescence.
+5. Stop submissions, mask/acknowledge events, invalidate or reset the device, advance a generation, and ignore late completions with old generation. Recovery must not reuse a buffer while the old device context can still access it.
+6. IOMMU mappings restrict DMA targets; interrupt remapping restricts interrupt destinations. Teardown requires quiescing the device and invalidating translations before reassignment.
+7. Delay completion, deliver duplicate completion, report excessive length, reorder fields, reset during transfer, and complete after timeout. Verify no double-free, buffer reuse, stale generation acceptance, or unbounded handler loop occurs.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: devices, interrupts, and interconnect notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)
+* [RISC-V IOMMU specification](https://github.com/riscv-non-isa/riscv-iommu)

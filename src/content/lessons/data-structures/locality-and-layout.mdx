@@ -1,0 +1,97 @@
+---
+title: "Locality, Layout, and Memory-Aware Structures"
+course: "data-structures"
+description: "Cache lines, indirection, blocking, compact representations, and performance models beyond asymptotic RAM."
+---
+# Locality, Layout, and Memory-Aware Structures
+
+The RAM model treats every memory access as equal. Modern processors do not: cache lines, translation lookaside buffers, branch prediction, prefetching, allocation, and NUMA make layout part of algorithmic performance. Two structures with the same asymptotic complexity can differ by an order of magnitude because one touches adjacent bytes and the other follows unpredictable pointers. This lesson adds a memory hierarchy model while preserving abstract-data-type reasoning.
+
+## Cache lines and spatial locality
+
+Memory is transferred between caches in fixed-size cache lines, often tens of bytes. A sequential array traversal that reads one element per line uses each fetched line many times or advances predictably to the next line. A linked list whose nodes are scattered may fetch a new line for each node, even though both traversals perform n logical steps. Spatial locality means nearby addresses are useful; temporal locality means recently used data is reused soon.
+
+Array layout also affects element width. An array of structures stores all fields together; an array of structures of arrays stores each field in a separate contiguous stream. If an algorithm scans only one field, the latter may move less irrelevant data. If it processes all fields of each item together, the former may be better. Layout is a representation choice subject to the same abstraction function; clients should observe values, not padding or field order unless the ABI exposes it.
+
+## Indirection and pointer chasing
+
+A pointer-based tree or graph introduces at least one dependent load per edge. The next address cannot be known until the current node is read, limiting hardware prefetch. A balanced tree has O(log n) comparisons but may suffer cache misses at each level. A B-tree or cache-oblivious layout stores many keys per block, reducing height and amortizing one miss across several comparisons.
+
+Pointer compression can reduce memory and improve locality when addresses lie in a known arena. Store offsets instead of full pointers, but specify arena lifetime, offset width, alignment, and relocation behavior. A compact representation is not correct if an offset overflows or is interpreted after the arena moves without adjustment.
+
+## Blocking and tiling
+
+Blocking partitions data so an inner computation reuses a working set before eviction. A matrix or graph algorithm can be mathematically unchanged while loop order and tile size alter cache traffic. For a blocked array, the representation invariant must map logical index (i,j) to the correct block and offset. An off-by-one at block boundaries may pass small tests but corrupt only dimensions not divisible by the tile size.
+
+**Worked layout comparison.** Traversing an n-by-n matrix row-major accesses consecutive elements and costs approximately one cache line per block of elements. Column-major traversal in a row-major layout jumps by n elements and can incur a miss for nearly every access when n exceeds cache capacity. Transposing the representation or changing loop order preserves the matrix result but changes memory traffic dramatically.
+
+## Cache-aware and cache-oblivious designs
+
+A cache-aware algorithm knows line size B and cache capacity M and chooses block sizes. A cache-oblivious algorithm is recursive and obtains good behavior across levels without explicit parameters. The ideal-cache model counts transfers between an arbitrarily sized cache and memory, assuming optimal replacement. It abstracts hardware details but makes locality a mathematical resource.
+
+Asymptotic RAM cost and transfer cost answer different questions. An O(n log n) tree operation may use O(log n) random transfers, while a sorted-array search uses O(log n) comparisons but may use O(log_B n) block transfers with a B-tree or interpolation strategy. Include the model and cost metric in a claim.
+
+## Compact graph layouts
+
+Compressed sparse row (CSR) stores one offsets array and one contiguous neighbor array. The neighbors of vertex u occupy positions offset[u] through offset[u+1]-1. The RI requires offsets nondecreasing, offset[0]=0, offset[V]=E, and destination entries valid. Neighbor iteration is sequential and efficient; insertion is expensive because later entries shift or a rebuild is required.
+
+Structure-of-arrays and compressed bitsets can improve vectorization and memory use. A bitset representation of a dense adjacency row uses V bits and supports word-parallel intersection; it may outperform pointer lists for dense set operations. Compression trades decode work for fewer memory transfers, so benchmark on actual distributions rather than assuming smaller is always faster.
+
+## Allocation and fragmentation
+
+Frequent node allocation adds allocator metadata, synchronization, and fragmentation. An arena or pool can allocate nodes in batches, improve locality, and make destruction cheap, but lifetime becomes region-based: keeping one node alive may retain the entire arena. Object reuse needs generation counters or cleared fields to prevent stale handles from referring to a new object.
+
+Memory reclamation is part of correctness in manual or concurrent systems. A removed node cannot be freed while a reader can still access it. Reference counting, epochs, hazard pointers, or a garbage collector provide different guarantees and costs. A sequential data-structure proof that assumes immediate reclamation is insufficient for concurrent clients.
+
+## Translation and virtual memory
+
+The processor translates virtual addresses through page tables and a TLB. A cache miss can therefore include a TLB miss and page-table walks before the data line is fetched. Large contiguous arrays may reduce TLB pressure, while a pointer graph can touch many pages for a small logical traversal. Huge pages can reduce translation overhead but change fragmentation and allocation tradeoffs; they are not a universal improvement.
+
+Virtual memory also changes the meaning of “resident.” A structure that fits in its logical byte count may still cause working-set pressure when multiple processes compete. Page faults are orders of magnitude slower than cache misses. Streaming algorithms can be efficient if they scan pages once, while random access may thrash when the active set exceeds memory. Report whether measurements include cold-start faults and whether the data was preloaded.
+
+## Layout and correctness
+
+Optimization must preserve the abstraction function. Reordering records for locality requires an index map or updated handles; compressing a nullable field requires a validity bitmap; packing bits requires precise masking and endianness. Test representation boundaries such as empty blocks, partially filled final blocks, alignment changes, and resize/compaction. A layout optimization that changes only performance should still have a separately checkable RI.
+
+## Experimental method
+
+Compare one layout at a time, use identical logical inputs, warm up the runtime when appropriate, and collect enough repetitions to report variance. Measure bytes moved, cache misses, branch misses, allocations, and throughput where available. A faster benchmark may simply have a more favorable data distribution or fit in a larger cache; scale n across cache boundaries to reveal the transition. Use a reference implementation to verify outputs before trusting timing data.
+
+## When asymptotics remain decisive
+
+Locality can change constants, but it cannot usually turn an unbounded linear scan into a logarithmic worst-case search. A compact sorted array may beat a tree for small n, while a tree’s asymptotic advantage emerges as n grows or updates become dominant. State both the asymptotic guarantee and the regime where the representation’s memory behavior matters. This avoids treating hardware effects as a replacement for algorithm analysis.
+
+## Exercises
+
+1. Explain why array and linked-list traversal with the same O(n) bound can have different timings.
+2. Define a CSR invariant and derive neighbor-iteration cost.
+3. Compare array-of-structures and structure-of-arrays for two workloads.
+4. Explain how blocking changes cache transfers without changing abstract semantics.
+5. Design an offset-based pointer representation and its safety checks.
+6. Analyze an arena’s locality and lifetime tradeoffs.
+7. State which memory model a performance claim uses.
+
+### Diagnostic solutions
+
+
+1. Arrays exploit spatial locality and prefetching; linked nodes may require a dependent cache miss for each pointer. Both perform n logical operations, but cache-transfer and latency costs differ.
+
+2. Require offset[0]=0, offset[V]=E, offsets nondecreasing, and each destination valid. Degree(u)=offset[u+1]-offset[u]; iteration costs O(degree(u)) sequential accesses, and scanning all edges is O(V+E) including headers.
+
+3. If an algorithm scans only timestamps, structure-of-arrays avoids fetching payload fields; if it processes every field per item, array-of-structures keeps an item together. Measure alignment, line width, and access order rather than relying only on language-level declarations.
+
+4. A tile keeps a working subset in cache while computing many operations before moving to the next tile. The logical mapping from indices to values is unchanged; the transfer count falls when the tile fits the relevant cache level.
+
+5. Store an arena identifier, offset, generation, and bounds. Check arena validity, offset alignment/range, and generation before dereference. Update offsets when relocating or forbid relocation while handles exist.
+
+6. An arena gives cheap, contiguous allocation and bulk destruction, but one long-lived object can retain unrelated memory. It is excellent for objects sharing a phase lifetime; use separate arenas or individual reclamation when lifetimes diverge.
+
+7. State word-RAM or unit-cost RAM for asymptotic operations, cache-line/ideal-cache model for transfers, and whether comparison, allocation, and key length are constant. A timing result should also report hardware, layout, and workload.
+
+
+
+## References & Further Reading
+
+* [Open Data Structures](https://opendatastructures.org/)
+* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
+* Frigo, Leiserson, Prokop, and Ramachandran, “Cache-Oblivious Algorithms.”

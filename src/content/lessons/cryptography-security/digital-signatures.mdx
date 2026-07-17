@@ -1,0 +1,89 @@
+---
+title: "Digital Signatures"
+course: "cryptography-security"
+description: "Authenticity, integrity, non-repudiation claims, and verification."
+---
+# Digital Signatures
+
+## Security interface and unforgeability
+
+A digital signature scheme has algorithms KeyGen, Sign, and Verify. KeyGen produces a public verification key and secret signing key. Sign takes the secret key and a message and returns a signature, often using fresh randomness. Verify takes the public key, message, and signature and returns accept or reject. Correctness says honestly generated signatures verify. Existential unforgeability under adaptive chosen-message attack, usually EUF-CMA, says an attacker who can request signatures on messages of its choice should not produce a valid signature for a new message.
+
+“New message” must be defined carefully. A scheme can be vulnerable if an attacker transforms a signature on m into a signature on a related message, even if it never queried that exact message. A stronger notion may consider strong unforgeability, where even a new signature on an already signed message is a forgery. The application must also bind context, protocol role, algorithm identifier, and exact serialization; signing the wrong bytes is equivalent to authenticating the wrong statement.
+
+## Hash-then-sign and randomized encoding
+
+Signatures normally operate on a digest or encoded digest rather than an unbounded message directly. The encoding must be unambiguous and domain separated. RSA signatures use specified encodings such as RSASSA-PSS or a correctly structured deterministic encoding for legacy contexts; textbook modular exponentiation is not a signature scheme. A verifier must reject unknown hash identifiers, malformed lengths, noncanonical encodings, and signatures outside the intended range.
+
+For randomized signing, the randomizer must be generated with a cryptographically secure source and never reused in a way that reveals the secret key. ECDSA and related schemes are especially sensitive to nonce reuse: two signatures with the same ephemeral scalar expose a linear relation that can recover the private signing key. Deterministic nonce derivation can reduce dependence on an external random source, but it must be implemented according to the scheme and include the message and key in the derivation.
+
+## RSA-PSS intuition
+
+RSA-PSS encodes a message representative with a hash, a random salt, a masked data block, and a trailer field before applying the RSA private operation. Verification recomputes the hash relation and checks all bit and padding constraints. The salt provides probabilistic signatures and helps prevent algebraic structure from surviving into the RSA representative. The exact encoded message length must match the modulus and hash output; permissive parsing can create alternate encodings or acceptance of signatures outside the security proof.
+
+RSA signing requires private-key protection and blinding. Without blinding, a timing or fault attack against modular exponentiation may reveal information about the secret exponent. CRT acceleration must verify the result or use a fault-resistant design, because a faulty signature can allow factor recovery. Public verification should be strict and should not treat a successful modular operation as proof that the encoding was valid.
+
+## ECDSA and Schnorr-style reasoning
+
+In an elliptic-curve group of order q, a signing key is a scalar x and the public key is X=xG. ECDSA selects a nonce k, computes R=kG, derives r from R, and sets s=k inverse times (H(m)+xr) modulo q. Verification checks a group equation involving s inverse, H(m), the public key, and the reconstructed point. If k repeats for two messages, subtracting the equations reveals x. If k is biased or partially leaked, lattice attacks may recover x.
+
+Schnorr-style signatures use a commitment R=kG, a challenge e derived from R, public key, and message, and a response s=k+ex modulo q. Verification checks sG=R+eX. The linear equation makes security reductions and batch verification conceptually clean, but the challenge hash must bind the exact context and the nonce must remain secret. Never mix formulas or encodings from different signature schemes.
+
+## Certificates and trust chains
+
+A signature proves possession of a signing key under the scheme’s assumptions; it does not by itself identify a human or authorize an action. Certificates bind a public key to a name or service through a certification authority and constrained validity period, key usage, and subject alternative names. Verification must build and validate a chain, check time and revocation policy, enforce name matching, and reject algorithm or key-size downgrades.
+
+Trust stores and certificate policies are part of the security boundary. A client that accepts any self-signed certificate has confidentiality against passive observers but not authenticated server identity. Pinning can reduce trust-anchor scope but creates rotation and recovery risks. A signed object should include issuer, audience, expiration, nonce or identifier, and intended action if replay or cross-service substitution matters.
+
+## Verification pipeline
+
+Parse before cryptographic computation only enough to establish bounded lengths and canonical structure. Reject malformed values without detailed oracle responses. Hash the exact canonical message, select the algorithm only from an authenticated or policy-controlled identifier, verify the signature, then enforce authorization and freshness. A valid signature on an expired token should not authorize an action. A valid user signature on a server-to-server message should not be accepted if the audience is wrong.
+
+Use constant-time comparisons for secret-derived values and avoid exposing whether a signature failed due to padding, curve membership, hash mismatch, or authorization. Log verification failures with safe metadata and rate-limit abuse without turning the endpoint into an availability vulnerability.
+
+## Exercises
+
+1. State EUF-CMA correctness and forgery conditions.
+2. Explain how nonce reuse in ECDSA reveals a private key.
+3. Distinguish a signature from a certificate.
+4. List fields that should be bound into a signed authorization token.
+5. Explain why textbook RSA signing is not an adequate modern signature scheme.
+6. Describe two certificate validation checks beyond signature verification.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. The adversary may adaptively request signatures on chosen messages and wins by producing a valid signature for a message not queried, under the exact scheme and verification relation.
+2. With equal k, the two equations have the same nonce term. Subtracting them determines k from the message hashes and s values, then x follows from either signature equation.
+3. A signature authenticates a message under a public key. A certificate is a signed statement binding a key to an identity or constrained subject; validation includes chain, name, time, and policy checks.
+4. Bind issuer, subject or audience, action, resource, algorithm, key identifier, expiration, not-before time, nonce or unique identifier, and any tenant or protocol version affecting interpretation.
+5. It is deterministic, algebraically malleable, and lacks a secure encoding and probabilistic protection against structured-message attacks. Modern schemes specify padding and verification constraints.
+6. Check the chain to a trusted anchor, validity interval, hostname or subject name, key usage, revocation policy, allowed algorithms, and acceptable key parameters.
+
+</details>
+
+## Testing, migration, and key lifecycle
+
+Test known-answer vectors, altered messages, altered signatures, truncated encodings, noncanonical integers, wrong public keys, boundary hash lengths, and signatures generated by independent implementations. Test that an old algorithm is rejected when policy says it is retired and that a key identifier cannot select an algorithm outside its allowed use. Fuzz parsers separately from group arithmetic and assert that every malformed input returns a safe failure without unbounded allocation.
+
+Signing keys need generation, backup or escrow policy, activation, rotation, revocation, compromise response, and destruction. Public-key distribution needs authenticity and freshness; an attacker who substitutes a public key can make signatures appear valid under the attacker’s key. Certificates and key metadata must be authenticated before authorization decisions. During migration, support a deliberately narrow overlap period and record which key and algorithm verified each event.
+
+A signed message can still be replayed. Include a recipient, operation, expiry, and unique nonce or sequence number when the application action is not idempotent. The verifier must maintain replay state or use a freshness mechanism tied to the protocol. “Signature valid” is only one predicate in a secure authorization decision.
+
+Verification should be treated as a typed operation: the caller supplies the expected message type, audience, and action, not merely arbitrary bytes and a public key.
+
+## References & Further Reading
+
+* [NIST FIPS 186-5, Digital Signature Standard](https://csrc.nist.gov/pubs/fips/186-5/final)
+* [RFC 8017, PKCS #1](https://www.rfc-editor.org/rfc/rfc8017)
+* [RFC 8032, Ed25519 and Ed448](https://www.rfc-editor.org/rfc/rfc8032)
+
+A signature scheme has key generation, signing, and verification. Verification establishes that a holder of the private key signed the message under the scheme’s assumptions; it does not prove the human identity unless a trust system binds the public key to one.
+
+Sign the exact canonical bytes or a defined digest. Ambiguous serialization can make two parties verify different meanings.
+
+**Exercise.** Design a signed API request. Include method, path, body digest, timestamp or nonce, and key identifier; explain replay prevention.
+
+## References & Further Reading
+
+* [NIST Digital Signature Standard](https://csrc.nist.gov/pubs/fips/186-5/final)

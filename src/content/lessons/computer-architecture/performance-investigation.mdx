@@ -1,0 +1,86 @@
+---
+title: "Performance Investigation"
+course: "computer-architecture"
+description: "Design and evaluate an experiment that distinguishes compute, cache, and memory bottlenecks."
+---
+# Performance Investigation
+
+This laboratory treats a performance claim as a falsifiable engineering hypothesis. The subject is two implementations of a matrix kernel: a naive traversal and a tiled/vectorized implementation. The aim is not to produce a chart that flatters an optimization. It is to determine which resource limits each version, quantify uncertainty, and identify the input boundary where the conclusion changes.
+
+## Question and model
+
+Suppose the kernel computes $C=A+B$ for square matrices of 32-bit values. A naive row-major implementation reads two values and writes one for each element. A column-major or poorly laid-out version may touch a new cache line for each access. The hypothesis is: “For matrices larger than the last-level cache, tiled row-major traversal reduces time by improving spatial and temporal locality, and the improvement will correlate with lower cache-miss traffic rather than merely higher clock frequency.”
+
+The hypothesis predicts several observations: cache misses per instruction should decrease, memory bandwidth may become more efficient, instructions per element may change modestly, and the effect should grow when dimensions exceed cache capacity but weaken when the entire matrix fits in a higher cache. If time improves while misses and bandwidth do not change, the proposed mechanism is incomplete; perhaps vector width, compiler unrolling, or frequency changed instead.
+
+## Experimental controls
+
+Fix element type, matrix dimensions, initialization, compiler version, optimization flags, thread count, CPU affinity, frequency policy where possible, and correctness check. Use the same memory alignment and allocation method. Randomize or carefully define matrix contents so dead-code elimination cannot remove the computation. Make the output observable, for example by checking a checksum after timing, but exclude checksum time from the kernel measurement unless end-to-end time is the object of study.
+
+Warm-up matters. The first iteration may include page faults, instruction-cache fills, dynamic linking, frequency ramp, and allocator effects. Decide whether the target is cold-start latency or steady-state throughput. For steady state, run warm-up iterations and report that policy. For cold start, reset or isolate state rather than silently discarding the first observation.
+
+Repeat enough times to observe scheduling and thermal variation. Report median, interquartile range, and high percentiles; show raw repetitions when sample count is small. A single fastest run is a lower bound on incidental interference, not an estimate of typical performance.
+
+## Measurement boundaries
+
+Use a monotonic high-resolution timer or hardware cycle counter with a documented serialization method. The start must not be moved after work by compiler or CPU reordering; the end must not be read before stores complete if the result includes stores. A barrier or fence may be needed around timing, but its cost must be excluded or included consistently.
+
+Measure at least wall-clock time, cycles, retired instructions, cache references/misses at relevant levels, branch instructions/misses, and memory bandwidth if counters are available. Record CPU model, core, frequency, operating system, compiler, input dimensions, alignment, and thermal state. Hardware counter names and sampling may differ; report their interpretation rather than treating a counter label as a universal physical quantity.
+
+## Workload matrix
+
+Use dimensions that cross the cache hierarchy: small enough to fit L1, larger than L1 but within L2, larger than L2, and larger than the shared cache or memory capacity available to the process. Include non-square or leading-dimension cases if the implementation claims generality. Test dimensions aligned and misaligned to vector width and cache-line size. For tiled code, include tile sizes smaller than, near to, and larger than the candidate cache footprint.
+
+For each dimension, compute the expected bytes of logical input and output. A simple lower bound for $C=A+B$ is 12 bytes per element if every value is read/written once, though write allocation and line transfers can add traffic. Compare measured bandwidth with the hardware’s sustainable stream bandwidth rather than its advertised peak. If the naive version is far below the ceiling due to poor locality, tiling may improve effective bandwidth without changing the physical DRAM limit.
+
+## Statistical interpretation
+
+Plot normalized time per element or cycles per element against matrix size. A cache-capacity transition should appear as a change in slope or a step when the active working set exceeds a level, though prefetchers and replacement can smooth it. Plot cache misses per element and bandwidth alongside time. Use paired runs where both implementations execute under similar system conditions, but avoid alternating patterns that cause one version to inherit the other’s cache state unless that is the production scenario.
+
+Compute effect size and uncertainty. If implementation A takes 10.0 ± 0.2 ms and B takes 9.8 ± 0.2 ms with strongly overlapping paired variation, the 2% improvement needs more evidence. If B takes 7.0 ± 0.1 ms across stable repetitions, the mechanism and practical significance are clearer. Do not call a result “statistically significant” without stating the test and independence assumptions.
+
+## Confounders
+
+Compiler vectorization can turn both source variants into similar machine code. Inspect generated assembly or compiler optimization reports. A different allocation can change page coloring and TLB behavior. Transparent huge pages can change translation reach. Frequency scaling can favor the version that keeps the core busy differently. NUMA placement can dominate large matrices. Background processes, interrupts, thermal throttling, garbage collection in a host runtime, and page faults can create outliers.
+
+A benchmark that fixes all confounders may no longer represent deployment. Therefore use two phases: a controlled mechanism experiment and a representative end-to-end experiment. The former supports causal understanding; the latter tests product value. Do not use the representative result to claim a cache mechanism without counters, or the controlled result to claim universal application speed.
+
+## Correctness and adversarial cases
+
+Compare outputs against a high-precision or reference implementation on random values, zeros, maximum and minimum representable values, NaNs if floating point is used, and dimensions that exercise tails. Vectorized code can read beyond logical bounds if masked loads are misunderstood. Tiled code can omit fringe rows or reuse a stale tile. A performance result from incorrect output is not a performance result.
+
+Test aliasing and alignment assumptions. If the API permits overlapping input/output, a transformation that assumes no alias may change semantics. If aligned vector loads are used, test misaligned input and either reject it explicitly or provide a safe path. Document whether the compiler is allowed to reassociate floating-point operations; bitwise differences may be acceptable only under a stated numerical tolerance.
+
+## Worked investigation plan
+
+Run four matrix sizes: 64×64, 256×256, 1024×1024, and 4096×4096, with three tile sizes and both implementations. Warm up five times, measure ten repetitions per cell, pin to one core, and record cycles, instructions, L1/L2/LLC misses, branch misses, and memory bytes. For each cell, verify a checksum and report median cycles per element and p99.
+
+If tiling helps only at 1024 and 4096 while L2/LLC misses per element fall, the cache hypothesis gains support. If it helps at all sizes with unchanged misses but lower instructions, vectorization or loop overhead is likely. If p50 improves but p99 worsens, investigate preemption, memory contention, or tile-size-dependent allocation. If the compiler emits identical loops, the source-level optimization has no measured implementation effect and the hypothesis must be revised.
+
+## Independent practice
+
+1. Write a complete hypothesis and prediction table for a cache optimization.
+2. Choose dimensions that cross three cache levels and justify them from capacity.
+3. Design a timing boundary that includes stores correctly without measuring result verification.
+4. List six confounders and a control or measurement for each.
+5. Interpret time improving with unchanged cache misses but lower instruction count.
+6. Design correctness tests for vector tails and overlapping buffers.
+7. Explain why a peak-bandwidth comparison is insufficient for a random-access kernel.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. A good hypothesis names a mechanism, input regime, and predicted observable. “Tiling is faster” is weak; “for working sets exceeding L2, tile reuse lowers L2 misses per element and therefore cycles per element” is testable.
+2. Compute bytes per active working set and choose dimensions just below and above L1, L2, and LLC capacities, then include larger cases. State whether matrices are shared or private and whether all three arrays fit simultaneously.
+3. Use a monotonic timer with compiler/CPU ordering barriers, start immediately before the kernel, end after the final stores are ordered, and verify output afterward. If fences are inside the measured boundary, include their cost consistently in both variants.
+4. Examples: compiler vectorization—inspect assembly; frequency scaling—pin and log frequency; NUMA—bind memory; page faults—pre-touch or measure cold start separately; alignment—control allocation; interference—isolated core and repeated runs.
+5. The improvement may come from fewer instructions, better issue utilization, or vectorization rather than cache behavior. Measure vector instructions, CPI, and generated code before attributing causality.
+6. Test lengths 0, 1, lane-1, lane, lane+1, and large nonmultiples; compare against a scalar reference. For overlap, test exact alias, forward overlap, backward overlap, and disjoint buffers, or document that overlap is forbidden.
+7. Peak bandwidth assumes large sequential transfers and ideal concurrency. Random access has latency, poor locality, TLB misses, and limited memory-level parallelism; sustainable bandwidth and latency distribution are the relevant measures.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: cost/performance notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [UC Berkeley CS 61C: memory hierarchy and AMAT](https://notes.cs61c.org/content/caches-intro/amat/)

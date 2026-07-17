@@ -1,0 +1,101 @@
+---
+title: "Concurrency Control"
+course: "database-systems"
+description: "Locking, two-phase locking, MVCC, and deadlocks."
+---
+# Concurrency Control
+
+Two-phase locking acquires locks before releasing any, supporting serializability but permitting deadlock. A wait-for cycle is a deadlock; detection and victim abort are one resolution. MVCC stores versions so readers can avoid blocking writers, while visibility rules determine which versions each transaction sees.
+
+Locks protect predicates only when the system’s protocol represents the predicate, not merely the rows currently found.
+
+## Schedules and serializability
+
+A schedule interleaves operations from concurrent transactions while preserving each transaction’s internal order. A serial schedule runs one transaction completely before the next. A schedule is conflict-serializable if it is conflict-equivalent to a serial schedule. Build a precedence graph with one node per transaction and an edge Ti to Tj when Ti’s operation conflicts with and precedes Tj’s operation on the same item. The schedule is conflict-serializable exactly when this graph is acyclic.
+
+Conflicts involve the same item with at least one write: read-write, write-read, or write-write. Two reads do not conflict. A cycle proves that no serial ordering preserves all conflict order; an acyclic graph yields a topological serial order. View serializability is more general but harder to test. Database protocols often target conflict serializability because locks and timestamps can enforce it operationally.
+
+## Two-phase locking and deadlocks
+
+Shared locks protect reads and exclusive locks protect writes. Two-phase locking has a growing phase of acquisitions followed by a shrinking phase of releases. Strict variants hold write locks until commit or abort, preventing dirty reads and simplifying undo. Lock granularity ranges from table and page to row, key range, or predicate. Fine locks improve concurrency but increase metadata and deadlock opportunities.
+
+A deadlock is a cycle in a waits-for graph. T1 holding A and waiting for B while T2 holds B and waits for A is the canonical case. Prevention imposes a global lock order or aborts according to transaction age; detection searches for cycles and aborts a victim; timeout is a heuristic. Victim choice considers rollback cost and starvation. A prevention policy may reduce deadlocks while increasing aborts or delaying transactions.
+
+Intention locks coordinate hierarchy: a transaction declares that it will acquire row locks before another transaction takes an incompatible table lock. A latch protecting a page’s in-memory structure is not a transaction lock. Latches are short and physical; locks govern logical visibility and may persist until commit. Confusing them causes races, use-after-eviction, or excessive blocking.
+
+## Timestamp and optimistic control
+
+Timestamp ordering assigns each transaction a logical order and rejects operations that would violate it. It avoids deadlocks but can abort transactions repeatedly under contention. Optimistic control lets a transaction read and compute, then validates its read and write sets before commit. It works when conflicts are rare and fails expensively when a hot row is updated by many transactions. A failed transaction’s partial state must not be reused on retry.
+
+## MVCC and snapshots
+
+MVCC stores versions with creator and deleter metadata. A snapshot determines visible versions, allowing readers to avoid blocking writers. Old versions remain until no active snapshot can observe them, so long transactions delay cleanup and can cause bloat and replication lag. Snapshot isolation prevents many anomalies but permits write skew: two transactions can read a shared condition and update disjoint rows so the joint invariant fails.
+
+Serializable snapshot isolation adds dependency tracking and aborts dangerous structures. The application must retry serialization failures from a clean transaction start. An outbox or idempotency key is needed when a retry is connected to an external notification, payment, or message.
+
+## Predicate protection
+
+A row lock protects an existing tuple, not necessarily a future row matching a predicate. Phantoms require predicate locks, key-range locks, serializable validation, an exclusion constraint, or a locked summary row. An index latch protects tree structure and is not automatically a predicate lock. For an invariant “at least one doctor remains on call,” lock or validate the set of doctors, not merely whichever row each transaction happens to update.
+
+## Trace method
+
+For each schedule, annotate visible values, locks or versions, commits, aborts, and the precedence graph. Test lost update, dirty read, nonrepeatable read, phantom, write skew, deadlock, delayed retry, and crash-after-write. State the DBMS isolation behavior rather than assuming a textbook label. A schedule is safe only relative to a stated invariant and failure model.
+
+## Exercises
+
+1. Build a precedence graph and identify a cycle.
+2. Repair a lost update under read-then-write.
+3. Construct a write-skew schedule.
+4. Explain row locks versus predicate protection.
+5. Compare strict 2PL, timestamp ordering, optimistic validation, and MVCC.
+6. Design an idempotent serialization-failure retry.
+
+### Diagnostic solutions
+
+
+1. Add an edge for every conflicting pair in schedule order. A cycle proves non-serializability; an acyclic graph can be topologically sorted.
+2. Use an atomic conditional UPDATE, acquire an appropriate lock before reading, enforce a constraint, or use Serializable and retry from the beginning.
+3. T1 and T2 both read that one of two doctors is active; T1 turns A off and T2 turns B off; both commit under snapshot isolation and violate the invariant.
+4. A row lock protects a known tuple. Predicate protection covers existing and future tuples matching a condition through range locks, validation, constraints, or a locked summary.
+5. Strict 2PL blocks but simplifies recovery; timestamps avoid deadlocks but abort conflicts; optimistic validation avoids blocking but aborts at commit; MVCC provides snapshots and needs cleanup and possibly serializable validation.
+6. Restart all database work after abort, generate a stable idempotency key, defer external effects through an outbox, and deduplicate the consumer.
+
+
+
+## Anomaly schedule workbook
+
+Let accounts(A=100,B=100) and consider transfers. T1 reads A=100, computes A=90; T2 reads A=100, computes A=80; T1 writes 90 and T2 writes 80. The final value loses T1’s decrement. An atomic UPDATE accounts SET balance=balance-10 WHERE id='A' serializes the row modification, while a read-then-write repair needs a lock held from read through write or a version predicate such as WHERE id='A' AND version=v with a retry on zero rows.
+
+For dirty read, T1 updates inventory from 5 to 4 but has not committed; T2 reads 4 and ships an item; T1 aborts. T2 acted on a value that never committed. Strict two-phase locking or a snapshot that excludes uncommitted versions prevents the read. For a nonrepeatable read, T2 reads price 10, T1 commits price 12, and T2 reads 12 later. Repeatable read may use a stable snapshot or locks, depending on the DBMS.
+
+For a phantom, T1 asks whether any appointment exists in time range R and sees none; T2 inserts an appointment in R and commits; T1 inserts its own appointment, violating a uniqueness or capacity rule. A row lock on existing appointments does not protect the empty range. Use a unique or exclusion constraint, serializable isolation, a range lock where supported, or a locked capacity row.
+
+## Correctness and performance trade-offs
+
+More isolation can reduce anomalies but increase blocking, aborts, memory for versions, lock-table size, and retry load. The right choice is determined by an invariant. A read-only dashboard can use a replica or snapshot if staleness is acceptable. A payment authorization must route through an authoritative transaction and protect duplicate effects. A queue consumer should use a unique event ID and idempotent state transition rather than rely solely on serializable isolation.
+
+## Implementation test plan
+
+Use barriers to force schedules. Start each transaction from a known snapshot, pause after reads or lock acquisition, and release the other transaction at the intended point. Assert not only final values but which operation blocked, committed, or aborted and which error was returned. Repeat under row skew, long transactions, deadlock victim selection, process crash, replica lag, and retry. Include a test that an aborted transaction’s external effect is not duplicated.
+
+## Synthesis checkpoint
+
+For a concurrency claim, present a history rather than only naming an isolation level. Mark the value each read sees, the conflict or predicate that must be protected, and the client response to abort or deadlock. Then test the repaired transaction with a deterministic barrier and explain which guarantee comes from proof and which comes only from measurement.
+
+## References & Further Reading
+
+## Exam checklist
+
+For a schedule, name the isolation level, draw the interleaving, mark each visible version or lock, construct the conflict graph, and state the final invariant. For a repair, explain why the chosen lock, constraint, atomic update, or validation step covers the entire read and write set. For a retry, restart from a fresh transaction and make external effects idempotent. These are proof obligations, not implementation details.
+
+* [PostgreSQL Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html)
+* [PostgreSQL Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+
+**Exercise.** Draw a deadlock between two transactions locking rows A and B in opposite order. Give two prevention policies and their trade-offs.
+
+Run the schedule against the actual target DBMS and record its version, configuration, and returned errors. Vendor semantics can differ even when isolation names match. Use documentation and a controlled schedule as evidence. Preserve the trace for regression and keep it versioned always.
+
+## References & Further Reading
+
+* [PostgreSQL Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html)

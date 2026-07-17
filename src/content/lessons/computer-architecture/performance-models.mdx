@@ -1,0 +1,109 @@
+---
+title: "Performance Models"
+course: "computer-architecture"
+description: "CPI, latency, throughput, Amdahl's law, and measurement discipline."
+---
+# Performance Models
+
+Performance engineering begins by defining what is being measured. A processor can be faster in cycles per instruction and slower in wall-clock time if its clock is lower, or faster on one input and slower on another because its memory behavior changes. A credible performance claim names the workload, correctness condition, measurement boundary, resource metric, and baseline. Only then do equations such as CPI, AMAT, Amdahl’s law, and throughput become useful rather than decorative.
+
+## Time, instruction count, and CPI
+
+For a program executing $IC$ instructions, average cycles per instruction $CPI$, and clock frequency $f$, idealized CPU time is
+
+$$
+T=\frac{IC\cdot CPI}{f}=IC\cdot CPI\cdot T_{cycle}.
+$$
+
+The formula is a decomposition, not a causal explanation. $IC$ depends on compiler, ISA, optimization, and input. CPI depends on pipeline width, hazards, cache behavior, branches, memory-level parallelism, and contention. Frequency depends on critical paths, voltage, temperature, and design point. Improving one term can worsen another.
+
+If a processor retires 3 billion instructions in 1.5 seconds at 2 GHz, then $IC=3\cdot10^9$, cycles $=3\cdot10^9$, and $CPI=1$. If a second implementation retires 2.4 billion instructions in 1.4 seconds at 2.5 GHz, its cycles are $3.5\cdot10^9$ and CPI is about 1.458. It is faster in wall-clock time despite a worse CPI because it performs fewer instructions and runs at a higher frequency. Reporting CPI alone would reverse the conclusion.
+
+Instruction count can be weighted by class: $CPI_{avg}=\sum_i f_i CPI_i$, where $f_i$ is the fraction of executed instructions in class $i$. In a pipeline, base CPI may approach one, but load-use stalls, branch mispredictions, cache misses, synchronization, and front-end starvation add terms. A model such as
+
+$$
+CPI=CPI_{base}+\alpha_{br}p_{br}+\alpha_{load}p_{load}+\alpha_{L1}p_{L1}+\cdots
+$$
+
+is useful only when $α$ represents the relevant frequency and $p$ the conditional penalty. Double-counting a miss penalty that is already embedded in a measured CPI produces a false diagnosis.
+
+## Latency, throughput, and queueing
+
+Latency is the time for one operation from request to completion. Throughput is the sustainable completion rate. A pipelined multiplier may have latency four cycles and throughput one result per cycle; a nonpipelined multiplier may have latency and initiation interval both four cycles. A system can have low latency but poor throughput, or high latency with excellent throughput after filling.
+
+Queueing adds waiting time. If a server’s utilization approaches one, small increases in offered load can produce large increases in response latency even when service time is unchanged. A network or memory benchmark that measures only peak bandwidth hides queueing effects and can overstate performance under contention. Tail latency—p95, p99, or higher—matters when a user request depends on many parallel subrequests.
+
+**Worked pipeline example.** A four-stage unit has 2 ns latency per result after fill and accepts one input every 0.5 ns. For a single request, latency is approximately 2 ns; for 100 independent requests, completion time is $2+(99)(0.5)=51.5$ ns. A nonpipelined unit with 2 ns service time takes 200 ns. If the requests are dependent, however, the consumer may need to wait for each two-nanosecond result and receive little benefit from throughput.
+
+## Amdahl’s law and bottlenecks
+
+If fraction $p$ of the original execution time is improved by factor $s$, total speedup is
+
+$$
+S=\frac{1}{(1-p)+p/s}.
+$$
+
+The unimproved fraction limits the result. If memory accounts for 40% and is made twice as fast, $S=1/(0.6+0.2)=1.25$. If serialization accounts for 70% and becomes free, the maximum speedup is $1/0.3\approx3.33$, not infinite.
+
+The fraction must be measured in the baseline execution, not inferred from the fraction of source code or hardware blocks. Improving cache hit rate can reduce memory time but also change overlap with computation; the simple law may need a more detailed model. Gustafson-style scaling asks a different question: as the problem grows with processor count, how much parallel work can be usefully added? Neither law replaces a workload definition.
+
+## Roofline and resource ceilings
+
+For data-intensive kernels, arithmetic intensity is operations per byte transferred from a bottleneck memory level. If peak compute throughput is $P_{peak}$ operations per second and sustainable bandwidth is $B$, attainable performance is bounded by
+
+$$
+P\le\min(P_{peak},B\cdot I),
+$$
+
+where $I$ is arithmetic intensity. A low-intensity kernel is bandwidth-bound; adding arithmetic units does little unless reuse or compression increases effective intensity. A high-intensity kernel is compute-bound until another resource—register capacity, cache bandwidth, instruction issue, or synchronization—becomes limiting.
+
+**Worked roofline example.** A processor sustains 1 TB/s of relevant memory bandwidth and 4 TFLOP/s peak arithmetic. A kernel performs 2 floating operations per byte, so the bandwidth ceiling is 2 TFLOP/s and the kernel is bandwidth-bound under the model. Doubling peak compute to 8 TFLOP/s changes nothing; doubling reuse to 4 operations per byte raises the bandwidth ceiling to 4 TFLOP/s, at which point peak compute becomes the next ceiling.
+
+## Measurement design
+
+A benchmark is an experiment, not a stopwatch call. Define the hypothesis, independent variable, dependent metric, controlled variables, repetitions, warm-up policy, and stopping rule. The timing boundary must exclude setup when measuring steady-state execution and include it when measuring end-to-end user experience. Report distribution and uncertainty, not only the fastest run.
+
+Warm-up may populate instruction/data caches, trigger JIT compilation, stabilize branch predictors, or move a frequency governor. Randomized input order can prevent an algorithm from receiving a pre-sorted favorable trace, but randomization itself must be reproducible and reported. CPU affinity, thread count, background load, thermal state, compiler flags, and allocator behavior can dominate small effects.
+
+Use counters to test mechanisms. If a cache hypothesis predicts that row-major traversal lowers L1 misses, measure misses and bandwidth as well as time. If a branch hypothesis predicts misprediction stalls, measure branch events and compare a branchless variant. Counters are not infallible—multiplexing, sampling, speculative counting, and privilege restrictions matter—but they are stronger evidence than a narrative about “cache friendliness.”
+
+## Statistical interpretation
+
+A mean is sensitive to outliers; a median describes a typical run; high percentiles describe tail behavior. Confidence intervals quantify uncertainty under assumptions about sampling, but repeated measurements from the same warmed system are not automatically independent. Effect size matters: a 1% improvement with 0.8% measurement variation is weak evidence unless the experiment is strengthened.
+
+Benchmark suites should include representative and adversarial workloads. A compiler optimization that wins on one synthetic loop may lose on a real application because instruction-cache pressure or code size changes. A cache design that wins on a small working set may lose when the active data exceeds L2. The strongest report explains where the model predicts failure and tests that boundary.
+
+## Energy and performance per watt
+
+Performance is not the only constraint. Dynamic energy is related to switching activity, capacitance, and voltage; leakage and static power matter at idle and high density. A higher frequency may require higher voltage and disproportionately increase power. Memory traffic often consumes more energy than an arithmetic operation, so a cache optimization can improve both time and energy, or increase energy by fetching large unused lines.
+
+Performance per watt is a ratio with a workload denominator. A design that finishes quickly but uses a high power burst may compare differently from one that runs longer at low power, depending on whether the system is energy-limited, thermally limited, or latency-limited. State the objective before optimizing.
+
+## Independent practice
+
+1. Compute CPU time, cycles, and CPI from instruction count, frequency, and measured time. Compare two implementations with different instruction counts.
+2. Apply Amdahl’s law to a workload with 25% memory, 15% synchronization, and 60% compute when memory is 4× faster and synchronization 2× faster.
+3. Use a roofline model to classify a kernel given bandwidth, peak compute, and arithmetic intensity. Explain what optimization can move each ceiling.
+4. Design an experiment testing whether a matrix traversal is cache-bound. Name at least five confounders.
+5. Explain a case where average latency improves while p99 latency worsens.
+6. Distinguish latency, initiation interval, throughput, and utilization in a pipelined unit.
+7. Critique a benchmark that reports only the fastest of three runs on a warmed cache.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Use $T=IC\cdot CPI/f$. Cycles are $T f$ and CPI is cycles divided by IC. A lower CPI does not prove lower time when instruction count or frequency differs.
+2. Baseline fractions are 0.25, 0.15, and 0.60. New time fraction is $0.25/4+0.15/2+0.60=0.7375$, so speedup is about 1.356. The remaining compute fraction limits the result.
+3. Compute $B\cdot I$ and compare with peak compute. Increasing vector width raises compute ceiling; tiling, reuse, compression, and fewer bytes moved raise arithmetic intensity or effective bandwidth. Neither helps if another resource is already the bottleneck.
+4. Control matrix dimensions, element type, compiler, thread placement, frequency, allocator, warm-up, input values, and background load; measure time, cache misses, bandwidth, and repetitions. Compare dimensions crossing cache capacities.
+5. A cache or admission policy may improve common requests while causing rare large requests to queue behind evictions, increasing tail latency. Report the distribution rather than infer quality from the mean.
+6. Latency is request-to-result delay; initiation interval is spacing between accepted inputs; throughput is completed results per unit time; utilization is occupied capacity relative to its maximum. A four-cycle pipeline can have four-cycle latency and one-cycle initiation interval.
+7. The fastest run hides variability, warm-up state, scheduling, and outliers. The experiment should report all runs or a distribution, define warm-up, repeat enough times, and use counters or controlled conditions to test the proposed mechanism.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: cost/performance and parallel processing notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [UC Berkeley CS 61C: memory hierarchy and AMAT](https://notes.cs61c.org/content/caches-intro/memory-hierarchy/)
+* [UC Berkeley CS 61C: final-exam performance problems](https://cs61c.org/sp26/pdfs/exams/sp26-final-blank.pdf)

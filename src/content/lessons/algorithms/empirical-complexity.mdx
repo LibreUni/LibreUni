@@ -1,0 +1,87 @@
+---
+title: "Empirical Complexity"
+course: "algorithms"
+description: "Using data to challenge or refine a cost model."
+---
+# Empirical Complexity
+
+To test a hypothesized $T(n)$, vary input size over a meaningful range and compare normalized measurements such as $T(n)/nlog n$. Noise, cache thresholds, garbage collection, and input shape can create apparent phases.
+
+A log-log plot can reveal a power-law exponent, but a straight line over one range is not proof of asymptotic behavior. Pair measurement with a structural analysis.
+
+## Complexity as a model-selection problem
+
+An empirical complexity study asks which model best explains measurements under a specified workload and machine. Candidate models might be n, n log n, n squared, or n plus m for a graph with n vertices and m edges. The goal is not to “prove” a model by plotting it. The goal is to test predictions derived from the implementation and identify where the model stops being informative.
+
+Begin with a mechanism. If an algorithm performs one comparison per input item and a logarithmic tree operation, predict a curve proportional to n log n plus lower-order terms. If it scans every edge, use V+E rather than a single n. If memory traffic dominates, include bytes moved and cache levels as explanatory variables. A model without a mechanism is curve fitting, and many unrelated functions can fit a short sequence of points.
+
+Normalize carefully. If T(n)/(n log n) is approximately constant over a range, that is evidence consistent with n log n, not evidence that the ratio will remain constant forever. Plot residuals, not only normalized values. A systematic residual pattern means the candidate misses a phase, a parameter, or a change in the dominant cost.
+
+## Designing the input matrix
+
+Size alone is rarely enough. For a graph algorithm vary vertices, edges, degree skew, connected components, weights, and diameter. For a sorting algorithm vary duplicates, runs, key width, and presortedness. For a dynamic program vary both dimensions and the density of reachable states. Hold all but one factor fixed when estimating a partial effect, then use a factorial or randomized design to detect interactions.
+
+Include scales that cross implementation boundaries: cache capacity, allocator thresholds, integer-width changes, thread counts, and input sizes where a quadratic routine becomes visibly infeasible. Logarithmically spaced sizes expose growth across orders of magnitude; dense local spacing helps locate a transition. Do not discard small sizes merely because asymptotics have not appeared: startup overhead is part of the deployed system.
+
+Use at least three input families: benign, representative, and adversarial. A representative family needs a provenance or a clear generator, not a vague claim that it is realistic. An adversarial family should target a known branch, pivot rule, hash pattern, or queue behavior. If the algorithm has randomization, repeat each instance with multiple seeds and separate instance variance from seed variance.
+
+## Timing and uncertainty
+
+A measurement is an estimate. Repeat trials, randomize run order, and report median and quantiles or confidence intervals. Interleaving candidates reduces bias from thermal drift and background activity. If the distribution is heavy-tailed, the mean alone can be misleading. Record failed runs and timeouts using a declared policy.
+
+Measure the boundary you intend to optimize. Kernel timing answers a different question from end-to-end latency. If input construction is excluded, explain why; if it is included, ensure both candidates receive equivalent preparation. In a managed runtime, warm-up and garbage collection can create phases. In native code, compilation flags, link-time optimization, vectorization, and CPU frequency can change the result.
+
+Use units that remain interpretable. Report seconds per operation, bytes per item, or edges processed per second in addition to raw time. A ten percent speedup at a tiny workload may have no operational impact, while a modest improvement at a large repeated workload may matter substantially. Keep raw samples so summaries can be recomputed.
+
+## Fitting and comparing models
+
+For a power-law hypothesis T=a n^b, a log-log transformation gives log T=log a+b log n. The slope b is useful as a diagnostic, but logarithms change the error weighting: a fit emphasizes relative rather than absolute error. For T=a n log n+b n+c, fit in the original scale or compare predicted residuals after defining the noise model.
+
+Do not choose the model solely by the largest R-squared. A flexible model can fit noise. Compare residual plots, parameter uncertainty, out-of-sample prediction, and the plausibility of coefficients. Use held-out sizes or cross-validation when the purpose is prediction. If the data span only one order of magnitude, state that several models are observationally indistinguishable there.
+
+A useful diagnostic is doubling behavior. Measure T(2n)/T(n). A linear term tends toward two, a quadratic term toward four, and n log n toward approximately two times a slowly changing logarithmic factor. Lower-order terms and fixed overhead can obscure this at small n. If the ratio changes with n, that change may reveal the transition from computation to memory or from one algorithmic branch to another.
+
+## Separating causes of phases
+
+A timing curve with a sudden knee may indicate cache capacity, page faults, a different data structure representation, branch predictor behavior, garbage collection, or a parallel scheduling threshold. Treat the knee as a question. Collect hardware counters if available, inspect allocation and memory footprint, rerun with randomized order, and vary the suspected threshold. A plausible story is not enough without a discriminating experiment.
+
+For memory behavior, compare working-set size with cache levels and measure bytes transferred. For branch behavior, compare predictable and adversarial key orders. For parallel algorithms, plot speedup against processor count and distinguish strong scaling at fixed work from weak scaling at fixed work per processor. For external-memory workloads, count I/O operations and sequential versus random access rather than pretending all memory references cost the same.
+
+## Threats to validity
+
+Internal validity concerns whether the comparison itself is fair. Use identical compilation settings, equivalent output validation, and the same input materialization. Avoid accidentally letting one implementation reuse preprocessing that the other repeats. External validity concerns whether the findings transfer to other machines, languages, sizes, or input distributions. State the scope instead of generalizing from one laptop.
+
+Construct validity concerns whether the metric measures the intended concept. Throughput may hide tail latency; average approximation ratio may hide catastrophic instances; CPU time may hide energy or memory pressure. Reproducibility requires enough information for another student to regenerate inputs and rerun the experiment: source revision, environment, commands, seeds, and analysis script.
+
+## From data back to theory
+
+Empirical results should refine, not replace, proof. If a measured algorithm appears linear, inspect the code for a hidden quadratic branch and construct an input that exercises it. If a theoretically superior algorithm loses, identify constants and representation costs; do not conclude the theorem is false. If an optimized implementation has a better curve than the baseline, verify that both solve the same problem and return equally certified outputs.
+
+A strong report ends with predictions. For example: “For sparse graphs with degree below d and memory sufficient for CSR, implementation A should process at least twice as many edges per second; beyond the cache threshold, the advantage should shrink.” Test that prediction on new sizes. A prediction that fails is useful when it reveals which assumption was wrong.
+
+## Exercises
+
+1. Design an input matrix for testing a sorting algorithm across size, duplicates, and presortedness.
+2. Explain why a high R-squared value cannot establish an asymptotic complexity class.
+3. A timing ratio T(2n)/T(n) rises from 1.4 to 3.8 as n grows. Give two plausible explanations and one experiment for each.
+4. Separate internal, external, and construct validity in a benchmark comparing graph representations.
+5. Propose a fair method for separating instance variance from random-seed variance.
+6. Write a falsifiable prediction about a cache-capacity transition.
+
+### Diagnostic solutions
+
+
+1. Use logarithmic sizes and, for each size, generate random, reverse, presorted, duplicate-heavy, and long-run inputs with recorded seeds. Keep the comparator and output validation identical.
+2. Many functions can fit a finite noisy interval, including polynomials with different degrees. R-squared measures fit under a chosen model; it does not establish behavior outside the measured range or explain the mechanism.
+3. The rise may reflect a quadratic term becoming dominant, or a cache/I/O transition. Double sizes while recording operation counts and hardware counters; an operation-count change supports the first, while a working-set and miss-rate knee supports the second.
+4. Internal validity asks whether code, compiler, inputs, and timing boundaries are equivalent. External validity asks whether the result transfers to other graph families and machines. Construct validity asks whether throughput, memory, and latency capture the intended deployment objective.
+5. Use a crossed design: several fixed instances, several independent seeds per instance, randomized run order, and a variance decomposition or grouped confidence intervals. Do not average seeds and instances as if they were the same source of variation.
+6. Example: “When the working set exceeds the last-level cache, median time per edge will increase by at least 30 percent while counted algorithmic operations remain constant.” Test sizes around the predicted capacity and record cache misses.
+
+
+
+**Exercise.** Choose three candidate growth rates for an observed timing series. Define a residual or normalization that would distinguish them and state one confounder.
+
+## References & Further Reading
+
+* [MIT Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)

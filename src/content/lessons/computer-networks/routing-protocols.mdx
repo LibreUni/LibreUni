@@ -1,0 +1,84 @@
+---
+title: "Routing Protocols in Practice"
+course: "computer-networks"
+description: "OSPF-style link state, BGP path vectors, policy, route selection, and safe control-plane operations."
+---
+# Routing Protocols in Practice
+
+Routing algorithms answer a mathematical question: which next hop should be used for a destination under a chosen metric? Routing protocols must answer a larger operational question: which information may a router trust, how is that information disseminated, how are conflicts resolved, and how does the system behave while the answer is changing? This lesson connects the algorithms from the previous lesson to protocol mechanisms used in real networks.
+
+## Domains and administrative scope
+
+An autonomous system is an administrative domain with a coherent routing policy. Interior gateway protocols (IGPs) such as OSPF and IS-IS are designed to converge inside a domain where a common metric and topology database are plausible. Exterior routing, most prominently BGP, exchanges reachability between domains that may have conflicting commercial, security, and performance objectives.
+
+The distinction is not simply “small protocol versus large protocol.” An IGP usually optimizes a technical path metric and seeks relatively fast convergence. BGP carries policy attributes and intentionally does not promise the globally shortest physical path. A domain may prefer a customer route over a provider route even when the latter has fewer hops, because the economic relationship determines export and import policy.
+
+## Link-state operation
+
+In a link-state protocol, each router originates advertisements describing its links, costs, and relevant adjacencies. Flooding distributes these advertisements through the domain. Every router maintains a link-state database and independently runs a shortest-path calculation rooted at itself. The resulting next hops are installed in the routing table after validation and preference checks.
+
+Reliable flooding needs more than forwarding a packet to every neighbor. Advertisements carry identifiers, sequence or version information, age or lifetime, and a checksum. A router keeps the newest instance, acknowledges reliable delivery where required, and refloods a newer instance while suppressing duplicates. Aging removes state whose origin has disappeared. Without freshness and aging, a stale link could remain permanently present after a failure.
+
+**Worked convergence trace.** Routers A, B, and C form a triangle. A advertises its links to B and C. B receives the advertisement from A, records it, and forwards it to C. C forwards the same identifier back toward A, but A recognizes its own current instance. If A’s link to B fails, A originates a newer advertisement. B and C replace the old instance, recompute paths, and install routes that avoid the failed edge. During the interval before all databases agree, temporary blackholes or loops are possible; sequence numbers prevent a delayed old advertisement from replacing the newer one.
+
+## OSPF concepts
+
+OSPF creates adjacencies between neighbors and uses a link-state database within an area. Broadcast networks elect a designated router to reduce the number of full adjacency relationships and represent the shared segment efficiently. Areas create hierarchy: routers maintain detailed topology within an area and summarized reachability between areas. Summarization reduces state but can hide more-specific failures and may create suboptimal paths.
+
+An OSPF route is not selected solely by Dijkstra’s distance. Route type, area scope, administrative preference, and cost interact. A lower-cost external route does not necessarily defeat an intra-area route. Operational reasoning must therefore state which comparison stage is being used. A correct SPF calculation applied to the wrong candidate set still yields the wrong forwarding behavior.
+
+## BGP as a path-vector protocol
+
+BGP advertises prefixes with attributes rather than flooding a complete physical topology. An UPDATE can announce a prefix and a path vector such as an AS sequence, next hop, local preference, origin information, and MED. A receiving AS applies import policy, selects a best path, and applies export policy before advertising to neighbors. The advertised path can be transformed by policy; it is not a neutral observation.
+
+The AS path serves loop prevention: an AS generally rejects an advertisement containing its own AS number. This is necessary but not sufficient for all routing loops, especially when policies, confederations, route servers, or implementation mistakes complicate the path. Prefix filtering and maximum-prefix limits protect against accidental or malicious announcements. Route origin validation can provide additional evidence about whether an AS is authorized to originate a prefix, but authorization does not prove that the chosen path is optimal or that the destination is safe.
+
+**Policy example.** AS X learns prefix P from customer C and provider U. It sets higher local preference for the customer route, even if the provider path’s AS sequence is shorter. It exports the provider-learned route to customers only if its policy permits transit; often it does not. If X announces P to U while P is not actually reachable, traffic can be attracted to a blackhole. The protocol can distribute a syntactically valid path while the operator’s policy or data plane is wrong.
+
+## Route selection and manipulation
+
+Route selection is a sequence of comparisons, not one universal shortest-path rule. A simplified reasoning order might compare local policy, route validity, local preference, locally originated routes, path length, origin type, MED under a defined scope, and tie-breakers such as eBGP preference, IGP cost to next hop, router ID, and age. Exact order varies by protocol and implementation; a course answer must name the assumed rule set.
+
+Attributes can be used deliberately for traffic engineering. Prepending an AS may make a route look less attractive to some neighbors, but remote policy can ignore path length. More-specific announcements can attract traffic because of longest-prefix matching, but they increase global table state and create security and operational risk. Local preference can control outbound choice inside an AS, while export announcements influence inbound traffic only indirectly.
+
+## Failure modes
+
+Control-plane failures include adjacency loss, stale state, route withdrawal, policy rejection, table exhaustion, and process or hardware failure. Data-plane failures include an unusable next hop, ACL drop, MTU problem, congested queue, or incorrect FIB installation. A route visible in the control-plane database is not evidence that packets traverse it successfully.
+
+Convergence is a distributed event. Router A can remove a route before router B has learned the withdrawal. If B still forwards through A and A forwards toward B, a transient loop results. If B removes the route but an upstream C has not yet learned the alternative, a blackhole results. Fast timers shorten detection but can cause false failures under transient control-plane delay. Graceful restart may preserve forwarding during a process restart but risks stale reachability if the data plane is no longer valid.
+
+Microloops can occur during ordered updates: one router installs a new next hop while a neighbor still uses the old next hop. Loop-free alternate and ordered-FIB techniques reduce this risk, but they require additional state and careful update sequencing. Operators should distinguish packet loss during a bounded convergence interval from persistent misconfiguration; both matter, but they imply different repairs.
+
+## Verification and safe change
+
+A routing change should have a precondition, intended invariant, observation window, and rollback plan. Useful invariants include: customer prefixes do not enter forbidden transit paths; next hops resolve through the intended topology; no route is accepted from an unauthorized origin; default routes are not leaked where prohibited; and the FIB agrees with the selected control-plane route.
+
+A staged rollout limits blast radius. Validate configuration syntax, policy, prefix counts, and route maps before activation. Apply to one neighbor or region, observe control-plane state and data-plane probes, then expand. A successful ping is weak evidence; test representative prefixes, both directions, large packets, and failure recovery. Record the previous known-good state so rollback is a defined operation rather than an improvised edit.
+
+## Exercises
+
+1. Contrast link-state and path-vector dissemination in terms of state, optimization objective, and failure behavior.
+2. A router learns prefix P by an intra-area route cost 30, an inter-area route cost 10, and an external route cost 5. Explain why “choose 5” is not necessarily valid.
+3. Construct a BGP policy in which a customer-learned route is preferred over a shorter provider-learned route and is exported differently to each neighbor class.
+4. Explain how a stale advertisement can cause a blackhole and how sequence numbers and aging mitigate it.
+5. A FIB shows a next hop that is present in the routing table but unreachable through the data plane. Give a troubleshooting sequence that separates control-plane from data-plane causes.
+6. Describe a safe staged deployment for a new more-specific route and name two risks of using it for traffic engineering.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Link state distributes topology and lets each router compute a metric path; path vector distributes reachable prefixes plus policy attributes and avoids requiring a shared global topology. Link state can converge quickly within a managed domain but has flooding/state costs; BGP scales administrative boundaries but can prefer policy over physical shortest paths and can converge through transient withdrawals.
+2. Candidate class and administrative preference are compared before the metric in many IGPs. An intra-area route may be preferred regardless of its numeric cost. The answer must use the protocol’s selection order, not compare incomparable metrics.
+3. Set local preference 200 for customer route C and 100 for provider route U. Export C to peers and providers if transit policy allows, but export U only to customers or not at all. The exact policy must also reject unauthorized origins and ensure the next hop is reachable.
+4. If a router continues advertising a dead path, neighbors can send traffic to it and discard packets, producing a blackhole. Sequence/version information makes newer withdrawals supersede old announcements; aging removes state when refreshes stop. Neither mechanism proves that the remaining path is operational.
+5. Check interface/link state and ARP/ND or recursive next-hop resolution; inspect ACLs, VRFs, and FIB programming; compare control-plane and hardware counters; use a source-specific probe; then test MTU and return routing. A route-table entry alone does not locate the fault.
+6. Validate authorization and reachability, announce to one controlled neighbor, monitor prefix propagation, reachability, and load, then expand with a rollback timer. Risks include route-table growth and accidental hijack/blackholing; remote networks may also apply different policies than expected.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 4271: BGP-4](https://www.rfc-editor.org/rfc/rfc4271)
+* [RFC 2328: OSPF Version 2](https://www.rfc-editor.org/rfc/rfc2328)
+* [RFC 6811: BGP Prefix Origin Validation](https://www.rfc-editor.org/rfc/rfc6811)
+* [RFC 7908: Route Leaks and Their Solutions](https://www.rfc-editor.org/rfc/rfc7908)

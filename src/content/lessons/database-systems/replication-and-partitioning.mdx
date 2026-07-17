@@ -1,0 +1,91 @@
+---
+title: "Replication and Partitioning"
+course: "database-systems"
+description: "Read replicas, sharding keys, hotspots, and rebalancing."
+---
+# Replication and Partitioning
+
+Replication improves read capacity or availability but introduces lag and failover state. Partitioning divides data by a key; a good key balances load and keeps common queries local. A poor key creates hotspots or cross-partition coordination.
+
+Changing a partition key is a data migration, not a configuration toggle. Dual writes and backfills need reconciliation and a removal plan.
+
+## Replication semantics
+
+Replication copies a logical history or state between nodes. A primary may accept writes and stream log records to read replicas; a synchronous replica acknowledges before the client commit response, while an asynchronous replica may lag. Define whether the guarantee concerns acknowledged writes, read freshness, ordering, failover, or only eventual convergence. A read replica that is healthy but behind is not equivalent to an authoritative primary for uniqueness, permissions, payment state, or inventory.
+
+Read-after-write consistency can be provided by routing a user’s reads to the writer for a bounded interval, attaching a log position to the write response and waiting for a replica to catch up, using session-sticky routing, or reading from an authoritative quorum. Each method has latency and failure behavior. A client that writes in region A and immediately reads region B needs an explicit guarantee rather than an assumption that replication is fast.
+
+## Failover and fencing
+
+Failover changes which node may accept writes. The promoted node must satisfy a data-loss policy, and the old primary must be fenced so it cannot continue writing as a split brain. Fencing may use a lease, epoch or term number, storage-level reservation, network isolation, or an external coordinator. A node with an old lease must reject writes even if it believes it is primary.
+
+Promotion requires checking log position, unapplied transactions, prepared transactions, schema version, encryption keys, and application compatibility. Writes acknowledged by an asynchronous primary may be absent from the promoted node; the system must expose the recovery-point objective and reconcile or report them. A failover test should occur after an acknowledgment and before replication, not only during idle traffic.
+
+## Partitioning strategies
+
+Hash partitioning maps a key through a stable hash to a bucket and usually balances uniform identifiers. It scatters ranges, so a time-window query may touch every partition. Range partitioning keeps nearby values together and supports pruning for ranges and retention, but monotone keys can create a hot newest partition. List partitioning is useful for explicit tenants or regions but may become operationally unwieldy.
+
+Choose a key based on write distribution, query predicates, transaction locality, data growth, privacy boundaries, and rebalancing. User ID may co-locate a user’s data but a celebrity or automated account can create a hotspot. Country may help locality and compliance but create severe skew and cross-country user queries. A composite or salted key can spread load but makes point lookup and transaction routing harder.
+
+Partition pruning removes partitions whose ranges or predicates cannot match. It depends on query form, parameter visibility, type and timezone normalization, and correct partition constraints. A function around the partition key may prevent pruning. Over-partitioning increases planning, catalog, and maintenance overhead; under-partitioning increases scan and migration cost.
+
+## Sharding and cross-shard operations
+
+Sharding places partitions on different nodes. A single-shard transaction can often use local atomicity; a cross-shard transaction needs coordination, a saga, or a design that accepts partial progress. Joins and aggregates across shards require data movement, co-location, replicated dimensions, or approximate/partial results. A shard key that makes common reads local may make global analytics expensive, so workload classes may need separate projections.
+
+Cross-shard uniqueness requires a global authority, deterministic allocation, partition-scoped namespaces, or a protocol that detects conflicts. Generating order IDs independently is easy; enforcing one global sequential order is expensive and creates a coordination bottleneck. Tenant-local order numbers may be preferable if the product semantics permit them.
+
+## Rebalancing and migrations
+
+Changing a partition key or shard placement is a data migration. A safe migration identifies source and destination ownership, copies a snapshot, captures changes during the copy, validates row counts and checksums, catches up the change stream, switches reads and writes at an epoch boundary, and retires the old owner only after observation. Dual writes can diverge on partial failure, so each write needs an idempotency key and a reconciliation process.
+
+Use versioned ownership maps. A request carries or resolves an epoch; a node rejects writes for a partition it no longer owns. During cutover, avoid a window in which both owners accept the same write. Backfill jobs must be resumable, rate-limited, isolated from foreground latency, and safe under retries. Validate foreign keys, indexes, materialized views, policies, and backups after migration.
+
+## Replication conflict and repair
+
+Multi-primary systems may receive concurrent writes to the same logical key. Last-write-wins can lose an update and often depends on imperfect clocks. Version vectors detect concurrent versions; application-defined merges preserve meaning for selected data types. Deletes need tombstones or epochs so delayed old writes cannot resurrect data. Repair processes must authenticate source data, compare versions, report conflicts, and avoid silently overwriting newer state.
+
+## Operational observability
+
+Monitor replication lag in time and log position, apply throughput, queue depth, oldest unacknowledged write, failover epoch, partition skew, hot keys, cross-shard traffic, migration progress, checksum mismatch, and repair backlog. Alert on lag that violates read-freshness policy rather than on one arbitrary threshold. A replica can have low network lag but high query-visible staleness if apply workers are blocked by a long transaction.
+
+## Worked global service
+
+A global order service partitions by tenant and uses regional replicas. Tenant-local order creation is routed to a tenant authority with a unique (tenant_id,order_number) constraint. Product catalog reads use eventual replicas; payment authorization and inventory reservation use the authoritative transaction path. Each write response carries a commit position so the client can request a read at least as fresh. Failover promotes a replica only after fencing the old authority and checking the configured data-loss window.
+
+During a tenant migration, the system copies rows, streams changes, compares checksums, switches ownership at epoch 42, and rejects old-epoch writes. A duplicate message after cutover is ignored by its idempotency key. The rollback plan does not reopen the old owner without a new epoch. The runbook records which acknowledged writes could be missing under asynchronous replication and how affected orders are reconciled.
+
+## Exercises
+
+1. Compare synchronous and asynchronous replication guarantees.
+2. Design a read-after-write policy for a web session.
+3. Choose a partition key for orders and justify skew and locality.
+4. Describe fencing during failover.
+5. Design a dual-write migration with reconciliation.
+6. Analyze a cross-shard uniqueness requirement.
+
+### Diagnostic solutions
+
+
+1. Synchronous acknowledgment waits for a defined replica condition and improves acknowledged-write durability but may block during failure. Asynchronous acknowledgment reduces latency and preserves availability but permits stale reads and loss of unpropagated writes on failover.
+2. Return a log position or session token from the write and route subsequent reads to a replica that has applied it, or use the authority for a bounded period. Define behavior when no replica catches up.
+3. Tenant ID co-locates tenant transactions and supports privacy boundaries, but a large tenant may hotspot. Add subpartitioning or a controlled hash suffix if transactions and queries can tolerate the routing complexity.
+4. Issue a monotonically increasing epoch, ensure the old primary cannot reach storage or clients, and require every write to carry or validate the current epoch. A timeout alone does not fence a partitioned old leader.
+5. Snapshot-copy rows, capture changes, replay idempotently, compare checksums, switch ownership at an epoch, reject stale-owner writes, monitor, and keep a reconciliation and rollback policy.
+6. Use a global allocator or authority, partition-scoped identifiers, or a coordination protocol. Independent local uniqueness does not prove global uniqueness; state the latency and availability trade-off.
+
+
+
+## Distributed test matrix
+
+Test primary crash before and after acknowledgment, replica lag, network partition, duplicate and delayed changes, clock skew, ownership cutover, worker restart, hot-key overload, and checksum divergence. For each test record safety—no split-brain writes, lost acknowledged work beyond the contract, or unauthorized cross-tenant result—and liveness after the stated dependencies recover. Test recovery from a snapshot plus change log, not only steady-state replication.
+
+A benchmark should separate local transaction latency, cross-partition latency, replication apply delay, failover duration, rebalancing throughput, and repair cost. Report p50 and tail behavior under skewed tenants, because averages can hide a single hot partition that determines availability.
+
+**Exercise.** Compare user-ID and country partitioning for a globally used service. Identify skew, query locality, migration cost, and privacy implications.
+
+## References & Further Reading
+
+* [PostgreSQL Table Partitioning](https://www.postgresql.org/docs/current/ddl-partitioning.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL Streaming Replication](https://www.postgresql.org/docs/current/warm-standby.html)

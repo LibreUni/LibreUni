@@ -1,0 +1,78 @@
+---
+title: "Network Measurement and Inference"
+course: "computer-networks"
+description: "How to measure delay, loss, throughput, paths, and service behavior without confusing observations with causes."
+---
+# Network Measurement and Inference
+
+Network measurement is an experiment under partial observability. A packet trace records what one measurement point saw; it does not directly reveal every queue, route, timer, or policy that produced the observation. Strong diagnosis therefore separates a metric, its estimator, and the hypotheses that could explain it. This lesson builds that discipline and applies it to common tools and failure cases.
+
+## Latency, variation, and loss
+
+For a probe sent at time (s_i) and answered at (a_i), the observed round-trip time is (r_i=a_i-s_i). It includes local scheduling, serialization, propagation, transmission, queueing, processing, and return-path delay. The minimum of a sample often approximates the fixed path and processing component; increases above that baseline are evidence of queueing or changing service, not proof of a single congested link.
+
+Useful summaries include median, percentiles, maximum, and a time series. The mean can be dominated by a few long queueing events. A p99 latency of 500 ms means approximately one percent of the measured requests took at least that long under the chosen sampling and population; it does not mean the path always has 500 ms delay. Report sample count, interval, payload size, protocol, vantage point, and whether timeouts are included.
+
+Loss is also an estimator. If (n) probes are sent and (k) replies arrive, the observed loss fraction is ((n-k)/n). A small sample has high uncertainty. If each probe independently succeeds with probability (p), the count is binomial and the standard error of the fraction is approximately √(p(1-p)/n). Independence is often false: queue overflow causes bursts, wireless interference is correlated, and rate limiting may target probe traffic.
+
+## Throughput and bottlenecks
+
+Goodput is useful application data delivered per unit time. It differs from link rate because headers, retransmissions, acknowledgments, slow start, receiver processing, and application stalls consume capacity. A single speed test measures a path under a particular concurrency, object size, protocol, and server; it does not establish the capacity available to every flow.
+
+For a flow with congestion window (cwnd), packet size (L), and RTT (T), a rough in-flight-limited throughput is (cwnd\cdot L/T). If this is below the bottleneck capacity, the sender is window-limited. If increasing the window produces no throughput increase but raises queueing delay, the bottleneck or receiver is limiting. Measurements should vary one factor at a time: parallel connections can hide a too-small per-flow window and can also create unfair load.
+
+The bandwidth-delay product (R T) estimates bytes required in flight to fill a path of rate (R). It is not a guarantee of usable capacity. A path with 1 Gb/s and 100 ms RTT has a 12.5 MB bandwidth-delay product. A sender with a 1 MB flight limit cannot fully utilize that path even when no packet is lost.
+
+## Path discovery and its caveats
+
+Traceroute varies a packet’s TTL or hop limit and records responses from routers that expire it. The resulting list is an inference about responding interfaces, not a complete map of forwarding. Routers may rate-limit or suppress expiry messages; several probes may take different paths; per-flow load balancing may make successive traces differ; and the address shown may be an administrative interface rather than the interface traversed by the forward packet.
+
+The time displayed beside an intermediate hop is a round-trip to that router’s control plane plus the return path. A hop with high reported time followed by normal destination time may simply prioritize forwarding over responding. Conversely, a steadily elevated destination time without an elevated intermediate response does not identify the exact congested hop. Compare multiple runs, destination endpoints, protocols, and times; treat route changes as a hypothesis to test.
+
+## Packet captures and causal reconstruction
+
+A capture can reveal sequence numbers, acknowledgment timing, retransmissions, advertised windows, DNS transactions, TLS records, and HTTP framing. Before interpreting it, identify the capture point and clock behavior. A host capture may show a packet before NIC offload segmentation or checksum computation, so apparent malformed checksums can be an artifact. Captures on two hosts need clock synchronization before one-way delay is calculated.
+
+To diagnose a suspected retransmission, correlate the original sequence range, the acknowledgment history, and the elapsed timer. A repeated sequence number alone is not enough: retransmission, packet reordering, capture duplication, and offload artifacts can look similar. To diagnose receiver limitation, examine advertised receive window and application read behavior. To diagnose congestion, examine loss, RTT growth, queue occupancy if available, and competing flows rather than assuming every retransmission is congestion.
+
+**Worked inference.** A client sees RTT rise from 20 ms to 180 ms while throughput remains near the access rate; later, RTT falls when the transfer stops. This is consistent with a queue building at or near the access bottleneck, often called bufferbloat. It is not proof: a slow server or delayed client scheduler could produce a similar trace. A control probe sent from the same host, plus queue-aware measurements and a second destination, helps discriminate path queueing from endpoint delay.
+
+## Active versus passive measurement
+
+Active probes create traffic and may change the system being measured. They are controllable and can test reachability, but they may be filtered, deprioritized, or rate-limited. Passive measurement observes production traffic and avoids synthetic load, but it may lack a controlled baseline and raises privacy questions. A sound experiment chooses the least intrusive method that can distinguish the hypotheses.
+
+Sampling changes conclusions. Periodic probes can miss short outages or synchronize with a periodic queue. Randomized intervals reduce this aliasing. Heavy-tailed latency needs enough samples for stable tail estimates. When comparing two versions, use the same endpoints and workloads, randomize order when possible, and report uncertainty rather than one impressive median.
+
+## Reproducible measurement record
+
+A useful record includes source and destination, address family, resolver, protocol, payload, packet count, interval, timestamp standard, software and kernel version, interface, route, concurrent traffic, and failure definition. Store raw observations as well as summaries. A dashboard that preserves only averages cannot later answer whether the tail came from one outage or persistent variation.
+
+Define the question before the command. “Is the service slow?” might mean connection establishment, TLS handshake, time to first byte, complete object transfer, or application processing. “Is the network lossy?” might mean link-layer retries, end-to-end packet loss, or requests that fail after application retries. Different definitions lead to different instruments and different conclusions.
+
+## Exercises
+
+1. A 20-sample RTT series has median 32 ms, p95 240 ms, and maximum 900 ms. What can and cannot be concluded about typical delay?
+2. Explain why a high traceroute time at hop 5 followed by normal destination time is not sufficient evidence of a hop-5 forwarding problem.
+3. A 50 Mb/s path has RTT 40 ms and 64 KiB flight limit. Estimate the window-limited throughput.
+4. Design an experiment to distinguish server processing delay from queueing delay on the access link.
+5. List three reasons that one-way delay computed from two packet captures may be invalid.
+6. A flow’s throughput stays constant as RTT rises and its sending rate is unchanged. Give two plausible explanations and one additional measurement for each.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Half the observations are at or below 32 ms and approximately 5% are at or above 240 ms under the sample convention. The maximum is a single extreme. The small sample does not establish a stable population percentile or identify the cause of the tail.
+2. The router may rate-limit control-plane responses while forwarding normally; the response’s return path may differ; or the probe may be treated differently from transit traffic. Compare destination RTT and repeated traces, and inspect forwarding traffic or interface counters before attributing loss or delay to hop 5.
+3. (64\text{ KiB}/0.04\text{ s}=1.6384\) MB/s, about 13.1 Mb/s. Ignoring protocol overhead and window dynamics, the sender cannot reach 50 Mb/s with that flight limit.
+4. Compare a small control request and a large transfer to the same service, collect time-to-first-byte and RTT concurrently, and repeat while varying local access load. If RTT and all destinations rise with load, queueing is likely; if only server processing grows while control RTT stays stable, endpoint work is more likely. These are inferences, not automatic proof.
+5. Unsynchronized clocks create offset error; capture points may not be at the actual endpoints; NIC offload or buffering changes timestamp meaning; asymmetric paths make forward and reverse components differ; and clock drift corrupts long intervals.
+6. A bottleneck may already be saturated, so extra queueing raises RTT without increasing rate; measure link utilization and queue/ECN signals. Or the receiver/application may cap delivery, so path delay is incidental; inspect advertised receive window, application read rate, and host CPU scheduling.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 3393: IP Packet Delay Variation Metric](https://www.rfc-editor.org/rfc/rfc3393)
+* [RFC 2680: IP Packet Loss Measurement](https://www.rfc-editor.org/rfc/rfc2680)
+* [RFC 3449: TCP Performance Implications of Network Path Asymmetry](https://www.rfc-editor.org/rfc/rfc3449)
+* Kurose and Ross, *Computer Networking: A Top-Down Approach*, measurement, delay, loss, and throughput chapters.

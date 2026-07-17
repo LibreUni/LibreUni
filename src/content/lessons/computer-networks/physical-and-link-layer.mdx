@@ -1,0 +1,99 @@
+---
+title: "Physical and Link Layers"
+course: "computer-networks"
+description: "Signals, framing, error detection, media access, and local delivery."
+---
+# Physical and Link Layers
+
+The physical and link layers turn a packet into a transmission over one local medium. The physical layer represents bits as electrical, optical, or radio signals subject to noise, attenuation, interference, and bandwidth limits. The link layer defines how a neighboring receiver recognizes a frame, identifies local endpoints, detects or corrects errors, shares a medium, and handles local delivery. These layers do not provide an end-to-end Internet path; a router may terminate one link frame and create another for the next hop.
+
+## Signals and channel capacity
+
+A link has a symbol rate, signal alphabet, bandwidth, noise environment, and coding scheme. A bit rate of 100 Mb/s does not mean the signal has exactly 100 million square-wave transitions per second; line coding may add transitions for clock recovery, DC balance, or error detection. The physical channel’s usable capacity depends on signal-to-noise ratio and bandwidth. Shannon’s idealized upper bound is $C=B\log_2(1+S/N)$ bits per second for bandwidth $B$ and signal-to-noise ratio $S/N$, while real systems incur coding and implementation overhead.
+
+A higher modulation order carries more bits per symbol but requires a cleaner channel. FEC adds redundant bits so a receiver can correct some errors without retransmission. Interleaving spreads burst errors across codewords, allowing a code designed for random errors to handle a burst. The design trades raw throughput, range, energy, latency, and error rate.
+
+Propagation and transmission remain distinct at the physical layer. A 1,500-byte frame on a 100 Mb/s link takes $120$ microseconds to serialize, regardless of whether the cable is one meter or one kilometer. Propagation adds distance-dependent delay. A short link can have high bit rate and still expose serialization delay for large frames; a long link can have low serialization but high round-trip propagation.
+
+## Framing
+
+The receiver needs boundaries: where one frame begins, where it ends, and which bits are payload versus control. Framing may use length fields, delimiters with byte/bit stuffing, fixed-size cells, or physical coding violations. A length field is efficient but must be validated against the frame limit; a corrupted length can desynchronize parsing and cause buffer errors. A delimiter requires an escape mechanism so payload bytes cannot impersonate the boundary.
+
+**Worked byte-stuffing example.** Suppose `0x7E` delimits frames and `0x7D` escapes. A payload containing `0x7E` is transmitted as `0x7D 0x5E`; a payload `0x7D` becomes `0x7D 0x5D`. The decoder removes escape prefixes only inside a frame. A malformed trailing escape must produce a controlled error rather than consume the next frame’s delimiter as payload. The framing state machine must define behavior for delimiters, noise before a frame, oversized frames, and checksum failure.
+
+## Error detection and correction
+
+Noise can flip, insert, delete, or reorder bits. A code maps data to a longer codeword with redundancy. A receiver computes a check and accepts only if the codeword is consistent. Parity detects an odd number of bit flips but misses even counts. A checksum adds fixed-width words and catches many errors. A cyclic redundancy check (CRC) treats the bit sequence as a polynomial over GF(2) and computes a remainder; it is particularly effective for burst errors under a specified polynomial and frame length.
+
+A CRC is not cryptographic authentication. An attacker who can modify a frame can recompute its CRC. A keyed MAC or authenticated encryption is needed against intentional tampering. Error detection also does not guarantee delivery: a frame with a bad check may be dropped, causing a higher-layer retransmission or loss.
+
+**Worked CRC reasoning.** Let a data polynomial be $D(x)$ and generator $G(x)$ of degree $r$. The sender appends the remainder of $x^rD(x)$ divided by $G(x)$ over GF(2). The transmitted polynomial is divisible by $G(x)$. The receiver divides the received polynomial; a nonzero remainder indicates an error under the code’s detection guarantees. The guarantee depends on the generator: a factor of $(x+1)$ detects every odd number of bit errors, and a generator with degree $r$ detects all bursts of length at most $r$.
+
+Forward error correction adds enough structure to identify and repair some errors. Retransmission avoids the redundancy cost when a return path and delay are acceptable. Wireless links often use both: FEC repairs common errors and local ARQ repairs residual errors. An end-to-end transport may still need its own integrity and loss recovery.
+
+## Local addresses and delivery
+
+The link layer needs a local destination identifier. Ethernet uses MAC addresses; other technologies use different addressing and association schemes. A switch learns that a source address is reachable through an ingress port and forwards known destinations selectively. Unknown destinations or broadcast frames may be flooded within a broadcast domain. Learning is an optimization: entries expire, move, and can be poisoned or overwhelmed.
+
+A local address is not an Internet-wide location. When an IP packet crosses a router, the next-hop link destination changes even though the end-to-end IP destination remains the same. Address-resolution protocols map a network-layer next hop to a link-layer address and must handle cache lifetime, duplicate claims, and failure. A stale resolution can blackhole or misdirect local traffic.
+
+## Medium access
+
+If several stations share one medium, simultaneous transmission can collide or interfere. A multiple-access protocol defines who may transmit and when. Time division assigns slots; frequency or code division separates signals; token passing grants explicit permission; random access lets stations contend and recover from collisions. Each method trades utilization, fairness, latency, control overhead, and behavior under bursty load.
+
+Carrier-sense protocols listen before transmitting, but propagation delay means two stations may both believe the medium is idle. Collision detection is possible on some wired media; a transmitting radio generally cannot reliably hear a collision at its own receiver, so wireless protocols use collision avoidance, acknowledgements, and random backoff. Hidden terminals can interfere even when two senders cannot hear one another; reservation or request-to-send mechanisms may help at additional overhead.
+
+**Worked contention example.** Two stations choose random backoff slots after a collision. If both choose zero, they collide again; if one chooses zero and the other two, the first transmits while the second waits. Exponential backoff increases the choice window after repeated collisions, reducing collision probability under load but increasing delay and variance. A fairness claim must consider stations with different retry histories and transmission durations.
+
+## Ethernet and switched LANs
+
+An Ethernet frame contains destination and source addresses, type/length information, payload, and a frame check sequence, surrounded by physical framing. A switch maintains a forwarding database mapping source addresses to ports. When a frame arrives, the switch learns the source location, looks up the destination, forwards to the associated port if known, floods within the relevant domain if unknown or broadcast, and filters if source and destination are on the same port.
+
+Loops are dangerous because Ethernet flooding has no IP TTL in the ordinary frame path. Spanning-tree or equivalent control prevents forwarding loops; link aggregation and VLANs change the topology and broadcast scope. VLAN tags separate logical LANs over shared switching infrastructure, but they do not automatically provide end-to-end confidentiality or correct an authorization policy.
+
+## Wireless link characteristics
+
+Wireless channels vary over time and location. Multipath, fading, interference, obstacles, and shared spectrum change the loss and capacity distribution. A link adapts modulation and coding, retransmission policy, transmit power, and channel selection. The same station can experience high throughput near an access point and low throughput behind an obstruction without any application change.
+
+Wireless acknowledgements and retransmissions improve local delivery but consume airtime. A slow station can reduce shared-cell capacity because transmissions use conservative rates. Energy-constrained devices may sleep and buffer traffic, introducing latency and synchronization requirements. Mobility changes association and may require address, key, and state management above the link layer.
+
+## MTU and fragmentation
+
+The maximum transmission unit (MTU) limits the payload a link frame can carry. A network-layer packet larger than the outgoing MTU may be fragmented, rejected, or require the sender to discover a suitable path MTU. Fragmentation increases state and loss consequences: losing one fragment can make the whole reassembled packet unusable. Applications and transports often choose message or segment sizes below the effective path limit.
+
+**Worked MTU calculation.** If an IP packet has 1,500-byte total size and crosses a link with 1,000-byte MTU, the network layer must either reduce the packet or fragment it. Fragment offsets and more-fragments flags are interpreted in units defined by the protocol, so payload alignment matters. A firewall or tunnel can reduce effective MTU by adding headers; a design that works on a direct path may fail after encapsulation.
+
+## Link reliability and end-to-end behavior
+
+Local ARQ changes the loss process seen by transport. A link may hide short errors but add variable delay and repeated retransmissions. TCP or another end-to-end protocol sees either a successful packet later or a loss/timeout; it cannot know whether the cause was wireless repair, a queue overflow, or a failed router. Excessive local retries can cause transport timeouts and amplify tail latency.
+
+Reliability mechanisms must bound state and retries. A link receiver needs sequence numbers or frame identifiers to discard duplicates. A sender needs timers and a policy for unreachable peers. A link acknowledgement confirms local receipt, not durable application processing; the distinction is the same as transport delivery versus application side effect.
+
+## Independent practice
+
+1. Compute serialization and propagation delay for frames on two links and explain the difference.
+2. Design a byte-stuffing frame format and enumerate malformed escape cases.
+3. Compare parity, checksum, CRC, and MAC by error model and attacker model.
+4. Simulate a switch learning table over a trace of source/destination frames.
+5. Compare token, random-access, and scheduled medium access under low and high load.
+6. Explain hidden-terminal and exposed-terminal problems in wireless access.
+7. Derive the consequence of an MTU reduction caused by tunneling.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Serialization is $L/R$ and propagation is distance/signal speed; increasing rate changes the former, not the latter. Queueing and processing must be added separately.
+2. Define delimiter, escape byte, transformation, and state transitions for start, payload, escape, end, and error. Reject or resynchronize malformed trailing escape and oversized frames explicitly.
+3. Parity is cheap and weak; checksums catch many arithmetic changes; CRC gives strong structured burst-error detection but no adversarial authenticity; MAC requires a secret and detects intentional modification under its cryptographic assumptions.
+4. Learn source on ingress, then forward known destinations, flood unknown/broadcast destinations in the domain, and expire or update entries when a source moves. Do not treat the table as permanent topology truth.
+5. Token/scheduled schemes avoid collisions but need coordination; random access is efficient under light load and unstable under heavy contention; reservations add setup cost but can guarantee service under sustained load.
+6. Hidden terminals cannot hear each other but collide at the receiver; exposed terminals hear a transmission and unnecessarily defer even when their transmissions would not interfere. RTS/CTS or spatial reuse can change the trade-off.
+7. Encapsulation consumes header bytes, reducing payload MTU. Endpoints must discover or configure a smaller segment size, otherwise fragmentation, drops, or black holes can occur.
+
+</details>
+
+## References & Further Reading
+
+* [Kurose and Ross: link-layer knowledge checks and labs](https://gaia.cs.umass.edu/kurose_ross/knowledgechecks/index.php)
+* [RFC 1122: Requirements for Internet Hosts](https://www.rfc-editor.org/rfc/rfc1122)
+* [MIT 6.829 Computer Networks readings](https://ocw.mit.edu/courses/6-829-computer-networks-fall-2002/pages/readings/)

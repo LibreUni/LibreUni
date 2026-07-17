@@ -1,0 +1,96 @@
+---
+title: "HTTP and Web Architecture"
+course: "computer-networks"
+description: "Resources, methods, representations, caching, intermediaries, and web performance."
+---
+# HTTP and Web Architecture
+
+HTTP is a request/response application protocol for transferring representations of resources. Its power comes from separating resource identity, method semantics, metadata, and representation bytes. A browser request may traverse DNS, a proxy, a CDN, TLS, a load balancer, an application server, and a database; HTTP defines a boundary among these components but does not guarantee that the underlying operation is atomic or idempotent. Web architecture is therefore a study of semantics, intermediaries, failure, caching, and security as much as message syntax.
+
+## Resources and representations
+
+A resource is an abstract target identified by a URI. A representation is a current or selected serialization of that resource, such as HTML, JSON, an image, or a compressed variant. The URI does not necessarily name a file or database row. Content negotiation can select a representation based on media type, language, encoding, or client capabilities; the response’s `Vary` metadata tells caches which request fields affect that selection.
+
+An HTTP message has a start line, headers, and optional content. Length may be explicit, inferred from transfer framing, or terminated by connection closure under certain conditions. A parser must reject ambiguous framing, conflicting length indicators, and invalid encodings to prevent request smuggling between intermediaries that interpret boundaries differently.
+
+**Worked request.** A client sends `GET /reports/7` with `Accept: application/json` and an authorization credential. The server may return a JSON representation with status 200, a cache policy, an entity tag, and a content type. A proxy can cache it only if authorization, privacy, freshness, and `Vary` semantics permit. The URI identifies the target; the representation and headers describe the response selected for this request.
+
+## Method semantics
+
+GET retrieves a representation and is intended to be safe: it should not request a state-changing action from the resource. HEAD returns headers corresponding to GET without content. POST asks the target resource to process enclosed data and commonly creates a subordinate resource or triggers an action. PUT replaces or creates the representation at a client-chosen URI and is intended to be idempotent. DELETE requests removal. PATCH applies a partial modification under its defined patch semantics.
+
+Safe and idempotent are not synonyms. A GET should be safe by protocol semantics even if server logging increments a counter as an implementation side effect. PUT can be idempotent even if the first request returns 201 and a repeated request returns 200. An idempotent request may still fail, and a client retry can arrive after the first operation succeeded; idempotence means the intended final state is equivalent, not that the network executes it once.
+
+**Worked retry decision.** A client times out after sending `POST /payments`. Retrying may charge twice because POST has application-specific side effects. A safer design supplies an idempotency key that the server stores with the result, or exposes a status query keyed by a client-generated operation ID. Retrying a GET is normally safer, but authorization, rate limits, and resource cost still matter.
+
+## Status codes and error semantics
+
+Status classes distinguish information, success, redirection, client error, and server error, but clients need the specific code and headers. 200 means a successful response with a representation; 201 indicates creation and may identify the new resource; 204 indicates success without content. 304 tells a conditional cache that its stored representation remains valid. 400 indicates malformed request syntax or semantics; 401 challenges authentication; 403 denies authorization despite understood identity; 404 may mean absence or intentional concealment; 409 signals a state conflict; 429 indicates rate limiting; 500 and 503 indicate server-side failure conditions with different retry implications.
+
+An error response is part of the API contract. It should provide a machine-readable type, human-readable detail safe for the audience, an instance or correlation ID, and retry guidance where appropriate. Clients should not retry every 5xx or treat every 4xx as permanent. `Retry-After`, idempotency, request deadlines, and backoff determine safe behavior.
+
+## Connections, multiplexing, and versions
+
+HTTP/1.1 can reuse a persistent connection, but requests and responses may suffer head-of-line blocking when one response is delayed. HTTP/2 multiplexes streams over a connection, compresses headers, and uses binary framing; a lost transport packet can still block all streams on TCP until retransmission. HTTP/3 maps HTTP over QUIC, using separate streams over UDP-based encrypted transport so loss on one stream need not block independent streams in the same way.
+
+Multiplexing changes connection setup, prioritization, congestion sharing, and observability. Opening many connections may defeat fairness and increase handshake cost. A browser, proxy, or service should choose connection reuse based on authority, certificate, protocol negotiation, congestion, and isolation requirements rather than a simplistic “one request, one connection” rule.
+
+## Caching and validation
+
+A cache stores a response under a cache key and serves it while fresh or after successful validation. Freshness metadata includes `Cache-Control`, `Expires`, and validators such as `ETag` or `Last-Modified`. A conditional request with `If-None-Match` can receive 304 if the stored representation is still current, saving body transfer. An ETag may be strong or weak; clients must use it according to comparison semantics.
+
+**Worked cache policy.** A versioned public JavaScript asset at `/app.abc123.js` can use a long freshness lifetime because its URI changes when content changes. An account page containing private data should be non-shared-cacheable or carefully keyed by authorization and user context; a public CDN must not serve one user’s response to another. A product listing can tolerate seconds of staleness and use validation. The resource’s mutability, privacy, consistency requirement, and invalidation mechanism determine policy.
+
+Cache keys and `Vary` are security boundaries. If a response depends on `Accept-Language`, encoding, cookie, or authorization but the cache ignores that dimension, it can serve the wrong representation. Cache poisoning can occur when an attacker controls a cache-key input that the origin interprets but the cache does not, or when malformed requests are parsed differently by front and back ends.
+
+## Intermediaries and deployment
+
+Reverse proxies terminate or forward requests near the origin. CDNs cache assets and route clients to edge locations. Load balancers select an origin based on health, capacity, locality, or connection state. These intermediaries can add headers, rewrite paths, compress content, terminate TLS, and enforce policy. Each hop creates a failure and trust boundary; the application should not blindly trust client-supplied `Forwarded` or `X-Forwarded-For` data unless a trusted proxy establishes it.
+
+A deployment may include an API gateway, service mesh, authentication service, and multiple origins. Timeouts and retry budgets must compose. If a client retries twice, a gateway retries twice, and a service retries a database twice, one request can create many attempts. Use deadlines, bounded retries, jitter, circuit breaking, and idempotency; otherwise a partial outage becomes a retry storm.
+
+## Authentication and authorization
+
+TLS authenticates a server endpoint under certificate validation and protects bytes in transit, but it does not authorize a user to read a resource. Cookies, bearer tokens, mutual TLS, signed requests, and session mechanisms bind a request to an identity with different threat models. Authorization must evaluate the authenticated principal, action, resource, and context at the sensitive operation; hiding a button is not an access check.
+
+Cookies require secure transport and scope attributes. CSRF defenses are needed when browsers attach ambient credentials automatically; same-site policy, anti-CSRF tokens, and origin checks can contribute. XSS can steal or act with a user’s session depending on cookie and application policy. CORS controls browser script access, not server-to-server authorization or the existence of a resource.
+
+## Web performance
+
+Page or API latency is a sum of DNS, connection, cryptographic handshake, request queueing, server processing, data access, response transfer, and client rendering. Persistent connections and caching reduce repeated setup. Compression trades CPU for bytes; HTTP/2/3 multiplexing trades head-of-line behavior and scheduling complexity. A performance budget should specify p50/p95/p99, cold and warm paths, payload size, cache state, and geographic path.
+
+**Worked critical path.** A page loads HTML that references five blocking resources. If the browser cannot discover the resources until HTML arrives and each requires a serial connection/setup, the critical path is not the sum of all server times if requests can parallelize, but it includes the longest dependency chain. Preload, bundling, caching, and streaming can shorten the chain; excessive bundling can increase invalidation and transfer for users who need only one feature.
+
+## Failure and observability
+
+A timeout does not identify whether DNS, TCP/QUIC, TLS, proxy, origin, database, or client rendering failed. Correlation IDs, trace context, request timestamps, status, selected route, cache hit/miss, upstream timings, and response size allow decomposition. Logs must avoid credentials and sensitive bodies. A 200 response can contain an application-level error, while a 503 can be a deliberate overload protection signal.
+
+## Independent practice
+
+1. Design an HTTP resource and method contract for an order service.
+2. Determine whether a request is safe/idempotent and whether retry is appropriate.
+3. Design cache policies for public assets, private pages, and mutable product data.
+4. Explain HTTP/1.1, HTTP/2, and HTTP/3 head-of-line trade-offs.
+5. Threat-model cookies, bearer tokens, CSRF, CORS, and TLS.
+6. Trace a request through CDN, gateway, service, and database with deadlines.
+7. Build a latency budget and observability plan for a page with dependent resources.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Define URI, representation, methods, status codes, validation, authorization, and conflict semantics. Avoid embedding an implementation table name as the only contract.
+2. GET is safe/idempotent by intended semantics; PUT and DELETE are generally idempotent if defined so; POST is not assumed idempotent. Use operation keys or status queries before retrying side effects.
+3. Public immutable assets can be long-lived; private responses must not leak through shared caches; mutable listings need bounded freshness and validation based on business tolerance.
+4. HTTP/1.1 can block responses on a connection; HTTP/2 multiplexes streams but TCP loss can block them together; HTTP/3/QUIC isolates stream loss differently but adds transport and deployment complexity.
+5. TLS protects channel bytes and authenticates a server; cookies create ambient browser credentials and need CSRF/XSS defenses; bearer tokens must be protected; CORS controls browser reads, not authorization.
+6. Propagate a deadline and trace ID, bound retries at each layer, make side effects idempotent, record cache/route/upstream timing, and return an explicit overload or timeout status.
+7. Sum dependency-chain latencies rather than all parallel tasks, measure cold/warm cache, DNS, handshake, server, transfer, and render stages, and report percentile targets with correlation IDs.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110)
+* [RFC 9113: HTTP/2](https://www.rfc-editor.org/rfc/rfc9113)
+* [RFC 9114: HTTP/3](https://www.rfc-editor.org/rfc/rfc9114)
+* [Kurose and Ross: application-layer knowledge checks](https://gaia.cs.umass.edu/kurose_ross/knowledgechecks/index.php)

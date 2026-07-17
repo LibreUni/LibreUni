@@ -1,0 +1,88 @@
+---
+title: "Architecture Assessment"
+course: "computer-architecture"
+description: "Integrated written assessment for computer architecture."
+---
+# Architecture Assessment
+
+This assessment tests whether a student can connect the layers of computer architecture rather than recite isolated definitions. Answer every part using explicit assumptions, units, and invariants. A numerical answer without a model earns little credit; a design answer without a failure case is incomplete. Where the prompt leaves an implementation choice open, state the choice and explain how the result depends on it.
+
+## Part I: representation and ISA
+
+A processor has 32-bit registers and byte-addressed memory. An instruction encodes a signed 12-bit displacement in bytes, two 5-bit register identifiers, and an opcode. A branch uses PC-relative addressing from the address of the next instruction. Explain the signed immediate range, sign-extension procedure, and target calculation for an instruction at `0x1000` with displacement `-16`.
+
+Then define the architectural transition for a load of a 16-bit signed value from `base + displacement`. Include alignment, permission, byte order, extension, destination write, PC update, and the exception state if the page is absent. State which details are ISA guarantees and which can vary by microarchitecture.
+
+Finally, a C-like program converts a signed length to an unsigned allocation size before checking whether it exceeds a buffer limit. Construct a negative input that becomes large after conversion and explain the safe order of checks. Your answer should distinguish mathematical integers, fixed-width residues, and language conversion rules.
+
+## Part II: datapath and control
+
+Design a single-cycle datapath for register-register addition, load, store, conditional branch, and jump. Identify the PC, instruction memory, register file ports, immediate generator, ALU inputs, data memory, write-back mux, and next-PC mux. For each instruction class, provide values for `RegWrite`, `MemRead`, `MemWrite`, `ALUSrc`, `ResultSrc`, and `PCSrc`, marking irrelevant choices and safe defaults.
+
+The proposed timing is: instruction memory 280 ps, register read 160 ps, ALU 220 ps, data memory 420 ps, multiplexing 70 ps, and register setup/clock overhead 100 ps. Compute the load critical path and minimum clock period. Explain why a store and an add may finish sooner but do not increase single-cycle clock frequency.
+
+Replace the design with a multicycle machine using one ALU and one memory port. Give states for fetch, decode, address calculation, memory read/write, execute, branch, and write-back. For every temporary register, state its meaning and lifetime. Include a memory stall or response-not-ready event and explain how the controller avoids repeating a device write.
+
+## Part III: pipeline reasoning
+
+Use a five-stage IF/ID/EX/MEM/WB pipeline. Schedule:
+
+```text
+lw   r1, 0(r2)
+add  r3, r1, r4
+sub  r5, r3, r6
+beq  r5, r0, target
+or   r7, r8, r9
+```
+
+Assume ALU forwarding is available, a load-use pair requires one stall, and branches resolve in EX with predict-not-taken. Show stage occupancy, forwarding selections, the bubble, and the instructions flushed when the branch is taken. State which instructions may have computed values internally but must not commit.
+
+Explain the difference between holding the PC/IF-ID registers, inserting a bubble into ID/EX, and flushing younger valid bits. A correct answer must identify the control signals for each event and why an alternative would deadlock, duplicate, or commit wrong-path work.
+
+## Part IV: memory hierarchy and virtual memory
+
+A cache is 32 KiB, 4-way set associative, with 64-byte lines and 32-bit physical addresses. Derive offset, index, tag, number of sets, and the mapping of two supplied addresses. Construct a conflict-miss trace and compare direct-mapped and 2-way behavior.
+
+The L1 hit time is 1 cycle with a 6% local miss rate. L2 hit time is 8 cycles with a 15% local miss rate; main memory adds 90 cycles after an L2 miss. Compute AMAT and explain what changes if someone mistakenly treats the 15% as a global rate.
+
+A process uses 4 KiB pages and a four-level page table with 512 entries per level. For a given virtual address, show the VPN fields and offset, then explain the TLB hit, page-table walk, permission fault, and page fault paths. Describe the copy-on-write handler after a fork-like operation and the TLB invalidation needed after installing a private writable page.
+
+Finally, explain a physically indexed/physically tagged cache versus a virtually indexed/physically tagged cache. Identify synonyms, page-offset constraints, ASIDs, and the security consequence of stale translations after physical-frame reuse.
+
+## Part V: parallel and I/O design
+
+A 4-core processor runs a kernel that is 90% parallel. Compute ideal speedup on 2, 4, 8, and unlimited cores. Then explain why a streaming kernel may stop scaling when memory bandwidth saturates. Give two layout or algorithm changes that could improve scaling without adding cores.
+
+The kernel receives data through DMA. Draw ownership states for a descriptor from free to ready, in-flight, completed, and reclaimed. Include cache synchronization for coherent and noncoherent systems, IOMMU mapping, invalid lengths, timeout, reset, generation tags, and buffer reuse. State the invariant that prevents a late completion from corrupting a new owner.
+
+## Part VI: integrated design essay
+
+Design a small processor-backed image-filter pipeline. Specify pixel representation, accumulator width, instruction operations, vector or multicore decomposition, cache tile, DMA buffers, queue policy, exception behavior, and security assumptions. Derive arithmetic work and a memory traffic estimate. Use either a roofline or CPI model to identify the bottleneck, then give one alternative design and a sensitivity analysis.
+
+Your essay must include a sequence diagram from device arrival to output completion, one correctness proof for a pixel or loop invariant, one performance experiment that could falsify your bottleneck claim, and one fault-injection test. Distinguish what is proved from what is simulated, benchmarked, or assumed.
+
+## Diagnostic answer guide
+
+For Part I, the displacement range is $[-2048,2047]$ bytes if all 12 bits are signed; `-16` is sign-extended and the target is `0x0FF0` when the current instruction address is `0x1000` and the branch base is the next instruction only if the prompt explicitly says the next address. A load must check access and alignment before reading, sign-extend the 16-bit value, and leave the destination unchanged on a fault. Negative lengths must be rejected before unsigned conversion.
+
+For Part II, the load path is $280+160+220+420+70+100=1250$ ps under the additive model. A multicycle design needs temporary registers because one ALU and one memory port are reused. An unready memory response holds the transaction state without reissuing a non-idempotent device request.
+
+For Part III, the load-use pair causes one bubble; the dependent `sub` can use forwarded `r3` from the add, and branch resolution determines whether the younger `or` is flushed. Holding and bubbling are different: hold preserves the consumer and fetch state, while the bubble allows the producer to advance and occupies the dependent stage with no side effect.
+
+For Part IV, there are $32768/(64\cdot4)=128$ sets, six offset bits, seven index bits, and nineteen tag bits. AMAT is $1+0.06(8+0.15\cdot90)=2.29$ cycles. A global L2 rate would multiply the L2 miss term differently and undercount misses conditional on reaching L2. A four-level 512-entry page table consumes 36 VPN bits plus a 12-bit offset. Copy-on-write allocates and maps a private frame only after validating the fault, then invalidates the writer’s stale translation.
+
+For Part V, speedup is $1/(0.1+0.9/P)$: 1.82× on 2, 3.08× on 4, 4.71× on 8, and 10× as a limit. DMA ownership and ordering prevent simultaneous CPU/device mutation; generation tags reject late completions. Coherence is not sufficient on a noncoherent platform without explicit cache operations.
+
+For Part VI, the strongest answers connect representation to overflow bounds, layout to cache-line reuse, vector width to tail handling, DMA protocol to security, and measured counters to the performance model. The alternative must change a real trade-off—arithmetic versus traffic, latency versus throughput, area versus frequency, or isolation versus sharing—and the sensitivity analysis must identify the measurement that would reverse the decision.
+
+## Grading criteria
+
+An A answer is self-contained, precise, and adversarial. It makes no silent assumptions about PC conventions, miss-rate definitions, signedness, memory ordering, ownership, or cache coherence. It derives quantitative results with units, gives transition tables or traces where state changes, and explains why the chosen implementation refines the abstract contract. A diagram without a written invariant, a benchmark without a boundary, or a proof that omits edge cases is not complete.
+
+Before submission, audit every numerical answer by dimensional analysis and every design answer by a failure trace. Check the zero-length case, maximum representable value, first and last pipeline slot, cache-line boundary, page permission transition, branch-taken path, device timeout, and simultaneous producer/consumer event. The assessment is intended to reveal whether the student can carry one invariant across abstraction layers, not whether they can reproduce a preferred diagram.
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: learning objectives and lecture notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)
+* [UC Berkeley CS 61C: memory hierarchy and pipeline notes](https://notes.cs61c.org/)

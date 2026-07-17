@@ -1,0 +1,95 @@
+---
+title: "Storage and Interconnects"
+course: "computer-architecture"
+description: "Buses, DMA, persistent storage, and the cost model of I/O."
+---
+# Storage and Interconnects
+
+The processor is one participant in a system that includes DRAM, persistent storage, network devices, accelerators, and controllers. An interconnect transports requests and responses among them; a storage hierarchy determines where data resides and what latency, bandwidth, ordering, and durability guarantees apply. Architecture students must distinguish capacity from availability, visibility from persistence, and link bandwidth from end-to-end throughput. A device can accept a request quickly while the data remains queued, buffered, or volatile.
+
+## Interconnect transactions
+
+An interconnect transaction generally contains an address or route, command, attributes, write data or a response identifier, and completion information. A memory read request may be split from a later response; a posted write may have no immediate response. Credits, ready/valid handshakes, or request IDs control flow and prevent a fast producer from overrunning a receiver.
+
+Ordering is a protocol property. A system may guarantee that requests from one source preserve order, allow reads to pass writes, or permit responses to return out of order with IDs. The CPU’s memory model, cache coherence protocol, device DMA rules, and interconnect ordering must compose. A memory fence that orders ordinary cacheable stores may not order a device transaction unless the address space and ISA explicitly assign that meaning.
+
+**Worked transaction trace.** A CPU stores a descriptor, rings a device doorbell, and expects the device to read the descriptor. The descriptor write must become visible to the device before the doorbell write is observed. A release fence or device-memory ordering operation establishes this. If the doorbell passes the descriptor on the interconnect, the device may fetch uninitialized fields even though the CPU executed the stores in source order.
+
+## Buses, links, and topologies
+
+A shared bus arbitrates access among masters and broadcasts or routes transactions over common wires. It is simple but its bandwidth and arbitration latency degrade as participants increase. Point-to-point links scale better by providing independent lanes, switches, virtual channels, and flow control, but require more routing and protocol state. A crossbar offers multiple simultaneous paths at area cost; a mesh or ring trades diameter and bisection bandwidth against wiring.
+
+Topology determines contention and failure domains. A link with peak bandwidth $R$ does not imply every pair can communicate at $R$ if traffic shares a bottleneck. Bisection bandwidth bounds the total traffic crossing a partition of the network. Arbitration policy affects fairness, latency, and priority inversion. A high-priority control request can starve bulk traffic, while strict fairness can delay latency-sensitive interrupts.
+
+## DRAM behavior
+
+DRAM stores charge in cells that must be refreshed and accessed through rows and columns. A row-buffer hit can be faster than opening a different row; bank-level parallelism allows multiple outstanding operations when addresses distribute well. The memory controller schedules reads, writes, refreshes, and priorities while respecting timing constraints.
+
+A sequential stream benefits from burst transfers and row locality. Random accesses expose activate/precharge and queueing costs. Two threads can interfere by targeting the same bank or row, so per-thread bandwidth is workload-dependent. The controller’s policy may favor row hits for throughput or aging requests for fairness and tail latency.
+
+## Persistent storage
+
+Storage devices add controller queues, translation layers, flash erase blocks, wear leveling, garbage collection, and firmware scheduling. A solid-state drive may complete small random reads quickly relative to a disk, but latency still varies with queue depth, garbage collection, thermal state, and whether data is resident in a device cache. A disk’s seek and rotation make sequential access much cheaper than random access.
+
+The cost of an I/O request can be decomposed as queueing, command setup, media access, transfer, and completion notification. At low queue depth, media latency dominates; at high queue depth, queueing and contention dominate. A benchmark must state queue depth and request size. Reporting only peak sequential bandwidth cannot predict small synchronous writes.
+
+## DMA and ownership
+
+Direct memory access (DMA) allows a device to transfer a buffer without a CPU instruction for each word. The OS configures a descriptor containing buffer address, length, direction, permissions, and perhaps a completion policy. The device becomes owner of the buffer for the transfer; the CPU must not modify or reuse it until ownership returns.
+
+**Worked receive lifecycle.** For a 1 MiB network receive, the OS allocates or maps a buffer, establishes a device-visible address, records length and permissions, and publishes a descriptor with a memory-ordering barrier. The device writes bytes, marks completion, and raises an interrupt or updates a completion queue. The driver acknowledges the completion, invalidates or synchronizes CPU cache state if the platform is noncoherent, validates the reported length and packet metadata, transfers ownership to the network stack, and posts a replacement buffer. A stale cache line can make the CPU see old bytes; a missing bounds check can turn a malformed device length into a memory-safety bug.
+
+On an IOMMU-equipped system, device virtual addresses are translated and permission-checked, limiting a compromised device or driver from DMA-writing arbitrary physical memory. The IOMMU mapping has its own invalidation and lifetime protocol. Unmapping a buffer while the device still owns it creates a use-after-free at the hardware boundary.
+
+## Cache coherence and DMA
+
+A coherent DMA device participates in the cache-coherence domain or uses a coherent interconnect, so CPU and device copies follow a defined protocol. A noncoherent device requires explicit cache clean/invalidate operations. For a CPU-to-device buffer, dirty CPU cache lines must be written back before the device reads. For a device-to-CPU buffer, stale CPU cache lines must be invalidated before the CPU reads. The exact operation order depends on direction and platform.
+
+A descriptor ring has two agents updating different fields: the producer publishes a descriptor, and the consumer observes it and later returns ownership. Use release/acquire ordering or the platform’s DMA primitives. Do not infer safety from interrupt delivery alone; an interrupt can arrive before earlier writes become visible to the CPU if the architecture permits that ordering.
+
+## Interrupts, polling, and completion queues
+
+Interrupts reduce CPU waste when events are infrequent, but each interrupt has entry, save/restore, scheduling, and cache costs. A high-rate device can cause an interrupt storm, so drivers batch completions, coalesce interrupts, or switch to polling under load. Polling reduces notification latency and can improve throughput at the expense of a busy core.
+
+A completion queue decouples device progress from handler execution. The producer writes entries and advances a producer index; the consumer reads entries and advances a consumer index. Ring-buffer wraparound needs sequence numbers or an empty/full convention. The indices themselves are shared state and need atomicity and ordering. A consumer must not read an entry before the producer has published it; a producer must not overwrite an entry before ownership returns.
+
+## Reliability and error handling
+
+Interconnects and storage controllers detect corruption with parity, ECC, CRC, retries, or end-to-end checksums. A corrected error may be logged; an uncorrectable error may raise an exception, return a failed request, or mark a device block bad. Software must distinguish transient retry from permanent failure and must not report durable success before the relevant persistence guarantee holds.
+
+ECC memory can correct a one-bit error and detect certain multi-bit patterns depending on code. The architectural consequence may be transparent correction or a machine-check exception. Redundancy improves reliability but does not make silent corruption impossible; end-to-end checksums detect errors that occur outside the protected segment or in software.
+
+## Durability and ordering
+
+A write reaching a controller’s volatile cache is visible to the issuing software but may disappear on power loss. A flush, force-unit-access operation, capacitor-backed cache, or storage protocol may provide stronger persistence. Filesystem and database durability depend on the entire chain: CPU ordering, cache write-back, interconnect completion, device cache, flash translation layer, and power-failure behavior.
+
+**Worked durability sequence.** To make a journal record durable before exposing a metadata update, software writes the record, issues the required data barrier/flush, waits for completion, writes the metadata, and flushes again if the protocol demands it. If the first flush is omitted, a power failure can leave metadata pointing to a record that never persisted. The correct sequence is a cross-layer contract, not merely two source-level writes in order.
+
+## Independent practice
+
+1. Design a ready/valid transaction with backpressure and out-of-order responses identified by request ID.
+2. Trace a DMA transmit buffer from CPU preparation through device completion and reuse, including cache operations.
+3. Compare polling, interrupts, and interrupt coalescing for a low-rate sensor and a 100 Gb/s network interface.
+4. Explain how an IOMMU limits DMA damage and why unmapping before completion is unsafe.
+5. Compute time to transfer a block from bandwidth and setup latency for small and large requests; identify the crossover.
+6. Design a durable two-record journal sequence and name every flush/order assumption.
+7. Give invariants for a descriptor ring with producer and consumer indices.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. The sender holds `valid` and data until the receiver asserts `ready`; a transfer occurs only on both. Responses carry IDs so an out-of-order return can match its request. State whether ordering is restored before software observes completions.
+2. CPU writes data, orders it, transfers ownership, device reads/transmits, device returns completion, CPU observes completion and reclaims only after the completion is ordered and validated. Noncoherent systems need direction-specific cache clean/invalidate operations.
+3. Polling suits high-rate traffic when a core can remain dedicated; interrupts suit sparse events; coalescing batches high-rate notifications and trades latency for lower overhead. The choice depends on arrival rate, latency target, and available CPU capacity.
+4. The IOMMU maps only permitted device virtual addresses to frames and can revoke mappings. Revocation must wait for outstanding transactions or synchronize the device; otherwise a late DMA uses a freed or reassigned frame.
+5. For setup $L$ and bandwidth $R$, transfer time is $L+n/R$. Small requests are setup-dominated; large requests approach $n/R$. Compare two systems by solving where their total times cross rather than using peak $R$ alone.
+6. Persist the journal record and flush it before publishing metadata; persist metadata and flush before acknowledging the operation. The exact barriers depend on the storage protocol, but each acknowledgement must follow the stated durable point.
+7. A producer never overwrites an entry whose ownership remains with the consumer; a consumer never reads an unpublished entry; each index advances monotonically modulo ring size with an unambiguous full/empty rule; descriptor fields become visible before publication and completion becomes visible before reclamation.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: devices, interrupts, and interconnect notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)
+* [RISC-V IOMMU specification](https://github.com/riscv-non-isa/riscv-iommu)

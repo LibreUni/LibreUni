@@ -1,0 +1,91 @@
+---
+title: "Protocol Analysis"
+course: "cryptography-security"
+description: "State machines, replay, downgrade, and compositional failure."
+---
+# Protocol Analysis
+
+A protocol is a state machine whose messages change authenticated state. Analyze freshness, ordering, error transitions, and what each participant believes after verification. A secure message primitive does not make an insecure state machine safe.
+
+Replay protection requires a nonce, sequence, expiry, or challenge tied to the intended context. Error messages should not create an oracle that reveals secret-dependent distinctions.
+
+## Roles, states, and beliefs
+
+Write a protocol as a labeled transition system. Each participant has local state, an input event, an output message, and a transition guard. A message trace is valid only if the receiver’s state permits it and authenticated fields match the current session. For every accepted message, state what the participant now believes: peer identity, freshness, key possession, authorization, and transcript agreement. A signature or MAC proves a cryptographic relation; it does not automatically prove every belief an application may infer.
+
+Include role and direction fields in authenticated material. Reflection attacks occur when a message generated for a client is accepted as a server message or vice versa. Session identifiers and transcript hashes prevent messages from one session being transplanted into another. A challenge must be bound to the identity and operation for which it was issued, not merely checked for syntactic validity.
+
+## Replay and freshness
+
+Replay defenses differ in state and guarantees. A challenge-response uses a server-generated nonce that is accepted once and bound to the client, session, and operation. A sequence number provides ordering and a replay window but requires persistent or coordinated sender state. Timestamps depend on clock synchronization and an acceptance window. Expiry limits lifetime but does not prevent replay inside the window. Choose a mechanism based on availability, concurrency, and crash behavior.
+
+The server must atomically consume a one-time challenge with the authorization decision. If it marks the challenge used after performing the action, concurrent requests may both succeed. If it marks it before validating the response, a failed attempt can create denial of service. Transactional state or a carefully designed idempotency key is required.
+
+## Downgrade and negotiation
+
+Negotiation messages are often visible before secure keys exist, so the final authenticated transcript must include offered and selected versions, algorithms, extensions, and capabilities. Otherwise an active attacker can delete strong options and cause both endpoints to believe that the weaker selection was voluntary. A downgrade defense must be verified by both sides and fail closed when a policy-required version is unavailable.
+
+Algorithm identifiers are data, not executable instructions. Use an allowlist tied to key type and protocol version. Reject duplicate or conflicting parameters. A compatibility mode that silently accepts legacy ciphers, short tags, static keys, or unauthenticated compression may create a downgrade path.
+
+## State machine analysis
+
+Enumerate states such as initial, negotiated, authenticated, established, closing, and failed. For each state, list valid incoming message types, required authentication, state updates, outputs, and error behavior. Mark terminal states and ensure an invalid message cannot move the machine into an authenticated or authorized state. Check loops that accept repeated key updates, close messages, acknowledgments, or authentication attempts.
+
+A useful invariant is: no state that authorizes an application action is reachable unless the current transcript, peer identity, key confirmation, freshness, and policy checks have all succeeded. Prove transitions preserve the invariant. A second invariant can state that every accepted sequence number is unique and within the permitted window.
+
+## Error oracles and composition
+
+An oracle is any observable response correlated with a secret or hidden validity predicate. Differences may appear in status codes, timing, connection closure, retry counts, packet sizes, or resource consumption. Padding oracles, signature-validity oracles, user-enumeration oracles, and token-existence oracles all arise from state-machine distinctions. Perform bounded parsing, authenticate before sensitive processing, and rate-limit repeated failures.
+
+A primitive secure in one protocol may be unsafe in another because messages share keys, encodings, or verification endpoints. Use domain-separated keys and labels, include protocol and role identifiers in transcripts, and reject messages from the wrong context. A signature over “approve” may be replayed as “delete” if the action is not encoded. A secure transport channel still does not prevent an application request from being replayed in a new session.
+
+## Worked challenge-response repair
+
+Suppose a server sends challenge c and accepts a client signature on c, but keeps all historical challenges valid. An attacker records a valid response and replays it later. Repair by storing c with the intended account, session, operation, expiration, and unused status; require the signature to cover c, client identity, server identity, operation, and protocol version; atomically mark c used only after verification and authorization; and reject a second use. If the operation is non-idempotent, add an action identifier and transaction rule so retries do not duplicate it.
+
+## Exercises
+
+1. Define a protocol-state invariant for authenticated application actions.
+2. Compare nonce, sequence, timestamp, and expiry replay defenses.
+3. Construct a downgrade trace and identify the missing transcript field.
+4. Give two observable oracle channels besides an error message.
+5. Repair a reflection attack caused by identical client and server messages.
+6. Explain why TLS does not automatically prevent application replay.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. An action is accepted only when peer identity, transcript, key confirmation, audience, authorization, and freshness checks have succeeded in the current session.
+2. A nonce supports one-time challenges but needs storage; a sequence supports ordering and windows but needs coordinated state; a timestamp needs synchronized clocks; expiry limits lifetime but allows replay within the window.
+3. The attacker deletes a strong algorithm from the offer, both sides select the weak one, and the transcript omits the original offer. Authenticate the full offer and selection and enforce policy at both endpoints.
+4. Timing, connection closure, response size, status code, retry behavior, CPU or memory consumption, and externally visible audit events can reveal a hidden validity predicate.
+5. Include an explicit role and direction label in the signed or MACed message, and reject messages whose label does not match the expected transition.
+6. TLS protects a transport session, but an application request can be copied and submitted in a new valid session. Application semantics need an idempotency key, sequence, nonce, or replay state.
+
+</details>
+
+## Trace-table method
+
+Analyze a protocol by writing one row per message: sender, receiver, visible fields, authenticated fields, secret known by sender, expected receiver state, state transition, and security belief gained. For a challenge-response, the first row creates a fresh challenge and records it as pending. The response row proves possession of the signing or MAC key only if the verifier checks the correct identity and operation. The commit row consumes the challenge atomically and records the action identifier. A retry with the same challenge must either return the same idempotent result or fail without repeating the effect.
+
+Now test adversarial traces. Delete a message, reorder two messages, replay each message after completion, replace the identity field, reflect a client message to the client, negotiate a weaker algorithm, and send a syntactically valid message in the wrong state. For every trace, identify the first violated guard. If there is no violated guard, either the trace is a real attack or the invariant is too weak.
+
+## Verification obligations
+
+Protocol analysis should produce four artifacts: a state diagram, a message grammar with canonical encoding, invariants for authorization and freshness, and a negative-trace test suite. Add a threat model describing whether the attacker can observe, modify, delay, replay, open parallel sessions, compromise one endpoint, or access logs. A proof that ignores parallel sessions does not justify one-time challenges in a concurrent server.
+
+## References & Further Reading
+
+The protocol artifact should be executable as a bounded trace checker where practical: generate valid traces, mutate one message or state field, and assert that the first invalid transition is rejected. This turns a state invariant into a regression test without confusing finite testing with a proof over all traces.
+
+For a formal review, enumerate parallel sessions and adversarial scheduling, not only one linear happy path. An attacker can interleave messages from two otherwise valid sessions, replay a completed message during a new session, or delay a close and continue using an old authorization state. Bind session identifiers, roles, and operation context so the receiver can reject cross-session traces.
+
+* [RFC 8446, TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+* [RFC 5116, Authenticated Encryption Interface](https://www.rfc-editor.org/rfc/rfc5116)
+* [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/)
+
+**Exercise.** Analyze a login challenge-response in which the server accepts any previously seen challenge. Construct a replay trace and repair the state rule.
+
+## References & Further Reading
+
+* [RFC 8446: TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446)

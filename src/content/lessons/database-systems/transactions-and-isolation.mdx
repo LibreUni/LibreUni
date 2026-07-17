@@ -1,0 +1,95 @@
+---
+title: "Transactions and Isolation"
+course: "database-systems"
+description: "Atomicity, consistency, isolation, durability, and anomalies."
+---
+# Transactions and Isolation
+
+A transaction groups operations into an atomic unit. ACID is a set of system properties, not a promise that every application invariant is automatically encoded. Isolation controls which concurrent effects are visible: dirty reads, nonrepeatable reads, and phantoms are distinct anomalies.
+
+Serializable execution is equivalent to some serial order, but may require blocking, validation, or aborts. Weaker isolation can improve concurrency when the application tolerates its anomalies.
+
+## Atomicity and consistency
+
+Atomicity means the system exposes a transaction’s effects as all-or-nothing with respect to commit. A transaction may perform several writes, but a crash or explicit rollback must not leave only a prefix visible to future transactions. Consistency means a committed transaction preserves declared database constraints and, with application logic, the business invariants that the transaction is responsible for. ACID consistency is not automatic validation of every business rule; a database cannot infer that a transfer must conserve total balance unless the schema or transaction encodes it.
+
+Durability means committed effects survive the failures covered by the system’s contract. A commit acknowledgment may require a log flush, replicated quorum, or other persistence point. “The statement returned” is not equivalent to durable commit if the client did not issue COMMIT or the deployment uses asynchronous durability. Document the failure model: process crash, machine loss, storage corruption, replica loss, or regional outage require different guarantees.
+
+## Schedules and serializability
+
+A schedule interleaves operations from concurrent transactions while preserving each transaction’s internal order. A serial schedule runs one transaction completely before the next. A schedule is conflict-serializable if it is conflict-equivalent to a serial schedule. Build a precedence graph with one node per transaction and an edge Ti to Tj when Ti’s operation conflicts with and precedes Tj’s operation on the same item. The schedule is conflict-serializable exactly when this graph is acyclic.
+
+Conflicts involve the same data item with at least one write: read-write, write-read, or write-write. Two reads do not conflict. A cycle proves that no serial ordering preserves all conflict order; an acyclic graph yields a topological serial order. View serializability is more general but harder to test and reason about. Database protocols often target conflict serializability because locks and timestamps can enforce it operationally.
+
+## Isolation anomalies
+
+A dirty read observes data written by a transaction that later aborts. A nonrepeatable read observes different committed values for the same row in one transaction because another transaction updates it between reads. A phantom occurs when a repeated predicate query sees a new or removed row matching the predicate. A lost update occurs when two read-modify-write transactions overwrite each other. Write skew occurs when transactions read overlapping conditions, update disjoint rows, and jointly violate an invariant.
+
+Give concrete schedules rather than relying on labels. For a rule “at least one doctor remains on call,” T1 reads both doctors and turns off A while T2 reads both and turns off B. Neither writes the row the other changes, but both commit and the invariant fails unless serializable isolation, predicate locking, or a constraint catches it. Row locks on the individual rows may be insufficient if the invariant is about a predicate or set.
+
+## Two-phase locking
+
+Strict two-phase locking has a growing phase in which a transaction acquires locks and a shrinking phase in which it releases them; strict variants hold write locks until commit or abort. The locking protocol can guarantee conflict serializability, and strictness simplifies recovery because uncommitted writes are not read or overwritten. Deadlocks remain possible: T1 holds A and waits for B while T2 holds B and waits for A.
+
+Deadlock handling uses prevention, avoidance, detection, or timeout. Detection builds a waits-for graph and aborts a victim to break a cycle. Victim choice considers work, locks, age, and rollback cost. Lock granularity affects concurrency and overhead: row locks allow parallel work but create more metadata, while table locks are cheap but block unrelated operations. Intention locks coordinate multi-granularity access.
+
+## Timestamp and optimistic control
+
+Timestamp ordering assigns each transaction a logical timestamp and rejects or aborts operations that would violate the order. A read or write records relevant read and write timestamps; if a new operation conflicts with an earlier or later transaction according to the protocol, the transaction aborts. This avoids deadlocks but may cause repeated restarts under contention.
+
+Optimistic concurrency control lets transactions read and compute without blocking, then validates their read and write sets before commit. Validation must detect dangerous overlap and ensure that the committed order is serializable. It works well when conflicts are rare and poorly when many transactions update the same hot set. Retrying after a serialization failure is part of the application contract; a failed transaction’s partial effects must not be reused.
+
+## MVCC and snapshots
+
+Multiversion concurrency control stores multiple row versions with visibility metadata. A transaction reads a snapshot determined by its isolation level and transaction start or statement boundaries. Readers can often avoid blocking writers, but old versions require vacuum or garbage collection after no active transaction can see them. Long-running snapshots can delay cleanup and create storage growth.
+
+Snapshot isolation prevents many read anomalies but does not guarantee serializability. Two transactions can each read a consistent snapshot and write disjoint rows, producing write skew. Serializable snapshot isolation adds dependency tracking and aborts transactions when a dangerous structure could produce a nonserializable result. The application must retry serialization failures and preserve idempotency.
+
+## Isolation levels and vendor semantics
+
+Isolation names are not enough; consult the DBMS’s actual behavior. PostgreSQL documents Read Committed, Repeatable Read, and Serializable with snapshot and serialization-failure semantics, and treats Read Uncommitted as Read Committed. A statement at Read Committed sees rows committed before it begins, while a transaction at Repeatable Read uses a stable snapshot according to the system’s rules. Locks, DDL, replicas, and advisory mechanisms add caveats.
+
+Write a test schedule against the target system rather than assuming textbook definitions. Check whether an anomaly is possible, whether one transaction blocks or aborts, what error is returned, and whether retrying is safe. Do not use a stronger isolation level as a substitute for a missing unique constraint when the invariant can be expressed declaratively.
+
+## Application invariants
+
+For each invariant, identify its read set, write set, and conflict boundary. A uniqueness constraint is usually stronger and simpler than “SELECT then INSERT.” An atomic UPDATE with a predicate can enforce a balance or inventory bound if the affected row contains the invariant. A predicate over many rows may need serializable isolation, explicit locking of a summary row, an exclusion constraint, or a materialized counter updated in the same transaction.
+
+## Exercises
+
+1. Build a precedence graph for an interleaved schedule and classify it.
+2. Construct dirty read, nonrepeatable read, phantom, and write-skew schedules.
+3. Explain why strict two-phase locking helps recovery.
+4. Give a deadlock and two ways to resolve it.
+5. Compare snapshot isolation with serializability.
+6. Repair a read-then-insert uniqueness race.
+
+### Diagnostic solutions
+
+
+1. Add an edge Ti to Tj for every conflicting same-item pair where Ti’s operation precedes Tj’s. A cycle means not conflict-serializable; an acyclic graph’s topological order is an equivalent serial order.
+2. Dirty: T1 writes x, T2 reads x, T1 aborts. Nonrepeatable: T2 reads x, T1 commits a new x, T2 reads x again. Phantom: T2 scans predicate P, T1 inserts a matching row, T2 scans again. Write skew: two transactions read the same predicate and update disjoint rows so the joint invariant fails.
+3. Uncommitted writes are not exposed and write locks remain until commit, so an abort does not require another committed transaction to undo or propagate a dirty value.
+4. T1 locks A then waits for B while T2 locks B then waits for A. Detect a waits-for cycle and abort one, impose a global lock order, use wait-die or wound-wait, or time out with a safe retry.
+5. Snapshot isolation gives consistent reads and reduces read-write blocking but can permit write skew. Serializable execution prevents all nonserializable schedules, often by blocking, validation, or aborting.
+6. Add a unique constraint and attempt the insert, handling a conflict; or lock a stable key/range under an appropriate isolation level. A preceding existence check alone races.
+
+
+
+## Concurrency test protocol
+
+Run schedules on the target DBMS with two or more sessions, barriers that force the intended interleaving, and a fresh database state for each trial. Record commits, aborts, blocking, returned errors, and final invariants. Repeat after changing isolation, indexes, replica placement, and retry policy. A test that merely runs two clients without controlling their order cannot establish that a particular anomaly is possible or impossible.
+
+When retrying serialization failures, restart the entire transaction from a clean application state. Do not replay only the last statement with values computed from an aborted snapshot. Make external effects idempotent or defer them until commit through an outbox or equivalent mechanism.
+
+## References & Further Reading
+
+* [PostgreSQL Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+* [PostgreSQL Concurrency Control](https://www.postgresql.org/docs/current/mvcc.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+
+**Exercise.** Construct two transactions that cause a lost update under read-then-write behavior. Repair it with a lock, atomic update, or serializable transaction.
+
+## References & Further Reading
+
+* [PostgreSQL Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)

@@ -1,0 +1,98 @@
+---
+title: "SQL Lab"
+course: "database-systems"
+description: "Write queries while checking null, join, and grouping semantics."
+---
+# SQL Lab
+
+Create a small schema with keys and constraints, populate edge cases, and write joins, aggregates, updates, and a transaction. Inspect the result of nulls, zero matches, duplicate rows, and a failed constraint.
+
+## Lab schema
+
+Create Student(student_id, tenant_id, email, name), Course(course_id, code, title), Offering(course_id, term, instructor, capacity), and Enrollment(student_id, course_id, term, status, enrolled_at). Declare primary keys, foreign keys, unique constraints, checks for capacity and status, and a uniqueness rule preventing duplicate enrollment per term. Explain whether tenant_id belongs in every key and reference for a multi-tenant deployment. Use explicit types and a documented timezone policy.
+
+Populate fixtures with two tenants, a student with no enrollment, an offering with multiple students, an offering with zero students, a NULL optional field, duplicate-looking emails with different case, and an attempted dangling foreign key. Include a course whose code is reused in a different term if the schema permits it. Record which inserts the database rejects and why; do not silently remove edge cases to make a query pass.
+
+## Query tasks
+
+Write a query returning every course and its enrollment count for a term, including zero. Write a query finding students enrolled in every required course using NOT EXISTS. Write an antijoin for offerings with no enrollment. Write a report with total, average, and distinct student counts and explain NULL behavior. Write a window query ranking offerings by enrollment within term, with deterministic tie-breaking.
+
+For each query state the grain of the result, expected cardinality, duplicate behavior, and authorization predicate. Compare an INNER JOIN and LEFT JOIN fixture. Move a term predicate between ON and WHERE and explain the changed result. Test NOT IN with a NULL-producing subquery and repair it with NOT EXISTS. Inspect EXPLAIN and identify whether indexes on tenant, course, term, and enrollment keys are used.
+
+## Modification tasks
+
+Implement enrollment with a transaction that checks offering capacity and inserts only if capacity remains. Run two concurrent enrollment attempts against the last seat and observe whether both can commit. Repair with an atomic conditional update, appropriate lock, serializable transaction, or a capacity-row design. Handle a serialization failure by restarting the whole transaction and using an idempotency key for the request.
+
+Implement a course-code change and decide whether historical enrollments should follow the code or stable offering ID. Attempt a parent deletion and inspect the foreign-key policy. Update a student email under a uniqueness constraint and test case normalization. Include a rollback path and verify that failed statements do not leave a partial enrollment or audit record.
+
+## Plan and performance tasks
+
+Create uniform and skewed fixtures. Compare a sequential scan, index scan, and join strategy for enrollment counts and tenant-scoped lookups. Use EXPLAIN ANALYZE only in a safe transaction or read-only copy. Record estimated and actual rows, loops, buffers, memory, planning time, execution time, and tail latency. Add a composite index only after stating its query and write cost. Refresh statistics and repeat.
+
+## Security tasks
+
+Use separate application and migration roles. Attempt SQL injection through a value, an ORDER BY choice, and an identifier selector; parameterize values and allowlist identifiers. Attempt to read another tenant’s student and enrollment IDs. Enforce tenant context in every query or row policy and test bulk, search, export, and error paths. Verify that query logs and failed statements do not contain passwords or tokens.
+
+## Recovery tasks
+
+Start a transaction, perform an enrollment and audit insert, crash or roll back at several points, and verify atomicity. Take a backup or test fixture, apply changes, and restore to a known point. Check that constraints, indexes, tenant policy, and application assumptions remain valid after restore. Record what happens if the KMS, identity provider, or audit sink is unavailable.
+
+## Exercises
+
+1. Write the zero-enrollment query and prove why LEFT JOIN is required.
+2. Construct a capacity race and repair it.
+3. Create a NULL fixture that changes a NOT IN result.
+4. Design indexes for tenant-term enrollment reports.
+5. Write a cross-tenant negative test.
+6. Trace rollback after a failed constraint.
+
+### Diagnostic solutions
+
+
+1. Start from Offering and LEFT JOIN Enrollment with the term predicate in ON, group by offering, and COUNT(e.student_id). The preserved offering row remains when no enrollment matches.
+2. Both transactions read one remaining seat and insert. Use an atomic UPDATE with capacity predicate and check affected rows, lock the offering row, or use serializable isolation with full retry.
+3. Put a NULL in a subquery used by NOT IN. A nonmatching outer value compares UNKNOWN, so it is filtered. Use NOT EXISTS with an explicit equality and a non-null key.
+4. Use tenant_id, term, and course or offering ID in an order matching equality and grouping. Measure skew, selectivity, write overhead, and whether a covering index is worth its size.
+5. Authenticate as tenant A, request an object ID owned by tenant B through direct, list, search, export, and asynchronous paths, and assert no data or revealing error is returned.
+6. Verify the failed insert or update is absent, earlier statements in the same transaction are rolled back unless explicitly committed elsewhere, and any external effect uses an outbox or compensation rather than assuming database rollback.
+
+
+
+## Expected result analysis
+
+Before executing each query, write the expected rows for the fixture by hand. Mark the relation’s grain and count how many rows each join key can contribute. For a course-count query, there must be one result per offering, even when the enrollment side is empty. For a student-course query, duplicate enrollment records should be impossible because of a constraint; if the fixture permits them temporarily, explain whether the query should count rows or distinct students.
+
+For NULLs, write the three-valued truth value of every predicate. A WHERE clause retains TRUE only; UNKNOWN is not accepted. For outer joins, mark the generated NULL-extended row separately from a stored NULL. For aggregates, compare COUNT(*) with COUNT(student_id), SUM over no rows, and AVG with missing grades. Include a test where a filter is moved from ON to WHERE and record the exact row that disappears.
+
+## Transaction trace
+
+Use two database sessions and barriers. Session A reads capacity, session B reads capacity, then release both to attempt the last-seat update. Record snapshots, locks or versions, affected-row counts, commits, and errors. A correct design either serializes one transaction, causes one conditional update to affect zero rows, or aborts one transaction for retry. A test that merely observes the final capacity cannot show whether two users were both incorrectly told they succeeded.
+
+## SQL safety review
+
+Inspect generated SQL and parameters. Every user value must be bound, every identifier selected from an allowlist, and every privileged field assigned by the server. Test malformed Unicode, quotes, comments, large values, unexpected NULL, duplicate JSON keys, and a client attempting to set tenant_id or enrollment status. Review query logs and errors for sensitive values. The lab is complete only when semantic result, concurrency behavior, security policy, and operational evidence agree.
+
+## Lab report
+
+Submit DDL, seed data, expected result tables, SQL statements, transaction schedules, EXPLAIN plans, timing and buffer measurements, negative security tests, and recovery observations. For every result explain the logical query phase that produces it. For every failed test state whether the defect was in schema, query, transaction boundary, authorization, configuration, or expectation. Include database version, isolation settings, index definitions, fixture generator, and commands so another student can reproduce the lab.
+
+## Extension: workload reasoning
+
+Add enough rows to cross a planner threshold and introduce a skewed tenant. Observe whether a plan changes from index probes to a scan or from nested loop to hash join. Then add a composite index and measure both read benefit and insert cost. Do not report one fast run; report repeated distributions, cache condition, statistics state, and the logical result checksum.
+
+## Grading standard
+
+Full credit requires a schema whose constraints match the stated domain, queries whose grain and NULL behavior are explained, a concurrency repair that is correct under the selected isolation level, parameterized and authorized access, and measurements that identify assumptions. A screenshot of a successful query is not evidence of correctness. Include an independently computed oracle for small fixtures and retain failing cases as regression tests. Record the DBMS version and configuration with the submission. Store the raw plans and result checksums as well. Keep them versioned and rerun them after every query, index, or configuration change so that performance conclusions remain reproducible rather than anecdotal.
+
+## References & Further Reading
+
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL SQL Queries](https://www.postgresql.org/docs/current/queries.html)
+
+**Exercise.** Include one query whose result changes if an inner join is replaced with a left join, and explain why.
+
+## References & Further Reading
+* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
+* [PostgreSQL SQL Queries](https://www.postgresql.org/docs/current/queries.html)

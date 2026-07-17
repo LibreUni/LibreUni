@@ -1,0 +1,89 @@
+---
+title: "Tries and String Indexing"
+course: "data-structures"
+description: "Prefix trees, compressed tries, radix layouts, lexicographic queries, and memory-aware string dictionaries."
+---
+# Tries and String Indexing
+
+A trie stores strings by their prefixes rather than comparing complete keys at each branch. A path from the root spells a prefix; a terminal marker identifies which prefixes are complete keys. This representation gives lookup time proportional to key length, independent of the number of stored keys under suitable assumptions, and supports prefix queries naturally. Its cost is memory: sparse alphabets and long paths can create many nodes and pointer fields.
+
+## String-set abstraction
+
+The set ADT supports insert(s), contains(s), remove(s), and prefix queries such as all keys beginning with p or the number of keys with prefix p. Define whether duplicate insertion changes a value, whether the alphabet is fixed, and whether strings are byte sequences or Unicode scalar values. Normalization and case folding are application policy, not automatic properties of a trie.
+
+A basic trie has a root and one outgoing collection per node. An edge is labeled by a symbol, and a node has terminal=true when the path from root forms a stored key. The RI is that each node has one unique path label, no two outgoing edges have the same symbol, and terminal exactly records membership of that string. The root represents the empty prefix; it may itself be terminal if the empty string is allowed.
+
+**Worked example.** Insert the strings "to", "tea", "ten", and "in". The root branches on t and i. The t path branches after "te" into a terminal a and n; the o path is terminal for "to". A prefix query "te" reaches the node for te and traverses its subtree, returning tea and ten. A dictionary comparison structure would need an ordered search or repeated range queries; the trie exposes the prefix as a path.
+
+## Operations and proof
+
+To insert a string, start at root and for each symbol follow or create the corresponding child. Mark the final node terminal. The path invariant ensures the resulting path spells exactly the string. To search, follow the same symbols; failure to find a child proves no stored key has that prefix, while terminal decides exact membership. Search cost is O(ell) child steps plus child-lookup cost for a key of length ell.
+
+Removal unmarks the terminal node. It may then prune nodes that are nonterminal and have no children, moving upward until a node is needed by another key. Pruning changes only representation, not the set of stored strings. A common bug is deleting a path shared by another key; the terminal/child checks are the proof that pruning is safe.
+
+If children are stored in a fixed array of alphabet size sigma, child lookup is O(1) but each node costs O(sigma) slots. A sorted vector costs O(log d) lookup with d children and compact storage; a hash map gives expected O(1) lookup but adds hashing and unordered iteration. The correct bound should expose alphabet size, degree, key length, and memory layout.
+
+## Prefix queries
+
+To enumerate keys with prefix p, follow p then perform DFS or BFS over descendants, appending edge symbols to a mutable buffer. The traversal visits the prefix path plus the output subtree; time is O(|p|+total output symbols) with compact child iteration. Lexicographic order requires visiting children in sorted symbol order and using DFS; a hash-map child collection cannot promise order without sorting.
+
+Counting keys under a prefix stores subtreeCount at each node. Inserting a new key increments counts along its path, removal decrements them, and duplicate policy determines whether an update is applied. The invariant is subtreeCount(node)=number of terminal descendants, including the node if terminal. A stale count can return plausible but incorrect autocomplete results, so validate counts recursively.
+
+Longest-prefix matching asks for the longest stored key that is a prefix of an input string. During a traversal, remember the deepest terminal node seen. If traversal fails, return the remembered key. This supports routing-like prefix tables and lexical token matching. It differs from longest stored string sharing a prefix; the direction of the query matters.
+
+## Compressed tries and radix trees
+
+A trie with one-child chains wastes nodes. A compressed trie (Patricia/radix tree) labels an edge with a nonempty string and stores branching points or terminals. Lookup compares chunks, tracking the first mismatch. Insertion splits an edge at the longest common prefix, creates a branching node, and preserves the old and new suffixes. The RI requires edge labels on a node to have disjoint first symbols or an equivalent unambiguous partition.
+
+Compression reduces node count and pointer overhead but makes updates more complex: a split must preserve all descendants, terminal status, and parent links if present. The path comparison cost remains O(ell) character inspections. A radix tree is especially useful for long keys with shared prefixes and for memory-resident indexes where pointer count matters.
+
+## Binary tries and bitwise keys
+
+For fixed-width integers or bit strings, a binary trie branches on one bit per level. A compressed binary trie skips unary paths and stores a discriminating bit index. Longest-prefix match becomes a natural operation: follow bits while retaining the deepest matching prefix. Patricia tries are used in routing and IP lookup because prefix length and bitwise comparison align with the query.
+
+The height of an uncompressed fixed-width trie is bounded by word width W, giving O(W) operations even when n is large. For variable-length strings, height depends on key length. Compressed structures can reduce the number of visited nodes but still inspect enough key bits to distinguish candidates.
+
+## Memory and implementation
+
+Node allocation dominates many trie implementations. An arena can improve locality, while packed edge arrays reduce per-node overhead. Store terminal flags as bit fields only if the representation handles alignment and atomic updates correctly. A child-index array into a contiguous node pool avoids raw pointers and permits serialization, but pool growth can invalidate indexes if they are addresses rather than stable offsets.
+
+Unicode requires a defined unit. Indexing UTF-8 bytes gives a valid trie over bytes but prefix queries may cut through code-point encodings; indexing decoded scalar values changes length and normalization behavior. Grapheme clusters require even more linguistic processing. The data structure cannot decide which notion of string equality the application intends.
+
+## Ordering and persistence
+
+Trie nodes can be made immutable and shared between versions using the same path-copying method as persistent trees. Inserting a string copies the nodes along its prefix path and reuses unrelated subtries; deleting a key copies the path while pruning only in the new version. Subtree counts, terminal flags, and child maps must all be copied or treated immutably. This makes autocomplete snapshots consistent, but old roots retain every reachable subtrie.
+
+Lexicographic iteration is defined by the alphabet order, not by memory address. A compressed edge label must be compared symbol by symbol, and a terminal at an internal node must be emitted before longer descendants when the shorter key sorts first. If the application wants locale-specific collation, a code-point trie’s byte order is not enough; store or compute the collation key explicitly.
+
+## Robust testing
+
+Generate strings with empty keys, one-symbol prefixes, duplicate keys, a key that is a prefix of another, long unary chains, and maximal alphabet symbols. Compare contains and prefix output against a reference set, and after deletion verify no unrelated key disappeared. For radix trees, test splits at the first symbol, at the final symbol, and when one key ends exactly at the split. These cases exercise the boundaries hidden by ordinary random strings.
+
+## Exercises
+
+1. State a trie RI and prove exact lookup correctness.
+2. Trace insertion and pruning for keys with shared prefixes.
+3. Design prefix enumeration in lexicographic order.
+4. Prove subtreeCount maintenance for insert and remove.
+5. Compare fixed-array, sorted-vector, and hash-map child storage.
+6. Describe a radix-edge split and list all invariants to preserve.
+7. Explain byte-oriented versus Unicode-scalar tries.
+
+### Diagnostic solutions
+
+
+1. Each node has a unique root path, outgoing labels are unique, and terminal marks exactly stored keys. Lookup follows the only path matching each input symbol; it succeeds exactly when that path exists and its final node is terminal.
+2. Insert the shared prefix once and mark only complete keys. On removal, unmark the terminal; prune a node only if it is nonterminal and childless. A shared prefix remains because it has another child or terminal status.
+3. Follow the prefix, then DFS with children visited in sorted symbol order. Emit the buffer whenever terminal is true. The traversal returns each descendant key once; sorting child order yields lexicographic order by the standard prefix comparison.
+4. For a new key, increment count at every node on its path exactly once; the set of terminal descendants gains one. For removing an existing key, decrement the same path; if duplicate insertion is idempotent, do not increment twice. Induction over the path proves the count formula.
+5. Fixed arrays provide direct lookup but cost u0398(u03c3) per node; sorted vectors use compact degree-proportional space and O(log d) lookup; hash maps use expected O(1) lookup with overhead and no inherent order. Choose based on alphabet, degree distribution, and memory budget.
+6. Find the longest common prefix of old edge label and new suffix; split into a parent edge prefix and two suffix edges, attach both subtrees, and preserve terminal flags if a key ends at the split. Recompute counts and parent links, and ensure outgoing first symbols remain distinct.
+7. A byte trie treats encoded bytes as symbols and can answer byte-prefix queries; a scalar trie decodes code points and answers scalar-prefix queries. Normalization, case, invalid encoding, and grapheme semantics must be specified; otherwise equal user-visible strings may map to different paths.
+
+
+
+## References & Further Reading
+
+* [Open Data Structures](https://opendatastructures.org/)
+* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
+* Morrison, “PATRICIA—Practical Algorithm To Retrieve Information Coded in Alphanumeric,” *JACM*.

@@ -1,0 +1,76 @@
+---
+title: "Secure Networked Applications"
+course: "computer-networks"
+description: "Threat models, authenticated channels, certificates, session state, and secure application protocol design."
+---
+# Secure Networked Applications
+
+Network security is a property of a protocol running in an environment where packets can be observed, modified, delayed, replayed, injected, or suppressed. Confidentiality, integrity, peer authentication, freshness, authorization, and availability are different claims. A protocol can provide one while failing another: encryption without authentication may hide data from a passive observer while allowing an active attacker to redirect a client to the attacker’s endpoint.
+
+## Start with the threat model
+
+State the assets, principals, attacker capabilities, trust anchors, and desired guarantees. An Internet attacker may read and alter traffic, spoof source addresses, operate a malicious endpoint, replay old messages, or block packets. It may not be able to break modern cryptographic assumptions or compromise a protected private key. If the server is already compromised, transport encryption does not protect the client from malicious application responses.
+
+A useful security claim is conditional. “The attacker cannot learn the plaintext” assumes a secure cipher, secret keys, correct nonce use, endpoint protection, and no side channel that reveals it. “The client is connected to the intended service” requires an authenticated binding between the service identity and a key, plus correct validation by the client. “The request was processed exactly once” additionally requires application state and durable identifiers; TLS alone cannot supply it.
+
+## Authenticated channels
+
+An authenticated encrypted channel typically combines a key-establishment protocol with authenticated encryption. The handshake negotiates algorithms, proves possession of a private key or shared secret, derives traffic keys, and binds the transcript to the negotiated context. The record layer then encrypts and authenticates application records, detects modification, and rejects invalid sequence or nonce state.
+
+Confidentiality should be modeled separately from integrity. A stream cipher without a secure authenticator permits bit-flipping; a message authentication code without encryption authenticates visible data but does not hide it. Authenticated encryption with associated data (AEAD) protects plaintext and authenticates unencrypted context such as a version, direction, or record type. Associated data must be canonical and included in the security proof’s intended domain.
+
+**Worked attack.** A protocol encrypts `amount=100` with a malleable stream cipher and sends the ciphertext without a MAC. An attacker flips the ciphertext bit corresponding to the ASCII digit so the receiver parses `amount=900`. The receiver cannot distinguish the altered plaintext from the original. Adding a MAC over the ciphertext and context causes verification to fail before parsing; merely encrypting with a different key does not solve the missing integrity claim.
+
+## Certificates and identity
+
+Public-key certificates bind a subject identity to a public key through a signed statement by a certification authority. The client validates the signature chain to a trusted root, validity period, key usage, name constraints, and the server name. Trusting a certificate because it is signed is incomplete: the signature says the authority signed the binding, while hostname validation checks whether the binding is for this service.
+
+Certificate validation also has operational failure modes. Expired certificates, incorrect system clocks, missing intermediates, revoked or distrusted authorities, and wrong service names can break an otherwise reachable application. Disabling validation “temporarily” converts a diagnosable configuration issue into an active man-in-the-middle vulnerability. For internal services, private trust anchors can be appropriate when distribution, rotation, and compromise recovery are managed explicitly.
+
+## Sessions, replay, and state
+
+A secure channel does not automatically make application requests fresh or idempotent. An attacker who records a valid authenticated request may replay it unless the protocol includes a nonce, sequence number, timestamp with an acceptance window, or server-side operation identifier. The receiver must remember enough state to reject reuse. A nonce that is generated but not checked provides no replay protection.
+
+Session cookies and bearer tokens are credentials. Anyone who obtains one may act as the holder until expiry, revocation, or audience checks prevent it. Bind tokens to an intended service and scope, use secure transport, restrict exposure through cookie attributes or equivalent mechanisms, and rotate or revoke when compromise is suspected. A TLS session resumption ticket can reduce handshake cost but must still be protected, scoped, and expired according to the protocol’s security model.
+
+## Message framing and parser safety
+
+Security begins before cryptography if the two endpoints disagree about message boundaries. Length fields should have explicit bounds, integer arithmetic should be checked before allocation, and parsers should reject trailing ambiguity where canonical encoding is required. Request smuggling and signature confusion often arise when a proxy and an origin parse the same bytes differently.
+
+Authenticate the exact bytes whose meaning is authorized. If a signature covers a decoded object but not its original encoding, two encodings may verify as the same or different objects depending on implementation. Canonical serialization, explicit versioning, and domain separation prevent a valid signature from being transplanted into a different protocol context. Error handling should avoid turning parser failures into oracle responses that reveal secrets.
+
+## Availability and abuse
+
+Encryption consumes CPU, memory, connection slots, and state. An attacker can exploit expensive handshakes, large advertised windows, reflection behavior, or retry loops. Rate limits should be applied at suitable identities and stages, but source IP alone may be spoofed, shared, or hidden by NAT. Stateless cookies or proof-of-work-like admission can reduce server state before a peer is authenticated, but they introduce latency and usability tradeoffs.
+
+Application retries need budgets, exponential backoff, jitter, and idempotency. If a service times out after committing an operation, blind retry can duplicate the operation. If every client retries simultaneously after a dependency recovers, a thundering herd can recreate the outage. Security and reliability are connected: authentication and authorization must remain correct under load, and availability controls must not become authorization bypasses.
+
+Security review should test the negative paths: altered records, reordered records, repeated nonces, expired credentials, wrong hostnames, truncated messages, oversized lengths, unsupported versions, and server restarts between commit and response. A protocol that succeeds on the happy path but has no specified behavior for these cases is not self-contained or secure.
+
+## Exercises
+
+1. State the missing security property in an encrypted-but-unauthenticated channel and give a concrete attack.
+2. Explain the difference between certificate-chain validation and hostname validation.
+3. Design replay protection for an idempotent request and for a non-idempotent request.
+4. A proxy accepts one HTTP framing interpretation while the origin accepts another. Why is this dangerous, and what protocol rule reduces the ambiguity?
+5. Give a secure failure response for an expired certificate and explain why bypassing validation is not an acceptable repair.
+6. Analyze a service whose clients retry every request three times immediately after a 2-second timeout.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Integrity and peer authentication are missing. An active attacker can redirect traffic, modify ciphertext, inject records, or impersonate a server while passive confidentiality remains intact. Authenticated encryption plus authenticated key establishment addresses the channel claim.
+2. Chain validation checks that a trusted authority signed a sequence of certificates with valid constraints. Hostname validation checks that the authenticated leaf binding names the service the client intended to contact. A valid certificate for another domain must be rejected.
+3. Include a unique request ID and reject an ID already completed; for non-idempotent work, durably store the ID and result before acknowledging commitment. A timestamp alone is insufficient if the acceptance window is wide and replay state is not tracked.
+4. Different boundaries can cause one component to see an authenticated request while another sees a different request, enabling smuggling or authorization confusion. Require one unambiguous framing interpretation, reject conflicting length/transfer indicators, and normalize before forwarding.
+5. Fail closed with an actionable diagnostic, renew or correctly deploy the certificate chain, and verify the service name and clock. Bypassing validation permits an attacker controlling the path to present any certificate or proxy.
+6. Each client can generate four requests for one operation, increasing load precisely when the service is slow. Use bounded exponential backoff with jitter, classify retryable errors, cap attempts, and require an operation ID for state-changing requests. Measure retry amplification as part of capacity planning.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 8446: TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+* [RFC 5280: Internet X.509 Public Key Infrastructure](https://www.rfc-editor.org/rfc/rfc5280)
+* [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110)
+* [OWASP Application Security Verification Standard](https://owasp.org/www-project-application-security-verification-standard/)

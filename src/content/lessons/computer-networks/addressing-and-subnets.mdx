@@ -1,0 +1,92 @@
+---
+title: "Addressing and Subnets"
+course: "computer-networks"
+description: "IPv4 prefixes, subnet arithmetic, route aggregation, IPv6, and address planning."
+---
+# Addressing and Subnets
+
+Network-layer addressing gives packets a structured destination that routers can use to forward traffic without knowing every host individually. An address has an interface or host identifier and a prefix that describes a region of the topology. Subnetting divides a prefix into smaller regions; aggregation combines adjacent regions into a shorter routing description. The arithmetic is simple, but errors in prefix length, host range, route specificity, or address ownership can create outages and security boundaries that fail silently.
+
+## Prefix notation
+
+CIDR notation writes an address followed by a prefix length, such as `192.0.2.0/24`. The first 24 bits identify the network prefix; the remaining 8 bits are available for host/interface identifiers under the protocol’s rules. A mask has ones in prefix positions and zeros in host positions. The network address is `address AND mask`; the broadcast address in traditional IPv4 is the network address with all host bits set.
+
+For a prefix of length $p$ in a $w$-bit address space, the number of raw addresses is $2^{w-p}$. Usable host count depends on protocol and deployment: traditional IPv4 subnets commonly reserve network and directed-broadcast addresses, while point-to-point links, loopback, and modern host configurations can use different rules. Never subtract two mechanically without stating the subnet semantics.
+
+**Worked example.** For `192.0.2.130/26`, a /26 has 6 host bits and block size 64. The subnet boundaries are 0, 64, 128, and 192 in the last octet. The network is `192.0.2.128`, host bits are `0x02`, and the traditional broadcast is `192.0.2.191`. The host range under the conventional rule is .129–.190. The address is not in the .192 subnet merely because its last octet is numerically close; the prefix mask determines membership.
+
+## Subnet calculation and allocation
+
+To divide a /24 into four equal subnets, borrow two host bits and create /26 prefixes. Each contains 64 raw addresses. To allocate unequal requirements, use variable-length subnetting: assign the largest requirement first, choose a power-of-two block that contains it, then continue with the remaining aligned space. Alignment is essential; a block of size $2^h$ must begin at an address whose low $h$ bits are zero.
+
+**Worked allocation.** A company has `198.51.100.0/24` and needs at least 100, 40, 20, and 10 hosts. Allocate /25 for the 100-host department (128 addresses), /26 for the 40-host department (64), /27 for the 20-host department (32), and /28 for the 10-host department (16), leaving 16 addresses unused only if alignment and conventional reservations still meet the requirements. Assign largest first: .0/25, .128/26, .192/27, and .224/28. The final .240/28 remains available. A plan that starts with a /28 at .0 can create holes that cannot fit the later /25.
+
+Address planning includes gateways, infrastructure, point-to-point links, growth, management, and failure domains. “Enough host addresses” is not enough if a future expansion requires contiguous aggregation or if a security policy needs separate prefixes. Document ownership, purpose, location, route advertisement, and decommissioning.
+
+## Longest-prefix matching
+
+A router may have multiple routes containing a destination. Longest-prefix matching chooses the route with the greatest prefix length, because it represents the most specific knowledge. A default route `/0` matches everything but loses to any more specific route. Equal-length matches require a routing policy or metric rule.
+
+**Worked table.** Suppose a forwarding table contains `0.0.0.0/0 → R0`, `198.51.0.0/16 → R1`, and `198.51.100.0/24 → R2`. Destination `198.51.100.7` uses R2; `198.51.200.7` uses R1; `203.0.113.7` uses R0. Adding the /24 changes traffic only in that range. A route leak can therefore affect a narrow prefix while leaving neighboring destinations unchanged.
+
+Routing aggregation summarizes adjacent prefixes when their binary ranges align. Two /25 networks can aggregate into a /24 only if they are the two halves of that /24 and both are reachable through the same next hop. Arbitrary nearby prefixes cannot be summarized without covering addresses that may not be reachable. A summary route can blackhole traffic to the covered but absent subrange unless a more specific route or discard policy handles it.
+
+## IPv4 address roles and translation
+
+IPv4 uses unicast, multicast, broadcast, private, loopback, link-local, and documentation or special-purpose ranges with distinct scopes. Private addresses are not globally routed and often appear behind network address translation (NAT). NAT maps internal address/port tuples to external tuples, conserving addresses and creating a stateful boundary. It does not replace authentication or guarantee security; unsolicited inbound traffic is commonly blocked because no mapping exists, but permitted mappings and application vulnerabilities remain.
+
+NAT complicates end-to-end reachability, peer-to-peer protocols, logging, and address literals embedded in payloads. A transport connection is identified by endpoint addresses and ports, but the mapping can expire while an application is idle. Keepalives, connection migration, relays, or explicit signaling may be required. The architectural question is whether location-dependent translation is acceptable for the application’s trust and mobility model.
+
+## IPv6 and prefix semantics
+
+IPv6 expands the address space and changes header and configuration conventions. An IPv6 prefix such as `2001:db8:1234::/48` leaves 80 bits for subnet and interface choices. IPv6 routers do not use broadcast in the IPv4 sense; multicast and neighbor-discovery mechanisms take related roles. Hosts can configure addresses through router advertisements, DHCPv6, or static policy, and privacy addresses can reduce long-lived identifier exposure.
+
+The large space does not eliminate planning. Prefix delegation, hierarchical routing, stable subnet boundaries, multi-homing, and security policy still matter. An enterprise commonly receives a larger prefix and assigns /64 subnets to LANs because protocol mechanisms assume that size for many link types. Using arbitrary tiny subnets can break neighbor discovery or address-autoconfiguration assumptions.
+
+## Forwarding path and ARP/neighbor discovery
+
+A host determines whether a destination is on-link by applying its prefix. If on-link, it resolves the destination’s link-layer address; if off-link, it resolves the configured next-hop router’s link-layer address and sends the IP packet there. The IP destination remains the final endpoint while the link destination is the next hop. Address-resolution caches have lifetimes and can be poisoned, stale, or incomplete.
+
+**Worked local path.** Host A `192.0.2.10/24` sends to `192.0.2.44`: both share the /24 prefix, so A resolves .44’s link address directly. Sending to `198.51.100.7`, A finds the destination off-link, resolves its default gateway `192.0.2.1`, and sends a frame addressed to the gateway carrying an IP packet addressed to .7. A router repeats this decision at each interface. Confusing link and IP destination produces a frame that reaches the wrong local recipient or an IP packet that cannot be routed.
+
+## Route aggregation and policy
+
+A routing table is a policy data structure, not just a map of shortest paths. A prefix may be advertised because an organization owns it, has a customer route, or wants traffic to enter at a particular location. Aggregation reduces table size and update churn but can hide failures if a summary remains while specific paths disappear. More-specific advertisements override summaries and can attract traffic unexpectedly.
+
+Traffic engineering uses multiple paths, metrics, communities, local preference, and prepending. A path that is numerically shorter may be rejected for policy. Address allocation should follow topology and ownership so aggregation remains possible; random assignment creates routing-table fragmentation and increases failure propagation.
+
+## Security and operational boundaries
+
+An address is not an identity. It can be reassigned, shared through NAT, spoofed on a local network, or moved by mobility. Access-control rules should bind to authenticated principals and explicit network context where possible. Ingress filtering can reduce spoofing by rejecting source addresses that should not arrive on an interface; it does not authenticate every packet.
+
+Operational diagnosis uses prefix membership, route lookup, neighbor cache, interface state, ARP/ND resolution, and packet capture in that order. A route existing in a table does not prove the next hop is reachable; a reachable next hop does not prove return routing; and both do not prove the application accepts traffic.
+
+## Independent practice
+
+1. Compute network, broadcast, host range, and block size for several IPv4 prefixes.
+2. Allocate unequal subnet requirements from a /24 and preserve an aligned growth block.
+3. Apply longest-prefix matching to a forwarding table with overlapping routes.
+4. Determine whether two prefixes can aggregate and identify the covered range.
+5. Trace on-link and off-link delivery including link and IP destinations.
+6. Compare NAT’s reachability effect with an authentication or firewall guarantee.
+7. Design an IPv6 prefix plan with /64 LANs, delegated sites, and route aggregation.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Convert the prefix length into host bits, derive block size $2^{w-p}$, mask the address for the network, set host bits for broadcast if IPv4 semantics apply, and state reservations. Do not assume every prefix has the same usable-host rule.
+2. Sort requirements descending, allocate aligned power-of-two blocks, and reserve addresses for gateways/infrastructure. Verify each block’s end does not overlap the next and that remaining space can support the planned growth.
+3. Select the matching route with the greatest prefix length; then apply equal-length policy or metric. A default route is used only if no more specific match exists.
+4. Prefixes aggregate only when they form a complete aligned binary parent and share the same reachability policy. The parent covers both children plus no unintended range.
+5. On-link traffic resolves the destination’s link address; off-link traffic resolves the gateway’s link address while retaining the final IP destination. Each router repeats the next-hop decision.
+6. NAT may block unsolicited inbound flows through state, but it does not prove who is authorized or prevent an allowed endpoint from attacking. Authentication and policy operate on different properties.
+7. Assign a /64 per LAN from delegated site prefixes, reserve summarizable site blocks, document stable and privacy addresses, and verify advertisements do not overlap or create unintended more-specific paths.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 4632: Classless Inter-Domain Routing](https://www.rfc-editor.org/rfc/rfc4632)
+* [RFC 791: Internet Protocol](https://www.rfc-editor.org/rfc/rfc791)
+* [RFC 8200: IPv6 Specification](https://www.rfc-editor.org/rfc/rfc8200)
+* [Kurose and Ross: network-layer knowledge checks](https://gaia.cs.umass.edu/kurose_ross/knowledgechecks/index.php)

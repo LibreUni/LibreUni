@@ -1,0 +1,134 @@
+---
+title: "Pipelining"
+course: "computer-architecture"
+description: "Throughput, latency, stage balance, and the limits of instruction overlap."
+---
+# Pipelining
+
+Pipelining improves instruction throughput by allowing different instructions to occupy different portions of a datapath at the same time. It does not make one instruction’s combinational work disappear. Instead, registers divide a long path into stages and establish a repeating schedule. The architectural machine still appears to execute instructions in program order, while the implementation overlaps their internal phases.
+
+The distinction between latency and throughput is fundamental. *Latency* is the time from an instruction entering the pipeline to its result becoming available or retiring. *Throughput* is the long-run completion rate after the pipeline is filled. A five-stage pipeline may have five-cycle instruction latency but complete one independent instruction per cycle. A pipeline that accepts one instruction per cycle but stalls frequently has a lower effective throughput than its ideal diagram suggests.
+
+## A pipeline as a timed refinement
+
+Suppose an unpipelined datapath performs fetch, decode/register read, execute, memory, and write-back in one cycle. Insert pipeline registers between these phases. The registers carry both data and control: an instruction’s destination register, ALU operation, memory direction, and write-back choice must travel with the values they govern. A common five-stage model is IF, ID, EX, MEM, and WB.
+
+At cycle $t$, instruction $I_0$ may be in EX while $I_1$ is in ID and $I_2$ is in IF. The hardware is not executing three complete instructions independently; it is executing three slices of three different instruction transitions. Correctness requires that each slice’s data and controls remain aligned. A classic bug is to pipeline the operand value but not its destination register, causing a result to be written into the wrong architectural register several cycles later.
+
+**Worked timeline.** For independent instructions $I_0,I_1,I_2,I_3,I_4$:
+
+| Cycle | IF | ID | EX | MEM | WB |
+|---|---|---|---|---|---|
+| 1 | $I_0$ | – | – | – | – |
+| 2 | $I_1$ | $I_0$ | – | – | – |
+| 3 | $I_2$ | $I_1$ | $I_0$ | – | – |
+| 4 | $I_3$ | $I_2$ | $I_1$ | $I_0$ | – |
+| 5 | $I_4$ | $I_3$ | $I_2$ | $I_1$ | $I_0$ |
+| 6 | – | $I_4$ | $I_3$ | $I_2$ | $I_1$ |
+
+The first result appears at cycle 5, but the fifth result appears at cycle 9. After filling, completion is one per cycle. For $N$ instructions and $k$ stages, ideal cycles are $k+N-1$, not $kN$.
+
+## Clock period and stage balance
+
+Each pipeline stage has a combinational delay $d_i$ and a register overhead $r_i$ including clock-to-Q, setup, skew, and margin. The clock period must exceed the maximum stage delay:
+
+$$
+T\ge\max_i(d_i+r_i).
+$$
+
+Splitting a path into more stages helps only if the new maximum decreases enough to justify added register overhead, bypass complexity, power, and branch-recovery cost. Perfectly equal stages are rarely possible because instruction fetch, memory access, and decode have different structures. A stage with 700 ps and four stages with 300 ps determines the clock; splitting a 300 ps stage further does nothing until the 700 ps bottleneck changes.
+
+**Worked speedup.** An unpipelined path takes 10 ns. A four-stage partition has combinational delays 2.5 ns each and 0.1 ns register overhead, so its clock is 2.6 ns. For one instruction, unpipelined latency is 10 ns while pipelined latency is approximately $4\times2.6=10.4$ ns: the pipeline is slightly worse because of register overhead. For 100 independent instructions, the unpipelined time is 1000 ns; the pipeline takes $(4+100-1)2.6=267.8$ ns, a speedup of about 3.73 rather than the ideal 4. This example explains why pipeline depth is a throughput decision, not a promise of lower single-instruction latency.
+
+## Pipeline registers and control propagation
+
+A pipeline register is a typed bundle. In IF/ID, it may hold the fetched instruction and `PC`. ID/EX holds operands, immediate, destination identifiers, and decoded controls. EX/MEM holds ALU result, store data, destination, and memory controls. MEM/WB holds loaded data or ALU result, destination, and register-write control. Every field must have a defined value when the associated instruction is valid.
+
+Validity is itself state. A bubble is an invalid pipeline entry that performs no architectural side effect. Reset typically fills the pipeline with invalid entries; a flush converts younger entries to bubbles. Treating a bubble as an instruction with arbitrary opcode is unsafe if control decode can assert writes. A valid bit must gate register writes, memory writes, exceptions, and retirement.
+
+Control signals can be decoded early and pipelined, or regenerated from a pipelined instruction field later. Early decode may reduce repeated logic but increases bundle width; late decode may simplify the bundle but extend a stage’s critical path. The invariant is that the controls used in a stage describe the instruction whose data is in that stage, not the instruction currently being fetched.
+
+## Data hazards
+
+A data hazard arises when overlapping instructions have a dependence. A read-after-write (RAW) hazard is a true dependence: $I_1$ must read a value produced by $I_0$. Write-after-read (WAR) and write-after-write (WAW) hazards are name dependences that appear in machines allowing reads, writes, or retirement out of program order. A simple in-order five-stage pipeline primarily faces RAW hazards.
+
+Consider:
+
+```text
+add  r1, r2, r3
+sub  r4, r1, r5
+```
+
+The add produces `r1` at the end of EX or later, while the sub needs it at the beginning of its EX stage. If the register file is read in ID, the sub may read the old value. *Forwarding* or bypassing sends the produced value from a later pipeline register directly to the consuming ALU input, avoiding a register-file round trip. The forwarding unit compares source identifiers against destination identifiers of older instructions whose results are available.
+
+Forwarding does not eliminate every stall. For:
+
+```text
+lw   r1, 0(r2)
+add  r3, r1, r4
+```
+
+the load’s data becomes available only after MEM, but the dependent add needs it in EX in the immediately following cycle. A one-cycle bubble lets the load reach its data-producing point before forwarding to the add. The hazard detector must freeze the PC and IF/ID register, insert a bubble into ID/EX, and then allow progress. Freezing everything would deadlock; advancing everything would compute with stale data.
+
+**Worked hazard schedule.** With a load-use pair, cycle 3 has `lw` in EX and `add` in ID. The detector sees `ID/EX.MemRead=1` and `ID/EX.rd` equal to the add’s source. In cycle 4, keep the add in ID, keep the PC and fetched instruction stable, and place a no-op control bundle in EX. In cycle 5, the load is in WB or its value is available for forwarding, while the add enters EX. The bubble costs one cycle and preserves architectural semantics.
+
+## Structural hazards
+
+A structural hazard occurs when two stages need a resource simultaneously. A single-ported unified memory cannot fetch the next instruction while a load or store accesses data in the MEM stage. Solutions include separate instruction and data caches, multiported memory, scheduling that inserts a stall, or a pipeline organization that separates requests in time. Hardware duplication increases area and power but can increase throughput.
+
+Structural hazards are not data hazards and should not be hidden under a generic “stall.” The cause determines the proof: a data stall waits for a value; a structural stall waits for ownership of a resource. A valid/ready protocol makes the resource conflict explicit and prevents the controller from assuming a response that was never accepted.
+
+## Control hazards and speculation
+
+A conditional branch creates a control hazard because the next PC depends on a comparison that may not be resolved until EX. Meanwhile, the fetch stage has already fetched sequential instructions. The simplest policy stalls until the branch resolves or predicts not taken and flushes wrong-path instructions when taken. If the branch resolves after $r$ stages and there are $q$ younger wrong-path instructions, the recovery cost includes those invalidated cycles and any front-end refill.
+
+The flush must be precise. A wrong-path instruction may have computed a value internally, but it must not write a register, memory, status register, or device. Valid bits and side-effect gating enforce this. A branch target calculation and condition comparison can be moved earlier to reduce penalty, but doing so increases the earlier stage’s critical path and may introduce new forwarding requirements.
+
+Branch prediction guesses direction and sometimes target. A static predictor uses a fixed rule; a dynamic predictor records history. Prediction accuracy, branch frequency, and misprediction penalty determine benefit. If branches occur with frequency $f$, prediction accuracy is $a$, and penalty is $p$ cycles, the average branch cost is approximately $f(1-a)p$ cycles per instruction, ignoring secondary effects. Increasing predictor complexity is worthwhile only when its area, power, and access latency do not erase the gain.
+
+## Exceptions in a pipeline
+
+An exception may be detected in one stage while younger instructions have advanced. Precise exception handling requires all older instructions to retire, the faulting instruction to be represented at the specified boundary, and all younger instructions to become bubbles. A page fault on a load must not allow a younger store to modify memory before the handler observes the faulting state.
+
+Pipeline control therefore has three distinct actions: stall, which holds an instruction in place; bubble, which inserts invalid work into a stage; and flush, which discards younger work. Confusing them produces subtle bugs. On a load-use hazard, older stages continue, the dependent instruction is held, and one bubble is inserted. On a taken branch, younger instructions are flushed and a target fetch begins. On an exception, the precise recovery boundary is determined by the ISA and retirement design.
+
+## Performance model
+
+For a pipeline with clock period $T$, ideal time for $N$ instructions is $(k+N-1)T$. Add stall cycles $S$ and flush/recovery cycles $B$:
+
+$$
+T_{total}=(k+N-1+S+B)T.
+$$
+
+The effective CPI for large $N$ is approximately $1+(S+B)/N$, plus any base issue limitation. A deeper pipeline can reduce $T$ while increasing branch penalty, latch overhead, and hazard complexity. A useful comparison must include both terms.
+
+**Worked comparison.** Design A has $T=1$ ns, 10 stages, and 0.08 branch-mispredictions per instruction with penalty 8 cycles. Design B has $T=1.3$ ns, 5 stages, and the same branch frequency with penalty 3 cycles. Ignoring other stalls, A has CPI $1+0.64=1.64$ and time per instruction 1.64 ns. B has CPI $1+0.24=1.24$ and time 1.612 ns. The deeper clock is not automatically better; workload-dependent control penalties nearly erase its frequency advantage.
+
+## Independent practice
+
+1. Schedule five independent instructions in a five-stage pipeline and derive the $k+N-1$ formula.
+2. For an add followed by a dependent add, identify the forwarding path and the cycle in which the value is available. Repeat for a load followed by a dependent add.
+3. Design the stall control signals for a load-use hazard. State exactly which registers hold, which receive a bubble, and which instruction proceeds.
+4. A unified single-ported memory serves IF and MEM. Give a trace containing a load and explain the structural stall. Propose two hardware alternatives.
+5. Calculate average CPI for branch frequency 20%, accuracy 92%, and penalty 5 cycles, then add a one-cycle load-use stall for 10% of instructions.
+6. Explain why a flushed store must be prevented from reaching a memory write even if its address and data were already computed.
+7. Compare a 20-stage and 5-stage design under a workload with branch frequency 15%, misprediction accuracy 90%, and respective penalties 12 and 3 cycles. Include clock periods of 0.7 ns and 1.2 ns.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Instruction $I_j$ enters IF in cycle $j$, reaches WB in cycle $j+4$, and the last of $N$ instructions therefore completes in cycle $N+4$. In general, the first instruction occupies all $k$ stages and each additional instruction adds one cycle, giving $k+N-1$.
+2. An ALU result can usually forward from EX/MEM to the next instruction’s EX input. A load result is not available until after MEM, so an immediately dependent instruction needs one bubble in a basic five-stage design and then receives the value from MEM/WB.
+3. Hold PC and IF/ID, force ID/EX controls to a no-op, and allow the load in EX to advance. On the next cycle release the hold. Holding ID/EX as well would repeat the load; advancing ID without a bubble would use stale data.
+4. When a load occupies MEM, IF cannot access the same port in that cycle, so fetch stalls and a bubble may appear in the front end. Separate instruction/data memories or a multiported/cache-banked design remove the conflict at hardware cost.
+5. Branch penalty is $0.20\times0.08\times5=0.08$ CPI. Load-use stalls add 0.10 CPI, so the estimate is 1.18 CPI. The terms assume independent frequencies and no interaction; real traces may correlate hazards.
+6. Computed internal values are not architectural effects. If the store writes after the branch is found taken or an exception is detected, a wrong-path or younger instruction changes memory and violates precise execution. The valid bit must gate the memory-write enable.
+7. The 20-stage design has branch cost $0.15\times0.10\times12=0.18$, CPI 1.18, and 0.826 ns per instruction. The 5-stage design has cost 0.045, CPI 1.045, and 1.254 ns per instruction. Under these assumptions the deeper design wins despite its larger misprediction penalty, but the margin is workload-sensitive.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: lecture notes and examinations](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [MIT 6.004 learning objectives](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [UC Berkeley CS 61C: pipeline and memory-system notes](https://notes.cs61c.org/content/pipeline/five-stage-pipeline/)

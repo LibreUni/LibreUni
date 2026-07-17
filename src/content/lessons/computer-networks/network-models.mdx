@@ -1,0 +1,105 @@
+---
+title: "Network Models"
+course: "computer-networks"
+description: "Layering, encapsulation, protocol state, delay, throughput, and the end-to-end boundary."
+---
+# Network Models
+
+Computer networks are distributed systems built from independently operated components. A browser, router, access point, transport endpoint, and application server do not share one clock, memory, or failure domain. Network architecture makes this manageable through protocols: explicit rules for message format, interpretation, state transitions, timing, and error behavior. A layer is useful when it hides a stable mechanism behind a service interface, but layers do not remove cost. Headers consume bandwidth, queues add delay, and an abstraction can fail at exactly the boundary it was intended to hide.
+
+## Hosts, links, and packet switches
+
+The network edge contains end systems that run applications; access networks connect them to the core; routers and switches forward traffic through links. A *packet* is a bounded unit of data with control metadata. A link transmits a packet as a sequence of bits; a router receives, stores or forwards, and may drop it when queues overflow. The destination does not receive a physical stream by magic: every hop makes a local forwarding decision based on an address and a table.
+
+The Internet is a network of networks. Autonomous systems have internal topology and policy, while inter-domain protocols exchange reachability and policy. The phrase “the network” therefore hides ownership boundaries. A path can include links with different media, administrative rules, MTUs, queues, and failure behavior. End-to-end correctness cannot assume that every hop implements the same reliability or security policy.
+
+## Service, protocol, and abstraction
+
+A service specification says what a layer offers to its user: perhaps a best-effort datagram, an ordered byte stream, or a name-to-address lookup. A protocol says how cooperating entities implement that service using messages and state. The service does not guarantee more than its specification; a reliable transport built above a best-effort network must detect loss and reorder or retransmit data itself.
+
+Layering permits substitution. An application should not need to know whether a local link is Ethernet, Wi-Fi, or a virtual tunnel if the link layer preserves the network-layer service. The substitution is valid only for the documented properties: a link with high loss, variable delay, or small MTU may change transport behavior even if its nominal service is “deliver a frame.” Interfaces need both positive guarantees and limits.
+
+**Worked abstraction boundary.** HTTP requests a resource representation from a server. TCP or QUIC provides a transport abstraction with reliability, ordering, or stream/datagram semantics. IP supplies best-effort packet forwarding. A link frames each hop. If a packet is lost, the link may retransmit locally, the transport may retransmit end-to-end, or the application may tolerate loss. The browser should not assume a link retry makes a request idempotent; a server may have processed a request before its response was lost.
+
+## Encapsulation and decapsulation
+
+As data descends a protocol stack, each layer adds a header describing the layer’s control information. An application message becomes a transport segment or datagram, then an IP packet, then a link frame. At a router, the link header is removed and a new link header is created for the next hop; the IP packet generally persists end-to-end, although fields such as TTL/hop limit change. The receiver removes headers in the reverse order.
+
+Encapsulation is not necessarily one-to-one. A transport segment may be fragmented into multiple link frames, several application messages may share a stream segment, or a tunnel may add an additional network header. The receiver needs lengths, sequence numbers, or framing rules to reconstruct the intended units. A TCP read boundary does not preserve application write boundaries; an application protocol must define its own message framing.
+
+**Header accounting example.** Suppose a 1,000-byte application payload receives a 20-byte transport header, a 20-byte IP header, and a 14-byte link header plus 4-byte link check. The transmitted frame is 1,058 bytes before physical preamble and inter-frame gap. Payload efficiency is $1000/1058\approx94.5\%$. Small messages have worse efficiency because fixed headers dominate; batching can improve efficiency but increases latency and head-of-line exposure.
+
+## Delay components
+
+End-to-end packet delay has processing, queueing, transmission, and propagation components:
+
+$$
+d_{end}=d_{proc}+d_{queue}+d_{trans}+d_{prop}.
+$$
+
+Transmission delay is $L/R$ for packet length $L$ bits and link rate $R$ bits per second. Propagation delay is distance divided by signal speed and does not shrink when the link rate increases. Queueing delay depends on offered load and scheduling; it can dominate under congestion. Processing includes checksum, lookup, encryption, and interrupt work.
+
+**Worked delay example.** A 12,000-bit packet crosses a 100 Mb/s link with 2 ms propagation delay, 0.4 ms processing, and 3 ms queueing. Transmission is $12000/100\times10^6=0.12$ ms, so total one-hop delay is 5.52 ms. Increasing link rate to 1 Gb/s reduces transmission to 0.012 ms but leaves propagation, processing, and queueing unchanged. If queueing was caused by the link’s capacity, the rate increase may also reduce queueing; that is a second causal effect and must be measured separately.
+
+## Throughput and bottlenecks
+
+Throughput is the rate at which useful data reaches a destination. For a path of serial links, a simple upper bound is the minimum capacity, but protocol windows, processing, loss, and competing traffic can lower it. A pipeline can have high throughput despite long propagation delay after it fills. A stop-and-wait protocol on a high-bandwidth, long-delay path may achieve poor utilization because it sends one packet and waits for an acknowledgement.
+
+For a window of $W$ bits, round-trip time $RTT$, and bottleneck rate $R$, throughput is bounded roughly by $\min(R,W/RTT)$ in a no-loss model. The bandwidth-delay product $R\cdot RTT$ is the amount of data needed in flight to fill the path. Transport congestion windows, receiver windows, and application backpressure all limit the flight size.
+
+**Worked window calculation.** A path has 100 Mb/s capacity and 80 ms RTT, so its bandwidth-delay product is 8 Mb, or about 1 MB. A sender limited to a 64 KiB window can achieve at most roughly $65536\cdot8/0.08=6.55$ Mb/s even with no loss. Increasing the link rate without increasing the window does not improve this sender’s throughput. The actual system also pays headers, ACK traffic, and processing.
+
+## Protocol state and failure
+
+A protocol endpoint is a state machine. TCP has connection states; DNS resolvers track outstanding identifiers and cache lifetime; a link protocol tracks sequence and acknowledgement state. For each state, define accepted messages, actions, timer behavior, and transitions on loss, duplication, reordering, and delay. “Timeout” is not a message from the network—it is a local inference that an expected event did not arrive by a deadline.
+
+Duplicate messages are normal in retransmitting protocols. A receiver needs sequence numbers, transaction IDs, or idempotent operations to distinguish a new request from a repeated one. A lost acknowledgement can cause a sender to retransmit a request that the server already executed. Reliability of bytes does not imply exactly-once execution of side effects.
+
+**Worked failure trace.** A client sends “charge account,” the server commits the charge, and the response is lost. The client times out and retries. A reliable transport may deliver both application requests correctly; it cannot know that the operation should occur once. The application needs an idempotency key or transaction identity that the server records and reuses when the duplicate arrives.
+
+## Layering trade-offs
+
+Layering can duplicate functions. Wi-Fi may retransmit a frame, TCP may retransmit a segment, and an application may retry a request. Local repair can be efficient when the error is near the link; end-to-end repair is necessary when a failure occurs beyond one hop. Duplicated retries can amplify congestion and duplicate side effects. A design should assign responsibility to the layer with the information and scope to perform it correctly.
+
+Layering can also create head-of-line blocking. A reliable ordered transport may hold later bytes when one segment is lost, even if an application could use independent messages. A datagram or multiple-stream abstraction can avoid this at the cost of reliability or complexity. The service interface should match application semantics rather than force every workload into one ordering model.
+
+## Names, addresses, and identifiers
+
+A name identifies an object by a human- or application-oriented label; an address identifies a location or routing destination; an identifier distinguishes a protocol instance or object independent of location. DNS names, IP addresses, transport ports, connection tuples, and request IDs serve different purposes. Treating a name as a permanent address breaks under mobility, replication, and deployment changes.
+
+An IP address may be assigned to an interface or prefix and can change. A DNS record may be cached beyond an application’s desired freshness. A transport port multiplexes multiple applications on one host. A request ID prevents confusion among concurrent operations. Each mapping has lifetime, scope, and collision semantics that belong in the protocol design.
+
+## Security boundaries
+
+Layering does not imply security. An IP packet may be authenticated by a lower or upper layer, but a link-local credential does not identify the end-to-end application peer. An encrypted transport protects traffic under its threat model but does not authorize an operation or prevent an endpoint from logging plaintext. A protocol review names the attacker’s position, capabilities, trusted keys, replay window, and failure behavior.
+
+Metadata remains visible unless protected: packet lengths, timing, addresses, and traffic patterns can leak information. Padding and batching trade bandwidth and latency for traffic-flow privacy. A firewall may filter ports but cannot infer application identity reliably from a port number alone. Security properties must be stated at the layer where they are enforced and checked at the layer where the consequence occurs.
+
+## Independent practice
+
+1. Draw encapsulation for an HTTPS request crossing two routers and identify which headers change at each hop.
+2. Compute transmission, propagation, queueing, and total delay for a multi-hop path.
+3. Derive throughput limits from bandwidth-delay product and a sender window.
+4. Construct a duplicate request trace and design an idempotency-key solution.
+5. Compare link-local retransmission with end-to-end retransmission for a lossy wireless hop.
+6. Distinguish name, address, port, and request identifier in a replicated service.
+7. Threat-model a layered protocol and state which metadata remains visible.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. The application message gains a transport header, then an IP header, then a link header for the first hop. Each router replaces the link header; endpoint transport/application headers remain end-to-end, while IP hop-limit and possibly fragmentation-related fields change.
+2. Sum each per-hop processing, queueing, transmission $L/R$, and propagation component. Do not replace propagation by transmission or assume queueing is zero unless the experiment or model states that assumption.
+3. Throughput is bounded by bottleneck rate and $W/RTT$. If $W<RTT\cdot R$, the sender cannot keep enough data in flight; if larger, the path capacity or congestion control becomes the limiting factor.
+4. Use a stable key per logical operation, store the result atomically with the key, and return the stored result on retry. Transport retransmission alone cannot provide exactly-once side effects.
+5. Link repair saves a packet from traversing the rest of the path and can hide wireless errors, but end-to-end repair is still needed for failures elsewhere. Layered retry must avoid excessive delay and congestion amplification.
+6. A DNS name can map to changing addresses; an IP address routes to a location; a port multiplexes a host endpoint; a request ID distinguishes one logical operation and supports duplicate detection.
+7. State whether the attacker sees link, IP, transport, or endpoint traffic. Encryption may hide payload but not necessarily addresses, lengths, timing, or request volume; authorization and endpoint compromise remain outside transport confidentiality.
+
+</details>
+
+## References & Further Reading
+
+* [Kurose and Ross: Computer Networking 9e knowledge checks and chapter structure](https://gaia.cs.umass.edu/kurose_ross/knowledgechecks/index.php)
+* [RFC 1122: Requirements for Internet Hosts](https://www.rfc-editor.org/rfc/rfc1122)
+* [MIT 6.829 Computer Networks readings](https://ocw.mit.edu/courses/6-829-computer-networks-fall-2002/pages/readings/)

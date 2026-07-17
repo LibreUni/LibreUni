@@ -1,0 +1,97 @@
+---
+title: "Dynamic Connectivity"
+course: "data-structures"
+description: "Online and offline connectivity, rollback union-find, deletion challenges, and time-segment tree techniques."
+---
+# Dynamic Connectivity
+
+Connectivity asks whether two vertices lie in the same connected component of a graph. Static connectivity can be solved with one DFS or BFS. Incremental connectivity supports edge insertions efficiently with union-find. Fully dynamic connectivity permits insertions and deletions, which is harder because deleting an edge may split a component and invalidate compressed history. This lesson develops the boundaries and an offline technique that turns deletions into controlled additions.
+
+## Models of change
+
+In the incremental model, edges are added but never removed. Union-find maintains components with near-constant amortized operations. In the decremental model, edges are removed from an initial graph. In the fully dynamic model, both occur. Define whether queries ask connectivity, component count, spanning forest, or connected-component sizes; a structure optimized for one may not support another.
+
+Online means each operation must be answered before seeing future operations. Offline means the complete operation sequence is known in advance, allowing time decomposition or reverse processing. An offline solution is not an online data structure, but it can be the right engineering choice for batch queries, logs, or judge problems.
+
+## Why deletion is difficult
+
+Union-find records that components merged but not which edge is essential to a component’s connectivity. If edge (u,v) is deleted, there may be an alternate path or the edge may be a bridge. A parent pointer tree is not the same as the original graph’s edge set; path compression deliberately discards historical structure. Rebuilding from all remaining edges after each deletion is correct but can cost O((V+E)Q).
+
+For a small graph, maintain a spanning forest and test whether a deleted tree edge has a replacement path. For large online systems, dynamic trees and randomized cutset structures maintain richer information. The key lesson is that the abstract operation “remove edge” requires information that incremental union-find was designed not to preserve.
+
+## Offline reverse processing
+
+If operations consist of additions, deletions, and connectivity queries, process them backward. An edge present in the final graph is initially active. A forward deletion becomes a reverse addition; a forward addition is omitted initially and becomes a reverse deletion, which union-find cannot perform. Mark edge lifetimes to determine which edges are active at the final time, then add an edge in reverse when crossing its start time.
+
+This simple reversal works cleanly for a sequence of only deletions from an initial graph: build the final graph, process deletions backward as additions, and answer reversed queries. For mixed additions and deletions, use a time-segment tree so each edge is active over an interval.
+
+## Segment tree over time
+
+Let operation times be 0 through Q-1. An edge inserted at l and removed at r is active on interval [l,r). Add that edge to the O(log Q) segment-tree nodes whose time ranges partition the interval. Traverse the tree depth-first. On entering a node, union all edges stored there; at a leaf, answer the query at that time; on exit, undo the unions made in the node. Each edge participates in O(log Q) nodes.
+
+Undo requires rollback union-find, not path compression. Union by size keeps tree height logarithmic, and each union records the changed parent and size on a stack. A snapshot records stack length. Rollback pops changes until the snapshot, restoring the prior partition. Since no path compression changes many parents without logging, rollback is O(log n) per union and O(1) per undone change.
+
+**Worked interval example.** Edge e is added at time 2 and removed at time 7, so it is active at 2,3,4,5,6. The segment tree stores e in a logarithmic set of canonical nodes covering [2,7). During traversal, every leaf in that interval sees e’s union; leaves outside do not. A query at time 5 sees all edges whose intervals cover 5, and rollback after the subtree prevents an edge from leaking into a sibling time range.
+
+## Rollback union-find
+
+Union by size attaches the smaller root to the larger. Before changing parent[b] and size[a], push enough information to restore both, including which roots were chosen. If a union finds equal roots, push a no-op marker or record the snapshot boundary so rollback count remains correct. Find follows parents without compression. A rollback must restore exactly the parent forest and root metadata; stale rank/size values on nonroots should never be used.
+
+The correctness invariant is temporal: at every recursive segment-tree node, the rollback structure represents exactly the edges active on that node’s time range along with ancestor ranges. Entering unions adds the node’s edges; leaving restores the caller’s state. Induction over the traversal proves each leaf’s component relation matches the graph at that time.
+
+## Complexity
+
+Each edge interval is stored in O(log Q) segment nodes. Each stored edge causes one union, costing O(log V) with union by size, so total is O((E log Q) log V + Q log V) in a basic analysis, plus segment-tree traversal. Rollback work is proportional to performed unions. More refined bounds and specialized structures improve factors, but the offline method is already much better than rebuilding for every query.
+
+Memory is O(E log Q + V) for interval storage and rollback state, depending on implementation. Recursion depth is O(log Q), but the number of active rollback records along a path can be substantial. Use iterative traversal or explicit stack frames if recursion depth or language stack limits matter.
+
+## Extensions and limits
+
+Component sizes are easy: store size at roots and query the root’s size. Component count decrements on a successful union and rolls back on restoration. To answer whether an edge itself is a bridge or to return a path, connectivity alone is insufficient; maintain additional spanning-forest information. Bipartiteness can be supported with parity-to-root metadata and rollback, but every union must log parity and detect contradictions.
+
+Parallel edges need distinct edge identities and lifetimes. Self-loops never connect distinct components but may matter to edge queries. An edge added and removed at the same timestamp needs a precise interval convention. Input normalization is part of correctness, not preprocessing trivia.
+
+## Rollback implementation details
+
+Represent a snapshot by the current history-stack length. A union operation must push a record even when its roots are equal if the caller will later roll back by operation count; alternatively, snapshots can store the exact stack length and equal-root unions need not push. Pick one convention and use it consistently. Mixing “one record per call” with “one record per mutation” causes rollback to stop too early or undo a union from an ancestor interval.
+
+When an edge interval is inserted into a segment-tree node, the edge may be united with a component created by another edge in the same node or an ancestor. The order of unions does not affect the final partition, but it affects the history stack; rollback must undo in strict reverse order. Do not keep a root pointer or component-size reference across a rollback because the representative may change after restoration.
+
+## Testing temporal behavior
+
+Generate a short operation sequence, construct the graph from scratch at every time, and compare connectivity, component count, and sizes with the offline structure. Include repeated edge additions, parallel edges with different lifetimes, deletion of an absent edge, intervals ending at the first or last time, and queries at boundaries. Also test nested segment-tree traversals: a component created in one branch must disappear before a sibling branch begins. These tests target rollback leaks that ordinary static connectivity tests cannot detect.
+
+## Exercises
+
+1. Explain why union-find cannot directly support arbitrary deletions.
+2. Solve a deletion-only connectivity sequence by reverse processing.
+3. Derive the segment-tree interval decomposition.
+4. State rollback union-find invariants and logged fields.
+5. Prove the time-segment traversal invariant.
+6. Extend rollback union-find to component counts.
+7. Explain why path compression is inconvenient for rollback.
+
+### Diagnostic solutions
+
+
+1. A union forest records merged components but not whether a deleted graph edge has alternate paths. Deleting a parent pointer could split a component incorrectly or preserve one that should split; the original edge structure or a richer dynamic algorithm is needed.
+
+2. Build the graph after all deletions, then traverse operations backward. A forward deletion is a reverse insertion; union-find answers the corresponding reversed connectivity query. Reverse answers are reported in original order.
+
+3. For [l,r), recursively add the interval to a segment node whenever that node’s range lies fully inside [l,r); otherwise recurse into intersecting children. At most two boundary paths plus full interior nodes are used, giving O(log Q) canonical nodes.
+
+4. Parent pointers form rooted trees, root sizes are correct, and the stack contains enough old parent/size data for every mutation since the latest snapshot. find follows parents without writes. Rollback restores the exact prior metadata and partition.
+
+5. Induct on segment-tree traversal. Before entering a node, the DSU represents ancestor-active edges. Entering unions adds exactly the node interval edges. At a leaf all active intervals are present, so connectivity is correct; rollback restores the entry state before leaving.
+
+6. Maintain componentCount initialized to V. A union of distinct roots decrements it and logs a change; an equal-root union leaves it unchanged but logs a no-op. Rollback reverses the decrement exactly when the union was successful.
+
+7. Path compression rewrites many parent pointers during find. To roll it back, every rewritten pointer and old value must be logged, potentially making one find expensive and complicating the stack. Union by size alone gives logarithmic paths with one logged parent/size change per union.
+
+
+
+## References & Further Reading
+
+* [Open Data Structures](https://opendatastructures.org/)
+* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
+* Holm, de Lichtenberg, and Thorup, “Poly-Logarithmic Deterministic Fully-Dynamic Graphs.”

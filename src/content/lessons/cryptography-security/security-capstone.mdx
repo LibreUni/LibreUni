@@ -1,0 +1,90 @@
+---
+title: "Security Capstone"
+course: "cryptography-security"
+description: "A complete threat model and defensible security architecture."
+---
+# Security Capstone
+
+Design a secure file-sharing service. Specify assets, attacker capabilities, identity lifecycle, authorization policy, encryption boundaries, key lifecycle, protocol states, logging, recovery, and abuse response.
+
+Every control must map to a threat and a residual risk. State where confidentiality ends, what compromise reveals, how replay is prevented, and which operational evidence would show that the control works.
+
+## Scope and assumptions
+
+Define the file-sharing system as browser or native clients, identity service, API, metadata database, object store, background scanner, notification service, key-management service, and administrators. State what is trusted: the operating systems and cryptographic library may be trusted for their documented interfaces, while user devices, network paths, uploaded files, and third-party webhooks are untrusted. State compromise cases separately: a stolen user session, compromised API process, compromised KMS caller, stolen signing key, malicious administrator, and unavailable storage.
+
+Assets include file contents, filenames and metadata, sharing grants, identities, sessions, signing and encryption keys, audit records, malware-scanning results, backups, and availability capacity. Security goals include confidentiality against unauthorized users and storage observers, integrity of file bytes and grants, authenticated sharing actions, freshness and non-replay of permission changes, tenant isolation, recoverability, and auditability. Explicitly state whether metadata and access patterns are protected; encryption of content rarely hides filenames, sizes, timing, or sharing graphs by itself.
+
+## Identity and authorization design
+
+Require an authenticated subject for every share, download, change, and administrative action. Bind tokens to issuer, audience, tenant, operation, resource, expiration, and a unique identifier. Enforce owner, reader, editor, and administrator policies server-side at object level. A client-supplied role, filename, or tenant field is data, not authority. Recheck authorization in asynchronous scanning, preview, export, and download jobs.
+
+Sharing should use an explicit grant object with owner, grantee or capability subject, resource, allowed actions, creation time, expiration, revocation version, and audit identifier. Revocation must invalidate cached or queued work according to a stated consistency policy. Public links are bearer capabilities and require high entropy, narrow scope, expiry, revocation, rate limits, and protection from referrer and log leakage. A link that permits editing is a different capability from one that permits reading.
+
+## Cryptographic architecture
+
+Generate a unique data-encryption key per file or suitable chunk domain and encrypt content with AEAD. Authenticate file identifier, tenant, version, chunk number, length, and algorithm metadata as associated data. Wrap data keys under a tenant or service wrapping key in the KMS. Derive or assign separate keys for encryption, token signing, audit integrity, and transport contexts. Public-key encryption may protect a key for a recipient, but it does not authenticate the sender unless a signature or authenticated channel binds the share action.
+
+Use a canonical file manifest containing file ID, version, chunk hashes or authenticated records, content length, encryption key version, and creation metadata. Sign or authenticate the manifest according to the trust model. Prevent substitution of one manifest for another by binding tenant, owner, recipient, and operation. On download, verify authenticated chunks before exposing them to a parser or renderer; untrusted file content must not execute in the application origin.
+
+## Protocol and replay state
+
+A share request includes session identity, target file, grantee, action, expiration, and client request identifier. The server authenticates the request, checks current authorization, atomically creates or rejects the grant, and records an audit event. Retried requests with the same idempotency key return the same result without creating duplicate grants. A request from an old session or revoked credential must fail even if its signature is mathematically valid.
+
+Downloads use a short-lived authorization decision or capability bound to file version, recipient, action, and a nonce or sequence policy. If a queued job is created before revocation, the worker must recheck or use a documented authorization snapshot. The protocol rejects altered identifiers, duplicate fields, stale versions, wrong tenant context, and cross-service tokens. TLS protects transport but application replay and object authorization remain application responsibilities.
+
+## Threats and controls
+
+For IDOR, enforce tenant and object predicates in every access path and test sequential, opaque, bulk, search, and export identifiers. For stolen sessions, use secure cookie or token policy, rotation, revocation, risk detection, and reauthentication for sharing and key export. For malicious uploads, bound size and parsing, store outside executable roots, scan in isolation, and serve with safe content headers. For SSRF in previews, enforce destination allowlists, DNS and redirect checks, egress controls, and response limits.
+
+For KMS misuse, use distinct service identities and operation-level policies, deny arbitrary unwrap or signing, bind key version and tenant context, and monitor calls. For stolen wrapping keys, inventory dependent files, stop new use, rotate or quarantine, assess plaintext exposure, and re-encrypt where required. For audit tampering, write append-only or integrity-protected events to a separate trust boundary and test that operators cannot silently rewrite history.
+
+## Availability and recovery
+
+Define behavior when the KMS, object store, identity provider, scanner, or audit sink is unavailable. Do not silently bypass authorization or encryption to preserve availability. Queue operations with bounded retries and idempotency; avoid duplicate share or delete effects. Backups should encrypt manifests and data keys, protect restore authority, test restoration, and authenticate restored metadata before use. Document whether revoked grants remain effective during an outage and what compensating control applies.
+
+## Evidence and tests
+
+The deliverable must include negative tests for cross-tenant reads, altered ciphertext and associated data, replayed share requests, revoked links, expired tokens, old key versions, worker restart, KMS denial, duplicate queue messages, malformed file headers, path traversal, archive links, SSRF redirects, and administrator privilege boundaries. Include generated trace IDs and safe logs proving which policy decision occurred. Test cryptographic vectors independently and run a restore exercise using synthetic but realistic data.
+
+## Risk register examples
+
+Record risk, asset, precondition, attacker, consequence, likelihood evidence, control, residual risk, owner, deadline, and retest. “Stolen API process can read files” may remain a high residual risk even with encrypted storage because the API has decryption authority; reduce blast radius with isolated services, per-tenant keys, short-lived grants, and detection, but state the remaining trust boundary. “Metadata leaks file names” requires a product decision about whether names are sensitive, not a claim that content encryption solves it.
+
+## Exercises
+
+1. Draw the trust boundaries and list assets.
+2. Specify the associated data for a file chunk.
+3. Repair a replayable share endpoint.
+4. Analyze a compromised KMS caller.
+5. Design a revocation test for queued downloads.
+6. Write one complete risk-register entry.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Boundaries include client/API, API/identity, API/database, API/object store, API/KMS, worker/queue, scanner/sandbox, and admin/control plane. Assets include content, metadata, grants, keys, sessions, logs, and backups.
+2. Include tenant, file ID, file version, chunk index, total or expected length, manifest version, algorithm, key version, and direction or purpose. Use a canonical encoding authenticated by AEAD.
+3. Bind the request to a fresh or unique idempotency identifier, authenticated subject, resource, action, and expiration; atomically consume or deduplicate it and recheck authorization before effect.
+4. Stop or restrict the identity, audit calls, identify keys and data reachable through it, rotate dependent keys, assess unwrap/signing exposure, and restore service under a narrower policy. KMS availability does not justify arbitrary fallback.
+5. Create a job, revoke the grant, execute the worker after the revocation, and assert that it rechecks and refuses or returns a safe idempotent result. Repeat across replicas, retries, and restart boundaries.
+6. Example: “API object authorization bypass; attacker needs any valid session and a guessed or obtained file ID; consequence is cross-tenant disclosure; evidence is a reproducible request; control is server-side tenant-and-object predicate on every path; retest is a negative integration suite; owner and deadline are explicit.”
+
+</details>
+
+## Oral defense checklist
+
+The student should be able to explain which component can read plaintext, which key protects each file, how a revoked grant affects queued work, how a replay is detected, what a stolen signing key reveals, and which log or test proves each control. A diagram without these transition and compromise answers is not a security architecture.
+
+## References & Further Reading
+
+* [NIST Cybersecurity Framework 2.0](https://www.nist.gov/publications/cybersecurity-framework-csf-20)
+* [OWASP Application Security Verification Standard 5.0](https://owasp.org/www-project-application-security-verification-standard/)
+* [NIST SP 800-57 Part 1, Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final)
+* [RFC 8446, TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+
+**Deliverable.** Submit a threat model, sequence diagram, key and identity inventories, abuse cases, test plan, and a risk register prioritized by consequence and likelihood.
+
+## References & Further Reading
+
+* [NIST Cybersecurity Framework 2.0](https://www.nist.gov/publications/nist-cybersecurity-framework-csf-20)

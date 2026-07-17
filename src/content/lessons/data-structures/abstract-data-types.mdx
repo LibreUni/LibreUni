@@ -1,0 +1,84 @@
+---
+title: "Abstract Data Types and Representation Invariants"
+course: "data-structures"
+description: "Specification before implementation: operations, algebraic behavior, representation invariants, and correctness contracts."
+---
+# Abstract Data Types and Representation Invariants
+
+A data structure is not merely a collection of fields. It is a representation plus operations that preserve a specification. An abstract data type (ADT) describes observable behavior without committing to arrays, pointers, trees, or hashing. Separating the abstraction from its representation makes correctness proofs portable, exposes illegal states, and lets engineering choose a representation based on workload and resource constraints.
+
+## Specification versus representation
+
+An ADT defines values and operations. A sequence ADT might support size, get(i), set(i,x), add(i,x), and remove(i), with indices in a specified range and a defined order. A map ADT might support put(k,v), get(k), remove(k), and contains(k), with a rule for duplicate keys. A priority queue might support insert, minimum, and delete-min, with an ordering relation and behavior for an empty structure.
+
+An implementation chooses concrete state. A sequence can be an array with a logical length, a linked chain of nodes, or a tree of chunks. Two implementations are equivalent if every allowed operation produces the same abstract result and side effects. Complexity is not part of abstract meaning, but it is part of whether a representation meets a client’s performance contract.
+
+Write preconditions and postconditions explicitly. If get requires (0le i less than n), an invalid index may raise an exception, return an option type, or be specified as undefined; different choices are different APIs. For put, decide whether an existing key is replaced, duplicated, or rejected. Ambiguity here becomes bugs in every client.
+
+## Representation invariants
+
+A representation invariant (RI) is a predicate true of every reachable concrete state. For a dynamic array, the RI might be (0le nle capacity), elements occupy positions 0 through n-1, and no operation relies on uninitialized positions. For a doubly linked list, head and tail consistency, endpoint nullity, reciprocal next/previous pointers, and a correct node count are part of the RI.
+
+Every mutating method has three proof obligations: if the RI holds before a valid call, the operation establishes its postcondition; it preserves the RI; and it returns the specified abstract result. Constructors establish the RI initially. A private helper can assume the RI only if every caller preserves it; exposing raw pointers or mutable backing arrays can invalidate the abstraction boundary.
+
+**Worked invariant.** A circular queue uses an array of capacity C, indices head and tail, and count q. The RI is (0le qle C), head and tail are in range, and the q logical elements are at positions ((head+j)bmod C) for (0le j less than q); tail equals ((head+q)bmod C). Enqueue writes at tail then increments q and tail modulo C. Dequeue reads at head then increments head and decrements q. The modular equations prove wraparound does not change logical order.
+
+## Abstraction functions
+
+An abstraction function maps a valid concrete representation to its abstract value. For an array sequence, AF(state) is the prefix of length n. For a linked list, AF is the traversal from head. For a hash table with chaining, AF is the finite map formed by all key-value pairs in buckets, subject to the duplicate-key invariant. The AF lets a concrete transition be proved correct by showing the abstract value changes as specified.
+
+A representation may have multiple concrete states for one abstract value. An empty array with capacity 8 and one with capacity 64 represent the same empty sequence. This representation independence is useful: resizing can change capacity without changing AF. A canonical representation is not required unless operations or equality depend on it.
+
+To prove a method, relate before and after states through AF. If enqueue appends x, show AF(after)=AF(before) followed by x. If remove(i) shifts an array suffix left, show the resulting prefix equals the abstract sequence with position i deleted. The proof should account for boundary cases such as empty, singleton, first, and last positions.
+
+## Cost contracts
+
+An ADT specification may state expected complexity, but amortized and worst-case guarantees must name the operation sequence and parameters. Dynamic-array append is O(1) amortized under geometric growth, not O(1) worst-case: a resize copies many elements. A linked-list get(i) is O(i) unless extra indexing is maintained. A hash-map lookup is expected O(1) under assumptions, not an unconditional worst-case promise.
+
+Space includes metadata, unused capacity, pointers, allocator overhead, and sometimes cache effects. A linked list may use O(n) words like an array but have worse locality and larger constants. If keys are large or objects are shared, count ownership and aliasing explicitly. Complexity analysis should match the actual representation rather than a name such as “list” or “map.”
+
+## Ownership, aliasing, and iterators
+
+If a client can hold a reference to an internal node or backing array, it may mutate state without preserving the RI. Choose copying, immutable views, controlled iterators, or documented aliasing. A slice may share storage with an array; then a set through one view changes the other. This can be efficient but must be part of the contract.
+
+Mutation during iteration needs semantics. Options include fail-fast detection, weakly consistent traversal, snapshot iteration, or a specified rule for skipped/duplicated elements. A modification counter can detect some concurrent changes but is not a synchronization mechanism. For concurrent structures, linearizability or a weaker consistency model must be stated separately from ordinary sequential correctness.
+
+## Testing from the specification
+
+Tests should target abstract behavior and invariant boundaries. Use model-based testing: execute the implementation and a simple reference model on the same operation sequence, then compare observable results. Generate empty, singleton, repeated, sorted, reverse-sorted, and adversarial keys. After each mutation, assert internal invariants in debug builds. Random tests find transition combinations; proofs explain why unseen combinations are safe.
+
+Metamorphic tests check relations without a fixed expected value. For a map, inserting then removing a fresh key should restore the previous abstract map. For a sequence, reversing twice should restore order. Tests do not replace proofs, but they expose mistaken assumptions and implementation errors in code that the proof intended to describe.
+
+## Choosing a representation
+
+Choose a structure by asking which operations and resource limits dominate. If indexed access and contiguous scans matter, arrays exploit locality. If insertion at known nodes dominates, links may avoid shifts. If ordered predecessor queries matter, a balanced search tree supplies logarithmic worst-case bounds. If exact ordering is irrelevant and keys have stable hashing, a table often supplies expected constant-time lookup. A representation is good only relative to an explicit workload and correctness contract.
+
+## Exercises
+
+1. Specify a map ADT including duplicate-key behavior, missing-key behavior, and iteration semantics.
+2. Give the RI and abstraction function for a singly linked sequence with a cached size.
+3. Prove circular-queue enqueue preserves its RI in both non-full and full cases.
+4. Explain why exposing a dynamic array’s backing storage breaks representation independence.
+5. Design model-based tests for a stack and list three high-value operation sequences.
+6. Compare worst-case and amortized complexity contracts for a geometric dynamic array.
+7. State a safe iterator contract for a mutable map.
+
+### Diagnostic solutions
+
+
+1. Define a finite map from keys to values; put replaces the value for an existing key, get returns an option, remove deletes or returns absent, and iteration yields each key once in an unspecified order. State whether clients may mutate keys; immutable or copied keys are required for hash/order stability.
+2. RI: head is null iff size is zero; following next pointers from head visits exactly size nodes and terminates at null; no node is repeated. AF is the sequence of node values in traversal order. Insert and remove must preserve reachability and count.
+3. If q less than C, write at tail, set tail to (tail+1) mod C, and increment q; the occupied modular interval gains one final element and remains within capacity. If q=C, the precondition rejects or blocks enqueue; silently overwriting would violate the queue ADT.
+
+4. A client can write outside the logical prefix, change elements without the ADT method, or retain an array across resize. The AF and RI can then fail, and a representation change becomes an observable client break rather than an internal optimization.
+5. Compare each operation sequence against a simple list model. Test push/pop on empty, push many then pop all, alternating push/pop, and duplicate values. Assert LIFO results and empty behavior after each operation.
+6. An append may copy n elements during a resize, so one operation costs O(n) worst case. Across m appends with capacity multiplying by a factor greater than 1, each element is copied only O(1) times per growth level, so total copying is O(m) and amortized append is O(1).
+7. Specify whether mutation during iteration is forbidden and detected, reflected with defined rules, or isolated in a snapshot. A fail-fast iterator may throw after detecting a modification, but absence of detection is not permission to rely on a traversal result.
+
+
+
+## References & Further Reading
+
+* [MIT 6.006 Introduction to Algorithms syllabus and lecture materials](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/pages/syllabus/)
+* [Open Data Structures](https://opendatastructures.org/)
+* [Cornell CS 2110 binary-search-tree lecture](https://www.cs.cornell.edu/courses/cs2110/2026sp/lectures/lec17/)

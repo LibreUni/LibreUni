@@ -1,0 +1,77 @@
+---
+title: "Binary Design Lab"
+course: "computer-architecture"
+description: "Design, encode, decode, and verify a binary device record."
+---
+# Binary Design Lab
+
+This lab turns representation theory into an interface that another engineer could implement. Design a 16-byte binary record for a sensor sample and a parser that is safe under malformed input. The record must contain a version, flags, signed temperature, unsigned pressure, timestamp, sequence number, and checksum. You must specify bit widths, byte order, alignment, valid ranges, reserved encodings, checksum coverage, and behavior when the record is truncated or inconsistent.
+
+## Specification before encoding
+
+Choose a wire format rather than inheriting the host machine’s struct layout. Host padding, compiler ABI, endianness, and alignment are not stable interchange contracts. Let byte 0 contain an 8-bit version, byte 1 flags, bytes 2–3 a signed 16-bit temperature in hundredths of a degree, bytes 4–7 an unsigned pressure in pascals, bytes 8–11 a 32-bit timestamp, bytes 12–13 a 16-bit sequence, and bytes 14–15 a CRC or checksum. State that all multibyte fields use big-endian order.
+
+The version field supports evolution, but a parser must define whether it accepts unknown versions. Flags need a mask of defined bits; reserved bits should be zero in canonical encodings and rejected or ignored according to policy. Temperature has a signed range $[-327.68,327.67]$ degrees if represented in hundredths. Pressure’s valid physical range may be narrower than the unsigned bit range; validation belongs above bit decoding and should not be conflated with syntax validity.
+
+## Worked encoding
+
+Suppose version is 1, flags are `0b00000101`, temperature is -12.34°C, pressure is 101325 Pa, timestamp is 1,700,000,000, and sequence is 42. Temperature scales to -1234. Its 16-bit two’s-complement encoding is $65536-1234=64302=0xFB2E$. Big-endian bytes are `FB 2E`. Pressure is `0x00018BCD`; timestamp and sequence are encoded similarly. The parser must sign-extend `0xFB2E` before dividing by 100; interpreting it as unsigned produces 643.02 and a physically absurd but representable value.
+
+The checksum must cover a defined byte range and have a defined initial value, polynomial or addition rule, reflection policy, and byte order. A simple sum can detect many accidental errors but is weak against rearrangements and deliberate changes. A CRC gives stronger burst-error detection under its specified polynomial, but it is not authentication. If the record crosses an adversarial boundary, add a cryptographic integrity mechanism rather than treating CRC as a security control.
+
+## Parser state and failure behavior
+
+A safe parser first checks that at least 16 bytes are available before reading any field. It then decodes into a temporary typed structure, checks version and reserved bits, verifies checksum before trusting payload, validates scaled ranges and sequence policy, and only then publishes the sample. If input may be streamed, use a state machine that accumulates exactly the required header and body bytes; never assume one read returns one record.
+
+The order is a security and correctness boundary. Checking physical range before checking that the bytes belong to a complete record can read beyond the buffer. Publishing temperature before checksum verification can expose attacker-controlled data to control logic. Updating the last-seen sequence before all validation succeeds can permanently reject a later valid record. Use a temporary object and a commit point: prior to commit, parsing is private speculation; after commit, every field satisfies the record invariant.
+
+Failure categories should be distinguishable: truncated input, unsupported version, invalid reserved bits, checksum failure, range violation, and replayed sequence. A caller may choose to drop a corrupt sample but should not treat a checksum failure as a valid zero measurement. Error paths must not leave partially updated shared state.
+
+**Worked malformed cases.** A 15-byte buffer must be rejected before the parser reads the checksum. A record with version 2 may be rejected or dispatched to a versioned parser, but the default parser must not interpret new fields using old offsets. A valid checksum over a temperature outside the physical sensor range is syntactically valid but semantically invalid. A sequence lower than the last accepted value may be stale, wrapped, or out of order; the protocol must state which.
+
+## Implementation and portability
+
+Implement field access with explicit shifts and masks or byte reads, not a packed host struct whose layout is compiler-dependent. Check arithmetic before conversion: a signed input converted to unsigned can become large, and scaling a value can overflow an intermediate type even when the final physical range would fit. Use a wider intermediate and checked multiplication/addition.
+
+The encoder should be the inverse of the decoder on canonical values. Property-based tests can generate valid records, encode and decode them, and assert equality. Negative tests mutate one bit, truncate each possible length, set every reserved bit, and exercise minimum/maximum values. A parser that passes only a hand-written happy-path sample has not established a robust representation contract.
+
+## Lab tasks
+
+1. Produce a byte-offset table with field name, width, signedness, scaling, valid range, and endianness.
+2. Derive the encoded bytes for five samples, including minimum and maximum representable temperature.
+3. Write pseudocode for a streaming parser with explicit states and error returns.
+4. Define a checksum and demonstrate detection of a one-bit error and a two-byte transposition.
+5. Design a version-2 extension that preserves version-1 parser safety.
+6. Give a proof sketch that encoding followed by decoding returns the original canonical sample.
+7. Create a test matrix for truncation, reserved fields, overflow, checksum, sequence, and physical range.
+
+## Proof obligations
+
+Let $E$ be the encoder and $D$ the decoder. For every canonical sample $x$ in the declared domain, the primary correctness property is $D(E(x))=x$. This requires more than matching a few examples: each field encoding must be injective, scaling must use an exact integer representation, byte-order reversal must be involutive, and the checksum computed by the decoder must equal the encoder’s checksum over the same bytes. A second property is rejection soundness: if a byte string fails length, version, reserved-bit, checksum, or range validity, the decoder must not publish a sample. A third is framing progress: after rejecting a record, the streaming parser must either discard exactly the documented frame or resynchronize according to an explicit delimiter rule.
+
+Prove the properties compositionally. First prove field encode/decode lemmas, then prove concatenation preserves offsets, then prove checksum agreement, and finally prove the parser’s commit condition. This mirrors hardware refinement: a large interface becomes manageable when each boundary has a local invariant and the composition preserves it.
+
+## Assessment standard
+
+An excellent lab report contains a complete byte-level specification, integer derivations, pseudocode with failure states, generated examples, a test matrix, and proofs tied to stated assumptions. It explains why a packed C struct is insufficient, why CRC is not authentication, why a checksum can be valid for semantically invalid data, and how a future version remains unambiguous. A report that only prints a hexadecimal sample has demonstrated encoding practice but not architectural competence.
+
+The reviewer should be able to implement the encoder and parser independently from the report and obtain identical bytes for every canonical example.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. A complete table names every byte and makes no reliance on host padding. The signed temperature field must explicitly say two’s complement before scaling; pressure and timestamps must state whether all bit patterns are syntactically valid.
+2. Encode negative scaled temperature as $2^{16}-|x|$ and emit high byte first. Check the result by decoding the emitted bytes and comparing the integer scaled value before converting to floating point.
+3. States should collect header/body bytes, then checksum, then validate and publish. Each read may return fewer bytes than requested. On any error, discard the current record and do not retain partial data as a future header unless the framing protocol says how resynchronization works.
+4. A CRC specification must include polynomial, initial value, reflection, final XOR, and coverage. Demonstrate the computed checksum before and after mutation; do not claim security or collision resistance from an unspecified sum.
+5. Put new records under version 2 and keep byte offsets unambiguous. A version-1 parser should reject version 2 before interpreting payload, while a version-2 parser can decode a shared prefix and additional fields.
+6. Show each field’s encoding is injective over its valid range, byte reversal is undone by decoding, sign extension inverts two’s-complement encoding, and scaling uses an exact integer representation. Canonicality excludes alternate encodings.
+7. Include length 0, every length 1–15, exact 16, extra trailing bytes, all-zero/all-one values, signed boundaries, each reserved bit, one-bit and burst mutations, stale sequence, and physical limits. Expected outcomes must distinguish reject, accept, and accept-with-warning.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: digital abstraction and machine language](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [CERT C integer conversion rules](https://wiki.sei.cmu.edu/confluence/display/c/INT00-C.+Understand+the+data+model+used+by+your+implementation)
+* [RISC-V unprivileged ISA specification](https://riscv.org/technical/specifications/)

@@ -1,0 +1,95 @@
+---
+title: "Error Detection and Retransmission"
+course: "computer-networks"
+description: "Checksums, CRCs, acknowledgments, sequence spaces, timers, and the design limits of reliable delivery."
+---
+# Error Detection and Retransmission
+
+Reliable communication is not the same thing as communication without errors. A channel may corrupt bits, lose frames, duplicate messages, reorder packets, or delay them long enough that a sender cannot tell whether the receiver has acted. A reliable protocol is an agreement about which observable histories count as successful delivery and how each participant responds when evidence is incomplete. This lesson develops that agreement from first principles.
+
+## What must be detected?
+
+Suppose a sender transmits a bit string (x) and a receiver obtains (y). The receiver needs an efficiently computable predicate that says whether (y) is consistent with a valid encoding of (x). No redundancy can detect every possible corruption: if every bit string is a valid codeword, a corrupted word remains valid. The design question is therefore which error patterns are guaranteed to be caught and what probability remains for patterns outside the guarantee.
+
+A parity bit detects every odd number of flipped bits but misses every even number. A two-dimensional parity scheme adds row and column parity; it detects many more patterns and can locate some single-bit errors, but carefully aligned multiple errors may still preserve all parities. A checksum treats words as integers and adds them with a specified carry rule. It is inexpensive and useful against many random errors, but its algebra has structured collisions.
+
+The detection guarantee is expressed using Hamming distance. If a code (C) has minimum distance (d), then it detects every corruption of at most (d-1) bit positions. To correct (t) errors, the minimum distance must be at least (2t+1), because two radius-(t) neighborhoods must not overlap. This distinction matters: a protocol that detects corruption still needs a recovery action; detection alone does not reconstruct the original packet.
+
+## CRC as polynomial division
+
+A cyclic redundancy check views a bit string as a polynomial over (GF(2)). Addition and subtraction are both XOR, so long division uses XOR rather than carries. Let the generator polynomial be (G(x)) of degree (r). The sender appends (r) zero bits to the message polynomial (M(x)), divides (M(x)x^r) by (G(x)), and appends the remainder (R(x)). The transmitted codeword is (T(x)=M(x)x^r+R(x)), which is divisible by (G(x)).
+
+If noise adds an error polynomial (E(x)), the receiver obtains (T(x)+E(x)). Division by (G) produces zero exactly when (G) divides (E). Thus a CRC detects every error pattern whose polynomial is not a multiple of the generator. A generator with a factor (x+1) detects every odd number of bit flips; a generator of degree (r) detects every burst of length at most (r); additional properties follow from its factors.
+
+**Worked CRC calculation.** Encode message `1101011011` with generator `10011`, whose degree is 4. Append four zeros: `11010110110000`. XOR the generator under each leading one during binary long division. The final four-bit remainder is the CRC; appending that remainder makes the dividend divide evenly. At reception, the same division is performed on all transmitted bits. A nonzero remainder rejects the frame. The worked arithmetic is less important than the invariant: the sender constructs a multiple of (G), and the receiver checks divisibility.
+
+CRC is not encryption, authentication, or a proof that a frame originated from a particular sender. An attacker who can alter a frame and recompute its CRC is not stopped. Even against accidental noise, a CRC’s undetected-error probability depends on the error model and generator; “one in (2^r)” is a useful random-error approximation, not a universal theorem.
+
+## From detection to reliable delivery
+
+Let a data link deliver frames with possible corruption and loss. The simplest stop-and-wait protocol sends one frame, waits for an acknowledgment, and retransmits after a timeout. The acknowledgment must identify what it acknowledges. If an ACK says only “yes,” a delayed ACK from an earlier exchange can be mistaken for the response to a later frame. Sequence numbers make message instances distinguishable.
+
+The alternating-bit protocol uses sequence numbers 0 and 1. The sender transmits data with bit (b); the receiver delivers it only if it is the next expected bit, then acknowledges (b). If a duplicate arrives, the receiver does not deliver it again but repeats its ACK. If the sender times out, it retransmits the same numbered frame. This gives at-most-once delivery at the receiver and, assuming eventual non-corrupt delivery and a functioning timeout, eventual delivery.
+
+The key safety invariant is: the receiver delivers a sequence number only once, and the sender never treats an acknowledgment for another sequence number as confirmation. The liveness argument is conditional. If the channel can lose every retransmission forever, no protocol can guarantee delivery. If the channel eventually allows a frame and its acknowledgment through, repeated retransmission eventually succeeds, although an overly short timer can create duplicates and an overly long timer increases delay.
+
+## Timer design and ambiguity
+
+The sender does not observe the one-way channel delay directly. It measures a round-trip sample from transmission to acknowledgment. Let (SRTT) be a smoothed RTT estimate and (RTTVAR) a smoothed mean deviation. A common estimator uses
+
+
+\[
+SRTT \leftarrow (1-\alpha)SRTT+\alpha R,
+\qquad
+RTTVAR \leftarrow (1-\beta)RTTVAR+\beta |SRTT-R|,
+\]
+
+and sets the retransmission timeout to (SRTT+K\cdot RTTVAR), with a lower bound. The constants are engineering choices, not magic correctness values. The timer should cover normal variation while still reacting to persistent delay.
+
+Retransmitted segments create an ambiguity: an ACK may acknowledge the original transmission or a retransmission. Measuring a sample from an ambiguous acknowledgment can make the estimator believe the network is faster or slower than it is. Karn’s algorithm avoids using RTT samples for retransmitted data, and exponential timeout backoff prevents a sender from increasing load during congestion. Timer behavior is part of congestion control, not merely an implementation detail.
+
+## Sliding windows and cumulative acknowledgments
+
+Stop-and-wait permits only one outstanding packet, so bandwidth-delay product can make utilization poor. A sliding-window protocol permits up to (W) unacknowledged sequence numbers. The sender maintains `base`, the oldest unacknowledged sequence, and `next`, the next sequence to transmit. The receiver maintains the next in-order sequence it expects. Cumulative acknowledgment (k) can mean “all sequence numbers through (k) arrived in order.”
+
+For a link rate (R), packet size (L), and RTT (T), the number of packets needed to keep the link busy is approximately (RT/L). If (W) is smaller, the sender may run out of work before an ACK returns. If (W) is large, it can fill queues and create loss. A window is therefore both a reliability bound and a flow/congestion-control parameter.
+
+Go-Back-N has a receiver that accepts only the next expected packet and a sender that retransmits the outstanding suffix after a timeout. Selective Repeat buffers out-of-order packets and retransmits only missing ones. Selective Repeat uses more receiver memory and more state, and its sequence-number space must be large enough that old packets cannot be confused with new packets. If the window size is (W), a standard safe design uses a sequence space at least (2W) so that the sender and receiver windows do not become indistinguishable after wraparound.
+
+**Worked window trace.** With window (W=4), packets 0–3 are sent and packet 1 is lost. A receiver accepting only in-order data acknowledges 0 and repeats that cumulative acknowledgment when 2 and 3 arrive. Go-Back-N retransmits 1, 2, and 3. Selective Repeat records 2 and 3, acknowledges them individually or with selective blocks, and retransmits only 1; after 1 arrives, buffered data can be delivered in order. The better choice depends on loss rate, memory, acknowledgment format, and implementation complexity.
+
+## Link reliability versus end-to-end reliability
+
+A local link can retransmit a damaged frame, reducing the rate of errors exposed to the transport layer. But local repair cannot prove end-to-end delivery: a later router may drop the packet, the destination process may reject it, or the return acknowledgment may be lost. End-to-end protocols therefore retain sequence, acknowledgment, timeout, and duplicate-suppression logic even when links are highly reliable.
+
+Layering creates a tradeoff. Link retransmission can hide transient wireless errors and avoid expensive end-to-end recovery. It can also increase delay variance, causing transport timers to fire while the link is still retrying. A transport protocol should reason about the delivered observation stream—loss, delay, duplication, and reordering—not assume that an intermediate layer has eliminated them.
+
+## Exercises
+
+1. Give a four-bit corruption pattern that parity misses, and explain why a CRC generator with an (x+1) factor detects it if and only if the number of flipped bits is odd.
+2. Perform the CRC division for message `1011001` and generator `1101`. Show the appended remainder and verify divisibility.
+3. Prove the alternating-bit safety invariant by induction over receiver events: delivery occurs only on the expected bit, and the expected bit changes only after delivery.
+4. A path has rate 100 Mb/s, 1,500-byte packets, and RTT 80 ms. Estimate the minimum window needed to avoid an RTT-induced idle period, ignoring headers and ACK transmission.
+5. Explain why a sequence space of size (W) is unsafe for Selective Repeat with window (W). Construct a wraparound history in which an old packet is accepted as new.
+6. Compare Go-Back-N and Selective Repeat for one loss in a window of 32 packets. State the bandwidth, buffering, and acknowledgement consequences.
+7. An RTT estimator has (SRTT=40) ms, (RTTVAR=5) ms, and a new sample of 60 ms. Using α=1/8 and β=1/4, calculate the updated values if the deviation uses the old SRTT, then calculate a timeout with (K=4).
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Flipping positions 2 and 7 is an even-weight error, so one parity bit is unchanged. If (G) contains (x+1), evaluating the error polynomial at (x=1) gives the parity of its terms; an odd-weight error has value 1 and cannot be divisible by (x+1).
+2. Append `00` to obtain `101100100`; XOR `1101` under each leading one. The remainder is `01`, so the codeword is `101100101`. Dividing this codeword by `1101` gives zero remainder. The exact intermediate rows are useful for checking XOR alignment; a common error is dropping zeros that belong to the dividend.
+3. Initially no packet has been delivered and the expected bit is 0. If an arriving frame has the expected bit and passes integrity checks, delivery occurs once and the receiver toggles expectation. If it has the old bit, it is a duplicate and is not delivered. No other event changes expectation, so the invariant holds for every finite trace.
+4. (RT/L=(100,000,000\times0.08)/(1500\times8)\approx666.7), so at least 667 packets must be in flight. A smaller window cannot cover the propagation round trip at line rate.
+5. After all (W) values are sent and acknowledged, the receiver’s acceptance interval can wrap to the same labels. If an old packet is delayed until that label is current again, the receiver cannot distinguish it from a new packet. A space of at least (2W) leaves a gap between old and new windows.
+6. Go-Back-N retransmits up to 31 correct packets after the missing one and needs little receiver buffering. Selective Repeat retransmits one packet, but buffers later packets and needs selective state and careful wraparound rules. Selective Repeat usually wins on high-delay or lossy paths; Go-Back-N can be simpler on clean short links.
+7. With old (SRTT), deviation is  20 ms. New (SRTT=0.875(40)+0.125(60)=42.5) ms. New (RTTVAR=0.75(5)+0.25(20)=8.75) ms. Timeout (=42.5+4(8.75)=77.5) ms, subject to implementation minimums and any backoff.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 768: User Datagram Protocol](https://www.rfc-editor.org/rfc/rfc768)
+* [RFC 9293: Transmission Control Protocol](https://www.rfc-editor.org/rfc/rfc9293)
+* [RFC 6298: Computing TCP's Retransmission Timer](https://www.rfc-editor.org/rfc/rfc6298)
+* Kurose and Ross, *Computer Networking: A Top-Down Approach*, transport-layer knowledge checks and reliable-data-transfer chapters.

@@ -1,0 +1,106 @@
+---
+title: "Superscalar and Out-of-Order Execution"
+course: "computer-architecture"
+description: "Instruction-level parallelism, renaming, speculation, and retirement."
+---
+# Superscalar and Out-of-Order Execution
+
+An in-order scalar pipeline issues at most one instruction per cycle and waits when the next instruction cannot proceed. Modern high-performance cores attempt to exploit *instruction-level parallelism* (ILP): independent instructions can execute simultaneously, even when they appear sequentially in the program. A superscalar processor has multiple issue slots or functional pipelines; an out-of-order processor allows a ready younger instruction to execute while an older instruction waits for a cache miss or long-latency operation. The implementation must nevertheless preserve the ISA’s ordered architectural observations.
+
+## Limits of instruction-level parallelism
+
+The dependence graph determines the parallelism available in a finite instruction window. Independent additions can execute concurrently; a chain `r1=r2+r3; r4=r1+r5; r6=r4+r7` has a critical path of three additions even if the core has many ALUs. Memory aliases, branches, exceptions, and finite registers limit how far the processor can look ahead.
+
+Superscalar width $W$ is an upper bound on issue per cycle, not a guarantee. If a workload has insufficient independent instructions, one functional unit is busy while others idle. The effective IPC is bounded by dependencies, front-end fetch/decode width, execution-unit availability, cache misses, and retirement bandwidth.
+
+**Worked dependency example.** For `A: r1=r2+r3`, `B: r4=r5+r6`, and `C: r7=r1+r4`, A and B can execute in parallel on two adders. C waits for both. With two-cycle add latency, A and B can issue in cycle 1, become ready in cycle 3, and C can issue in cycle 3. A scalar in-order machine needs at least four issue cycles for the same sequence; a two-wide out-of-order machine may complete it in three issue/execute cycles plus retirement overhead.
+
+## Renaming and physical registers
+
+Architectural register names create false dependencies. In:
+
+```text
+add r1, r2, r3
+add r2, r4, r5
+```
+
+the second instruction writes `r2` after the first reads it, a WAR anti-dependence. It is not a true flow of data. Register renaming maps each destination to a fresh physical register and records which physical register currently represents each architectural name. The first instruction reads the old physical `r2`; the second writes a new physical register. WAW hazards similarly disappear because distinct writes use distinct physical destinations.
+
+Renaming does not remove RAW dependencies. If a later instruction reads the architectural register after a new mapping is installed, it receives the producer’s physical register and waits for its readiness. The rename map is speculative state: a branch checkpoint records enough mapping information to restore the pre-branch name map if prediction fails.
+
+Physical registers need reclamation. When a new mapping replaces an old architectural mapping and no in-flight instruction can still read the old physical register, the old register can return to the free list. Reference tracking, retirement maps, or equivalent mechanisms prevent premature reuse. A physical-register leak eventually stalls dispatch even when execution units are idle.
+
+## Reservation stations and wakeup
+
+Out-of-order cores hold decoded instructions in issue queues or reservation stations. Each entry stores the operation, source physical-register identifiers, readiness bits or values, destination, and exception/speculation metadata. When a producer completes, a wakeup mechanism marks dependent operands ready. A select mechanism chooses ready instructions for available functional units.
+
+Wakeup and select are timing-critical because a wide machine compares many tags every cycle. A centralized issue queue is flexible but expensive; clustered or partitioned designs reduce wiring but can require operand movement between clusters. The architecture is not changed by these choices, but performance and power are.
+
+Long-latency operations create pressure. A cache-miss load may occupy a queue entry and a physical destination while independent work proceeds. If the reorder buffer or load/store queue fills, dispatch eventually stops—a phenomenon called back-end or window pressure. Increasing the window can expose more ILP but raises energy, area, and recovery cost.
+
+## Reorder buffer and precise retirement
+
+Execution completes out of order, but retirement commits architectural effects in program order. A reorder buffer (ROB) records program order, destination information, exception state, and completion. The head entry retires when its operation is complete and no older fault exists. Younger completed instructions wait.
+
+This design provides precise exceptions. If instruction 10 faults, instructions 0–9 may retire, instruction 10 records the fault, and instructions 11 onward are discarded even if they executed internally. Stores often enter a store buffer and become globally visible only at retirement or under a carefully defined memory-ordering protocol. Register results can be kept in physical registers while the committed map changes at retirement.
+
+**Worked exception trace.** Instruction A is an older load that faults; instruction B is a younger add that completes; instruction C is a younger store that completes. The ROB marks B and C done but cannot retire them because A is at the head and faulting. The machine discards B and C, leaves architectural registers and memory as though A had not committed, and enters the handler with A’s fault information. If C had written memory immediately at execute completion, precise exception semantics would be violated.
+
+## Load/store ordering and memory disambiguation
+
+Registers expose explicit dependences, but memory addresses may be unknown until execution. A younger load and older store can execute out of order only if the core proves their addresses do not alias, or if it speculates and can recover when the guess is wrong. The load/store queue records program order, addresses, data, and permissions. Store-to-load forwarding lets a load obtain data from an older store that has not reached cache, provided the addresses and byte masks match.
+
+Partial overlap is difficult. A 4-byte load may overlap two older stores with different byte ranges; forwarding must merge bytes or stall. An address predictor may speculate that a load does not alias an older store; a later conflict triggers replay of the load and its dependents. Memory consistency rules further restrict when stores become visible to other cores.
+
+## Speculation and branch recovery
+
+A branch predictor supplies a next PC before the branch resolves. The front end fetches and renames along that path. Each speculative instruction carries a branch-mask or checkpoint identifier. When the branch resolves correctly, the work may continue; when it mispredicts, the core restores the rename map, frees or invalidates younger ROB and issue entries, clears speculative stores, and redirects fetch.
+
+Recovery bandwidth matters. A machine that can dispatch eight instructions per cycle may need several cycles to clear a large wrong-path window. Predictor accuracy and branch resolution depth determine the average penalty. Speculation also consumes cache and predictor capacity, so wrong-path work can slow the correct path even before a flush.
+
+## Exceptions, interrupts, and replay
+
+Out-of-order execution may discover exceptions before an instruction reaches the ROB head. The exception is recorded, but the machine delays architectural entry until older instructions retire. Some operations are restartable; others require suppressing duplicate effects. A speculative page-walk fault, for example, may be handled differently from an architectural load fault depending on the design.
+
+Interrupts are taken at a precise boundary chosen by the ISA. The implementation must ensure all older effects are committed and all younger effects are recoverable. Replay mechanisms for memory-order violations and cache misses must preserve the same visible instruction ordering. The more aggressively a core speculates, the more state it must retain to restore the architectural model.
+
+## Performance and energy trade-offs
+
+Increasing width, window size, physical registers, and speculation can improve IPC on ILP-rich code. It can hurt on branchy, pointer-heavy, or synchronization-heavy code because the extra machinery consumes power and may lengthen critical wakeup/select paths. A high IPC can also be misleading if the code performs more instructions or stalls at memory.
+
+The optimal width depends on workload mix. A wide core may waste energy on a serial dependency chain; a modest core with a better cache or memory system may finish sooner. Architectural evaluation therefore uses traces, counters, and representative suites, not a single synthetic instruction stream.
+
+## Verification strategy
+
+An out-of-order implementation is verified against a reference ISA model at retirement. Random instruction streams stress renaming and commit; constrained tests stress dependencies, exceptions, mispredictions, overlapping memory accesses, and full queues. Assertions should ensure that no instruction retires before all older instructions, no physical register is reused while live, and no younger store becomes visible before the allowed commit point.
+
+Formal refinement abstracts away issue order. It relates each microarchitectural state to a sequence of retired architectural states. Internal execution can be arbitrary when it produces no prohibited external effect; retirement must correspond to the next reference transition. This proof style explains why caches, predictors, and speculative values need not appear in the ISA.
+
+## Independent practice
+
+1. Rename a sequence containing RAW, WAR, and WAW dependencies and draw the physical-register mappings.
+2. Schedule four instructions on two ALUs with one three-cycle multiply and one dependent consumer. State issue, completion, and retirement cycles.
+3. Explain why an older unresolved store can prevent a younger load from executing even when the load’s register operands are ready.
+4. Trace ROB state for an exception at the head with two younger completed instructions.
+5. Derive the expected IPC effect of a branch frequency, prediction accuracy, and recovery cost.
+6. Identify the state that must be checkpointed for branch recovery.
+7. Give three assertions that would catch premature physical-register reuse.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Allocate fresh physical destinations for every write, while each read uses the mapping visible at dispatch. WAR and WAW disappear; a consumer still waits for the physical register produced by its true source instruction.
+2. The multiply can issue alongside an independent add if units and operands are ready. Its consumer cannot issue until three-cycle completion. Retirement remains in program order even if the independent add finishes first.
+3. The store address may equal the load address. Executing the load first could read an older value and violate program order. The queue can prove nonaliasing, forward from the store, or wait and replay if speculation fails.
+4. Older instructions before the head retire; the faulting head records cause; younger completed entries do not retire and are discarded. Architectural register and memory state contains no younger effects.
+5. Branch cost is frequency times misprediction probability times penalty. IPC or CPI must then be combined with base issue width and clock period; a lower CPI does not automatically mean lower wall-clock time.
+6. Save the rename map or a recoverable checkpoint, the ROB boundary/branch mask, speculative store state, and fetch PC/target state. Predictor updates may use a separate policy but cannot allow wrong-path architectural effects.
+7. Assert that a physical register is allocated only when free, not allocated while referenced by any in-flight source, and not returned to the free list until retirement has removed every architectural and speculative reference.
+
+</details>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: pipeline and parallel-processing notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [MIT 6.004 learning objectives](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)

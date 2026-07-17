@@ -1,0 +1,80 @@
+---
+title: "Network Operations and Failure Domains"
+course: "computer-networks"
+description: "How to reason about layered failures, observability, change safety, and incident evidence in production networks."
+---
+# Network Operations and Failure Domains
+
+Network operations is applied distributed-systems reasoning. A service outage may involve physical links, VLANs, routing, transport timers, name resolution, certificates, application pools, or an interaction among several layers. The fastest reliable diagnosis begins by defining the user-visible symptom and then locating the first invariant that fails, rather than changing devices until the symptom disappears.
+
+## Model the service path
+
+Write the request as a sequence: name resolution, connection establishment, security handshake, request transmission, server processing, response transfer, and application interpretation. Each stage has distinct evidence. A DNS timeout is not a TCP timeout; a successful TCP handshake does not prove that TLS or HTTP will succeed; an HTTP 500 is evidence that the request reached an application boundary, not that every downstream dependency worked.
+
+For each stage, record the identity and path: source address, destination address, port, protocol, routing domain, policy zone, and expected return path. Address-family differences are especially important. IPv6 may resolve first and fail while IPv4 succeeds, or vice versa. A load balancer can make two identical URLs reach different backends, so correlate a request identifier, selected server, and timing breakdown.
+
+## Failure domains
+
+A failure domain is a set of components likely to fail together. Examples include a rack power domain, a switch stack, a VLAN, an availability zone, a route-policy boundary, a resolver cluster, or a certificate authority dependency. Redundancy is meaningful only when replicas are in different relevant failure domains. Two links on one line card are not independent if the line card is the common failure.
+
+Map dependencies as a graph and mark shared edges. If both application servers depend on one database, scaling the application tier does not remove the database as a single failure domain. If two resolver IPs terminate on one device, the addresses provide apparent but not real redundancy. Fault-injection and maintenance planning should target the common dependencies identified by the graph.
+
+## Observability and evidence
+
+Logs answer “what did this component believe happened?” Metrics answer “how often and how much?” Traces answer “which components participated in one request?” Packet captures answer “what crossed this observation point?” No source is complete. A router can report a route while its FIB programming is stale; an application can report a timeout while the response was delivered but not read.
+
+Timestamp quality matters. Compare clocks before subtracting timestamps from different hosts. Prefer monotonic clocks for local durations. Include units, aggregation windows, missing-value treatment, and sampling rate. A five-minute average can conceal a one-minute outage; a percentile calculated after dropping timeouts can make an outage look faster.
+
+## A disciplined troubleshooting loop
+
+First state the symptom and scope: all users or one subnet, one region or everywhere, one operation or all operations, constant or intermittent. Then establish a baseline from a known-good source and destination. Test from the same network path as an affected user when possible. Change one variable at a time and preserve evidence before restarting a component or flushing state.
+
+Use layer-specific probes: resolve the name, test reachability and route, establish a TCP connection, perform the TLS handshake, request a small object, then exercise the full operation. A failing lower-layer probe does not explain a higher-layer failure if the application uses another path; a passing ping does not clear TCP policy or service health. Compare forward and reverse paths because asymmetric routing is common.
+
+**Worked incident.** Users report that a web service “hangs” only from one office. DNS returns an address. TCP connects, but TLS takes 20 seconds and large responses fail. A small HTTP response works. The evidence suggests a path MTU or filtering problem rather than DNS or basic reachability. Capturing handshake packets shows a large packet followed by repeated retransmission and an absent too-large signal. Testing a reduced MTU restores the transfer; the durable repair is to correct the path or provide a safe discovery mechanism, not to leave every client permanently misconfigured without understanding the tradeoff.
+
+## Change management
+
+Before a routing, firewall, MTU, or DNS change, write the intended invariant and a rollback. Validate configuration syntax and effective policy, not just the fragment being edited. Stage on one segment or neighbor. Monitor both control-plane state and user transactions. Set a time-bounded rollback if the operator may lose access. After success, verify failure behavior and update the dependency/runbook record.
+
+The blast radius of a change depends on propagation. A local ACL may affect one interface; a route announcement or resolver change can affect external users. More-specific routes, wildcard certificates, default-deny rules, and shared automation deserve review because a small textual change can alter many paths. Emergency changes still need a minimal record of what changed and why.
+
+## Capacity, queues, and overload
+
+Capacity planning must distinguish peak rate, sustained rate, burst size, and concurrency. A link can carry the average load while queues overflow during bursts. A server can have idle CPU while its connection table, worker pool, memory bandwidth, or upstream dependency is saturated. Measure the resource that is actually on the critical path. Queue depth and wait time often reveal overload earlier than utilization alone.
+
+Backpressure is a cross-layer contract. A receiver window expresses storage capacity; a congestion window expresses a sender’s permitted network flight; an application queue expresses work that has been accepted but not processed. If every layer buffers aggressively, overload becomes latency rather than an immediate error. Bounded queues and explicit rejection can preserve tail latency and make recovery possible. Retrying every failure without backoff can turn a partial outage into a retry storm.
+
+When investigating overload, compare arrival rate, service rate, queue length, and retry rate over time. If arrival exceeds service, the queue grows until a limit is reached. If retries are counted as new arrivals, a failure can create positive feedback: errors cause retries, retries increase load, and increased load causes more errors. Exponential backoff, jitter, idempotency, and retry budgets are therefore network-reliability tools even when implemented in application code.
+
+## Security and operator access
+
+A diagnostic action can alter the evidence. Clearing a neighbor table may repair a stale state but also destroys the clue that the state was stale. Capturing traffic may expose credentials or personal data. Access should be least-privilege, captures should be filtered and retained under policy, and sensitive payloads should be redacted. Management traffic should use authenticated encryption and a separate failure-aware access path when possible.
+
+An incident conclusion should distinguish observation, inference, and confirmed cause. “Packets from the client stopped appearing at the service edge” is an observation. “The route changed” is an inference until route evidence confirms it. “Restoring the old route restored packets while all other variables remained fixed” is stronger causal evidence, though still worth documenting with timing and scope. This vocabulary prevents a plausible story from becoming an untested permanent fix.
+
+## Exercises
+
+1. Build a layer-by-layer test sequence for a user who can resolve a hostname but receives no web page.
+2. Explain why two resolver IPs may not provide resolver redundancy.
+3. Design observations that distinguish a routing blackhole from an application timeout.
+4. A five-minute average latency is unchanged while p99 increases sharply. What operational conclusion is justified?
+5. Give a rollback and verification plan for a new default route.
+
+<details>
+<summary>Diagnostic solutions</summary>
+
+1. Confirm the returned address and address family; test route and reachability from the affected source; attempt TCP to the service port; inspect TLS timing and certificate validation; issue a small HTTP request; then compare backend selection, application logs, and dependencies. Stop at the first failing boundary but do not assume it is the root cause.
+2. Both addresses can be anycasted or hosted on one switch, power domain, process, or upstream provider. Verify topology and failure independence, not address count. Query each address separately during controlled tests and inspect resolver service health.
+3. Compare routes and TTL behavior, use probes from multiple vantage points, inspect FIB and next-hop resolution, and compare packet captures at the client and service edge. A blackhole tends to stop packets at a path boundary; an application timeout often shows completed transport and a request reaching the service.
+4. Tail experience worsened for a meaningful subset even though typical requests did not. Investigate queueing, retries, overload, or a failing shard; do not dismiss it because the mean or median is stable.
+5. Record the previous route and owning change. Apply to one controlled neighbor or segment, verify next-hop resolution, representative prefixes, return paths, and application probes, then expand. Define automatic or operator rollback if reachability or route counts violate thresholds.
+
+</details>
+
+## References & Further Reading
+
+* [RFC 1812: Requirements for IP Version 4 Routers](https://www.rfc-editor.org/rfc/rfc1812)
+* [RFC 8200: IPv6 Specification](https://www.rfc-editor.org/rfc/rfc8200)
+* [RFC 2923: TCP Problems with Path MTU Discovery](https://www.rfc-editor.org/rfc/rfc2923)
+* Kurose and Ross, *Computer Networking: A Top-Down Approach*, network-layer operations and performance principles.

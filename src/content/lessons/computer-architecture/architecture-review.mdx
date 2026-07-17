@@ -1,0 +1,76 @@
+---
+title: "Architecture Review"
+course: "computer-architecture"
+description: "Review a design by invariants, bottlenecks, and failure modes."
+---
+# Architecture Review
+
+Architecture review is a structured argument that a proposed machine satisfies its software contract under its intended workload and failure model. A block diagram can show components without proving that instruction state, memory visibility, exceptions, device ownership, and performance budgets compose. This review uses a hypothetical 4-core image-processing SoC to demonstrate the evidence a reviewer should request.
+
+## Review packet
+
+The proposal contains an ISA summary, pipeline diagram, cache hierarchy, page-table model, DMA rings, and benchmark results. The cores are four-wide out of order, have private 32 KiB L1 caches and shared 2 MiB L2, use write-back coherence, and share DRAM. A camera writes frames through DMA; software applies a filter and sends output to a display engine. The design claims 30 frames per second and “strong consistency” without defining memory-ordering operations or the p99 latency boundary.
+
+The first review question is scope: which claims are architectural and which are implementation assumptions? If software binaries depend on an instruction’s exact overflow or alignment behavior, that behavior belongs to the ISA. If the claim is that a loop usually hits in L1, it is a workload-dependent performance hypothesis. If a driver assumes a DMA buffer is not reused until completion, that is an ownership protocol. Each claim needs a different proof or measurement.
+
+## Contract completeness
+
+Review the architectural state: registers, PC, privilege modes, memory model, exception causes, atomic operations, vector state, and device address-space attributes. For every instruction class, ask what changes and what remains unchanged. An illegal instruction must not inherit a neighbor’s write enable. A faulting load must specify whether the PC points to the faulting instruction and whether retry is legal.
+
+Check type boundaries: signed and unsigned arithmetic, extension rules, unaligned accesses, byte order, vector tails, and floating-point rounding. An ISA that says “integer add” without overflow semantics forces compilers and debuggers to guess. A device interface that permits arbitrary access widths can create incompatible implementations.
+
+**Review exercise.** The proposed ISA says loads return a word but does not say whether a byte load sign-extends, zero-extends, or leaves upper bits unchanged. This is a blocking defect because software cannot write a portable decoder and a compiler cannot preserve source-level signedness. Request a precise table of width and extension behavior.
+
+## Datapath and pipeline audit
+
+Trace one instruction of each class through every stage. For each stage, identify its inputs, outputs, valid bit, control bundle, and side effects. Confirm that destination identifiers travel with their results and that bubbles disable all architectural writes. Check the critical path and the clock constraint using worst-case rather than average delay.
+
+Audit hazards with adversarial sequences: dependent ALU chains, load-use pairs, branch-after-compare, back-to-back writes to one register, memory stalls, and exceptions after speculation. Ask which forwarding paths exist, which dependencies stall, and how the controller prevents deadlock. A review finding must include a trace that demonstrates the failure or a proof that the path is safe.
+
+For out-of-order execution, inspect rename-map checkpoints, physical-register reclamation, load/store disambiguation, reorder-buffer retirement, and store visibility. The statement “execution is out of order but results are correct” is not evidence. The design needs a refinement argument to the ISA and a precise exception story.
+
+## Memory-system audit
+
+Compute cache tag/index/offset fields from capacity, line size, and associativity. Identify conflict traces and estimate AMAT from local miss rates. Examine write-back eviction ordering, dirty state, coherence transitions, and fence semantics. A write-back cache without a coherence policy is not a complete shared-memory design: two cores may read different copies after one writes.
+
+Review virtual-memory interaction: TLB tags or ASIDs, page-table levels, permission checks, page faults, cache aliases, invalidation, and frame reuse. A stale TLB entry after context switch is a security defect, not merely a performance problem. A page-table update without interprocessor shootdown can expose a frame to the wrong process.
+
+Review the memory model with a message-passing test. A producer writes data then a flag; a consumer observes the flag then reads data. State which release/acquire or fence operations make the intended order visible. Coherence of each location is not enough to prove cross-location ordering.
+
+## I/O and ownership audit
+
+The camera DMA path must specify buffer allocation, IOMMU mapping, cache synchronization, descriptor publication, completion ordering, interrupt behavior, timeout, reset, and buffer reuse. Draw the ownership states and mark which agent may write each field. A completion carrying an invalid length must be rejected before it becomes an array bound.
+
+Review device-memory attributes. Caching a status register can return stale state; speculative reads can acknowledge a side-effect register unexpectedly. A barrier used for ordinary memory may not order a device doorbell. The driver and hardware specification must name the required primitive.
+
+## Performance and measurement audit
+
+The proposal’s 30-frame-per-second claim should be decomposed into input, processing, output, scheduling, and queueing. Count arithmetic operations, estimate bytes moved, compute a roofline ceiling, and identify whether the design is compute- or bandwidth-bound. Then examine p50 and p99, not only average frame time. If input bursts or DMA interrupts create queueing, mean throughput can hide missed latency targets.
+
+Benchmark methodology must state input dimensions, pixel distribution, alignment, compiler flags, warm-up, core placement, frequency, cache state, repetitions, and timing boundaries. Counters should test mechanisms: cache misses, branch misses, bandwidth, queue occupancy, and stall reasons. A review should reject “2× faster” when the baseline uses different correctness settings or excludes setup that the product must pay.
+
+## Safety and security audit
+
+Enumerate assets and adversaries: user frames, page tables, device buffers, privileged code, and inter-core messages. Check memory-safety arithmetic, privilege boundaries, IOMMU mappings, speculative side channels, cache timing, and stale ownership. Identify the blast radius of a compromised device or driver. A security control must map to a threat and have a test or operational signal.
+
+Check fault containment: illegal instruction, page fault, ECC error, DMA overrun, device timeout, thermal throttling, and power loss. For each, state whether the processor retries, kills a process, resets a device, degrades service, or enters a machine-check path. An architecture that only describes the happy path is incomplete.
+
+## Review decision and evidence levels
+
+Classify findings as blocking correctness defects, unverified assumptions, performance risks, or maintainability concerns. A design decision is strong when it has a precise invariant, a worked trace or proof, an experiment plan, and a rollback or recovery story. “The simulator passed” is evidence only for the tested traces and simulator model. “The benchmark improved” is evidence only for the stated workload and measurement boundary.
+
+**Worked decision.** The proposal uses write-back private L1 caches but gives no coherence protocol. Reject as incomplete because a two-core program can write a shared location and observe stale values, violating the memory model. A revision must specify a protocol, fence interaction, invalidation/ownership transitions, and tests for write-write, read-after-write, false sharing, and eviction. The reviewer should not approve the design merely because single-core benchmarks pass.
+
+## Required review report
+
+Submit a one-page architecture claim table, a block and sequence diagram, three adversarial traces, two quantitative models, a threat model, and a list of open assumptions. For every claim, label evidence as theorem/proof, simulation, benchmark, specification, or expert judgment. Include one finding you expect the design team to disagree with and the measurement that would settle it.
+
+Before signing off, perform a boundary review. Ask what happens at zero and maximum lengths, the first and last cache line, a branch taken at a page boundary, an exception after a younger DMA request, a context switch while a TLB entry is cached, a device reset while a descriptor is in flight, and a power failure after a storage acknowledgement. These cases expose whether the design has a real state model or only a collection of nominal diagrams. Record the expected architectural observation and the internal mechanism that enforces it for each case.
+
+The final review meeting should separate disagreement about a requirement from disagreement about an implementation. If two reviewers disagree about whether a frame may be dropped, first resolve the service contract; if they agree on the contract but disagree about a cache or DMA mechanism, compare evidence against the invariant. This prevents architecture review from becoming a preference contest and makes the decision reversible when a measured assumption changes.
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: learning objectives and lecture notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [UC Berkeley CS 61C: memory hierarchy and multicore notes](https://notes.cs61c.org/content/parallel-tlp/)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)
