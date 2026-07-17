@@ -2,6 +2,8 @@
 
 This is the canonical guide for authors and agents writing LibreUni lessons. Components are teaching tools, not quality quotas. Use one only when it improves a specific learning outcome; a lesson is not better because it contains more widgets.
 
+Never reuse one interactive component as a course-wide substitute for heading-level teaching artifacts. Each visual or interactive element must be authored for the specific paragraph or heading it follows. For structured technical courses, audit every substantive `##` heading and provide an intentional diagram, graph, exercise, playground, or equivalent teaching artifact at that heading.
+
 ## React components
 
 Import from `src/components/` with a relative MDX import and add `client:load` to every use. Only the props listed here are supported.

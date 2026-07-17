@@ -15,6 +15,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 - `src/data/course-manifests/` — YAML lesson order and module grouping for each course
 - `src/components/` — Interactive React components (`<Quiz>`, `<CodeRunner>`, `<CaseStudy>`, etc.)
 - `scripts/course_stats.py` — course inventory and smoke tests; it does not rate pedagogical quality.
+- `scripts/course_integrity.py` — anomaly audit for filler, duplication, generic artifacts, and uncovered headings; it is a review gate, not a pedagogical score.
 - `docs/` — technical references (UX, PlantUML)
 
 ---
@@ -70,7 +71,8 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
 1. Run `python3 scripts/course_stats.py` — run course smoke tests and inventory code blocks/components. Every `CodeRunner` must use a checked, declared language; renderer failures from PlantUML, PythonDiagram, and TikZ logs are also failures. A passing result means the checked structure and code are not broken; it is not a quality rating.
    - Run `python3 scripts/course_stats.py <course-id>` to smoke-test one course.
    - Run `python3 scripts/course_stats.py --write-quality` to regenerate the smoke-test data used by development tooling.
-2. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams. Note: use `$$` for display math, not `\[` — remark-math does not support LaTeX-style `\[ ... \]` delimiters.
+2. Run `python3 scripts/course_integrity.py --strict` for course padding, duplication, generic-artifact, and heading-coverage findings. Treat findings as review blockers; do not reduce them to a numeric score.
+3. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams. Note: use `$$` for display math, not `\[` — remark-math does not support LaTeX-style `\[ ... \]` delimiters.
 
 Automated metrics do not certify course quality. Pedagogy, correctness, sourcing, and exercise value require human or agent review under `docs/agent-rules/COURSE_PEDAGOGY.md`.
 

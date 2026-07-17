@@ -33,6 +33,7 @@ For course-scale modernization, report the feature audit alongside substantive c
 2. Read the relevant content before judging it. For course-scale work, read the complete course and manifest.
 3. Read `COURSE_PEDAGOGY.md` and `RESEARCH.md` when research or lesson writing is involved.
 4. Audit mathematical correctness, prerequisites, sequencing, worked reasoning, exercises, feedback, visual models, self-containedness, and sourcing. Rank findings by learner impact.
+   - Run the course integrity audit. Treat repeated templates, filler, generic renamed diagrams, and uncovered substantive headings as defects, not acceptable coverage.
 5. Draft and edit lessons by hand, one file at a time. Preserve correct material only when it serves the intended learning arc.
 6. Use interactive components only when they serve a specific learning outcome. Read `COURSE_COMPONENTS.md` before adding or changing one.
 7. Apply changes directly in the repository. Do not use a custom repository workflow or hidden staging area.

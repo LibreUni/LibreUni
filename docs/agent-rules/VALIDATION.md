@@ -27,12 +27,15 @@ Runs the full quality gate:
 Useful narrower commands:
 
 ```bash
+python3 scripts/course_integrity.py --strict
 npm run test:e2e
 npm run test:ux
 npm run test:lighthouse
 npm run test:visual
 npm run test:report
 ```
+
+The course integrity audit is intentionally separate from `course_stats.py`. Smoke tests answer “is the content mechanically valid?”; integrity checks answer “does the source show signs of padding, duplication, generic artifacts, or uncovered structured sections?” Neither command certifies pedagogical quality. A strict integrity failure must be investigated rather than bypassed by changing thresholds or adding placeholder text.
 
 `test:report` opens the Playwright HTML report from the last run.
 
