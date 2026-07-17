@@ -92,6 +92,60 @@ These are Astro components and do not need `client:load`.
 
 Prefer a diagram when it communicates relationships more clearly than prose. Keep source code deterministic and bounded. A diagram is not a substitute for explaining the model it represents.
 
+### Diagram types and usage
+
+Choose a diagram by the question it should answer, not by the tool that is most familiar. The same subject may need different diagrams when the learner must understand both its structure and its behavior.
+
+| Diagram type | Shows | Use it when the learner needs to understand | Preferred component |
+| --- | --- | --- | --- |
+| Flow or activity | Ordered steps, branches, loops, and parallel work | A process, algorithm, workflow, or decision path | `PlantUML` activity syntax |
+| Sequence or interaction | Messages between participants in time order | A protocol, request path, API exchange, or collaboration | `PlantUML` sequence syntax |
+| State machine | States, events, guards, and transitions | The lifecycle of one entity or event-driven system | `PlantUML` state syntax |
+| Class or domain model | Types, attributes, operations, and relationships | Static concepts, responsibilities, inheritance, or composition | `PlantUML` class syntax |
+| Component or deployment | Software units, interfaces, nodes, and dependencies | System structure, runtime placement, or architectural boundaries | `PlantUML` component/deployment syntax |
+| Use-case or context | Actors, goals, and system boundaries | Functional scope and who interacts with a system | `PlantUML` use-case syntax |
+| Mathematical or geometric | Axes, curves, shapes, constructions, and annotations | A precise proof aid, geometric relation, or function | `TikZ` |
+| Quantitative visualization | Data values, trends, distributions, or comparisons | A numerical pattern that is easier to see than to read in a table | `PythonDiagram` |
+| Custom conceptual or network | Nodes, links, labels, and visual groupings | A domain-specific relationship that does not fit UML or a mathematical plot | `PythonDiagram` SVG or simple `PlantUML` shapes |
+
+Use one primary diagram for one learning outcome. Label arrows with their meaning, include only entities relevant to the explanation, and describe the model immediately before or after the rendered figure. Do not use a diagram as decoration, as a replacement for definitions, or to encode detail that cannot remain legible on a narrow screen and in the PDF.
+
+For a visual that changes as the learner experiments, use `CodeRunner` to generate or inspect it instead of publishing a build-time diagram. Use `PythonDiagram` for a stable figure generated from bounded, deterministic Python; use `TikZ` when exact TeX-style geometry or mathematical notation is central; use `PlantUML` for relationship, process, interaction, and lifecycle diagrams.
+
+## Content and emphasis primitives
+
+Not every teaching feature is a React component. Lessons can also use semantic Markdown and HTML primitives that are styled by the lesson layout and preserved in the book output.
+
+| Primitive | Use it for | Authoring pattern |
+| --- | --- | --- |
+| Headings, lists, and tables | Structure, ordered procedures, comparisons, and compact reference material | Ordinary Markdown; keep tables narrow enough for the PDF |
+| Labeled blockquote | A visually distinct definition, lemma, theorem, proposition, proof idea, warning, or important note | `> **Lemma.** If ...` followed by the explanation or proof in ordinary prose |
+| `<details>` / `<summary>` | Optional hints, solutions, retrieval answers, or secondary derivations | Put a precise action in `<summary>` such as `Reveal hint`, and make the expanded content readable in sequence |
+| `BookOnly` | Print-specific framing, references, or a static explanation of an interaction | Wrap only content that belongs in the book |
+| `ScreenOnly` | Interactive controls or screen-specific navigation | Wrap only content that is genuinely unavailable or disruptive in print |
+| Inline and display math | Notation, equations, and short formal expressions | Use `$...$` inline and `$$...$$` for display math, or the `Math` component when explicit props are useful |
+| Fenced code block | A code fragment or transcript that should be read, not executed | Use a language fence when syntax highlighting or inventory matters |
+
+### Callouts and theorem-style content
+
+The repository currently has no dedicated `Callout`, `Theorem`, `Lemma`, `Definition`, or `Proof` component. Do not invent imports for them. Use a labeled blockquote for a short highlighted statement and ordinary headings plus prose for a substantial proof or derivation. Keep labels consistent within a course—for example, `Definition`, `Lemma`, `Theorem`, `Proof`, `Warning`, `Example`, and `Remark`—so learners can scan the visual structure.
+
+Use a callout-like block only when the distinction carries meaning. A lemma should identify the claim and its role; a proof should expose the reasoning; a warning should state the failure mode; and an example should connect the statement to a concrete case. Do not hide required definitions or core explanations inside a collapsed disclosure. Solutions and hints may be collapsible, but their expanded text must also read correctly in the PDF, where `<details>` content is shown without the interactive control.
+
+If a course would materially benefit from reusable variants such as semantic theorem cards, warning/tip callouts, tabbed comparisons, or richer proof blocks, record that as a component gap and propose or implement a component separately. Until such a component exists, prefer the supported semantic primitives above over ad-hoc classes or unsupported JSX.
+
+## Feature coverage when modernizing
+
+For a course-wide modernization, audit the whole authoring surface rather than adding the same component everywhere:
+
+1. Map each lesson’s learning outcomes to the most useful representation: prose, math, diagram, code, disclosure, or interaction.
+2. Check all applicable diagram families in the diagram table above, including diagrams absent from the original course.
+3. Check every interactive component and explain omissions where a quiz, runnable investigation, completion task, or case study would not improve the outcome.
+4. Check whether formal statements, warnings, examples, hints, solutions, and proofs have a consistent visual treatment.
+5. Check screen and book behavior, mobile legibility, accessibility, source disclosure, and deterministic build requirements.
+
+The result should be a more coherent learning experience, not a catalogue of widgets. Features that are not applicable should be omitted deliberately and noted in the modernization audit.
+
 ## Plain code fences
 
 Use fenced blocks for explanation, comparison, and code that is intentionally not interactive. Python and JavaScript/TypeScript fences are syntax-checked by `scripts/course_stats.py`; other languages are currently inventory-only because many are teaching fragments rather than standalone programs. A syntax check is a brokenness check, not proof that the example is correct, useful, or pedagogically sufficient.

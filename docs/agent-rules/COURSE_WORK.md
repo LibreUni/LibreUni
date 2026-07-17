@@ -11,6 +11,22 @@ Use this document for creating, reviewing, researching, auditing, or repairing c
 
 “Improve course X” means a whole-course audit and substantive redesign. Do not satisfy it with banned-phrase cleanup, heading changes, spelling fixes, or other cosmetic edits.
 
+## Modernization audit
+
+When a request says to modernize, remake, refresh, or bring a course up to date, treat the existing course as a baseline to audit against the current LibreUni authoring surface. Do not assume that the feature set available when the course was written is still the best one.
+
+After reading the complete course and manifest, inspect the current component guide and compare every lesson with the features now available. Explicitly evaluate whether each learning outcome would benefit from:
+
+- the applicable diagram families: activity/flow, sequence, state, class/domain, component/deployment, use-case/context, mathematical/geometric, quantitative, and custom conceptual/network diagrams;
+- the applicable interactive components: quizzes, code runners, code exercises, and case studies;
+- the applicable rendered and authoring primitives: Math, PlantUML, TikZ, PythonDiagram, fenced code, tables, labeled blockquotes, collapsible disclosures, and `BookOnly`/`ScreenOnly` wrappers;
+- clearer visual treatment for definitions, lemmas, theorems, proofs, warnings, examples, exercises, hints, solutions, and key takeaways; and
+- newer platform behavior, accessibility requirements, responsive layout, print/PDF behavior, and validation expectations.
+
+This is a coverage audit, not a widget quota. Use a feature when it improves a stated learning outcome, and record why an apparently relevant feature is not appropriate. A modernization is incomplete if it only updates prose or syntax while leaving avoidable walls of text, unvisualized relationships, weak practice, undisclosed solutions, or inconsistent emphasis structures. Preserve correct material only after checking that it still serves the revised learning arc.
+
+For course-scale modernization, report the feature audit alongside substantive content findings: which diagrams and components were added or revised, which lessons were intentionally left unchanged, and which desired capability is not currently implemented.
+
 ## Required process
 
 1. Identify the authoritative course metadata, manifest, and lesson files.
