@@ -10,6 +10,11 @@ const coursesCollection = defineCollection({
     color: z.string(),
     image: z.string().optional(),
     status: z.enum(['public', 'draft']).default('public'),
+    ects: z.union([z.literal(0), z.literal(5), z.literal(7.5), z.literal(10)]),
+    prerequisites: z.object({
+      required: z.array(z.string()),
+      recommended: z.array(z.string()),
+    }),
   }),
 });
 
