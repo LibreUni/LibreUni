@@ -36,6 +36,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 - No lesson numbers in filenames, headers, or text. Lessons can be taken in any order.
 - Lesson order and module grouping must be edited in `src/data/course-manifests/<course-id>.yml`, not in lesson frontmatter.
 - Everything must be university level or above.
+- For any course-related work, read [`COURSE_STANDARD.md`](COURSE_STANDARD.md) first. It is the mandatory quality bible for every agent, including agents working only on components, assessments, manifests, research, or repairs.
 
 ---
 

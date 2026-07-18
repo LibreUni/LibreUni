@@ -2,6 +2,8 @@
 
 Use this document for creating, reviewing, researching, auditing, or repairing courses, modules, and lessons. It is a shared task rule for every host harness.
 
+Before taking any course-related action, read [`COURSE_STANDARD.md`](COURSE_STANDARD.md). Its quality contract supersedes convenience, brevity, and mechanical completeness; this document describes the workflow for applying it.
+
 ## Scope
 
 - Course improvement or remake: inspect every lesson in the course and its manifest, then design a coherent revision.

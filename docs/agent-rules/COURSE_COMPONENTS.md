@@ -2,6 +2,8 @@
 
 This is the canonical guide for authors and agents writing LibreUni lessons. Components are teaching tools, not quality quotas. Use one only when it improves a specific learning outcome; a lesson is not better because it contains more widgets.
 
+The course standard is mandatory: read [`COURSE_STANDARD.md`](COURSE_STANDARD.md) before using this guide. Components should make difficult reasoning visible, executable, testable, or comparable. Agents must genuinely inspect and use the available authoring surface when it serves the outcome—not stop at plain prose by habit and not add widgets ceremonially.
+
 Never reuse one interactive component as a course-wide substitute for heading-level teaching artifacts. Each visual or interactive element must be authored for the specific paragraph or heading it follows. For structured technical courses, audit every substantive `##` heading and provide an intentional diagram, graph, exercise, playground, or equivalent teaching artifact at that heading.
 
 A quiz is not a substitute for a diagram, simulation, playground, or code task when the outcome concerns structure, state, motion, execution, or quantitative behavior. A suitable artifact exposes the relevant variables, transitions, constraints, or counterexamples. Reusing a generic artifact pattern with renamed labels is padding; artifact counts are inventory only and cannot establish modernization. Course reviews must include representative visual inspection from every module. A clean mechanical audit is necessary but never sufficient.
@@ -162,6 +164,20 @@ The repository currently has no dedicated `Callout`, `Theorem`, `Lemma`, `Defini
 Use a callout-like block only when the distinction carries meaning. A lemma should identify the claim and its role; a proof should expose the reasoning; a warning should state the failure mode; and an example should connect the statement to a concrete case. Do not hide required definitions or core explanations inside a collapsed disclosure. Solutions and hints may be collapsible, but their expanded text must also read correctly in the PDF, where `<details>` content is shown without the interactive control.
 
 If a course would materially benefit from reusable variants such as semantic theorem cards, warning/tip callouts, tabbed comparisons, or richer proof blocks, record that as a component gap and propose or implement a component separately. Until such a component exists, prefer the supported semantic primitives above over ad-hoc classes or unsupported JSX.
+
+## Required authoring-surface audit
+
+For every new, repaired, or substantially revised lesson, record a brief decision for the applicable options below. For course- or module-scale work, audit the complete target set and include the decisions in the review evidence. “Not applicable” is valid only with a pedagogical reason.
+
+- existing React components: `Quiz`, `CodeRunner`, `CodeExercise`, and `CaseStudy`;
+- existing Astro/rendered components: `PlantUML`, `PythonDiagram`, `TikZ`, `Math`, `MathStatement`, and `MathProof`;
+- MDX and Astro primitives: semantic headings, tables, labeled blockquotes, `<details>`, `BookOnly`, `ScreenOnly`, math, and fenced code;
+- diagram families: flow/activity, sequence, state, class/domain, component/deployment, use-case/context, mathematical/geometric, quantitative, and custom conceptual/network; and
+- a small custom Astro or React component when the current surface cannot express a necessary teaching interaction or semantic structure.
+
+Use the framework’s capabilities to support motivation, derivation, visualization, experimentation, transfer, feedback, accessibility, and screen/book coherence. A custom component is justified by a real learning need and must be deterministic, bounded, accessible, responsive, printable where relevant, and documented for future authors. Do not create a custom component to decorate weak content or to evade the standard.
+
+The audit must state which representation best serves each major outcome, which applicable features were used, which were deliberately omitted, and why. A component does not replace the surrounding explanation, worked reasoning, counterexample, or complete solution.
 
 ## Feature coverage when modernizing
 

@@ -7,8 +7,8 @@ This file is the single repository entrypoint for every coding harness: OpenCode
 1. Read [`docs/agent-rules/GENERAL.md`](docs/agent-rules/GENERAL.md).
 2. Identify the task category and read only the applicable rule file or files:
 
-   - Course, module, or lesson creation, review, repair, or research → [`docs/agent-rules/COURSE_WORK.md`](docs/agent-rules/COURSE_WORK.md), [`docs/agent-rules/COURSE_PEDAGOGY.md`](docs/agent-rules/COURSE_PEDAGOGY.md), [`docs/agent-rules/COURSE_INTEGRITY.md`](docs/agent-rules/COURSE_INTEGRITY.md), and [`docs/agent-rules/COURSE_REPAIR.md`](docs/agent-rules/COURSE_REPAIR.md) for repair work.
-   - Course components → [`docs/agent-rules/COURSE_COMPONENTS.md`](docs/agent-rules/COURSE_COMPONENTS.md).
+   - Any work on a course, module, lesson, course component, manifest, or assessment → read the mandatory [`docs/agent-rules/COURSE_STANDARD.md`](docs/agent-rules/COURSE_STANDARD.md) first, then the applicable [`docs/agent-rules/COURSE_WORK.md`](docs/agent-rules/COURSE_WORK.md), [`docs/agent-rules/COURSE_PEDAGOGY.md`](docs/agent-rules/COURSE_PEDAGOGY.md), [`docs/agent-rules/COURSE_INTEGRITY.md`](docs/agent-rules/COURSE_INTEGRITY.md), and [`docs/agent-rules/COURSE_REPAIR.md`](docs/agent-rules/COURSE_REPAIR.md) for repair work.
+   - Course components → [`docs/agent-rules/COURSE_COMPONENTS.md`](docs/agent-rules/COURSE_COMPONENTS.md), after reading the course standard.
    - Research, new factual material, explanations, or citations → [`docs/agent-rules/RESEARCH.md`](docs/agent-rules/RESEARCH.md).
    - Layout, styling, interaction, accessibility, or visual design → [`docs/agent-rules/UI.md`](docs/agent-rules/UI.md).
    - PlantUML → [`docs/agent-rules/PLANTUML.md`](docs/agent-rules/PLANTUML.md).
