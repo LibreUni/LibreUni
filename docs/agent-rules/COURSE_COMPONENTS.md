@@ -4,6 +4,8 @@ This is the canonical guide for authors and agents writing LibreUni lessons. Com
 
 Never reuse one interactive component as a course-wide substitute for heading-level teaching artifacts. Each visual or interactive element must be authored for the specific paragraph or heading it follows. For structured technical courses, audit every substantive `##` heading and provide an intentional diagram, graph, exercise, playground, or equivalent teaching artifact at that heading.
 
+A quiz is not a substitute for a diagram, simulation, playground, or code task when the outcome concerns structure, state, motion, execution, or quantitative behavior. A suitable artifact exposes the relevant variables, transitions, constraints, or counterexamples. Reusing a generic artifact pattern with renamed labels is padding; artifact counts are inventory only and cannot establish modernization. Course reviews must include representative visual inspection from every module. A clean mechanical audit is necessary but never sufficient.
+
 ## React components
 
 Import from `src/components/` with a relative MDX import and add `client:load` to every use. Only the props listed here are supported.

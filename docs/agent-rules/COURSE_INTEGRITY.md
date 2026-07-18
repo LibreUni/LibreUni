@@ -8,11 +8,14 @@
 - repeated prose blocks;
 - substantive headings without an adjacent teaching artifact;
 - generic diagrams whose labels do not express domain concepts;
-- repeated diagram topology within a course.
+- repeated diagram topology within a course;
+- quiz-only or case-study-only coverage, repeated question/scenario templates, weak vocabulary overlap between an artifact and its learning unit, missing paragraph-boundary coverage, and stateful components without meaningful controls or state changes.
 
 The audit reports findings rather than assigning a quality score. A finding is a review trigger; a clean report is not proof that the teaching is good. Findings marked `error` (filler, duplicate prose, or repeated diagram topology) make `--strict` fail. Findings marked `review` (generic artifacts or uncovered headings) require human/agent review and are reported without pretending that a threshold proves quality.
 
 Counts are inventory only. Never optimize for lesson length, character count, component count, or artifact count. Repeated structure with renamed labels is duplication, not coverage. A coverage matrix must be checked against the actual lesson files, and every artifact must be specific to the learning unit it follows.
+
+The generated coverage report is evidence for review, not a numeric quality score. It records each learning unit, artifact family, concept-specific identifier, and the interaction or visual purpose. A clean report does not certify pedagogy; representative lessons from every module still require manual visual inspection.
 
 ## Required course-review evidence
 
