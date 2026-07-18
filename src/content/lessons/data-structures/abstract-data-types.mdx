@@ -3,49 +3,355 @@ title: "Abstract Data Types and Representation Invariants"
 course: "data-structures"
 description: "Specification before implementation: operations, algebraic behavior, representation invariants, and correctness contracts."
 ---
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import TikZ from '../../../components/TikZ.astro';
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Abstract Data Types and Representation Invariants
 
-A data structure is not merely a collection of fields. It is a representation plus operations that preserve a specification. An abstract data type (ADT) describes observable behavior without committing to arrays, pointers, trees, or hashing. Separating the abstraction from its representation makes correctness proofs portable, exposes illegal states, and lets engineering choose a representation based on workload and resource constraints.
+A library catalog system must store books, support insertion, deletion, and search by title, author, and ISBN. Should the implementation use an array, a linked list, a hash table, or a binary search tree? The users of the catalog module should not care about the internal representation — changing the data structure later should not force rewrites of code that merely retrieves books by title. This separation between interface (what operations are provided) and implementation (how data is stored and accessed) is the essence of an abstract data type.
+
+The term "abstract data type" (ADT) was formalized by Barbara Liskov and Stephen Zilles in their 1974 paper "Programming with Abstract Data Types" [Liskov & Zilles 1974], which became the foundation of the CLU programming language. CLU introduced *clusters*, a language construct that bundled a type's representation with its operations while hiding the representation from clients. The insight was that a type's meaning should be defined by its behavior — the operations that can be performed on it and the laws those operations obey — not by the concrete memory layout of its values.
+
+<MathStatement id="adt-def" kind="definition" title="Abstract Data Type (ADT)">
+An ADT is a triple $(V, O, A)$ where $V$ is a set of abstract values, $O$ is a set of operations each with a well-defined signature, and $A$ is a set of algebraic laws (axioms) relating the operations. The representation is hidden; clients interact only through $O$.
+</MathStatement>
+
+The same ADT can have many implementations. Consider the Dictionary ADT with operations `put(k, v)`, `get(k)`, `delete(k)`, and `contains(k)`. A hash table implements it with expected $O(1)$ lookups by computing a key's hash to index into a bucket array. A balanced BST implements it with $O(\log n)$ lookups by navigating a sorted tree. A skip list implements it with $O(\log n)$ expected cost by maintaining multiple levels of linked "express lanes." A trie implements it for string keys by walking a prefix tree character by character.
+
+<PlantUML code={`
+@startuml
+rectangle "Dictionary ADT" as ADT {
+  rectangle "put(k, v)" as P
+  rectangle "get(k)" as G
+  rectangle "delete(k)" as D
+  rectangle "contains(k)" as C
+}
+rectangle "Hash Table" as HT
+rectangle "BST" as BST
+rectangle "Skip List" as SL
+P --> HT : implements
+P --> BST : implements
+P --> SL : implements
+G --> HT
+G --> BST
+G --> SL
+D --> HT
+D --> BST
+D --> SL
+C --> HT
+C --> BST
+C --> SL
+note right of HT : expected O(1) lookup
+note right of BST : O(log n) worst-case
+note right of SL : O(log n) expected
+@enduml
+`} />
+
+The ADT boundary enforces correctness. A *representation invariant* — a predicate that every valid concrete state must satisfy — lets you prove that operations preserve correctness without reasoning about the entire program. Encapsulation turns this logical obligation into a compile-time or documentation boundary.
 
 ## Specification versus representation
 
-An ADT defines values and operations. A sequence ADT might support size, get(i), set(i,x), add(i,x), and remove(i), with indices in a specified range and a defined order. A map ADT might support put(k,v), get(k), remove(k), and contains(k), with a rule for duplicate keys. A priority queue might support insert, minimum, and delete-min, with an ordering relation and behavior for an empty structure.
+<StructureDiagram kind="list" title="Concrete linked sequence" caption="The linked nodes realize the abstract sequence through head and next pointers." />
 
-An implementation chooses concrete state. A sequence can be an array with a logical length, a linked chain of nodes, or a tree of chunks. Two implementations are equivalent if every allowed operation produces the same abstract result and side effects. Complexity is not part of abstract meaning, but it is part of whether a representation meets a client’s performance contract.
+An ADT defines values and operations. A sequence ADT might support `size`, `get(i)`, `set(i, x)`, `add(i, x)`, and `remove(i)`, with indices in a specified range and a defined order. A map ADT might support `put(k, v)`, `get(k)`, `remove(k)`, and `contains(k)`, with a rule for duplicate keys. A priority queue might support `insert`, `minimum`, and `delete-min`, with an ordering relation and behavior for an empty structure.
 
-Write preconditions and postconditions explicitly. If get requires (0le i less than n), an invalid index may raise an exception, return an option type, or be specified as undefined; different choices are different APIs. For put, decide whether an existing key is replaced, duplicated, or rejected. Ambiguity here becomes bugs in every client.
+An implementation chooses concrete state. A sequence can be an array with a logical length, a linked chain of nodes, or a tree of chunks. Two implementations are equivalent if every allowed operation produces the same abstract result and side effects. Complexity is not part of abstract meaning, but it is part of whether a representation meets a client's performance contract.
+
+Write preconditions and postconditions explicitly. If `get` requires $0 \le i < n$, an invalid index may raise an exception, return an option type, or be specified as undefined; different choices are different APIs. For `put`, decide whether an existing key is replaced, duplicated, or rejected. Ambiguity here becomes bugs in every client.
+
+<Quiz client:load
+  question="A sequence ADT specifies get(i) with precondition $0 \le i < n$. Which design choice is NOT part of the ADT specification?"
+  options={[
+    "Whether an out-of-range index raises an exception or returns an option",
+    "Whether the backing store is an array or a linked list",
+    "Whether indices are zero-based or one-based",
+    "Whether the sequence is empty when $n = 0$"
+  ]}
+  correctIndex={1}
+  explanation="The representation choice (array vs. linked list) is an implementation detail, not part of the ADT specification. The precondition, error behavior, and base index are part of the interface contract."
+/>
 
 ## Representation invariants
 
-A representation invariant (RI) is a predicate true of every reachable concrete state. For a dynamic array, the RI might be (0le nle capacity), elements occupy positions 0 through n-1, and no operation relies on uninitialized positions. For a doubly linked list, head and tail consistency, endpoint nullity, reciprocal next/previous pointers, and a correct node count are part of the RI.
+<StructureDiagram kind="array" title="Representation invariant for capacity" caption="The logical prefix is the value; unused capacity is not an abstract element." variant="capacity" />
+
+<MathStatement id="ri-def" kind="definition" title="Representation Invariant (RI)">
+A representation invariant $\text{RI}(c)$ is a predicate over the concrete state $c$ that must hold for every reachable valid state. If $c_0$ is the initial state after construction, then $\text{RI}(c_0)$ must hold. For every mutating operation $m$, if $\text{RI}(c)$ holds and $m$ is called with valid arguments, then $\text{RI}(m(c))$ must hold after the operation.
+</MathStatement>
+
+| Representation | Must preserve | Typical strength |
+| --- | --- | --- |
+| Dynamic array | logical length, capacity, owned prefix | indexed access |
+| Linked list | endpoint links, reachability, size | local insertion |
+| Hash table | slot state, key uniqueness, probe rules | expected lookup |
+
+<Quiz client:load
+  question="Which statement belongs in a representation invariant?"
+  options={[
+    "Every reachable concrete state satisfies it",
+    "It describes only the public method names",
+    "It is true only after a successful search",
+    "It ignores cached metadata"
+  ]}
+  correctIndex={0}
+  explanation="An invariant is a predicate over every valid concrete state and supports every operation proof."
+/>
 
 Every mutating method has three proof obligations: if the RI holds before a valid call, the operation establishes its postcondition; it preserves the RI; and it returns the specified abstract result. Constructors establish the RI initially. A private helper can assume the RI only if every caller preserves it; exposing raw pointers or mutable backing arrays can invalidate the abstraction boundary.
 
-**Worked invariant.** A circular queue uses an array of capacity C, indices head and tail, and count q. The RI is (0le qle C), head and tail are in range, and the q logical elements are at positions ((head+j)bmod C) for (0le j less than q); tail equals ((head+q)bmod C). Enqueue writes at tail then increments q and tail modulo C. Dequeue reads at head then increments head and decrements q. The modular equations prove wraparound does not change logical order.
+<MathStatement id="circular-queue-ri" kind="example" title="Circular queue representation invariant">
+A circular queue uses an array of capacity $C$, indices $\text{head}$ and $\text{tail}$, and count $q$:
+$$
+\begin{aligned}
+\text{RI}(c) &:= 0 \le q \le C \\
+&\quad \land\; 0 \le \text{head} < C \\
+&\quad \land\; 0 \le \text{tail} < C \\
+&\quad \land\; \text{tail} = (\text{head} + q) \bmod C
+\end{aligned}
+$$
+The logical elements are at positions $((\text{head} + j) \bmod C)$ for $0 \le j < q$.
+</MathStatement>
+
+<MathProof id="cq-enqueue-proof" for="circular-queue-ri" title="Enqueue preserves the RI" collapsible open>
+Let $q < C$ before enqueue (otherwise the precondition rejects). Enqueue writes $x$ at position $\text{tail}$, then sets $\text{tail} \leftarrow (\text{tail} + 1) \bmod C$ and $q \leftarrow q + 1$. After the update:
+- $q' = q + 1 \le C$, so $0 \le q' \le C$ holds.
+- $\text{tail}' = (\text{tail} + 1) \bmod C$, and $\text{head}$ is unchanged.
+- $\text{tail}' = (\text{head} + q + 1) \bmod C = (\text{head} + q') \bmod C$, satisfying the modular equation.
+- The occupied modular interval gains one element at the new tail position and remains within capacity.
+
+If $q = C$, the operation is rejected (or blocks). Silently overwriting would violate the queue ADT because the abstract value would lose an element.
+</MathProof>
+
+<TikZ code={`
+\documentclass[tikz,border=3mm]{standalone}
+\begin{document}
+\begin{tikzpicture}[scale=0.9]
+  \draw[->,thick] (0,0) -- (8,0) node[right] {index};
+  \foreach \i in {0,...,7} {
+    \draw (\i+0.5,0.2) -- (\i+0.5,-0.2) node[below] {$\i$};
+    \draw[thick] (\i,0) rectangle (\i+1,1);
+  }
+  \fill[blue!20] (1,0) rectangle (5,1);
+  \node at (3,0.5) {logical elements};
+  \draw[<->,red,thick] (1.5,-0.5) -- (4.5,-0.5) node[midway,below] {head + q};
+  \draw[->,red,thick] (5.5,0.5) -- (1.5,0.5) node[midway,above] {tail = (head + q) mod C};
+  \node at (1,1.3) {head};
+  \node at (5,1.3) {tail};
+\end{tikzpicture}
+\end{document}
+`} />
 
 ## Abstraction functions
 
-An abstraction function maps a valid concrete representation to its abstract value. For an array sequence, AF(state) is the prefix of length n. For a linked list, AF is the traversal from head. For a hash table with chaining, AF is the finite map formed by all key-value pairs in buckets, subject to the duplicate-key invariant. The AF lets a concrete transition be proved correct by showing the abstract value changes as specified.
+<MathStatement id="af-def" kind="definition" title="Abstraction Function (AF)">
+An abstraction function $\text{AF}: \mathcal{C} \to \mathcal{A}$ maps a valid concrete state $c$ (where $\text{RI}(c)$ holds) to its abstract value $a \in \mathcal{A}$. The mapping is surjective onto the set of abstract values: every abstract value has at least one concrete representation.
+</MathStatement>
+
+For an array sequence, $\text{AF}(c)$ is the prefix of length $n$. For a linked list, $\text{AF}$ is the traversal from head. For a hash table with chaining, $\text{AF}$ is the finite map formed by all key-value pairs in buckets, subject to the duplicate-key invariant. The AF lets a concrete transition be proved correct by showing the abstract value changes as specified.
+
+<PythonDiagram code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 3))
+
+# Concrete state: array of capacity 8, logical length 4
+ax1.set_xlim(0, 9)
+ax1.set_ylim(0, 2)
+ax1.set_title('Concrete: array of capacity 8', fontsize=10)
+for i in range(8):
+    color = '#90EE90' if i < 4 else '#DDDDDD'
+    rect = mpatches.Rectangle((i+0.5, 0.5), 0.8, 0.8, facecolor=color, edgecolor='black')
+    ax1.add_patch(rect)
+    label = ['a', 'b', 'c', 'd', '·', '·', '·', '·'][i]
+    ax1.text(i+0.9, 0.9, label, ha='center', va='center', fontsize=12)
+ax1.text(0.5, 1.6, 'n=4', fontsize=9, fontweight='bold')
+ax1.axis('off')
+
+# Arrow: AF maps to abstract
+ax1.annotate('', xy=(5.5, 1.5), xytext=(9.5, 1.5),
+             arrowprops=dict(arrowstyle='->', lw=2, color='#3b82f6'))
+ax1.text(7.5, 1.7, 'AF', ha='center', fontsize=10, color='#3b82f6', fontweight='bold')
+
+# Abstract state: sequence [a, b, c, d]
+ax2.set_xlim(0, 5)
+ax2.set_ylim(0, 2)
+ax2.set_title('Abstract: [a, b, c, d]', fontsize=10)
+for i in range(4):
+    rect = mpatches.Rectangle((i+0.5, 0.5), 0.8, 0.8, facecolor='#90EE90', edgecolor='black')
+    ax2.add_patch(rect)
+    ax2.text(i+0.9, 0.9, ['a', 'b', 'c', 'd'][i], ha='center', va='center', fontsize=12)
+ax2.axis('off')
+
+plt.tight_layout()
+plt.savefig('/tmp/af-diagram.png', dpi=100, bbox_inches='tight')
+`} format="png" title="Abstraction function from concrete array to abstract sequence" />
 
 A representation may have multiple concrete states for one abstract value. An empty array with capacity 8 and one with capacity 64 represent the same empty sequence. This representation independence is useful: resizing can change capacity without changing AF. A canonical representation is not required unless operations or equality depend on it.
 
-To prove a method, relate before and after states through AF. If enqueue appends x, show AF(after)=AF(before) followed by x. If remove(i) shifts an array suffix left, show the resulting prefix equals the abstract sequence with position i deleted. The proof should account for boundary cases such as empty, singleton, first, and last positions.
+To prove a method, relate before and after states through AF. If enqueue appends $x$, show $\text{AF}(\text{after}) = \text{AF}(\text{before})$ followed by $x$. If `remove(i)` shifts an array suffix left, show the resulting prefix equals the abstract sequence with position $i$ deleted. The proof should account for boundary cases such as empty, singleton, first, and last positions.
+
+<Quiz client:load
+  question="Two dynamic arrays both represent the sequence [1, 2, 3]. One has capacity 8, the other capacity 16. What does this illustrate?"
+  options={[
+    "A representation invariant violation",
+    "Representation independence — multiple concrete states for one abstract value",
+    "A bug in the abstraction function",
+    "That capacity is part of the abstract value"
+  ]}
+  correctIndex={1}
+  explanation="Different concrete states (different capacities) can map to the same abstract value via the AF. This is by design — it allows resizing without changing the abstract meaning."
+/>
 
 ## Cost contracts
 
-An ADT specification may state expected complexity, but amortized and worst-case guarantees must name the operation sequence and parameters. Dynamic-array append is O(1) amortized under geometric growth, not O(1) worst-case: a resize copies many elements. A linked-list get(i) is O(i) unless extra indexing is maintained. A hash-map lookup is expected O(1) under assumptions, not an unconditional worst-case promise.
+An ADT specification may state expected complexity, but amortized and worst-case guarantees must name the operation sequence and parameters. Dynamic-array append is $O(1)$ amortized under geometric growth, not $O(1)$ worst-case: a resize copies many elements. A linked-list `get(i)` is $O(i)$ unless extra indexing is maintained. A hash-map lookup is expected $O(1)$ under assumptions, not an unconditional worst-case promise.
 
-Space includes metadata, unused capacity, pointers, allocator overhead, and sometimes cache effects. A linked list may use O(n) words like an array but have worse locality and larger constants. If keys are large or objects are shared, count ownership and aliasing explicitly. Complexity analysis should match the actual representation rather than a name such as “list” or “map.”
+Space includes metadata, unused capacity, pointers, allocator overhead, and sometimes cache effects. A linked list may use $O(n)$ words like an array but have worse locality and larger constants. If keys are large or objects are shared, count ownership and aliasing explicitly. Complexity analysis should match the actual representation rather than a name such as "list" or "map."
 
 ## Ownership, aliasing, and iterators
+
+<CaseStudy client:load
+  title="Aliased backing storage"
+  scenario="A client retains a reference to an array returned by a sequence implementation, then the sequence resizes."
+  question="What must the representation contract decide?"
+  options={[
+    "Whether the reference remains valid or is isolated",
+    "Nothing; aliases are never observable",
+    "Only the new capacity",
+    "The iterator's color"
+  ]}
+  correctIndex={0}
+  explanation="Aliasing can expose representation changes, so ownership and invalidation must be explicit."
+/>
 
 If a client can hold a reference to an internal node or backing array, it may mutate state without preserving the RI. Choose copying, immutable views, controlled iterators, or documented aliasing. A slice may share storage with an array; then a set through one view changes the other. This can be efficient but must be part of the contract.
 
 Mutation during iteration needs semantics. Options include fail-fast detection, weakly consistent traversal, snapshot iteration, or a specified rule for skipped/duplicated elements. A modification counter can detect some concurrent changes but is not a synchronization mechanism. For concurrent structures, linearizability or a weaker consistency model must be stated separately from ordinary sequential correctness.
 
+## Worked example: Interval with containment
+
+Define an interval ADT over a totally ordered set $T$:
+
+- `Interval(l, r)` for $l \le r$
+- `contains(x)` returns $l \le x \le r$
+- `overlaps(other)` returns $\max(l, \text{other}.l) \le \min(r, \text{other}.r)$
+- `union(other)` returns the smallest interval covering both, or fails if disjoint.
+
+Concrete representation: store $l, r \in T$ and cached length $len = r - l$ under a suitable metric. RI: $l \le r$, $len = r - l$, no operation depends on stale cached length. AF: the abstract closed interval $[l, r]$.
+
+`contains` returns $l \le x \le r$ in $O(1)$. `overlaps` checks the intersection condition in $O(1)$. `union` checks disjointness, returns a new interval with $l' = \min(l, \text{other}.l)$, $r' = \max(r, \text{other}.r)$. The cached length is recomputed in the constructor and union; a stale length bug would manifest as `contains` and `overlaps` remaining correct while any operation reading `len` silently returns a wrong value. This example extends the RI/AF pattern beyond sequences to geometric abstractions and shows how a cache invariant must be maintained across every constructor and mutation.
+
+<CodeRunner client:load
+  title="Interval ADT implementation"
+  language="python"
+  code={`
+class Interval:
+    def __init__(self, l, r):
+        assert l <= r, "Interval requires l <= r"
+        self.l = l
+        self.r = r
+        self._len = r - l
+
+    def contains(self, x):
+        return self.l <= x <= self.r
+
+    def overlaps(self, other):
+        return max(self.l, other.l) <= min(self.r, other.r)
+
+    def union(self, other):
+        if not self.overlaps(other):
+            raise ValueError("Disjoint intervals")
+        return Interval(min(self.l, other.l), max(self.r, other.r))
+
+    def __repr__(self):
+        return f"Interval([{self.l}, {self.r}])"
+
+a = Interval(1, 5)
+b = Interval(3, 8)
+print(f"a = {a}, b = {b}")
+print(f"a.contains(3) = {a.contains(3)}")
+print(f"a.overlaps(b) = {a.overlaps(b)}")
+print(f"a.union(b) = {a.union(b)}")
+  `}
+  output="a = Interval([1, 5]), b = Interval([3, 8])\na.contains(3) = True\na.overlaps(b) = True\na.union(b) = Interval([1, 8])"
+/>
+
+## Counterexample: Broken invariant via aliased exposure
+
+<MathStatement id="broken-ri" kind="example" title="Failure mode: exposed backing array">
+Consider a dynamic array that exposes its internal buffer via a `get_buffer()` method. A client writes:
+```
+buf = seq.get_buffer()
+buf[100] = 42   # beyond logical length
+```
+Now $\text{RI}(c)$ is violated: the logical length $n$ is still 50, but position 100 contains a value that `get(i)` for $i \ge n$ should not expose. The AF no longer correctly describes the abstract value because the client has mutated concrete state without going through the ADT interface. The abstraction boundary is breached.
+</MathStatement>
+
+This failure mode is not hypothetical. The Java `ArrayList` class before JDK 1.2 had a `trimToSize()` method that exposed the backing array's capacity in a way that could be exploited. Modern Java provides `Collections.unmodifiableList()` to prevent this. The lesson: encapsulation is not just a design preference — it is a correctness requirement.
+
+<Quiz client:load
+  question="A class exposes a public field for its internal node pointers. Why is this dangerous?"
+  options={[
+    "Clients can corrupt the representation invariant by mutating pointers directly",
+    "It makes the code run slower",
+    "It prevents the garbage collector from running",
+    "It is only dangerous in C++, not in Java or Python"
+  ]}
+  correctIndex={0}
+  explanation="Exposing internal pointers lets clients violate the RI without going through the ADT methods. This is a correctness issue, not just a performance or style concern."
+/>
+
 ## Testing from the specification
 
 Tests should target abstract behavior and invariant boundaries. Use model-based testing: execute the implementation and a simple reference model on the same operation sequence, then compare observable results. Generate empty, singleton, repeated, sorted, reverse-sorted, and adversarial keys. After each mutation, assert internal invariants in debug builds. Random tests find transition combinations; proofs explain why unseen combinations are safe.
+
+<CodeExercise client:load
+  title="Complete the invariant assertion"
+  code={`
+class DynamicArray:
+    def __init__(self):
+        self.data = [None] * 4
+        self.n = 0
+        self.cap = 4
+
+    def assert_invariant(self):
+        # RI: 0 <= n <= cap
+        assert [!blank!], "n out of range"
+        # All positions beyond n are None
+        for i in range(self.n, self.cap):
+            assert self.data[i] is None, "unused slot not None"
+
+    def append(self, x):
+        self.assert_invariant()
+        if self.n == self.cap:
+            self._resize()
+        self.data[self.n] = x
+        self.n += 1
+        self.assert_invariant()
+
+    def _resize(self):
+        self.cap *= 2
+        new_data = [None] * self.cap
+        for i in range(self.n):
+            new_data[i] = self.data[i]
+        self.data = new_data
+  `}
+  answers={["0 <= self.n <= self.cap"]}
+  explanation="The RI for a dynamic array requires that the logical length n is between 0 and capacity inclusive. This ensures the representation is valid before and after every operation."
+/>
 
 Metamorphic tests check relations without a fixed expected value. For a map, inserting then removing a fresh key should restore the previous abstract map. For a sequence, reversing twice should restore order. Tests do not replace proofs, but they expose mistaken assumptions and implementation errors in code that the proof intended to describe.
 
@@ -55,30 +361,102 @@ Choose a structure by asking which operations and resource limits dominate. If i
 
 ## Exercises
 
+<StructureDiagram kind="queue" title="Circular-buffer representation" caption="Head, tail, count, and capacity describe a bounded queue without overwriting live elements." />
+<StructureExercise client:load
+  title="Check a sequence representation"
+  prompt="Which choice preserves the sequence invariant after an append?"
+  options={[
+    "Write at the next logical position",
+    "Write past capacity",
+    "Change the head without changing size",
+    "Expose unused cells as elements"
+  ]}
+  answer={0}
+  explanation="The append changes the logical prefix and size together while keeping capacity and ownership valid."
+  kind="list"
+/>
+
+### Recall and application
+
 1. Specify a map ADT including duplicate-key behavior, missing-key behavior, and iteration semantics.
+
+   <ExerciseSolution hint="Think about the contract for put when the key already exists: should it replace, reject, or allow duplicates?">
+
+   Define a finite map from keys to values; put replaces the value for an existing key, get returns an option, remove deletes or returns absent, and iteration yields each key once in an unspecified order. State whether clients may mutate keys; immutable or copied keys are required for hash/order stability.
+   </ExerciseSolution>
+
 2. Give the RI and abstraction function for a singly linked sequence with a cached size.
+
+   <ExerciseSolution hint="Consider what invariant links head, size, and the reachable nodes.">
+
+   RI: head is null iff size is zero; following next pointers from head visits exactly size nodes and terminates at null; no node is repeated. AF is the sequence of node values in traversal order. Insert and remove must preserve reachability and count.
+   </ExerciseSolution>
+
 3. Prove circular-queue enqueue preserves its RI in both non-full and full cases.
-4. Explain why exposing a dynamic array’s backing storage breaks representation independence.
+
+   <ExerciseSolution>
+   If q less than C, write at tail, set tail to (tail+1) mod C, and increment q; the occupied modular interval gains one final element and remains within capacity. If q=C, the precondition rejects or blocks enqueue; silently overwriting would violate the queue ADT.
+   </ExerciseSolution>
+
+4. Explain why exposing a dynamic array's backing storage breaks representation independence.
+
+   <ExerciseSolution>
+   A client can write outside the logical prefix, change elements without the ADT method, or retain an array across resize. The AF and RI can then fail, and a representation change becomes an observable client break rather than an internal optimization.
+   </ExerciseSolution>
+
 5. Design model-based tests for a stack and list three high-value operation sequences.
+
+   <ExerciseSolution>
+   Compare each operation sequence against a simple list model. Test push/pop on empty, push many then pop all, alternating push/pop, and duplicate values. Assert LIFO results and empty behavior after each operation.
+   </ExerciseSolution>
+
 6. Compare worst-case and amortized complexity contracts for a geometric dynamic array.
+
+   <ExerciseSolution>
+   An append may copy n elements during a resize, so one operation costs $O(n)$ worst case. Across m appends with capacity multiplying by a factor greater than 1, each element is copied only $O(1)$ times per growth level, so total copying is $O(m)$ and amortized append is $O(1)$.
+   </ExerciseSolution>
+
 7. State a safe iterator contract for a mutable map.
 
-### Diagnostic solutions
+   <ExerciseSolution>
+   Specify whether mutation during iteration is forbidden and detected, reflected with defined rules, or isolated in a snapshot. A fail-fast iterator may throw after detecting a modification, but absence of detection is not permission to rely on a traversal result.
+   </ExerciseSolution>
 
+### Transfer and synthesis
 
-1. Define a finite map from keys to values; put replaces the value for an existing key, get returns an option, remove deletes or returns absent, and iteration yields each key once in an unspecified order. State whether clients may mutate keys; immutable or copied keys are required for hash/order stability.
-2. RI: head is null iff size is zero; following next pointers from head visits exactly size nodes and terminates at null; no node is repeated. AF is the sequence of node values in traversal order. Insert and remove must preserve reachability and count.
-3. If q less than C, write at tail, set tail to (tail+1) mod C, and increment q; the occupied modular interval gains one final element and remains within capacity. If q=C, the precondition rejects or blocks enqueue; silently overwriting would violate the queue ADT.
+8. **Transfer.** A `Graph` ADT is specified with operations `add_vertex(v)`, `add_edge(u, v)`, `neighbors(v)`, and `has_edge(u, v)`. Give an RI and AF for an adjacency-matrix representation (a $|V| \times |V|$ boolean array). What must happen when a vertex is removed — does the matrix shrink? How does the AF change?
 
-4. A client can write outside the logical prefix, change elements without the ADT method, or retain an array across resize. The AF and RI can then fail, and a representation change becomes an observable client break rather than an internal optimization.
-5. Compare each operation sequence against a simple list model. Test push/pop on empty, push many then pop all, alternating push/pop, and duplicate values. Assert LIFO results and empty behavior after each operation.
-6. An append may copy n elements during a resize, so one operation costs O(n) worst case. Across m appends with capacity multiplying by a factor greater than 1, each element is copied only O(1) times per growth level, so total copying is O(m) and amortized append is O(1).
-7. Specify whether mutation during iteration is forbidden and detected, reflected with defined rules, or isolated in a snapshot. A fail-fast iterator may throw after detecting a modification, but absence of detection is not permission to rely on a traversal result.
+   <ExerciseSolution>
+   RI: matrix is $n \times n$ where $n = |V|$; matrix[i][j] is True iff there is an edge from vertex i to vertex j; diagonal entries are False (no self-loops by convention). AF maps the matrix to the directed graph $(V, E)$ where $E = \{(v_i, v_j) \mid \text{matrix}[i][j] = \text{True}\}$. Removing a vertex requires either marking the row/column as invalid (tombstone) and tracking a free list, or copying to a new $(n-1) \times (n-1)$ matrix. The AF must skip tombstones or refer to the new matrix; the choice affects the complexity of vertex removal.
+   </ExerciseSolution>
 
+9. **Synthesis.** A binary search tree stores integer keys. The representation invariant states that for every node, all keys in the left subtree are less than the node's key, and all keys in the right subtree are greater. A programmer removes the `private` keyword from the node class, making all fields public. List three concrete ways a client can corrupt the tree without calling any of the tree's methods. Then propose a language-level mechanism (e.g., in Rust, Java, or Python) that would prevent this.
 
+   <ExerciseSolution>
+   Three corruptions: (1) set a node's left child to point to a node with a larger key; (2) create a cycle by setting a node's right child to point to an ancestor; (3) change a node's key value directly without rebalancing. Language mechanisms: Rust's module visibility (`pub(crate)` or private fields) prevents external mutation; Java's `private` with no getter for children prevents access; Python's name mangling (`__left`) discourages but does not prevent access — a `@property` that returns a copy is safer.
+   </ExerciseSolution>
 
-## References & Further Reading
+10. **Synthesis.** A priority queue is implemented as an unsorted array. The RI is simply $n \ge 0$. The `insert` operation appends in $O(1)$. The `delete-min` operation scans the entire array to find the minimum, swaps it to the end, and decrements $n$. Give the AF for this representation. Then design a faster representation that maintains a partial order (like a heap), and explain how the RI changes. What is the trade-off between the two RIs?
 
-* [MIT 6.006 Introduction to Algorithms syllabus and lecture materials](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/pages/syllabus/)
-* [Open Data Structures](https://opendatastructures.org/)
-* [Cornell CS 2110 binary-search-tree lecture](https://www.cs.cornell.edu/courses/cs2110/2026sp/lectures/lec17/)
+    <ExerciseSolution>
+    For the unsorted array: $\text{AF}(c)$ is the multiset of the first $n$ elements — order does not matter. RI: $0 \le n \le \text{capacity}$. For a binary heap: RI additionally requires the heap property: for every index $i > 0$, $\text{array}[i] \ge \text{array}[\text{parent}(i)]$. The heap RI is stricter (more constraints to maintain) but enables $O(\log n)$ insert and delete-min instead of $O(n)$ scan. The trade-off is between a simple, cheap-to-maintain RI with expensive operations and a constrained RI with efficient operations.
+    </ExerciseSolution>
+
+## DELIBERATELY OMITTED
+
+The following topics are relevant to ADTs but are intentionally excluded from this lesson to maintain focus on the RI/AF proof method:
+
+- **Algebraic specification of ADTs**: equational axioms and initial/final algebra semantics. These provide a more rigorous foundation for ADT correctness but are not required for the RI/AF proof method used here.
+- **Dependent types for representation invariants**: languages with refinement types (e.g., Liquid Haskell, Dafny) can encode RIs in the type system. This is an advanced verification technique orthogonal to the structural invariant patterns taught.
+- **Object-capability and confinement disciplines**: ownership types and capability-secure ADT boundaries. Relevant for encapsulation but beyond the scope of a single lesson on invariants.
+- **Effect systems for mutation**: tracking which operations modify which regions. Useful for modular reasoning but presupposes a type-system feature not available in mainstream data-structure implementations.
+
+## References
+
+- Liskov, B. and Zilles, S. (1974). "Programming with Abstract Data Types." *ACM SIGPLAN Notices*, 9(4), pp. 50–59. — The seminal paper that introduced the ADT concept.
+- Liskov, B. and Guttag, J. (2000). *Program Development in Java: Abstraction, Specification, and Object-Oriented Design*. Addison-Wesley. — Textbook treatment of specification, RIs, and AFs.
+- Meyer, B. (1997). *Object-Oriented Software Construction*, 2nd ed. Prentice Hall. — Design by Contract and invariant methodology.
+- Stepanov, A. and Lee, M. (1994). "The Standard Template Library." *HP Technical Report HPL-94-34*. — STL as a case study in ADT-based generic programming.
+- [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/pages/syllabus/) — syllabus and lecture materials.
+- [Open Data Structures](https://opendatastructures.org/) — reference implementations of ADTs in multiple languages.
+- [Cornell CS 2110: Binary Search Tree Lecture](https://www.cs.cornell.edu/courses/cs2110/2026sp/lectures/lec17/) — invariant analysis in practice.

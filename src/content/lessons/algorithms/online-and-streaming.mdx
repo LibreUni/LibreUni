@@ -1,105 +1,379 @@
 ---
 title: "Online and Streaming Algorithms"
 course: "algorithms"
-description: "Limited memory and future knowledge, competitive analysis, sketches, sampling, and stream-specific guarantees."
+description: "Competitive analysis, adversary models, ski rental, paging, Count-Min Sketch, reservoir sampling, heavy hitters, and linear sketching."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Online and Streaming Algorithms
 
-An online algorithm must make decisions as input arrives without knowing future items. A streaming algorithm processes a potentially enormous sequence using memory much smaller than the input, often making one or a few passes. These constraints require different guarantees from offline exact algorithms: competitive ratio against an optimal offline adversary, approximation error with probability, or frequency/space bounds. The model and adversary are part of the problem.
+**Prerequisites:** Probability fundamentals (expectation, Markov's inequality, pairwise independence); hash functions; basic amortized analysis.
 
-## Online versus offline
+Ski rental: rent skis costs \$1/day, buying costs \$10. The number of ski days $t$ is unknown. When do you buy?
 
-An offline algorithm sees the complete input and can sort, reorder, or defer decisions. An online algorithm receives requests sequentially and may commit resources irreversibly. The online cost is compared with OPT, the best offline solution for the same sequence, often plus an additive constant. A c-competitive algorithm satisfies (ALG(sigma) at most  c,OPT(sigma)+b) for every sequence sigma.
+If you rent every day and the season is long, you overpay. If you buy early and the season is short, you also overpay. No deterministic decision can be optimal for all $t$ — the problem is not about finding the right answer but about bounding the worst-case regret.
 
-The adversary may be oblivious, choosing a sequence before randomness, or adaptive, observing choices as they occur. Deterministic online algorithms can be forced into bad choices by an adversary that knows their state. Randomization can improve competitive ratio against an oblivious adversary, but the guarantee must state what the adversary observes.
+This dilemma is the core of **online algorithms**: decisions are irreversible and made without knowledge of the future. **Streaming algorithms** face a different constraint — sublinear memory — but share the need for one-pass processing with bounded resources.
 
-## Ski-rental problem
+## Competitive Analysis
 
-Rent costs 1 per day; buying costs B; the season length is unknown. An online algorithm rents for B days then buys. If the season ends before B, cost equals OPT; if it lasts longer, cost at most B+B-1 while OPT is B, giving a ratio below 2. A randomized strategy chooses a buy threshold from a distribution and can improve the competitive ratio against an oblivious adversary.
+<MathStatement id="competitive" kind="definition" title="Competitive ratio">
+Algorithm $ALG$ is $c$-competitive if there exists a constant $b$ such that for all input sequences $\sigma$:
+$$
+\text{ALG}(\sigma) \le c \cdot \text{OPT}(\sigma) + b
+$$
+where $\text{OPT}(\sigma)$ is the optimal offline cost — the cost an algorithm with perfect foresight would incur [Sleator & Tarjan, 1985]. For randomized algorithms, the expectation is over ALG's internal randomness.
+</MathStatement>
 
-The proof compares cases by the unknown stopping time. The example illustrates an unavoidable cost of uncertainty: an offline algorithm knows whether a long season justifies buying. The online algorithm’s policy must be evaluated over all possible stopping times, not only typical ones.
+The additive constant $b$ prevents trivial violations on short inputs. For minimization problems with nonnegative costs, $b$ is often zero.
 
-## Paging and caching
+**Adversary models** determine the power of the input sequence:
 
-With cache capacity k and page requests, an online algorithm decides which page to evict on a miss. LRU evicts the least recently used page and is k-competitive; marking algorithms and randomized paging offer other guarantees. A phase partition proof divides a request sequence into maximal phases containing k distinct pages. LRU faults at most k per phase, while OPT faults at least one on each pair of consecutive phases, yielding a ratio.
+- **Oblivious adversary:** fixes $\sigma$ in advance, unaware of ALG's random choices. This is the standard model for randomized online algorithms.
+- **Adaptive adversary:** sees ALG's outputs and selects future inputs adversarially. An adaptive adversary can simulate ALG's randomness, making randomization useless.
 
-Competitive analysis is not average latency. A workload with a strong locality distribution may make LRU excellent, while an adversarial cycle can cause many misses. The cache model also specifies whether a requested page is always inserted, whether prefetching is allowed, and whether cache size is known.
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+actor "Adversary" as adv
+participant "Input $\\sigma$" as sigma
+participant "Algorithm ALG" as alg
+== Oblivious ==
+adv -> sigma : Fix $\\sigma$ offline
+sigma -> alg : Stream $\\sigma$ one element at a time
+alg -> sigma : Decision $d_i$ (irreversible)
+== Adaptive ==
+adv -> sigma : Choose $\\sigma_1$
+sigma -> alg : Request $\\sigma_1$
+alg -> sigma : Decision $d_1$
+adv -> sigma : Choose $\\sigma_2$ given $d_1$
+sigma -> alg : Request $\\sigma_2$
+alg -> sigma : Decision $d_2$
+note right of adv
+  Adaptive adversary
+  sees each decision
+  before choosing next input
+end note
+@enduml`}
+/>
 
-## Streaming frequency estimation
+### Ski Rental
 
-A stream of item updates may be too large to store. Exact distinct counting or frequency maps require space proportional to the number of possible items in general. Sketches use randomized hashing to estimate with controlled error. Count-Min Sketch stores counters in d rows; update increments one counter per row, and query takes the minimum. With suitable pairwise-independent hashing, estimates never undercount for nonnegative updates and overcount by at most epsilon N with probability at least 1-delta when width and depth are chosen from epsilon,delta.
+**Problem.** Rent costs \$1/day; buy costs $B$. Season length $t$ is unknown. On each day, either rent (\$1) or buy (\$B, after which future days cost \$0). The goal is to minimize total cost.
 
-The proof uses one row’s expected collision mass and Markov’s inequality, then a union bound over rows. Querying the minimum reduces overestimation because at least one row has small collision noise. Signed updates require different sketches or assumptions; Count-Min’s one-sided guarantee relies on nonnegative frequencies.
+**Deterministic algorithm.** Rent for $B-1$ days, buy on day $B$.
 
-## Sampling and reservoir sampling
+- If $t < B$: cost $= t = \text{OPT}$ (optimal offline also rents).
+- If $t \ge B$: cost $= (B-1) + B = 2B-1$, while $\text{OPT} = B$ (buy immediately).
 
-Reservoir sampling chooses a uniform sample of k items from an unknown-length stream using O(k) memory. Store the first k; for item i greater than k, select it with probability k/i and, if selected, replace a uniformly random reservoir position. Induction proves each of the first i items is present with probability k/i: an old item survives the step with probability (1-k/i), while the new item is selected with k/i.
+Competitive ratio: $(2B-1)/B = 2 - 1/B$.
 
-Weighted sampling requires a different method, such as exponential keys or weighted reservoirs. A naïve probability proportional to weight can bias the sample because total future weight is unknown. State whether sampling is with or without replacement and what statistical guarantee is required.
+<MathStatement id="ski-rental-lb" kind="theorem" title="Ski rental lower bound" proofId="ski-rental-lb-proof">
+No deterministic online algorithm for ski rental achieves competitive ratio $< 2 - 1/B$. The optimal ratio is $2 - 1/B$.
+</MathStatement>
 
-## Streaming lower bounds and passes
+<MathProof id="ski-rental-lb-proof" for="ski-rental-lb">
+Any deterministic algorithm buys on some day $k$. If $t = k$ (season ends the day after purchase), cost $= (k-1) + B$. OPT = $\min(k, B)$. The ratio is:
+$$
+\frac{k-1+B}{\min(k, B)}.
+$$
+The adversary chooses $t$ to maximize this ratio. For $k \le B$, the worst case is $t = k$, giving ratio $(k-1+B)/k = 1 + (B-1)/k \ge 2 - 1/B$ (achieved at $k = B$). For $k > B$, the worst case is $t = B$, giving ratio $(k-1+B)/B = 1 + (k-1)/B \ge 2 - 1/B$ (worse as $k$ grows). The minimum over $k$ of the worst-case ratio is $2 - 1/B$, attained at $k = B$. □
+</MathProof>
 
-Memory limits impose information-theoretic lower bounds. Exact membership, distinct count, or equality may require remembering enough information to distinguish many prefixes. Randomization and approximation reduce space but cannot eliminate all error/space tradeoffs. Multiple passes can improve accuracy or solve tasks impossible in one pass; count passes as a resource.
+**Randomized algorithm (optimal).** Choose buy day $k \in \{1, \ldots, B-1\}$ with probability $p_k$ proportional to $(1 - 1/B)^{k-1}$. Against an oblivious adversary, this achieves competitive ratio $e/(e-1) \approx 1.582$, and no randomized algorithm can do better [Karlin et al., 1994].
 
-Streaming algorithms should define update model, turnstile versus insertion-only, item universe, word size, failure probability, and mergeability. A mergeable sketch can combine summaries from partitions, enabling distributed processing, but its merge operation must preserve the estimator’s error guarantee.
+### Paging
 
-## Heavy hitters and quantiles
+**Problem.** A cache holds $k$ pages. A request sequence of page numbers arrives. A hit costs \$0; a miss (fault) costs \$1 to fetch the page into cache. Minimize total faults.
 
-The heavy-hitters problem asks for items whose frequency is unusually large. In an insertion-only stream with total length N, an item is an epsilon-heavy hitter when its frequency is at least epsilon N. A full dictionary is exact but can use space proportional to the universe. Misra-Gries keeps at most k-1 candidate counters: on an unseen item, add a counter if space exists; otherwise decrement every counter and delete zeros. Any item with frequency greater than N/k cannot be absent from the final candidates, because every deletion event can be charged to k distinct occurrences and therefore removes at most N/k net support from an item.
+**LRU (Least Recently Used):** On a miss, evict the page whose most recent request is farthest in the past.
 
-The guarantee is a candidate filter, not an exact answer. If the final counter for x is c(x), then the true frequency lies between c(x) and c(x)+N/k. A second pass, or a Count-Min estimate, can verify candidates. This separation between finding candidates and estimating them is an important design pattern: first control the number of possible answers, then spend precision only where needed.
+<MathStatement id="lru-competitive" kind="theorem" title="LRU is $k$-competitive" proofId="lru-competitive-proof">
+LRU achieves competitive ratio $k$ for paging with a cache of size $k$. No deterministic algorithm can do better than $k$.
+</MathStatement>
 
-Quantiles require a different summary. A rank-r answer is an item with approximately rN observations below it. Greenwald-Khanna summaries store tuples with value, rank lower bound, and allowable rank gap; compression merges adjacent tuples when the invariant permits it. Randomized sketches such as KLL obtain strong rank accuracy with compact memory, but their guarantees depend on the sampling and merge analysis. When choosing a quantile structure, specify whether the stream is weighted, whether values arrive sorted or adversarially, whether exact endpoints matter, and whether summaries must merge across workers.
+<MathProof id="lru-competitive-proof" for="lru-competitive">
+Partition the request sequence into *phases*: each phase contains exactly $k$ distinct pages, and the first request of a phase is the $(k+1)$-st distinct page seen since the previous phase started.
 
-## Online primal-dual reasoning
+**Within a phase:** LRU faults at most $k$ times. Each distinct page inserted may cause a fault, and a phase has at most $k$ distinct pages (it ends when the $(k+1)$-st distinct page appears).
 
-Many online allocation and covering algorithms can be understood through a primal-dual argument. The offline problem has a linear-programming relaxation. When a request arrives, the online algorithm raises dual variables until some resource constraint becomes tight, then commits to an action. Weak duality gives a lower bound on OPT; if the algorithm's cost is at most alpha times the dual objective, the competitive ratio is alpha.
+**Between phases:** OPT must fault at least once per phase. The first request of phase $i+1$ is a page $p$ that was not among the $k$ distinct pages of phase $i$. After phase $i$, OPT's cache can hold at most $k$ pages, so at least one of the $k$ distinct pages from phase $i$ is absent. Since $p$ is distinct from all $k$, it must be absent from OPT's cache — OPT faults at least once per phase.
 
-This method is useful because it turns an irrevocable decision into a locally checkable certificate. For online set cover, one may increase the dual variable of an uncovered request and buy sets when a weighted cost threshold is reached. The analysis must account for shared purchases: charging each purchase to the dual growth prevents counting the same resource independently for every request. A plausible greedy rule without a charging invariant is not an online proof.
+Thus over $P$ phases: LRU faults $\le kP$, OPT faults $\ge P$, giving ratio $k$. □
+</MathProof>
 
-Randomization changes the object being compared. Against an oblivious adversary, take expectation over the algorithm's random bits for each fixed request sequence. Against an adaptive adversary, future requests may depend on observed choices, so conditional expectations and filtration arguments are needed. State this model explicitly; otherwise a claimed competitive ratio is underspecified.
+**Randomized paging:** The *marking* algorithm (a randomized variant of LRU) achieves $O(\log k)$-competitiveness against an oblivious adversary [Fiat et al., 1991], and this is optimal for any randomized algorithm.
 
-## Engineering a distributed sketch
+<Quiz client:load
+  title="Paging intuition"
+  question="Why does LIFO (evict the most recently used page) fail to be competitive?"
+  options={[
+    "LIFO is equivalent to LRU for all sequences",
+    "An adversary can alternate between k+1 pages, causing a fault on every request",
+    "LIFO only works with a cache of size 2",
+    "LIFO is randomized and therefore not comparable"
+  ]}
+  correctIndex={1}
+  explanation="With k+1 pages requested in a repeating pattern, LIFO evicts the page just loaded, causing a fault on every access. The fault rate is unbounded relative to OPT."
+/>
 
-Suppose a stream is split across p workers. A summary is safely mergeable only if the merge operation represents the same mathematical summary that a sequential run would have produced, or if a separate theorem bounds the merge error. Workers should share hash-function seeds when sketches depend on compatible counters; independently chosen dimensions can make naïve coordinate-wise addition meaningless. Counters need overflow policy, and the summary must record N or another scale used by its error bound.
+## Counterexample and Failure Modes
 
-A production interface should expose update, merge, estimate, memory footprint, serialization, and reset. Tests should include one worker versus many workers, repeated merges, empty streams, a single dominant key, uniform keys, and adversarial hash inputs. The measured error should be reported separately from the probabilistic failure event. A benchmark that reports only average latency but not rank or frequency error is incomplete.
+**When competitive analysis misleads.** Competitive ratio is a worst-case guarantee. An algorithm may be $c$-competitive yet perform poorly on every realistic input. Example: the "optimal" deterministic paging algorithm (Belady's algorithm, which evicts the page requested farthest in the future) is optimal offline but unimplementable online. LRU is $k$-competitive, but on a workload with working-set size $k+1$, LRU faults on nearly every access — the same as random eviction. The competitive ratio does not distinguish between LRU and random eviction; both are $k$-competitive.
 
-## Model-selection checklist
+**When an oblivious adversary is too weak.** The randomized ski rental algorithm is optimal only against an oblivious adversary. If the adversary can observe the algorithm's buy day before choosing the season length, randomization provides no advantage — the deterministic lower bound of $2 - 1/B$ reapplies. Choosing the wrong adversary model gives a misleading sense of algorithmic power.
 
-Before selecting an online or streaming algorithm, write down: the arrival order; whether deletion occurs; the maximum stream length; the allowed number of passes; memory in words or bytes; exact versus approximate output; confidence probability; adversary model; merge requirement; and query timing. Then identify the lower bound that makes the target plausible. For example, an exact distinct count over a huge universe cannot generally fit in a tiny summary, whereas an approximate count with relative error may be possible.
+**When streaming goes wrong.** Count-Min Sketch guarantees an overestimate with high probability but never underestimates. For applications that need unbiased estimates (e.g., tracking average frequency), the systematic overestimation bias is harmful. The sketch also cannot answer point queries accurately when frequencies are skewed — a single high-frequency item contamates every bucket it hashes into, raising estimates for all colliding items.
 
-Finally, distinguish a theorem from an engineering expectation. “At most epsilon N additive error with probability 1-delta” is a theorem only under the stated update and hash assumptions. “Works well on logs” is an empirical claim requiring a workload, seed policy, confidence interval, and comparison baseline. This discipline prevents online algorithms from becoming vague collections of heuristics.
+## Streaming Algorithms
+
+A streaming algorithm processes a sequence $a_1, \ldots, a_m$ with $a_i \in [n]$ using $o(\min(m, n))$ memory, ideally $O(\text{poly}(\log m, \log n))$ [Alon et al., 1999].
+
+### Count-Min Sketch
+
+<MathStatement id="count-min" kind="definition" title="Count-Min Sketch">
+A sketch with width $w$ and depth $d$ consists of $d$ pairwise-independent hash functions $h_1, \ldots, h_d : [n] \to [w]$ and a $d \times w$ counter array initialized to zero [Cormode & Muthukrishnan, 2005].
+
+- **Update** $(x, +1)$: for each row $r$, $\text{count}[r][h_r(x)] \mathrel{+}= 1$.
+- **Query** $\hat{f}(x)$: $\min_{r \in [d]} \text{count}[r][h_r(x)]$.
+</MathStatement>
+
+<MathStatement id="count-min-guarantee" kind="theorem" title="Count-Min guarantee" proofId="count-min-proof">
+For $\hat{f}(x)$ estimated by Count-Min with $w = \lceil e/\varepsilon\rceil$, $d = \lceil \ln(1/\delta)\rceil$:
+$$
+\Pr\left[ \hat{f}(x) \le f(x) + \varepsilon \|f\|_1 \right] \ge 1 - \delta.
+$$
+</MathStatement>
+
+<MathProof id="count-min-proof" for="count-min-guarantee">
+Fix item $x$. For a single row $r$, the bucket $\text{count}[r][h_r(x)]$ contains $f(x)$ plus the sum of all $f(y)$ for $y \neq x$ with $h_r(y) = h_r(x)$. By pairwise independence, $\Pr[h_r(y) = h_r(x)] = 1/w$. The expected contribution of other items:
+$$
+E[\text{count}[r][h_r(x)]] = f(x) + \sum_{y \neq x} \frac{f(y)}{w} \le f(x) + \frac{\|f\|_1}{w}.
+$$
+Set $w = e/\varepsilon$. Then $E[\text{count}[r][h_r(x)]] \le f(x) + (\varepsilon/e)\|f\|_1$. By Markov's inequality:
+$$
+\Pr[\text{count}[r][h_r(x)] > f(x) + \varepsilon\|f\|_1] \le \frac{1}{e}.
+$$
+With $d$ independent rows, the probability that all $d$ rows exceed the bound is $(1/e)^d \le \delta$ when $d \ge \ln(1/\delta)$. The minimum over rows gives the tightest bound. □
+</MathProof>
+
+The sketch visualizes as a matrix of counters, each row using an independent hash function:
+
+<PythonDiagram
+  code={`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+fig, ax = plt.subplots(1, 1, figsize=(8, 4))
+w, d = 8, 4
+data = np.random.randint(0, 20, (d, w))
+# Make one column visibly higher for item x's bucket
+data[:, 2] = [15, 18, 12, 14]
+
+im = ax.imshow(data, cmap='YlOrRd', aspect='auto', vmin=0, vmax=20)
+ax.set_xticks(range(w))
+ax.set_yticks(range(d))
+ax.set_xticklabels([f'$h_r(b_{i})$' for i in range(w)], fontsize=8)
+ax.set_yticklabels([f'$h_{r+1}$' for r in range(d)], fontsize=9)
+ax.set_xlabel('Buckets (width w = 8)', fontsize=10)
+ax.set_ylabel('Hash functions (depth d = 4)', fontsize=10)
+ax.set_title('Count-Min Sketch: Counters after processing stream', fontsize=11, fontweight='bold')
+for r in range(d):
+    for c in range(w):
+        ax.text(c, r, str(data[r, c]), ha='center', va='center', fontsize=9, fontweight='bold',
+                color='white' if data[r, c] > 10 else 'black')
+fig.colorbar(im, ax=ax, label='Counter value', shrink=0.8)
+fig.savefig(os.environ['LIBREUNI_OUTPUT'], bbox_inches='tight', dpi=150, transparent=True)
+plt.close(fig)`}
+  title="Count-Min Sketch visualization"
+/>
+
+<CodeRunner client:load
+  title="Count-Min Sketch with collisions"
+  language="python"
+  code={`import random
+
+random.seed(42)
+
+class CountMinSketch:
+    def __init__(self, w, d):
+        self.w = w
+        self.d = d
+        self.counters = [[0] * w for _ in range(d)]
+
+    def _hash(self, x, row):
+        return (hash(x) + row * 7919) % self.w
+
+    def update(self, item, delta=1):
+        for r in range(self.d):
+            self.counters[r][self._hash(item, r)] += delta
+
+    def estimate(self, item):
+        return min(self.counters[r][self._hash(item, r)]
+                   for r in range(self.d))
+
+cms = CountMinSketch(8, 3)
+true_counts = {}
+for _ in range(10000):
+    x = random.choice("abcdefghij")
+    true_counts[x] = true_counts.get(x, 0) + 1
+    cms.update(x)
+
+for c in "abcde":
+    est = cms.estimate(c)
+    true = true_counts[c]
+    over = est - true
+    print(f"  {c}: true={true:4d}, est={est:4d}, over={over:4d}")`}
+  output="  a: true= 944, est=2000, over=1056\n  b: true=1032, est=1032, over=   0\n  c: true=1016, est=2005, over= 989\n  d: true= 969, est= 969, over=   0\n  e: true= 982, est= 982, over=   0"
+/>
+
+<CodeExercise client:load
+  title="Complete the CMS query"
+  code={`class CountMinSketch:
+    def __init__(self, w, d):
+        self.w = w
+        self.d = d
+        self.counters = [[0]*w for _ in range(d)]
+
+    def update(self, item, _hash):
+        for r in range(self.d):
+            self.counters[r][_hash(item, r) % self.w] [!blank!]
+
+    def estimate(self, item, _hash):
+        return [!blank!](self.counters[r][_hash(item, r) % self.w]
+                   for r in range(self.d))`}
+  answers={["+= 1", "min"]}
+  explanation="Update increments the counter in each row; estimate takes the minimum across rows to bound the overcount."
+/>
+
+### Reservoir Sampling
+
+**Problem.** Select $k$ uniformly random items from a stream of unknown length $n$ using $O(k)$ memory.
+
+**Algorithm.** Store the first $k$ items. For the $i$-th item ($i > k$), with probability $k/i$, replace a uniformly random stored item with the new item.
+
+**Proof of uniformity (by induction on $i$).** After processing $i$ items, each item has probability $k/i$ of being in the reservoir. Base $i = k$: all $k$ items in reservoir, probability $1 = k/k$. Inductive step: assume true for $i$. For item $i+1$, inclusion probability $= k/(i+1)$. For an old item $x$ present after $i$ steps (probability $k/i$), it survives step $i+1$ if either $i+1$ is not selected ($1 - k/(i+1)$) or selected but replaces a different item ($k/(i+1) \cdot (1 - 1/k)$). Total survival probability: $k/i \cdot ((i+1-k)/(i+1) + 1/(i+1)) = k/(i+1)$. □
+
+### Misra–Gries Heavy Hitters
+
+**Problem.** Find all items with frequency $> N/k$ in a stream of length $N$ [Misra & Gries, 1982].
+
+**Algorithm.** Maintain at most $k-1$ counters and their associated items. For each stream element $x$:
+- If a counter for $x$ exists, increment it.
+- Else if fewer than $k-1$ counters exist, add $(x, 1)$.
+- Else decrement all counters (removing any that reach 0).
+
+**Guarantee.** Let $c(x)$ be the final counter value for item $x$. Then $c(x) \le f(x) \le c(x) + N/k$. Every $N/k$-heavy hitter (item with frequency $> N/k$) appears with $c(x) > 0$. The algorithm is deterministic and uses $O(k)$ memory.
+
+### Linear Sketching and Johnson–Lindenstrauss
+
+A random projection $A \in \mathbb{R}^{k \times d}$ with i.i.d. Gaussian entries approximately preserves pairwise distances: for any $x, y \in \mathbb{R}^d$, with probability $1 - e^{-\Omega(k\varepsilon^2)}$:
+
+$$
+(1-\varepsilon)\|x-y\|^2 \le \|Ax - Ay\|^2 \le (1+\varepsilon)\|x-y\|^2,
+$$
+
+provided $k = \Omega(\varepsilon^{-2} \log N)$ for $N$ points [Johnson & Lindenstrauss, 1984]. This enables dimensionality reduction in streaming and data mining: $d$-dimensional vectors can be compressed to $k$ dimensions while approximately preserving distances, then processed through a stream.
+
+<CaseStudy client:load
+  title="Network monitoring design"
+  scenario="A network switch monitors 10 Gbps traffic. Route analytics must track the top 100 destination IPs by packet count and estimate the frequency of each monitored IP. The switch has 1 MB of SRAM for packet counters. Each packet arrives every 67 ns at line rate; hash computations must complete in under 50 ns. The engineering team proposes: (A) a perfect hash table of 100 counters, (B) Count-Min Sketch with $w=2^{16}$, $d=4$, (C) Misra-Gries with $k=100$, or (D) reservoir sampling of 10,000 packets."
+  question="Which approach best fits the constraints?"
+  options={[
+    "Perfect hash table — simple and exact",
+    "Count-Min Sketch — sublinear memory, bounded error, fast hash",
+    "Misra-Gries — deterministic, guarantees heavy hitters",
+    "Reservoir sampling — low memory, uniform sample"
+  ]}
+  correctIndex={1}
+  explanation="Count-Min Sketch uses 4 × 65536 counters = 256K counters (≈1 MB with 32-bit counters). Each update is O(1) hash + increment. A perfect hash table for 100 items cannot track the tail — items outside the 100 are missed entirely. Misra-Gries (100 counters) is deterministic but loses sub-heavy-hitter frequencies. Reservoir sampling gives a random sample, not frequency estimates. CMS provides frequency estimates for all items with bounded error, fitting the 1 MB budget and 50 ns window."
+/>
+
+## Deliberately Omitted
+
+- **Exponential histograms for sliding-window streams** (DGIM, Datar–Gionis–Indyk–Motwani). Maintaining aggregates over a sliding window requires different data structures; the lesson covers only the unbounded-stream model.
+- **Bloom filters and probabilistic membership.** Probabilistic membership testing (Bloom, cuckoo filters) is a data-structure topic separate from the frequency-estimation focus of this lesson; covered in the data structures module.
+- **Algorithms with predictions (learning-augmented algorithms).** The emerging area that blends online algorithms with machine-learned advice is deferred to the advanced seminar.
+- **Turnstile and cash-register stream models.** The lesson covers only the insertion-only (cash-register) model. The turnstile model (insertions and deletions) requires Count-Mean-Sketch or Count Sketch, not Count-Min.
 
 ## Exercises
 
-1. Prove ski-rental’s deterministic competitive bound.
-2. Explain phase analysis for LRU paging.
-3. Derive Count-Min width/depth intuition.
-4. Prove reservoir sampling uniformity.
-5. Distinguish insertion-only and turnstile streams.
-6. State adversary assumptions in online randomized analysis.
-7. Design a mergeable streaming summary.
+**Recall**
 
-### Diagnostic solutions
+1. State the competitive ratio of LRU for paging with cache size $k$, and the optimal deterministic competitive ratio for ski rental with buy cost $B$.
 
+    <ExerciseSolution>
+    LRU: $k$-competitive. Ski rental: $2 - 1/B$-competitive.
+    </ExerciseSolution>
 
-1. If season length t less than B, rent cost t=OPT. If t at least B, rent B-1 days then buy, cost 2B-1 at most 2B while OPT=B, so ratio less than 2.
+2. What is the memory usage of a Count-Min Sketch with parameters $\varepsilon$ and $\delta$?
 
-2. Partition at each request that would introduce a (k+1)th distinct page. LRU faults at most k per phase; OPT must fault at least once across each pair of consecutive phases because their distinct-page sets force a page absent from any k-page cache.
+    <ExerciseSolution>
+    $O((1/\varepsilon) \cdot \log(1/\delta))$ counters, specifically $d \times w = \lceil \ln(1/\delta) \rceil \times \lceil e/\varepsilon\rceil$.
+    </ExerciseSolution>
 
-3. With width w=O(1/epsilon) times total scale and depth d=O(log(1/delta)), a row’s expected collision noise is small; Markov bounds a row’s bad overestimate, and the probability all rows are bad falls exponentially. Query minimum gives a one-sided estimate under nonnegative updates.
+**Application**
 
-4. Base first k items are included. At item i, a fixed old item is present with probability k/(i-1) and survives replacement with 1-1/i, yielding k/i; item i enters with k/i. Induct all items have equal inclusion probability.
+3. **Ski rental randomized.** Derive the optimal randomized competitive ratio $e/(e-1)$ for ski rental by solving for the distribution of buy days.
 
-5. Insertion-only updates never decrement frequencies, enabling one-sided Count-Min estimates. Turnstile updates can be negative and require cancellation-aware sketches and different norm/error analyses; an insertion-only proof does not transfer.
+    <ExerciseSolution hint="Use Yao's minimax principle: find a distribution over season lengths that forces any deterministic algorithm to have expected ratio at least $e/(e-1)$. Then the optimal randomized algorithm against an oblivious adversary achieves the same ratio.">
+    Choose buy day $k$ with probability $p_k = \frac{1}{B-1} \cdot \frac{(1-1/B)^{k-1}}{1 - (1-1/B)^{B-1}}$. The expected cost for a given season length $t$ is bounded by $e/(e-1)$ times OPT. This is optimal by Yao's minimax principle: the adversary distribution that sets $t = j$ with probability proportional to $(1 - 1/B)^{j-1}$ forces any deterministic algorithm to have expected ratio at least $e/(e-1)$ [Karlin et al., 1994].
+    </ExerciseSolution>
 
-6. Say whether the sequence is fixed before random bits, whether the adversary observes choices, and whether it can adapt future requests. Competitive ratios differ under oblivious and adaptive adversaries.
+4. **LRU and FIFO.** Prove that FIFO (evict the oldest page) is also $k$-competitive for paging. Show that LIFO (evict the newest) is not competitive.
 
-7. Use a linear sketch or a composable counter summary whose merge is addition. Prove expectation/variance or tail bounds after merging, account for hash seed consistency, and specify error probability across all queried outputs.
+    <ExerciseSolution hint="For FIFO, adapt the phase-partition argument. For LIFO, construct a request sequence over $k+1$ pages that forces a fault on every access.">
+    FIFO partitions phases identically to LRU: when a phase fills the cache with $k$ distinct pages, FIFO faults at least once per page. The same phase-counting argument shows $k$-competitiveness. LIFO fails: consider $k+1$ pages requested in the repeating order $1, 2, \ldots, k+1, 1, 2, \ldots$. LIFO evicts the most recently loaded page, which is the page just requested. Every request is a fault, giving unbounded competitive ratio.
+    </ExerciseSolution>
 
-## References & Further Reading
+5. **Count-Min width.** Prove that $w = \lceil e/\varepsilon\rceil$ ensures each row's overestimate probability is at most $1/e$.
 
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* Alon, Matias, and Szegedy, “The Space Complexity of Approximating the Frequency Moments.”
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+    <ExerciseSolution>
+    For row $r$, $E[\text{count}[r][h_r(x)]] = f(x) + \sum_{y \neq x} f(y) \cdot \Pr[h_r(y) = h_r(x)] \le f(x) + \|f\|_1 / w$. Setting $w = e/\varepsilon$ gives $E[\text{count}[r][h_r(x)]] \le f(x) + (\varepsilon/e)\|f\|_1$. By Markov's inequality, $\Pr[\text{count}[r][h_r(x)] > f(x) + \varepsilon\|f\|_1] \le 1/e$.
+    </ExerciseSolution>
+
+**Transfer**
+
+6. **Distinct elements (Flajolet–Martin).** Describe the Flajolet–Martin algorithm for estimating the number of distinct elements in a stream. Prove that the estimate is unbiased with variance bounded by $O(n^2/m)$ where $m$ is the number of hash functions.
+
+    <ExerciseSolution hint="Use a hash function that maps items to bit strings with geometric distribution on the trailing-zero count. The maximum trailing-zero count estimates $\log_2$ of the distinct count.">
+    Flajolet–Martin: apply a hash function $h$ that maps items to infinite bit strings with $\Pr[h(x) \text{ has suffix } 0^\rho 1] = 2^{-(\rho+1)}$. Track the maximum $\rho$ (trailing-zero count) observed. The distinct count $n$ is proportional to $2^{\max \rho}$. Use $m$ independent hash functions, average their estimates, and bound variance via the median-of-averages technique. The estimate is asymptotically unbiased; the variance decreases as $O(n^2/m)$ [Flajolet & Martin, 1985].
+    </ExerciseSolution>
+
+**Synthesis**
+
+7. **Heavy hitters lower bound.** Prove that any deterministic streaming algorithm for $\varepsilon$-heavy hitters in the insertion-only model requires $\Omega(1/\varepsilon)$ memory.
+
+    <ExerciseSolution>
+    Consider $1/(2\varepsilon)$ distinct items each appearing exactly $\varepsilon N$ times, plus $\varepsilon N$ distinct items each appearing once. Distinguishing these two cases requires $\Omega(1/\varepsilon)$ memory by a communication complexity reduction from set disjointness [Alon et al., 1999]. The intuition: the algorithm must distinguish whether the stream contains $1/(2\varepsilon)$ items each with frequency $\varepsilon N$ (all heavy hitters present) or $\varepsilon N$ singletons (no heavy hitters), which requires tracking at least $\Omega(1/\varepsilon)$ distinct identities.
+    </ExerciseSolution>
+
+8. **Design a streaming algorithm for range queries.** Given a stream of points $(x_i, y_i) \in [n]^2$, design a data structure using $O(\varepsilon^{-2} \log(1/\delta))$ memory that answers the query "how many points fall in the axis-aligned rectangle $[a,b] \times [c,d]$?" with additive error $\varepsilon N$. (Hint: compose two Count-Min Sketches or use a dyadic range decomposition.)
+
+    <ExerciseSolution hint="Decompose the range into $O(\log^2 n)$ canonical rectangles using a 2D segment tree, then store a CMS in each segment tree node, or use a CMS with a 2D hash function.">
+    One approach: build a 2D Count-Min Sketch with independent hash functions for each dimension. For a point $(x, y)$, update counters at $(h_r(x), h'_r(y))$ for each row $r$. Query a rectangle $[a,b] \times [c,d]$ by summing estimates over the rectangle, but this incurs error proportional to the rectangle area. A better approach: partition the $x$-range into $O(\log n)$ dyadic intervals, each with a CMS for the $y$-dimension. A query decomposes into $O(\log^2 n)$ CMS queries, each with additive error $\varepsilon N/(\log^2 n)$, giving total error $\varepsilon N$ with memory $O(\varepsilon^{-2} \log(1/\delta) \log^2 n)$.
+    </ExerciseSolution>
+
+## References
+
+- Alon, N., Matias, Y., and Szegedy, M. "The Space Complexity of Approximating the Frequency Moments." *J. Comput. Syst. Sci.* 58, no. 1 (1999): 137–147.
+- Borodin, A. and El-Yaniv, R. *Online Computation and Competitive Analysis*. Cambridge, 1998.
+- Cormode, G. and Muthukrishnan, S. "An Improved Data Stream Summary: The Count-Min Sketch and Its Applications." *J. Algorithms* 55, no. 1 (2005): 58–75.
+- Fiat, A., Karp, R. M., Luby, M., McGeoch, L. A., Sleator, D. D., and Young, N. E. "Competitive Paging Algorithms." *J. Algorithms* 12, no. 4 (1991): 685–699.
+- Flajolet, P. and Martin, G. N. "Probabilistic Counting Algorithms for Data Base Applications." *J. Comput. Syst. Sci.* 31, no. 2 (1985): 182–209.
+- Johnson, W. B. and Lindenstrauss, J. "Extensions of Lipschitz Mappings into a Hilbert Space." *Contemporary Mathematics* 26 (1984): 189–206.
+- Karlin, A. R., Manasse, M. S., McGeoch, L. A., and Owicki, S. "Competitive Randomized Algorithms for Nonuniform Problems." *Algorithmica* 11, no. 6 (1994): 542–571.
+- Misra, J. and Gries, D. "Finding Repeated Elements." *Sci. Comput. Program.* 2, no. 2 (1982): 143–152.
+- Mitzenmacher, M. and Upfal, E. *Probability and Computing*, 2nd ed. Cambridge, 2017.
+- Motwani, R. and Raghavan, P. *Randomized Algorithms*. Cambridge, 1995.
+- Sleator, D. D. and Tarjan, R. E. "Amortized Efficiency of List Update and Paging Rules." *Commun. ACM* 28, no. 2 (1985): 202–208.

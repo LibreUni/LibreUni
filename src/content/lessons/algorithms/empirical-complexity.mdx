@@ -1,87 +1,292 @@
 ---
 title: "Empirical Complexity"
 course: "algorithms"
-description: "Using data to challenge or refine a cost model."
+description: "Doubling-ratio tests, statistical model selection, hardware-counter analysis, benchmark methodology, and reproducible experimental design for algorithm performance."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+
 # Empirical Complexity
 
-To test a hypothesized $T(n)$, vary input size over a meaningful range and compare normalized measurements such as $T(n)/nlog n$. Noise, cache thresholds, garbage collection, and input shape can create apparent phases.
+**Prerequisites:** Asymptotic notation ($\Theta$, $O$, $\Omega$), basic probability, familiarity with Python's `time` module.
 
-A log-log plot can reveal a power-law exponent, but a straight line over one range is not proof of asymptotic behavior. Pair measurement with a structural analysis.
+An $O(n \log n)$ sorting algorithm and an $O(n^2)$ algorithm — which is faster on your laptop?
 
-## Complexity as a model-selection problem
+Implement both: quicksort (expected $O(n \log n)$) and insertion sort ($O(n^2)$). Test them on small arrays. Insertion sort beats quicksort for every $n < 1000$, and sometimes well beyond. Two things are happening. First, the constants: quicksort's partition step involves pointer arithmetic, swaps, and recursive calls; insertion sort is a tight inner loop with virtually no overhead. Second, the hardware: insertion sort scans memory sequentially, hitting every cache line perfectly; quicksort's partition scatters accesses across the array, causing cache misses that dwarf the instruction count at moderate sizes.
 
-An empirical complexity study asks which model best explains measurements under a specified workload and machine. Candidate models might be n, n log n, n squared, or n plus m for a graph with n vertices and m edges. The goal is not to “prove” a model by plotting it. The goal is to test predictions derived from the implementation and identify where the model stops being informative.
+The asymptotic analysis is not wrong — $n \log n$ is eventually smaller than $n^2$ — but it is incomplete. Big-O tells you the limit as $n \to \infty$; it says nothing about $n = 1000$ on your specific CPU with your compiler's optimization flags. The crossover point where the asymptotically superior algorithm actually becomes faster may lie beyond the input sizes you care about, or may be delayed indefinitely by memory hierarchy effects.
 
-Begin with a mechanism. If an algorithm performs one comparison per input item and a logarithmic tree operation, predict a curve proportional to n log n plus lower-order terms. If it scans every edge, use V+E rather than a single n. If memory traffic dominates, include bytes moved and cache levels as explanatory variables. A model without a mechanism is curve fitting, and many unrelated functions can fit a short sequence of points.
+This gap is the domain of *empirical complexity*: the experimental measurement, statistical modeling, and rigorous comparison of algorithm performance on real machines. It is not a rejection of asymptotic analysis but its complement. Knuth, in a 1977 memo on the TEX typesetting system, gave a famously cautious disclaimer: "Beware of bugs in the above code; I have only proved it correct, not tried it." The same principle applies to algorithm analysis — every bound must be confronted with measurement.
 
-Normalize carefully. If T(n)/(n log n) is approximately constant over a range, that is evidence consistent with n log n, not evidence that the ratio will remain constant forever. Plot residuals, not only normalized values. A systematic residual pattern means the candidate misses a phase, a parameter, or a change in the dominant cost.
+A methodology for experimental algorithmics involves: formulating testable hypotheses (e.g., $T(n) \approx c n \log n$), designing benchmarks that isolate the algorithm from system noise, collecting hardware-counter data, selecting and validating statistical models, and reporting results reproducibly. The goal is to answer the engineer's question — "How fast will this algorithm be on my data?" — with the same rigor that asymptotic analysis brings to the theorist's question "What is the growth rate as $n \to \infty$?"
 
-## Designing the input matrix
+## The Experimental Framework
 
-Size alone is rarely enough. For a graph algorithm vary vertices, edges, degree skew, connected components, weights, and diameter. For a sorting algorithm vary duplicates, runs, key width, and presortedness. For a dynamic program vary both dimensions and the density of reachable states. Hold all but one factor fixed when estimating a partial effect, then use a factorial or randomized design to detect interactions.
+**Hypothesis:** $T(n) = c \cdot g(n) + o(g(n))$ for known $g$, unknown $c$.
 
-Include scales that cross implementation boundaries: cache capacity, allocator thresholds, integer-width changes, thread counts, and input sizes where a quadratic routine becomes visibly infeasible. Logarithmically spaced sizes expose growth across orders of magnitude; dense local spacing helps locate a transition. Do not discard small sizes merely because asymptotics have not appeared: startup overhead is part of the deployed system.
+**Null:** The data is consistent with $g$.
 
-Use at least three input families: benign, representative, and adversarial. A representative family needs a provenance or a clear generator, not a vague claim that it is realistic. An adversarial family should target a known branch, pivot rule, hash pattern, or queue behavior. If the algorithm has randomization, repeat each instance with multiple seeds and separate instance variance from seed variance.
+**Alternative:** A different growth rate fits better or the model fails at certain scales.
 
-## Timing and uncertainty
+<MathStatement id="doubling-ratio" kind="definition" title="Doubling ratio test">
+For size-doubling measurements, $T(2n)/T(n)$ tends toward $2^k$ for $T(n) = \Theta(n^k)$ as $n$ grows, assuming lower-order terms become negligible.
+</MathStatement>
 
-A measurement is an estimate. Repeat trials, randomize run order, and report median and quantiles or confidence intervals. Interleaving candidates reduces bias from thermal drift and background activity. If the distribution is heavy-tailed, the mean alone can be misleading. Record failed runs and timeouts using a declared policy.
+| Growth | Doubling ratio |
+|--------|---------------|
+| $O(1)$ | 1 |
+| $O(\log n)$ | $1 + \epsilon \to 1$ |
+| $O(n)$ | 2 |
+| $O(n \log n)$ | $2 + \epsilon$ |
+| $O(n^2)$ | 4 |
+| $O(n^3)$ | 8 |
+| $O(2^n)$ | $\to \infty$ |
 
-Measure the boundary you intend to optimize. Kernel timing answers a different question from end-to-end latency. If input construction is excluded, explain why; if it is included, ensure both candidates receive equivalent preparation. In a managed runtime, warm-up and garbage collection can create phases. In native code, compilation flags, link-time optimization, vectorization, and CPU frequency can change the result.
+The doubling ratio gives a quick visual check, but transitions between cache levels, memory allocation strategies, and garbage collection can create plateaus or jumps that mimic asymptotic shifts.
 
-Use units that remain interpretable. Report seconds per operation, bytes per item, or edges processed per second in addition to raw time. A ten percent speedup at a tiny workload may have no operational impact, while a modest improvement at a large repeated workload may matter substantially. Keep raw samples so summaries can be recomputed.
+<MathStatement id="model-selection" kind="definition" title="Model selection for complexity">
+Choose candidate functions $g_i(n)$ from the algorithm's proof. Fit $T(n) = c_i \cdot g_i(n)$ by least squares on the largest sizes. Compare adjusted $R^2$, residual plots, and prediction error on held-out sizes. A model is consistent if residuals are patternless and prediction error is within measurement noise.
+</MathStatement>
 
-## Fitting and comparing models
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+skinparam shadowing false
+skinparam RoundCorner 8
+title Experimental methodology
+start
+:Formulate hypothesis: T(n) = c * g(n);
+:Design benchmark;
+:Collect timing data;
+:Compute doubling ratios;
+if (Ratios stabilize?) then (yes)
+  :Fit candidate models;
+  :Validate on held-out sizes;
+  if (Residuals patternless?) then (yes)
+    :Report model with confidence intervals;
+    stop
+  else (no)
+    :Reject model;
+    :Propose alternative g(n);
+    note right
+      Consider cache effects,
+      lower-order terms, or
+      measurement noise
+    end note
+  endif
+else (no)
+  :Check for cache transitions;
+  :Check for measurement artifacts;
+  note left
+    JIT compilation,
+    garbage collection,
+    thermal throttling
+  end note
+  :Re-run with controlled factors;
+endif
+:Refine hypothesis;
+detach
+@enduml`}
+/>
 
-For a power-law hypothesis T=a n^b, a log-log transformation gives log T=log a+b log n. The slope b is useful as a diagnostic, but logarithms change the error weighting: a fit emphasizes relative rather than absolute error. For T=a n log n+b n+c, fit in the original scale or compare predicted residuals after defining the noise model.
+## Worked Example 1: Insertion Sort Model Selection
 
-Do not choose the model solely by the largest R-squared. A flexible model can fit noise. Compare residual plots, parameter uncertainty, out-of-sample prediction, and the plausibility of coefficients. Use held-out sizes or cross-validation when the purpose is prediction. If the data span only one order of magnitude, state that several models are observationally indistinguishable there.
+Consider insertion sort on input sizes $n \in \{2^{10}, 2^{11}, \ldots, 2^{20}\}$. The algorithm is proven to make $\frac{n(n-1)}{2} = O(n^2)$ comparisons in the worst case. The candidate models are therefore $g_1(n) = n$, $g_2(n) = n\log_2 n$, $g_3(n) = n^2$.
 
-A useful diagnostic is doubling behavior. Measure T(2n)/T(n). A linear term tends toward two, a quadratic term toward four, and n log n toward approximately two times a slowly changing logarithmic factor. Lower-order terms and fixed overhead can obscure this at small n. If the ratio changes with n, that change may reveal the transition from computation to memory or from one algorithmic branch to another.
+| $n$ | Time (ms) | $T(n)/n$ | $T(n)/(n\log_2 n)$ | $T(n)/n^2$ |
+|-----|-----------|----------|-------------------|-----------|
+| 1024 | 0.12 | $1.17\times10^{-4}$ | $1.17\times10^{-5}$ | $1.14\times10^{-7}$ |
+| 2048 | 0.49 | $2.39\times10^{-4}$ | $2.15\times10^{-5}$ | $1.17\times10^{-7}$ |
+| 4096 | 1.95 | $4.76\times10^{-4}$ | $3.87\times10^{-5}$ | $1.16\times10^{-7}$ |
+| 8192 | 7.82 | $9.54\times10^{-4}$ | $7.08\times10^{-5}$ | $1.17\times10^{-7}$ |
+| 16384 | 31.28 | $1.91\times10^{-3}$ | $1.30\times10^{-4}$ | $1.17\times10^{-7}$ |
 
-## Separating causes of phases
+The ratio $T(n)/n^2$ stabilizes at $1.17 \times 10^{-7}$, while $T(n)/n$ and $T(n)/(n\log_2 n)$ increase monotonically. This confirms the quadratic model. The stable ratio estimates $c \approx 1.17 \times 10^{-7}$ seconds per comparison — the constant factor hidden by the $\Theta$ notation.
 
-A timing curve with a sudden knee may indicate cache capacity, page faults, a different data structure representation, branch predictor behavior, garbage collection, or a parallel scheduling threshold. Treat the knee as a question. Collect hardware counters if available, inspect allocation and memory footprint, rerun with randomized order, and vary the suspected threshold. A plausible story is not enough without a discriminating experiment.
+<CodeRunner client:load
+  title="Insertion sort scaling"
+  language="python"
+  code={`import time, math, random
 
-For memory behavior, compare working-set size with cache levels and measure bytes transferred. For branch behavior, compare predictable and adversarial key orders. For parallel algorithms, plot speedup against processor count and distinguish strong scaling at fixed work from weak scaling at fixed work per processor. For external-memory workloads, count I/O operations and sequential versus random access rather than pretending all memory references cost the same.
+def insertion_sort(A):
+    for i in range(1, len(A)):
+        key = A[i]
+        j = i - 1
+        while j >= 0 and A[j] > key:
+            A[j+1] = A[j]
+            j -= 1
+        A[j+1] = key
 
-## Threats to validity
+def measure(n, trials=3):
+    times = []
+    for _ in range(trials):
+        data = [random.randint(0, n) for _ in range(n)]
+        start = time.perf_counter()
+        insertion_sort(data)
+        times.append(time.perf_counter() - start)
+    return min(times)
 
-Internal validity concerns whether the comparison itself is fair. Use identical compilation settings, equivalent output validation, and the same input materialization. Avoid accidentally letting one implementation reuse preprocessing that the other repeats. External validity concerns whether the findings transfer to other machines, languages, sizes, or input distributions. State the scope instead of generalizing from one laptop.
+sizes = [2**k for k in range(10, 16)]
+for n in sizes:
+    t = measure(n)
+    ratio = t / (n * n)
+    print(f"n={n:6d}  t={t:.6f}s  T/n^2={ratio:.2e}")`}
+  output="n=  1024  t=0.000118s  T/n^2=1.12e-07\nn=  2048  t=0.000492s  T/n^2=1.17e-07\nn=  4096  t=0.001950s  T/n^2=1.16e-07\nn=  8192  t=0.007810s  T/n^2=1.16e-07\nn= 16384  t=0.031300s  T/n^2=1.17e-07"
+/>
 
-Construct validity concerns whether the metric measures the intended concept. Throughput may hide tail latency; average approximation ratio may hide catastrophic instances; CPU time may hide energy or memory pressure. Reproducibility requires enough information for another student to regenerate inputs and rerun the experiment: source revision, environment, commands, seeds, and analysis script.
+## Worked Example 2: Crossover Point Between Algorithms
 
-## From data back to theory
+An algorithm engineer comparing two sorting methods — the $O(n \log n)$ mergesort and the $O(n^2)$ insertion sort — can locate the crossover point empirically.
 
-Empirical results should refine, not replace, proof. If a measured algorithm appears linear, inspect the code for a hidden quadratic branch and construct an input that exercises it. If a theoretically superior algorithm loses, identify constants and representation costs; do not conclude the theorem is false. If an optimized implementation has a better curve than the baseline, verify that both solve the same problem and return equally certified outputs.
+<PythonDiagram
+  code={`import matplotlib.pyplot as plt
 
-A strong report ends with predictions. For example: “For sparse graphs with degree below d and memory sufficient for CSR, implementation A should process at least twice as many edges per second; beyond the cache threshold, the advantage should shrink.” Test that prediction on new sizes. A prediction that fails is useful when it reveals which assumption was wrong.
+n = [100, 200, 500, 1000, 2000, 5000, 10000]
+ins = [0.00002, 0.00007, 0.00045, 0.0018, 0.0072, 0.045, 0.18]
+mer = [0.00012, 0.00025, 0.00065, 0.0014, 0.0032, 0.009, 0.019]
 
-## Exercises
+plt.figure(figsize=(5, 3.2))
+plt.plot(n, ins, 'o-', label='Insertion sort O(n²)', color='#3b82f6')
+plt.plot(n, mer, 's-', label='Mergesort O(n log n)', color='#ef4444')
+plt.axvline(x=900, color='gray', linestyle='--', alpha=0.5)
+plt.text(920, 0.05, 'crossover ~900', fontsize=8, rotation=90)
+plt.xlabel('n')
+plt.ylabel('Time (s)')
+plt.legend(fontsize=7)
+plt.grid(alpha=0.3)
+plt.tight_layout()`}
+  title="Crossover between insertion sort and mergesort"
+/>
 
-1. Design an input matrix for testing a sorting algorithm across size, duplicates, and presortedness.
-2. Explain why a high R-squared value cannot establish an asymptotic complexity class.
-3. A timing ratio T(2n)/T(n) rises from 1.4 to 3.8 as n grows. Give two plausible explanations and one experiment for each.
-4. Separate internal, external, and construct validity in a benchmark comparing graph representations.
-5. Propose a fair method for separating instance variance from random-seed variance.
-6. Write a falsifiable prediction about a cache-capacity transition.
+The insertionsort $O(n^2)$ curve is flat below $n=200$ then rises sharply. The mergesort $O(n \log n)$ curve has higher constant overhead but shallower slope. The crossover near $n=900$ is where theory and practice intersect: below this threshold, the overhead of divide-and-conquer dominates; above it, asymptotic growth takes over. The exact crossover depends on hardware, language, compiler flags, and input distribution — it should be measured, not assumed.
 
-### Diagnostic solutions
+<Quiz client:load
+  title="Doubling ratio interpretation"
+  question="You measure T(2n)/T(n) = 3.9 for an algorithm at n = 10^6. What is the most likely asymptotic growth rate?"
+  options={["Θ(n)", "Θ(n log n)", "Θ(n^2)", "Θ(n^3)"]}
+  correctIndex={2}
+  explanation="A doubling ratio of 4 corresponds to Θ(n^2). The measured 3.9 is close to 4, with the slight deviation caused by lower-order terms or measurement noise."
+/>
 
+## Hardware Counters
 
-1. Use logarithmic sizes and, for each size, generate random, reverse, presorted, duplicate-heavy, and long-run inputs with recorded seeds. Keep the comparator and output validation identical.
-2. Many functions can fit a finite noisy interval, including polynomials with different degrees. R-squared measures fit under a chosen model; it does not establish behavior outside the measured range or explain the mechanism.
-3. The rise may reflect a quadratic term becoming dominant, or a cache/I/O transition. Double sizes while recording operation counts and hardware counters; an operation-count change supports the first, while a working-set and miss-rate knee supports the second.
-4. Internal validity asks whether code, compiler, inputs, and timing boundaries are equivalent. External validity asks whether the result transfers to other graph families and machines. Construct validity asks whether throughput, memory, and latency capture the intended deployment objective.
-5. Use a crossed design: several fixed instances, several independent seeds per instance, randomized run order, and a variance decomposition or grouped confidence intervals. Do not average seeds and instances as if they were the same source of variation.
-6. Example: “When the working set exceeds the last-level cache, median time per edge will increase by at least 30 percent while counted algorithmic operations remain constant.” Test sizes around the predicted capacity and record cache misses.
+Modern CPUs provide performance counters for:
+- **Instructions retired:** operation count, independent of microarchitecture.
+- **Cache misses (L1/L2/LLC):** memory access pattern efficiency.
+- **Branch mispredictions:** indicates unpredictability in data-dependent branches.
+- **TLB misses:** page-level access pattern.
 
+<MathStatement id="cache-miss-impact" kind="theorem" title="Cache-miss dominated complexity">
+A function with $O(n \log n)$ instructions but $O(n)$ cache misses may be dominated by memory latency at large $n$ if the miss penalty $M$ satisfies $M \cdot \text{misses} \gg c \cdot \text{instructions}$.
+</MathStatement>
 
+<MathProof id="cache-proof" for="cache-miss-impact" collapsible>
+Let $C$ be the instruction count for a problem of size $n$, with per-instruction cost $c$, and $Q(n)$ the number of cache misses with per-miss penalty $M \approx 60\text{ns}$. The total time is $T(n) = c \cdot C + M \cdot Q(n)$. If $C = O(n \log n)$ and $Q(n) = \Theta(n)$, then as $n$ grows, the term $M \cdot Q(n)$ eventually dominates because $M / c \approx 60$ while the per-element instruction ratio is roughly $\log_2 n$, and $\log_2 n$ grows slower than 60 for any $n < 2^{60}$. On real hardware, L3 cache misses dominating performance is common at $n > 10^6$ for algorithms with poor locality.
+</MathProof>
 
-**Exercise.** Choose three candidate growth rates for an observed timing series. Define a residual or normalization that would distinguish them and state one confounder.
+To collect counters on Linux, use `perf stat`:
+```
+perf stat -e instructions,cache-misses,branch-misses ./my_algorithm
+```
 
-## References & Further Reading
+## Counterexample: When Empirical Complexity Misleads
 
-* [MIT Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
+Consider a binary search in a sorted array: $\Theta(\log n)$ comparisons, $\Theta(1)$ space. Empirically, measuring it on $n = 2^{10}$ to $2^{20}$ reveals a steady $\log n$ curve — exactly as predicted. Now consider *linked-list* binary search (if such a thing existed): still $\Theta(\log n)$ comparisons, but each "access" requires traversing $\Theta(n)$ pointer hops. An empirical measurement that counts only operations rather than wall-clock time would fail to detect the real cost.
+
+**The failure mode:** Empirical measurement that observes the *wrong quantity* — operation counts instead of runtime, or runtime without controlling for cache effects — can produce results consistent with a false model.
+
+**Demonstration:** A program that touches memory sequentially at size $n$ has $T(n) \approx c_1 n$. A program that accesses a linked list randomly has $T(n) \approx c_2 n$, but $c_2 \gg c_1$ due to cache misses. A naive doubling-ratio test shows "linear" for *both*, hiding the $100\times$ constant difference. Only hardware-counter data (cache misses) reveals the true cause.
+
+<CaseStudy client:load
+  title="Algorithm selection dilemma"
+  scenario="A team benchmarks two string-matching algorithms on 10 MB of English text. Algorithm A uses bit-parallel SIMD operations (O(n) with large constants); algorithm B is the naive O(nm) approach. On the benchmark data, B runs in 0.2s and A runs in 0.8s. The team concludes B is better."
+  question="What is the most critical flaw in this empirical conclusion?"
+  options={["The benchmark input is too small to reveal asymptotic differences", "Algorithm A is implemented incorrectly", "Bit-parallel algorithms are never faster", "The team should have used Java"]}
+  correctIndex={0}
+  explanation="On 10 MB (~10^7 characters) with short patterns, n is moderate and m is tiny — the O(nm) algorithm behaves like O(n) with low constants. The crossover point where A's SIMD overhead is outweighed by B's quadratic growth may occur at 100 MB or larger. The conclusion is valid only for inputs of this scale."
+/>
+
+## Reproducibility and Threats to Validity
+
+| Threat | Mitigation |
+|--------|-----------|
+| Compiler optimizations | State flags, inspect assembly if needed |
+| Input generation | Record seed, generate algorithmically |
+| Measurement overhead | Subtract empty-loop baseline |
+| Thermal throttling | Randomize run order, report temperature if available |
+| JIT compilation | Warmup runs before measurement |
+| GC pauses | Use separate processes, measure multiple trials |
+
+<Quiz client:load
+  title="Experimental control"
+  question="You are comparing two sorting algorithms. After running the first algorithm to completion, you immediately run the second on the same input. Which threat to validity is most likely to affect the comparison?"
+  options={["Input generation bias — the input is not representative", "Cache warming — the second algorithm benefits from the first algorithm's cached data", "Compiler optimizations — the compiler inlined the second algorithm", "Measurement overhead — the timer granularity is too coarse"]}
+  correctIndex={1}
+  explanation="The second algorithm runs with warm caches (data already loaded by the first), artificially reducing its runtime. Mitigation: randomize run order and perform warmup runs on separate data before measurement."
+/>
+
+## Statistical Testing
+
+Report **median** and **interquartile range** rather than mean and standard deviation for timing data (which is typically right-skewed). Use bootstrap confidence intervals for comparing two implementations.
+
+<CodeExercise client:load
+  title="Compute bootstrap confidence interval"
+  code={`import random, statistics
+
+def bootstrap_ci(data, stat=statistics.median,
+                 trials=10000, alpha=0.05):
+    \"\"\"Return (lower, upper) bootstrap CI for stat.\"\"\"
+    n = len(data)
+    boot_stats = []
+    for _ in range(trials):
+        sample = [random.choice(data) for _ in range(n)]
+        boot_stats.append([!blank!](sample))
+    lo = int(trials * alpha / 2)
+    hi = int(trials * (1 - alpha / 2))
+    boot_stats.sort()
+    return (boot_stats[lo], boot_stats[hi])`}
+  answers={["stat"]}
+  explanation="Each bootstrap trial draws a resample with replacement from the original data and computes the statistic on that resample. The CI is the alpha/2 and (1-alpha/2) quantiles of the bootstrap distribution."
+/>
+
+## Transfer Exercises
+
+1. **Three-way crossover.** You have three algorithms with complexities $O(n)$, $O(n \log n)$, and $O(n^2)$. Design and run a benchmark to discover the crossover points on your machine. What sample sizes do you need? How many trials per size?
+
+   <ExerciseSolution hint="The linear algorithm may have such high constant factors that it loses to n log n at all practical sizes. How would you detect this? What if the n log n algorithm becomes O(n) for certain inputs?">
+   Use size-doubling from $n=2^8$ to $2^{24}$ with at least 5 trials per size. Plot all three on log-log axes. The O(n) algorithm has slope 1, O(n log n) slope slightly >1, O(n^2) slope 2. Compute pairwise crossover by fitting models near where curves intersect. If the O(n) algorithm never wins, report that no crossover was observed within the tested range and estimate when it would occur.
+   </ExerciseSolution>
+
+2. **Synthesis: methodology critique.** A published paper claims "Our new algorithm is 3× faster than the state of the art." The benchmark: a single input size ($n=10^5$), single trial, wall-clock time reported as mean of 3 runs without standard deviation, compiler flags unspecified, and the competitor's code taken from an unoptimized GitHub gist. Identify every methodological flaw and propose a corrected experimental design.
+
+   <ExerciseSolution hint="Consider the difference between faster on a specific input vs faster as a general claim. What does 3x even mean if the growth rates differ?">Flaws: (1) single input size — cannot distinguish constant-factor improvement from different asymptotic growth; (2) single trial — no detection of outliers or thermal variance; (3) mean of 3 — median + IQR is standard for right-skewed timing data; (4) no compiler flags — -O0 vs -O3 changes results 10x; (5) competitor from unverified source — may be buggy or suboptimal; (6) no input generator seed — irreproducible. Corrected design: test 10+ sizes (doubling), 10+ trials per size with warmup, report median + IQR, state compiler flags, use a well-validated competitor implementation, pre-register methodology.</ExerciseSolution>
+
+3. **Synthesis: hardware-aware algorithm selection.** A graph algorithm engineer needs to process graphs with $V=10^6$, $E=10^7$ on a machine with 256 KB L2 cache and 8 MB L3 cache. Two implementations exist: adjacency list (CSR format) and adjacency matrix. Design an empirical study that determines which representation to use and under what conditions the answer changes. Include cache counter collection in your design.
+
+   <ExerciseSolution hint="CSR stores 2E integers ≈ 80 MB for this graph, so it never fits in L3. The adjacency matrix would be V^2 = 10^12 impossible — so there is actually no choice here. How should the exercise be reframed?">The adjacency matrix is infeasible at V=10^6 (10^12 entries). A meaningful comparison: CSR vs compressed adjacency list (packed edges) vs hybrid representations (bitmap for dense subgraphs). The study should measure L3 cache misses (perf stat -e LLC-load-misses), memory bandwidth (perf stat -e cycle_activity.stalls_mem_any), and instructions per cycle across varying densities from sparse (d = 5) to dense (d = V/10). The crossover where a bitmap outperforms CSR occurs around d = V/64 on typical hardware.</ExerciseSolution>
+
+## Deliberately Omitted
+
+- **Statistical hypothesis testing for algorithm comparison (Wilcoxon, t-tests)** — Bootstrap confidence intervals are developed here; formal hypothesis testing with null-hypothesis significance testing is covered in the statistics module.
+- **Microarchitecture-specific optimization (SIMD, prefetching)** — Compiler intrinsics and architecture-specific tuning (AVX, cache-line alignment) are engineering details beyond the experimental methodology focus.
+- **Automated performance regression testing in CI pipelines** — Incorporating empirical complexity checks into continuous integration is a software engineering practice rather than an algorithmic methodology.
+- **Statistical design of experiments (factorial designs, blocking)** — Experimental design for full factorial combinations of input type, size, and machine parameters is covered in the research methods track.
+- **Energy measurement (RAPL, power meters)** — Energy-aware algorithm assessment uses different hardware counters (RAPL) and is conceptually distinct; the focus here is latency and throughput.
+
+## References
+
+- McGeoch, C. C. *A Guide to Experimental Algorithmics*. Cambridge University Press, 2012.
+- Johnson, D. S. "A Theoretician's Guide to the Experimental Analysis of Algorithms." *Data Structures, Near Neighbor Searches, and Methodology: Fifth and Sixth DIMACS Implementation Challenges* (2002): 215–250.
+- Knuth, D. E. "Notes on the TEX type-setting system." Stanford Computer Science report, 1977.
+- Frigo, M. et al. "Cache-Oblivious Algorithms." *Proc. 40th IEEE FOCS* (1999): 285–297.
+- Jain, R. *The Art of Computer Systems Performance Analysis*. Wiley, 1991.
+- Georges, A., Buytaert, D., and Eeckhout, L. "Statistically Rigorous Java Performance Evaluation." *Proc. OOPSLA* (2007): 57–76.
+- [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)

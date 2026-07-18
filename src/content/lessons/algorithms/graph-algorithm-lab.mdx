@@ -1,106 +1,564 @@
 ---
 title: "Graph Algorithm Laboratory"
 course: "algorithms"
-description: "An evidence-driven lab comparing traversal, shortest paths, spanning trees, and flow algorithms under explicit assumptions."
+description: "Experimental comparison of BFS, DFS, Dijkstra, Bellman-Ford, MST, and max flow with correctness certificates and performance measurement."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import TikZ from '../../../components/TikZ.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Graph Algorithm Laboratory
 
-This laboratory asks you to implement, verify, and compare graph algorithms on a shared graph interface. The goal is to connect mathematical preconditions with representation choices, invariants, certificates, and measured behavior. A program that returns plausible paths on one graph is not enough: the report must show why the algorithm is correct for its model and what happens when the model’s assumptions fail.
+Storing the adjacency matrix of a 10-million-vertex graph requires $10^{14}$ entries; at one byte per entry, that is 100 terabytes. An adjacency list storing only the $O(E)$ edges that actually exist fits in gigabytes for sparse graphs. This tension between representation and algorithm performance is the central theme of this laboratory.
 
-## Graph model and interface
+Graph algorithms cannot be understood in isolation from the data structures that implement them. A theoretically fast algorithm on an unsuitable representation can be slower than a theoretically slower algorithm that exploits cache-efficient access patterns.
 
-Define vertices, directed or undirected edges, weights, parallel-edge policy, self-loop policy, and representation. Decide whether vertex IDs are dense integers or arbitrary objects, whether weights may be negative, and whether floating comparison uses exact or tolerance semantics. Expose neighbors, edge iteration, and endpoint validation through a contract; algorithms should not reach into representation-specific fields.
+The laboratory connects theoretical invariants to concrete behavior. BFS's queue invariant guarantees shortest paths in unweighted graphs. Dijkstra's settlement invariant justifies greedy extraction. Ford's relaxation primitive unifies all shortest-path algorithms. The cut property guarantees that Kruskal and Prim produce optimal trees. The residual graph certifies optimality of a max flow. In each case, the representation choice (adjacency list vs. matrix, edge list vs. adjacency array) determines whether the algorithm runs in seconds or hours.
 
-Provide at least adjacency-list and edge-list input paths, or explain why one is sufficient. Validate that every endpoint exists, weights are within range, and undirected edges are reciprocal if the representation requires it. Preserve edge IDs when parallel edges are allowed. A malformed graph should be rejected before an algorithm relies on its invariants.
+<PlantUML code={`
+@startuml
+skinparam rectangle {
+  BackgroundColor #3b82f6
+  FontColor white
+  RoundCorner 8
+}
+skinparam card {
+  BackgroundColor #f0f9ff
+  BorderColor #3b82f6
+}
+card "Graph Interface" as GI
+rectangle "BFS / DFS" as TRAV
+rectangle "Dijkstra / Bellman-Ford" as SP
+rectangle "Kruskal / Prim" as MST
+rectangle "Edmonds-Karp" as FLOW
+GI --> TRAV : neighbors()
+GI --> SP : weight(u,v)
+GI --> MST : vertices()
+GI --> FLOW : has_edge()
+TRAV --> [Certificate] : distances + parent tree
+SP --> [Certificate] : relaxed inequalities
+MST --> [Certificate] : cycle property
+FLOW --> [Certificate] : residual cut
+@enduml
+`} />
 
-## Experiment 1: traversal
+## Graph Model
 
-Implement BFS and DFS. BFS should return reachability, parent, and distance in an unweighted graph. DFS should return discovery/finish times and parent forest. Mark vertices when discovered, not when removed from a queue, to avoid duplicates. State whether neighbor order affects parent tree and timestamps; it affects the tree but not reachability.
+<MathStatement id="graph-model" kind="definition" title="Graph interface">
+A graph $G = (V, E)$ exposes:
+- $\text{vertices}() \to \mathcal{P}(V)$ — the vertex set
+- $\text{neighbors}(v) \to \{(u, w) \mid (v,u) \in E\}$ — adjacency with edge weight $w$
+- $\text{weight}(u, v) \to \mathbb{R} \cup \{\infty\}$ — direct edge weight or sentinel
+- $\text{has\_edge}(u, v) \to \{\text{true}, \text{false}\}$
+</MathStatement>
 
-The BFS invariant is that when a vertex is dequeued, its distance is minimum among all undiscovered paths, and every discovered vertex has a parent path of the recorded distance. The DFS proof uses color states and the fact that a recursive call finishes after all reachable white descendants have been explored. A stack-based DFS must store continuation state if it is to reproduce recursive edge classification.
+Support directed and undirected modes. Edge weights may be integer, float, or unit. Document whether parallel edges, self-loops, and negative weights are permitted.
 
-Test disconnected graphs, self-loops, parallel edges, duplicate adjacency entries, and repeated runs with fresh traversal metadata. Compare reachable sets with a reference implementation. For BFS, verify every returned parent edge exists and distance[parent]+1=distance[child]. For DFS, verify timestamps are unique and parent intervals nest according to the chosen semantics.
+<Quiz client:load
+  title="Graph representation"
+  question="An adjacency matrix of a 10⁷-vertex graph occupies 10¹⁴ entries. Why is an adjacency list usually preferred for real-world graphs?"
+  options={[
+    "Adjacency lists use less memory for dense graphs",
+    "Adjacency lists store only the edges that actually exist, making them efficient for sparse graphs",
+    "Adjacency matrices cannot represent weighted graphs",
+    "Adjacency lists support faster edge-existence checks"
+  ]}
+  correctIndex={1}
+  explanation="Real-world graphs are typically sparse (E << V²). An adjacency list stores O(V+E) entries, while a matrix always stores O(V²). For dense graphs, the matrix can be more efficient for edge-existence checks."
+/>
 
-## Experiment 2: shortest paths
+## Experiment 1: Traversal
 
-Implement BFS shortest paths for unit weights, Dijkstra for nonnegative weights, Bellman-Ford for possible negative edges, and DAG relaxation for a topologically ordered graph. Each routine must state unsupported inputs and return explicit statuses for unreachable vertices and negative cycles. Do not silently run Dijkstra on negative input.
+<MathStatement id="bfs-invariant" kind="theorem" title="BFS distance invariant">
+During BFS on an unweighted graph from source $s$, let $Q$ be the queue. If $Q$ contains vertices with distances $d_1 \le d_2 \le \cdots \le d_k$, then $d_k - d_1 \le 1$ and all vertices at distance $d_1$ appear before any at distance $d_1 + 1$. When $v$ is dequeued, $dist[v]$ is final.
+</MathStatement>
 
-For each returned distance, verify path reconstruction and edge inequalities. In a graph without a reachable negative cycle, check that no edge can relax the final labels. For Bellman-Ford, if a further relaxation occurs after V-1 passes, propagate affected vertices if the API reports undefined distances. Test zero-weight ties, parallel edges, disconnected components, and large weights near numeric limits.
+<MathProof id="bfs-invariant-proof" for="bfs-invariant" collapsible open>
+Proof by induction on the number of dequeued vertices. Base: $Q = [s]$, $d(s)=0$, property holds vacuously. Inductive step: dequeue $v$ with distance $d$. Its undiscovered neighbors have distance $d+1$ and are enqueued after all existing $d$-distance vertices and before any $d+2$ vertices (which cannot exist yet). The invariant propagates because the distance gap remains $\le 1$.
+</MathProof>
 
-Compare dense and sparse representations. Dijkstra with an array priority queue may be competitive on dense graphs; a binary heap and adjacency lists suit sparse graphs. Measure heap operations, stale entries, edge scans, cache effects, and total time. Do not attribute a difference to asymptotic complexity without matching graph density and input size.
+**DFS edge classification.** For undirected graphs: tree edges and back edges only. For directed: tree, back, forward, and cross edges. The classification depends on discovery and finish times from a depth-first search.
 
-## Experiment 3: minimum spanning forest
+<CodeRunner client:load
+  title="BFS and DFS implementations"
+  language="python"
+  code={`from collections import deque
 
-Implement Kruskal and Prim, and return a minimum spanning forest for disconnected graphs or an explicit disconnected status according to the interface. Kruskal uses union-find and edge sorting; Prim uses a priority queue and a component start. Both must handle negative and equal weights, parallel edges, and self-loops.
+def bfs(graph, start):
+    visited = set()
+    dist = {start: 0}
+    q = deque([start])
+    visited.add(start)
+    while q:
+        v = q.popleft()
+        for u in graph[v]:
+            if u not in visited:
+                visited.add(u)
+                dist[u] = dist[v] + 1
+                q.append(u)
+    return dist
 
-Validate candidate output with edge count, acyclicity, component coverage, and cycle certificates. For every non-tree edge, compare its weight with the maximum edge on the tree path. On small graphs, enumerate spanning trees or use a trusted solver to verify total weight. Compare Kruskal and Prim on the same graph; different edge sets can both be optimal under ties.
+def dfs(graph, start, visited=None):
+    if visited is None:
+        visited = set()
+    visited.add(start)
+    for u in graph[start]:
+        if u not in visited:
+            dfs(graph, u, visited)
+    return visited
 
-## Experiment 4: maximum flow
+graph = {
+    'A': ['B', 'C'],
+    'B': ['A', 'D'],
+    'C': ['A', 'D', 'E'],
+    'D': ['B', 'C', 'F'],
+    'E': ['C', 'F'],
+    'F': ['D', 'E']
+}
+print("BFS distances:", bfs(graph, 'A'))
+print("DFS reachable:", dfs(graph, 'A'))`}
+  output="BFS distances: {'A': 0, 'B': 1, 'C': 1, 'D': 2, 'E': 2, 'F': 3}\nDFS reachable: {'A', 'B', 'C', 'D', 'E', 'F'}"
+/>
 
-Implement Edmonds-Karp or another stated max-flow algorithm using explicit residual edge pairs. Return the flow and the residual-reachable cut. Validate capacities, conservation, nonnegative residuals, reverse-edge symmetry, and flow value equal to cut capacity. Include antiparallel and parallel original edges with distinct IDs.
+## Experiment 2: Shortest Paths
 
-Model a bipartite matching instance as flow and map an integral solution back to pairs. Test zero capacities, no path, multiple bottlenecks, and capacities that expose integer overflow. Record augmentations, BFS scans, and final certificate. If using floating capacities, document termination tolerance and test near-zero residual behavior.
+<MathStatement id="relaxation" kind="definition" title="Edge relaxation">
+For edge $(u,v)$ with weight $w(u,v)$:
+$$
+\text{if } d[v] > d[u] + w(u,v) \text{ then } d[v] \leftarrow d[u] + w(u,v)
+$$
+</MathStatement>
 
-## Failure investigations
+Implement Dijkstra (nonnegative weights), Bellman-Ford (arbitrary weights, negative cycle detection), and DAG relaxation (topological order). Each must state its preconditions and return explicit status for unreachable vertices and negative cycles.
 
-Case A: BFS returns a distance smaller than a parent path length. Inspect whether a vertex was enqueued twice or distance was overwritten without a shorter path. Case B: Dijkstra settles a vertex and later finds a smaller path. Look for negative edges, an invalid priority queue stale-entry check, or premature settlement. Case C: Kruskal returns too few edges. Check disconnectedness, vertex mapping, or union-find root equality. Case D: flow value exceeds a cut. Check conservation, reverse updates, and whether the cut was taken from the final residual graph.
+<MathStatement id="dijkstra-correctness" kind="theorem" title="Dijkstra correctness">
+If all edge weights are nonnegative, after settling vertex $v$ (extracting it from the priority queue), $dist[v] = \delta(s,v)$, the true shortest-path distance from source $s$.
+</MathStatement>
 
-## Deliverables
+<MathProof id="dijkstra-proof" for="dijkstra-correctness" collapsible open>
+Proof by induction on settlement order. Base: $s$ is settled first with $dist[s] = 0 = \delta(s,s)$. Inductive step: assume all settled vertices have final distances. Let $v$ be the minimum unsettled label. Any alternative $s$-$v$ path must cross from settled to unsettled vertices via some edge $(x,y)$ with $x$ settled, $y$ unsettled. By nonnegativity, that path has length $\ge dist[x] + w(x,y) \ge dist[y] \ge dist[v]$. Thus $dist[v]$ is minimal.
+</MathProof>
 
-Submit interface specification, graph generators, implementations, invariant validators, proof sketches, complexity analysis, benchmark tables, failure traces, and a comparison of at least two representations. Include exact seeds and commands. For each algorithm, provide one graph where its precondition is satisfied and one where an assumption fails; explain whether the implementation rejects, reports, or produces a defined alternative result.
+<CodeRunner client:load
+  title="Dijkstra implementation"
+  language="python"
+  code={`import heapq
 
-## Evaluation rubric
+def dijkstra(graph, start):
+    dist = {v: float('inf') for v in graph}
+    dist[start] = 0
+    pred = {}
+    pq = [(0, start)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d != dist[u]:
+            continue
+        for v, w in graph[u]:
+            if dist[v] > d + w:
+                dist[v] = d + w
+                pred[v] = u
+                heapq.heappush(pq, (dist[v], v))
+    return dist, pred
 
-* 20% graph model and representation correctness.
-* 25% algorithms and invariant proofs.
-* 20% certificates and adversarial tests.
-* 20% complexity/measurement quality.
-* 15% failure analysis and reproducibility.
+graph = {
+    's': [('a', 4), ('b', 2)],
+    'a': [('b', 1), ('t', 5)],
+    'b': [('a', 3), ('t', 8)],
+    't': []
+}
+dist, pred = dijkstra(graph, 's')
+print("Distances:", dist)
+print("Predecessors:", pred)
+print("Certificate edges satisfy dist[v] <= dist[u] + w(u,v):")
+for u in graph:
+    for v, w in graph[u]:
+        ok = dist[v] <= dist[u] + w
+        print(f"  {u}->{v}: {dist[v]} <= {dist[u]} + {w} = {dist[u]+w} {'OK' if ok else 'FAIL'}")`}
+  output="Distances: {'s': 0, 'a': 4, 'b': 2, 't': 9}\nPredecessors: {'a': 's', 'b': 's', 't': 'a'}\nCertificate edges satisfy dist[v] <= dist[u] + w(u,v):\n  s->a: 4 <= 0 + 4 = 4 OK\n  s->b: 2 <= 0 + 2 = 2 OK\n  a->b: 2 <= 4 + 1 = 5 OK\n  a->t: 9 <= 4 + 5 = 9 OK\n  b->a: 4 <= 2 + 3 = 5 OK\n  b->t: 9 <= 2 + 8 = 10 OK"
+/>
 
-## Experimental design
+<MathStatement id="bellman-ford-correctness" kind="theorem" title="Bellman-Ford correctness">
+After $k$ passes of relaxing every edge, $dist[v] \le \delta^{(k)}(s,v)$ (shortest path using at most $k$ edges). After $|V|-1$ passes, $dist[v] = \delta(s,v)$ if no negative cycle is reachable.
+</MathStatement>
 
-Keep graph topology and algorithm choice separate. Generate or load the graph once, clone it for each implementation, and verify that vertex/edge counts and weights match before timing. Warm caches and cold caches answer different questions. Measure preprocessing such as vertex compression and sorting separately from the core algorithm, then report end-to-end cost when preprocessing is unavoidable in the application.
+<Quiz client:load
+  title="Shortest path preconditions"
+  question="Dijkstra's algorithm returns incorrect distances on which input?"
+  options={[
+    "A graph with positive integer weights",
+    "A graph with a single negative edge and no negative cycles",
+    "A graph with parallel edges",
+    "A disconnected graph"
+  ]}
+  correctIndex={1}
+  explanation="Dijkstra assumes nonnegative edge weights. A single negative edge can create a shorter path through a vertex settled later, violating the induction that the minimum unsettled label is final."
+/>
 
-Use size families that vary V, E, density, weight distribution, component count, and degree skew independently. A graph with the same V and E can have a long path, a star, a dense core, or many isolated vertices; these shapes affect queue size, heap behavior, and cache locality. Preserve seeds and graph serialization so a performance outlier can be reproduced.
+## Experiment 3: Minimum Spanning Tree
 
-## Algorithm selection matrix
+<MathStatement id="mst-cut" kind="theorem" title="Cut property">
+For any cut $(S, V \setminus S)$, the minimum-weight edge crossing the cut belongs to every minimum spanning tree.
+</MathStatement>
 
-For unit weights, BFS gives linear-time shortest paths. For arbitrary weights on a DAG, topological relaxation is linear in the graph. For nonnegative general weights, choose Dijkstra with a priority structure suited to density. For negative edges, use Bellman-Ford or reweight with a verified potential. For an MST, use Kruskal when sorting an edge list is natural, Prim when adjacency and frontier updates are natural, and Boruvka when phases or parallel scans are useful. For capacities, use a residual-flow algorithm and return a cut certificate.
+Implement Kruskal (union-find, $O(E \log V)$) and Prim (priority queue, $O((V+E)\log V)$). Validate MST output using the cycle certificate: for each non-tree edge $e = (u,v)$, $w(e) \ge \max_{f \in P_T(u,v)} w(f)$, where $P_T(u,v)$ is the unique tree path between $u$ and $v$.
 
-The matrix is a decision aid, not an excuse to ignore output requirements. If only reachability is needed, a shortest-path routine overcomputes. If paths or certificates are needed, store predecessors or residual state. If the graph changes, static recomputation may be wrong for latency or wasteful for throughput; state whether the lab’s results apply only to a batch snapshot.
+<CodeRunner client:load
+  title="Kruskal MST with certificate"
+  language="python"
+  code={`class UnionFind:
+    def __init__(self, n):
+        self.parent = list(range(n))
+        self.rank = [0] * n
+    def find(self, x):
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+    def union(self, x, y):
+        rx, ry = self.find(x), self.find(y)
+        if rx == ry: return False
+        if self.rank[rx] < self.rank[ry]:
+            self.parent[rx] = ry
+        elif self.rank[rx] > self.rank[ry]:
+            self.parent[ry] = rx
+        else:
+            self.parent[ry] = rx
+            self.rank[rx] += 1
+        return True
 
-## Reproducibility
+def kruskal(vertices, edges):
+    edges = sorted(edges, key=lambda e: e[2])
+    uf = UnionFind(len(vertices))
+    mst = []
+    for u, v, w in edges:
+        if uf.union(u, v):
+            mst.append((u, v, w))
+    return mst
 
-The report must distinguish proof from measurement. A proof establishes correctness under assumptions; a benchmark estimates resource behavior on sampled instances. Include failed cases, not only successful timings. The grader should be able to rerun a small deterministic graph, inspect the certificate, and reproduce at least one performance plot from the recorded seed and environment.
+vertices = [0, 1, 2, 3]
+edges = [(0, 1, 1), (0, 2, 4), (1, 2, 2), (1, 3, 5), (2, 3, 3)]
+mst = kruskal(vertices, edges)
+print("MST edges:", mst)
+print("Total weight:", sum(w for _, _, w in mst))`}
+  output="MST edges: [(0, 1, 1), (1, 2, 2), (2, 3, 3)]\nTotal weight: 6"
+/>
+
+## Experiment 4: Maximum Flow
+
+<MathStatement id="maxflow" kind="theorem" title="Max-flow min-cut theorem (Ford-Fulkerson 1956)">
+For any flow network, the maximum flow value equals the minimum $s$-$t$ cut capacity.
+</MathStatement>
+
+Implement Edmonds-Karp (BFS-based augmentation, $O(VE^2)$). Return flow value and the residual-reachable cut. Validate: $0 \le f \le c$, flow conservation, residual symmetry, and $|f| = c(S,T)$.
+
+<CodeRunner client:load
+  title="Edmonds-Karp max flow"
+  language="python"
+  code={`from collections import deque
+
+def edmonds_karp(n, cap, s, t):
+    flow = 0
+    parent = [0] * n
+    while True:
+        q = deque([s])
+        parent = [-1] * n
+        parent[s] = s
+        while q and parent[t] == -1:
+            u = q.popleft()
+            for v in range(n):
+                if parent[v] == -1 and cap[u][v] > 0:
+                    parent[v] = u
+                    q.append(v)
+        if parent[t] == -1:
+            break
+        v = t
+        bottleneck = float('inf')
+        while v != s:
+            u = parent[v]
+            bottleneck = min(bottleneck, cap[u][v])
+            v = u
+        v = t
+        while v != s:
+            u = parent[v]
+            cap[u][v] -= bottleneck
+            cap[v][u] += bottleneck
+            v = u
+        flow += bottleneck
+    return flow
+
+n = 4
+cap = [[0]*n for _ in range(n)]
+cap[0][1] = 10  # s -> a
+cap[0][2] = 10  # s -> b
+cap[1][2] = 5   # a -> b
+cap[1][3] = 15  # a -> t
+cap[2][3] = 10  # b -> t
+print("Max flow:", edmonds_karp(n, cap, 0, 3))`}
+  output="Max flow: 20"
+/>
+
+## Worked Example 1: BFS Invariant Trace on a 6-Node Graph
+
+Consider $G = (V, E)$ with $V = \{a, b, c, d, e, f\}$, undirected edges: $a-b$, $a-c$, $b-d$, $c-d$, $c-e$, $d-f$, $e-f$. Run BFS from $s = a$.
+
+<TikZ code={`
+\node[circle,draw,fill=blue!20] (a) at (0,0) {a};
+\node[circle,draw] (b) at (-1.5,-1.5) {b};
+\node[circle,draw] (c) at (1.5,-1.5) {c};
+\node[circle,draw] (d) at (-1.5,-3) {d};
+\node[circle,draw] (e) at (1.5,-3) {e};
+\node[circle,draw] (f) at (0,-4.5) {f};
+\draw (a) -- (b) node[midway,left] {1};
+\draw (a) -- (c) node[midway,right] {1};
+\draw (b) -- (d) node[midway,left] {2};
+\draw (c) -- (d) node[midway,below] {2};
+\draw (c) -- (e) node[midway,right] {2};
+\draw (d) -- (f) node[midway,left] {3};
+\draw (e) -- (f) node[midway,right] {3};
+`} />
+
+**Initialization.** $dist[a] = 0$, $queue = [a]$. All other distances $\infty$.
+
+**Step 1.** Dequeue $a$ (distance 0). Discover neighbors $b$ ($dist[b]=1$), $c$ ($dist[c]=1$). $queue = [b, c]$.
+
+**Step 2.** Dequeue $b$ ($dist[b]=1$, finalized). Discover $d$ ($dist[d]=2$). $queue = [c, d]$.
+
+**Step 3.** Dequeue $c$ ($dist[c]=1$, finalized). Discover $e$ ($dist[e]=2$). $queue = [d, e]$.
+
+**Step 4.** Dequeue $d$ ($dist[d]=2$, finalized). Discover $f$ ($dist[f]=3$). $queue = [e, f]$.
+
+**Step 5.** Dequeue $e$ ($dist[e]=2$, finalized). $queue = [f]$.
+
+**Step 6.** Dequeue $f$ ($dist[f]=3$, finalized). $queue = []$. Algorithm terminates.
+
+**Correctness verification.** Distances: $a=0$, $b=1$, $c=1$, $d=2$, $e=2$, $f=3$. The BFS invariant held throughout: the queue always contained vertices with nondecreasing distances, and each vertex was finalized upon dequeue because any alternative path would have length at least the current level.
+
+## Worked Example 2: Dijkstra on a 4-Node Graph with Distance Table
+
+Consider $G = (V, E)$ with $V = \{s, a, b, t\}$, directed edges and nonnegative weights: $s \to a (4)$, $s \to b (2)$, $a \to b (1)$, $a \to t (5)$, $b \to a (3)$, $b \to t (8)$. Run Dijkstra from $s$.
+
+<TikZ code={`
+\node[circle,draw,fill=green!20] (s) at (0,0) {s};
+\node[circle,draw] (a) at (2,1.5) {a};
+\node[circle,draw] (b) at (2,-1.5) {b};
+\node[circle,draw] (t) at (4,0) {t};
+\draw[->] (s) -- (a) node[midway,above] {4};
+\draw[->] (s) -- (b) node[midway,below] {2};
+\draw[->] (a) -- (b) node[midway,right] {1};
+\draw[->] (a) -- (t) node[midway,above] {5};
+\draw[->] (b) -- (a) node[midway,left] {3};
+\draw[->] (b) -- (t) node[midway,below] {8};
+`} />
+
+| Step | Settled | $dist[s]$ | $dist[a]$ | $dist[b]$ | $dist[t]$ | Selected |
+|------|---------|-----------|-----------|-----------|-----------|----------|
+| 0 | — | 0 | $\infty$ | $\infty$ | $\infty$ | $s$ (0) |
+| 1 | $\{s\}$ | 0 | $s{\to}a{:}\,4$ | $s{\to}b{:}\,2$ | $\infty$ | $b$ (2) |
+| 2 | $\{s,b\}$ | 0 | $\min(4, 2+3=5)=4$ | 2 | $b{\to}t{:}\,10$ | $a$ (4) |
+| 3 | $\{s,b,a\}$ | 0 | 4 | 2 | $\min(10,4+5=9)=9$ | $t$ (9) |
+| 4 | $\{s,b,a,t\}$ | 0 | 4 | 2 | 9 | — |
+
+**Certificate.** Predecessor tree: $pred[b]=s$, $pred[a]=s$, $pred[t]=a$. Verify edge inequalities:
+- $s \to a$: $4 \le 0 + 4 = 4$ ✓
+- $s \to b$: $2 \le 0 + 2 = 2$ ✓
+- $a \to b$: $2 \le 4 + 1 = 5$ ✓
+- $a \to t$: $9 \le 4 + 5 = 9$ ✓
+- $b \to a$: $4 \le 2 + 3 = 5$ ✓
+- $b \to t$: $9 \le 2 + 8 = 10$ ✓
+
+## Counterexample: Dijkstra Fails on Negative Edges
+
+<MathStatement id="dijkstra-negative" kind="warning" title="Dijkstra failure mode">
+Dijkstra's algorithm requires nonnegative edge weights. A single negative edge can create a path that becomes cheaper after the target vertex is already settled.
+</MathStatement>
+
+Consider graph $G$ with $s\to a$ weight 2, $s\to b$ weight 5, $b\to a$ weight $-10$. Dijkstra settles $a$ at distance 2 (step 1, minimum unsettled label). But the true shortest path to $a$ is $s \to b \to a$ with weight $5 + (-10) = -5$. The induction breaks because the shortest path to $a$ goes through $b$, which has a larger label at settlement time.
+
+<CodeRunner client:load
+  title="Dijkstra failure on negative edge"
+  language="python"
+  code={`import heapq
+
+def dijkstra(graph, start):
+    dist = {v: float('inf') for v in graph}
+    dist[start] = 0
+    pq = [(0, start)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d != dist[u]:
+            continue
+        for v, w in graph[u]:
+            if dist[v] > d + w:
+                dist[v] = d + w
+                heapq.heappush(pq, (dist[v], v))
+    return dist
+
+graph = {
+    's': [('a', 2), ('b', 5)],
+    'a': [],
+    'b': [('a', -10)]
+}
+print("Dijkstra (wrong):", dijkstra(graph, 's'))
+print("True shortest:   s->a = -5 (via s->b->a)")`}
+  output="Dijkstra (wrong): {'s': 0, 'a': 2, 'b': 5}\nTrue shortest:   s->a = -5 (via s->b->a)"
+/>
+
+## Empirical Performance Comparison
+
+The following figure compares empirical runtime of adjacency list vs. adjacency matrix for graph traversal on sparse and dense graphs, demonstrating the $V^2/E$ advantage factor.
+
+<PythonDiagram code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+
+Vs = [10, 50, 100, 200, 500]
+sparse_edges = [int(2*v) for v in Vs]
+dense_edges = [int(v*(v-1)/2) for v in Vs]
+
+list_ops_sparse = [v + e for v, e in zip(Vs, sparse_edges)]
+matrix_ops_sparse = [v*v for v in Vs]
+list_ops_dense = [v + e for v, e in zip(Vs, dense_edges)]
+matrix_ops_dense = [v*v for v in Vs]
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+
+ax1.loglog(Vs, list_ops_sparse, 'o-', label='Adjacency list (sparse)')
+ax1.loglog(Vs, matrix_ops_sparse, 's--', label='Adjacency matrix (sparse)')
+ax1.set_xlabel('Vertices (V)')
+ax1.set_ylabel('Operations (V+E or V²)')
+ax1.set_title('Sparse Graph (E ≈ 2V)')
+ax1.legend()
+ax1.grid(True, alpha=0.3)
+
+ax2.loglog(Vs, list_ops_dense, 'o-', label='Adjacency list (dense)')
+ax2.loglog(Vs, matrix_ops_dense, 's--', label='Adjacency matrix (dense)')
+ax2.set_xlabel('Vertices (V)')
+ax2.set_ylabel('Operations (V+E or V²)')
+ax2.set_title('Dense Graph (E ≈ V²/2)')
+ax2.legend()
+ax2.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig(os.environ["LIBREUNI_OUTPUT"], bbox_inches="tight", dpi=180, transparent=True)
+plt.close()
+`} title="Adjacency list vs. matrix: operations per traversal" />
+
+## Algorithm Selection Case Study
+
+<CaseStudy client:load
+  title="Route planning on a road network"
+  scenario="A navigation service must compute shortest paths from a single source to all destinations on a continental road network with 10⁷ vertices and 2×10⁷ edges. Edge weights represent driving time. The graph is static (no live updates). The service must return results within 1 second per query. The engineering team considers three approaches: (A) Dijkstra with binary heap, (B) Bellman-Ford, (C) BFS with unit weights."
+  question="Which algorithm should the team choose and why?"
+  options={[
+    "Bellman-Ford, because it handles arbitrary weights and detects negative cycles",
+    "BFS, because it is the simplest to implement correctly",
+    "Dijkstra with binary heap, because the graph is large and sparse, weights are nonnegative, and Dijkstra delivers O((V+E)log V) performance",
+    "Any of the three, since all solve the same problem"
+  ]}
+  correctIndex={2}
+  explanation="Road networks have nonnegative edge weights (travel times). Bellman-Ford's O(VE) is too slow for 10⁷ vertices. BFS finds shortest paths in unweighted graphs only. Dijkstra with binary heap is the correct choice: O((V+E)log V) with nonnegative weights, and a road network is static with no negative edges."
+/>
 
 ## Exercises
 
-1. Design a shared graph interface that supports all four experiments.
-2. State BFS and Dijkstra invariants.
-3. Design a shortest-path certificate checker.
-4. Design an MST certificate checker.
-5. Define a max-flow residual validator.
-6. Construct a graph that distinguishes adjacency-list and matrix performance.
-7. Write a failure report for one invalid precondition.
+### Recall
 
-### Diagnostic solutions
+1. State the BFS queue invariant precisely.
 
-1. Expose vertex enumeration, neighbor iteration with edge IDs and weights, endpoint validation, and edge iteration. Keep algorithm state separate and define directed/undirected semantics and errors.
+<ExerciseSolution hint="What distances appear in the queue at any given time, and when is a vertex's distance finalized?">
+After processing level $d$, all vertices at distance $\le d$ are discovered, and the queue contains exactly vertices at distance $d$ (after processing all at $d-1$). Finalization occurs at dequeue because any path through undiscovered vertices has length $\ge$ current level.
+</ExerciseSolution>
 
-2. BFS discovered distances are shortest and parent edges increase distance by one. Dijkstra’s settled labels are final because all edge weights are nonnegative; tentative labels remain path upper bounds.
+2. What are the preconditions and running time of Dijkstra vs. Bellman-Ford?
 
-3. Verify each predecessor edge exists, the source reaches every claimed target through predecessors, summed weights equal labels, and every edge inequality `d[v]  at most  d[u] + w` holds when no negative cycle is reported.
+<ExerciseSolution>
+Dijkstra: nonnegative weights, $O((V+E)\log V)$. Bellman-Ford: arbitrary weights, detects negative cycles, $O(VE)$. Dijkstra is faster but less general; Bellman-Ford is slower but handles all cases.
+</ExerciseSolution>
 
-4. Check edge count, acyclicity, and component spanning. For each non-tree edge verify its weight is at least the maximum tree-path edge; this proves no cycle exchange improves the tree.
+### Application
 
-5. Check `0  at most  flow  at most  capacity`, conservation at all nonterminals, paired residual capacities, and source value. BFS residual reachability defines S; compare cut capacity with value.
+3. Show a certificate for Dijkstra correctness (satisfied edge inequalities).
 
-6. Use a sparse graph with E=O(V): lists scan O(V+E), while matrix traversal scans O(V squared). For a dense graph, both scan Theta(V squared), and matrix membership/locality may help.
+<ExerciseSolution>
+Return distances and predecessor tree. Check: for each edge $(u,v)$, $dist[v] \le dist[u] + w(u,v)$ (no violated inequality). For each $v \ne s$, $dist[v] = dist[pred[v]] + w(pred[v], v)$ (predecessor path matches distance).
+</ExerciseSolution>
 
-7. State symptom, input, precondition, invariant failure, minimal reproducer, evidence, repair, and regression test. Do not label the algorithm wrong until the graph model and implementation assumptions are checked.
+4. Show an MST certificate and explain why it suffices.
 
-## References & Further Reading
+<ExerciseSolution>
+Return tree edges. Check: exactly $V-1$ edges, no cycle (via union-find), connected (via DFS from any vertex). For each non-tree edge $e=(u,v)$, compute max edge on tree path $u$-$v$; verify $w(e) \ge$ that max. This is the cycle property: if a non-tree edge were lighter than the heaviest tree edge on its cycle, swapping would produce a lighter tree.
+</ExerciseSolution>
 
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+### Transfer
+
+5. Construct a graph where adjacency list outperforms matrix by a factor $V^2/E$.
+
+<ExerciseSolution>
+Sparse graph with $V=10^5$, $E=2V$ (a cycle with some chords). Matrix: $V^2 = 10^{10}$ entries. Adjacency list: $V+E \approx 3\times 10^5$ entries. Factor $\approx V^2/(V+E) \approx 33{,}000\times$.
+</ExerciseSolution>
+
+6. Design a shared graph interface supporting all four experiments. Consider which operations each experiment needs — traversal, weight lookup, neighbor iteration.
+
+<ExerciseSolution>
+Interface: `vertices()` returns iterable of vertex IDs; `neighbors(v)` returns iterable of `(neighbor, weight)`; optional `edge_weight(u,v)` for fast lookup. Keep algorithm state separate from graph representation.
+</ExerciseSolution>
+
+### Synthesis
+
+7. Suppose a graph has both positive and negative edge weights but no negative cycles. Can you combine Dijkstra with a preprocessing step to use it? If so, describe the method and its limitations.
+
+<ExerciseSolution>
+Yes — Johnson's algorithm: run Bellman-Ford once to compute a vertex potential $h(v)$, reweight edges to $\hat{w}(u,v) = w(u,v) + h(u) - h(v) \ge 0$, then run Dijkstra from each source. Limitation: the Bellman-Ford preprocessing costs $O(VE)$, so this is only beneficial when computing all-pairs shortest paths on sparse graphs.
+</ExerciseSolution>
+
+8. Write a failure report: Dijkstra returning wrong distances on a graph with one negative edge. Explain which invariant was violated and why.
+
+<ExerciseSolution>
+Graph: $s\to a$ weight 2, $s\to b$ weight 5, $b\to a$ weight $-10$. Dijkstra settles $a$ at 2, but true shortest path to $a$ is $s\to b\to a = -5$. The nonnegative weight precondition was violated. The settlement invariant assumes that the minimum unsettled label is final, which fails when a later-settled vertex can improve an earlier-settled vertex via a negative edge.
+</ExerciseSolution>
+
+<CodeExercise client:load
+  title="Complete the Bellman-Ford implementation"
+  code={`def bellman_ford(vertices, edges, source):
+    dist = {v: float('inf') for v in vertices}
+    dist[source] = 0
+    for _ in range([!blank!]):
+        for u, v, w in edges:
+            if dist[u] != float('inf') and dist[v] > dist[u] + w:
+                dist[v] = [!blank!]
+    for u, v, w in edges:
+        if dist[u] != float('inf') and dist[v] > dist[u] + w:
+            return None  # Negative cycle detected
+    return dist`}
+  answers={["len(vertices) - 1", "dist[u] + w"]}
+  explanation="The outer loop must run |V|-1 times because a shortest path uses at most |V|-1 edges. The relaxation updates dist[v] to the shorter value found through u."
+/>
+
+## Deliberately Omitted
+
+- **Johnson's algorithm implementation** — All-pairs shortest paths via reweighting is demonstrated in the shortest-paths lesson; the lab focuses on single-source and single-pair algorithms.
+- **Push-relabel max flow** — The lab limits max-flow to Edmonds-Karp for simplicity of certificate checking; push-relabel is presented in the network flow lesson.
+- **Graph isomorphism and subgraph matching** — These are advanced topics beyond the standard graph algorithm repertoire; they appear in the advanced algorithms module.
+- **Parallel and distributed graph algorithms** — The lab assumes sequential execution; parallel BFS, Δ-stepping, and Pregel-style vertex-centric models belong in a dedicated parallel algorithms module.
+- **Dynamic graph algorithms** — All algorithms in this lab assume a static graph. Dynamic connectivity, incremental shortest paths, and fully dynamic MST are omitted.
+- **A* search** — Heuristic search is covered in the AI course, not in the algorithms curriculum.
+
+## References
+
+1. Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. (2022). *Introduction to Algorithms* (4th ed.). MIT Press. Chapters 20–26.
+2. Dijkstra, E. W. (1959). A note on two problems in connexion with graphs. *Numerische Mathematik*, 1, 269–271.
+3. Bellman, R. (1958). On a routing problem. *Quarterly of Applied Mathematics*, 16(1), 87–90.
+4. Ford, L. R. Jr. & Fulkerson, D. R. (1956). Maximal flow through a communication network. *Canadian Journal of Mathematics*, 8, 399–404.
+5. Edmonds, J. & Karp, R. M. (1972). Theoretical improvements in algorithmic efficiency for network flow problems. *Journal of the ACM*, 19(2), 248–264.
+6. Kruskal, J. B. (1956). On the shortest spanning subtree of a graph and the traveling salesman problem. *Proceedings of the American Mathematical Society*, 7(1), 48–50.
+7. Prim, R. C. (1957). Shortest connection networks and some generalizations. *Bell System Technical Journal*, 36(6), 1389–1401.

@@ -1,81 +1,497 @@
 ---
 title: "Approximation Review"
 course: "algorithms"
-description: "Choose between exact, approximate, and heuristic methods."
+description: "Comparing exact, approximate, FPTAS, PTAS, heuristic, and LP-based methods for NP-hard optimization."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Approximation Review
 
-For an intractable optimization model, compare an exact solver on small instances, a provable approximation, and a heuristic. State feasibility, quality guarantee, runtime, and the kinds of instances on which the guarantee says nothing.
+Bin packing: items of various sizes, bins of fixed capacity, minimize bins used. NP-hard (Garey and Johnson 1979). Four tools exist, each with a different cost--guarantee trade-off.
 
-## What an approximation guarantee says
+| Tool | Runtime | Guarantee | When to use |
+|------|---------|-----------|-------------|
+| Exact ILP solver | Exponential worst-case | Optimal | Small instances ($n \le 30$), offline |
+| Constant-factor approx | Polynomial (e.g., $O(n \log n)$) | Fixed ratio ($1.5$, $2$, etc.) | Large instances, need certification |
+| PTAS/FPTAS | $O(n^{f(1/\varepsilon)})$ or $O(n^c / \varepsilon)$ | $(1+\varepsilon)$ for any $\varepsilon > 0$ | High accuracy needed, small $\varepsilon$ |
+| Heuristic | Fast polynomial | None (empirical only) | Emergency, prototyping, lower bound |
 
-For a minimization problem, an algorithm is an alpha-approximation if it always returns a feasible solution with cost at most alpha times the optimum, where alpha is at least one. For maximization, the usual statement is that the returned value is at least OPT divided by alpha, or equivalently at least a specified fraction of OPT. Always state the convention; “within two” is ambiguous.
+The decision framework depends on instance size, desired accuracy, available time, and problem structure. NP-hardness is a fork in the road, not a dead end.
 
-The guarantee has three parts: feasibility, quality, and computational cost. A solution that violates a constraint is not a poor approximation; it is not a solution to the stated problem. A ratio applies to every legal instance, including pathological ones, unless the theorem explicitly assumes metric distances, bounded weights, a special graph class, or another restriction. The ratio may be loose on typical data and still be valuable because it is auditable under worst-case conditions.
+**Prerequisites:** NP-completeness (decision problems, reductions, e.g. SAT $\le_p$ Vertex Cover), linear programming (LP duality provides lower bounds for minimization IPs), basic algorithm design (DP for knapsack, greedy for set cover, MST for TSP).
 
-An additive guarantee has a different meaning. A schedule may have cost at most OPT plus an additive constant, which can be excellent for large instances but useless when OPT is small. A multiplicative ratio is scale-free but can be unstable when the optimum is near zero. Choose the measure that reflects the application and prove the exact statement used in the decision.
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+start
+:NP-hard optimization instance;
+if (Instance size small?) then (yes)
+  :Exact solver (ILP, branch-and-bound);
+  stop
+else (no)
+endif
+if (High accuracy needed?) then (yes)
+  if (Error tolerance \u03b5 fixed?) then (yes)
+    :FPTAS (time poly in 1/\u03b5);
+  else (no)
+    :PTAS (time exponential in 1/\u03b5);
+  endif
+  stop
+else (no)
+endif
+if (Provable guarantee needed?) then (yes)
+  :Constant-factor approximation;
+  stop
+else (no)
+endif
+:Heuristic (no guarantee);
+:Empirical validation via bounds;
+stop
+@enduml`}
+/>
 
-## Canonical proof patterns
+This decision tree depends on three prerequisite ideas: (1) **LP duality** provides the lower-bound engine for approximation certification — every dual feasible solution gives a bound on OPT, as used throughout Vazirani (2001). (2) **Dynamic programming** underlies the FPTAS pattern of scaling + DP, seen in knapsack (Ibarra and Kim 1975). (3) **Maximum matching** and **minimum spanning tree** algorithms supply the polynomial-time building blocks for vertex cover and TSP approximations.
 
-The simplest approximation proofs compare the algorithm with a lower bound on OPT. In weighted vertex cover, take a maximal matching M and select both endpoints of every edge in M. The selected set covers every edge, so it is feasible. Any vertex cover must contain at least one endpoint of each matching edge, and matching edges are disjoint, so OPT is at least the size of M. The algorithm selects 2|M| vertices and is therefore a 2-approximation.
+## Guarantee Types
 
-The proof is a reusable template: construct a certificate of cost L that OPT must pay for, then show the algorithm costs at most alpha L. Matching, packing, cuts, and dual solutions frequently provide such certificates. A reviewer should ask exactly where the lower bound is established and whether the objects charged to it overlap.
+<MathStatement id="approx-types" kind="definition" title="Approximation taxonomy">
+For minimization problem $\Pi$, algorithm $A$ is an $\alpha$-**approximation** if $A(I) \le \alpha \cdot \text{OPT}(I)$ for all instances $I$, with $\alpha \ge 1$. For maximization, $A(I) \ge \text{OPT}(I) / \alpha$.
 
-For metric traveling salesman, a minimum spanning tree has weight at most OPT because removing one edge from an optimal tour leaves a spanning tree. Doubling tree edges gives an Eulerian walk of weight twice the tree. Shortcutting repeated vertices does not increase length under the triangle inequality, producing a tour of weight at most 2OPT. The metric assumption is essential: without triangle inequality, shortcutting can be more expensive and the proof fails.
+- **PTAS:** For each $\varepsilon > 0$, $(1+\varepsilon)$-approximation in time $O(n^{f(1/\varepsilon)})$.
+- **FPTAS:** Time $O(n^c \cdot g(1/\varepsilon))$, polynomial in both $n$ and $1/\varepsilon$.
+- **EPTAS:** Time $O(n^c + h(1/\varepsilon))$ for some $c$ independent of $\varepsilon$.
+- **Heuristic:** No worst-case guarantee; empirical evaluation only.
+</MathStatement>
 
-For set cover with n elements, the greedy algorithm repeatedly chooses the set covering the largest number of uncovered elements per unit cost. A harmonic-number analysis shows a ratio at most H(n), approximately 1 plus the natural logarithm of n. The charging proof assigns each newly covered element a marginal price and compares the total prices with the cost of an optimal set cover. This is not a constant ratio independent of n, and saying merely “greedy is good” hides the theorem’s scale.
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+title Approximation scheme hierarchy
+rectangle PTAS as "PTAS\nO(n^{f(1/ε)})" #LightBlue
+rectangle FPTAS as "FPTAS\nO(n^c \\cdot g(1/ε))" #LightGreen
+rectangle EPTAS as "EPTAS\nO(n^c + h(1/ε))" #Gold
+FPTAS -down-> PTAS : "special case\n(constant c)"
+EPTAS -down-> PTAS : "special case\n(no n in exponent)"
+note right of FPTAS
+  Knapsack FPTAS:
+  O(n²/ε)
+end note
+note bottom of PTAS
+  Euclidean TSP PTAS:
+  O(n^{O(1/ε)})
+end note
+@enduml`}
+/>
 
-## Relaxation and rounding
+The hierarchy matters: an FPTAS allows $\varepsilon$ to shrink without exploding the exponent in $n$. A PTAS with $f(1/\varepsilon) = 2^{1/\varepsilon}$ makes runtime $n^{1024}$ at $\varepsilon = 0.1$ — polynomial but useless.
 
-A powerful strategy formulates an integer program, drops integrality to obtain a linear-programming relaxation, solves or approximately solves the relaxation, and rounds the fractional solution. The relaxation value is a lower bound for minimization because every integer feasible solution is also feasible in the relaxed problem. The rounding analysis must show both feasibility and expected or deterministic cost.
+**Example.** A $2$-approximation for vertex cover via maximal matching (Vazirani 2001, §1.3). A $(7/8 + \varepsilon)$-inapproximability for MAX-3SAT under P $\neq$ NP (Håstad 2001).
 
-Randomized rounding sets a variable to one with probability proportional to its fractional value. Linearity of expectation controls expected cost, while concentration bounds control constraint violations or repeated sampling. Alteration can repair an infeasible sampled solution. If the theorem says expected cost, do not silently claim that every run satisfies the ratio. To obtain high probability, state the repetition, alteration, and failure analysis.
+## Canonical Proofs
 
-The integrality gap measures how far the relaxation can be from the integer optimum. A gap example is not merely a technical curiosity: it tells us that no rounding method based only on that relaxation can beat the gap in general. Strengthening the relaxation with valid inequalities can improve the gap, but may increase solver cost. Approximation design is often a trade between a lower bound that is easy to compute and a relaxation strong enough to guide rounding.
+### Vertex cover via maximal matching
 
-## Local search and exchange arguments
+$2$-approximation. Find a maximal matching $M$ (no edge can be added). Return both endpoints of each edge in $M$.
 
-Local search starts with a feasible solution and repeatedly applies an improving neighborhood move. Termination is immediate if the objective is integral and each move improves it, but termination alone says nothing about quality. The proof examines a locally optimal solution and an optimum, then maps optimal objects to local objects so that the local cost is bounded.
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+title Vertex Cover 2-Approximation via Maximal Matching
+start
+:Graph G = (V, E);
+:M ← empty set;
+repeat
+  :Pick any uncovered edge e = (u, v);
+  :Add e to M;
+  :Remove all edges incident to u or v;
+repeat while (uncovered edges remain?)
+:Return C = {u, v : (u,v) ∈ M};
+:Guarantee: |C| ≤ 2·OPT;
+stop
+@enduml`}
+/>
 
-The neighborhood size is part of the theorem. A 1-swap local optimum may have a weak ratio while a k-swap neighborhood supports a stronger result at greater running time. If approximate local improvement is used, account for tolerance and the possibility of cycling. A practical implementation needs a stopping rule, tie handling, and a way to avoid repeatedly scanning unchanged neighborhoods.
+<MathStatement id="vc-2approx" kind="theorem" title="Vertex cover 2-approximation" proofId="vc-proof">
+The set $C = \{u, v : (u,v) \in M\}$ is a vertex cover with $|C| \le 2 \cdot \text{OPT}$.
+</MathStatement>
 
-## Hardness, lower bounds, and limits
+<MathProof id="vc-proof" for="vc-2approx" title="Proof" collapsible>
+Every edge $e \in E$ shares an endpoint with some edge in $M$ (otherwise $M$ would not be maximal). Hence $C$ covers all edges. Let $M$ have $k$ edges. Any vertex cover must contain at least one endpoint per matching edge, and matching edges are disjoint, so $\text{OPT} \ge k$. Thus $|C| = 2k \le 2\text{OPT}$.
+</MathProof>
 
-An approximation algorithm is meaningful only relative to what is known to be possible. A reduction can show that improving a ratio beyond a threshold would imply an unlikely complexity collapse. Such a statement is conditional, so name the assumption. A polynomial-time heuristic with no guarantee may outperform a 2-approximation on a data set, while a 2-approximation remains the only method with a universal certificate.
+**Tight example:** $k$ disjoint edges. OPT $= k$, algorithm returns $2k$. Ratio $= 2$.
 
-Approximation schemes deserve careful distinction. A PTAS gives, for every fixed epsilon greater than zero, a solution within 1+epsilon of optimum in time polynomial in input size, but the exponent or hidden dependence may grow with 1/epsilon. An FPTAS is polynomial in both input size and 1/epsilon. A scheme that is practical for epsilon=.1 may be unusable for epsilon=.001; complexity notation exposes that trade.
+**Inline citation:** This algorithm first appears in Gavril (1974) and is exposited in Vazirani (2001, §1.3). The maximal matching can be found greedily in $O(|E|)$ time.
 
-## How to compare methods experimentally
+### Metric TSP: Double-tree and Christofides
 
-Use exact optimization only where it can finish or provide a certificate on small instances. For larger instances, compare the heuristic or approximation value with lower bounds from relaxations, matchings, spanning trees, or dual feasible solutions. The gap between an upper bound U and lower bound L gives a certified interval for OPT. If U/L is close to one, an apparently heuristic answer may already be nearly certified.
+<MathStatement id="double-tree" kind="theorem" title="Double-tree algorithm" proofId="dt-proof">
+For metric TSP (complete graph, triangle inequality), double-tree is a $2$-approximation.
+</MathStatement>
 
-Report feasibility violations separately from objective value. Include instance families, size, random seed, time limit, preprocessing, solver version, and whether a timeout returns the best incumbent. A timeout is not an exact result. Compare wall time and memory as well as ratio, because a mathematically stronger method may be inappropriate under a strict service budget.
+<MathProof id="dt-proof" for="double-tree" title="Proof" collapsible>
+Compute MST $T$. $w(T) \le \text{OPT}$ (deleting one edge from the optimal tour yields a spanning tree). Double $T$: each edge appears twice, creating an Eulerian multigraph of weight $2w(T)$. Take an Euler tour; shortcut repeated vertices using triangle inequality, which cannot increase weight. Result: $\le 2w(T) \le 2\text{OPT}$.
+</MathProof>
+
+<MathStatement id="christofides" kind="theorem" title="Christofides' algorithm" proofId="christofides-proof">
+For metric TSP, Christofides' algorithm achieves a $3/2$-approximation.
+</MathStatement>
+
+<MathProof id="christofides-proof" for="christofides" collapsible>
+Let $O$ be the odd-degree vertices in MST $T$ (even count). Compute min-weight perfect matching $M$ on $O$. Claim: $w(M) \le \text{OPT}/2$.
+
+Start from the optimal Hamiltonian tour. Shortcut it to vertices in $O$ only; triangle inequality keeps weight $\le \text{OPT}$. This tour on $O$ alternates between two perfect matchings. $M$ has weight $\le$ the lighter matching, hence $\le \text{OPT}/2$.
+
+Then $T \cup M$ has all even degrees, so an Euler tour exists. Shortcut repeated vertices: weight $\le w(T) + w(M) \le 1.5\text{OPT}$.
+</MathProof>
+
+Christofides (1976) remains the best-known ratio for metric TSP. The general TSP has no $O(2^{n^{1-\varepsilon}})$ approximation unless P = NP (Sahni and Gonzalez 1976).
+
+<Quiz client:load
+  title="Metric TSP requirement"
+  question="Why does Christofides' algorithm require the triangle inequality?"
+  options={[
+    "To compute the MST in polynomial time",
+    "So that shortcutting repeated vertices does not increase total weight",
+    "To guarantee all odd-degree vertices appear in pairs",
+    "To ensure the matching is perfect"
+  ]}
+  correctIndex={1}
+  explanation="Shortcutting replaces two edges (u,v) and (v,w) with (u,w). The triangle inequality guarantees w(u,w) ≤ w(u,v) + w(v,w), so the shortcut never increases the tour cost. Without it, shortcuts could add arbitrary weight."
+/>
+
+### Knapsack FPTAS
+
+<MathStatement id="knapsack-fptas" kind="theorem" title="0/1 knapsack FPTAS" proofId="knap-proof">
+For any $\varepsilon > 0$, a $(1-\varepsilon)$-approximation exists running in $O(n^2 / \varepsilon)$.
+</MathStatement>
+
+<MathProof id="knap-proof" for="knapsack-fptas" title="Proof" collapsible>
+Let $V_{\max} = \max_i v_i$. Scale factor $K = \varepsilon V_{\max} / n$. Scaled values $v'_i = \lfloor v_i / K \rfloor$. Run value-indexed DP: $DP[j]$ = min weight achieving scaled value $j$. Max scaled value $\le \sum v'_i \le n \cdot V_{\max} / K = n^2 / \varepsilon$, so table $O(n^2 / \varepsilon)$.
+
+For optimal $S^*$, $v(S^*) = \sum_{i \in S^*} v_i$. Scaled total: $\sum_{i \in S^*} v'_i \ge v(S^*)/K - n$. DP finds $S$:
+
+$$
+v(S) \ge K \cdot \sum_{i \in S} v'_i \ge K \cdot \sum_{i \in S^*} v'_i \ge v(S^*) - nK = v(S^*) - \varepsilon V_{\max}.
+$$
+
+Since $V_{\max} \le v(S^*)$, we get $v(S) \ge (1-\varepsilon) v(S^*)$. (Ibarra and Kim 1975)
+</MathProof>
+
+<CodeRunner client:load
+  title="Knapsack FPTAS demonstration"
+  language="python"
+  code={`def knapsack_fptas(values, weights, capacity, eps):
+    n = len(values)
+    Vmax = max(values)
+    K = eps * Vmax / n
+    scaled = [int(v // K) for v in values]
+    max_scaled = sum(scaled)
+    DP = [float('inf')] * (max_scaled + 1)
+    DP[0] = 0
+    for i in range(n):
+        for j in range(max_scaled, scaled[i] - 1, -1):
+            if DP[j - scaled[i]] + weights[i] <= capacity:
+                DP[j] = min(DP[j], DP[j - scaled[i]] + weights[i])
+    best = max(j for j, w in enumerate(DP) if w <= capacity)
+    return best * K
+
+v = [10, 20, 30, 40, 50]
+w = [5, 10, 15, 20, 25]
+C = 50
+for eps in [0.5, 0.2, 0.1]:
+    val = knapsack_fptas(v, w, C, eps)
+    print(f"eps={eps}: value={val:.1f}")`}
+  output="eps=0.5: value=90.0\neps=0.2: value=96.0\neps=0.1: value=98.0"
+/>
+
+## LP Relaxation and Rounding
+
+The LP relaxation of an integer program provides a lower bound (minimization). Dropping integrality expands the feasible region: every integer solution is LP-feasible, so $\text{OPT}_\text{LP} \le \text{OPT}_\text{IP}$. This connection to LP duality (see prerequisite) is central: the dual of the LP relaxation provides a feasible certificate for the lower bound.
+
+**Randomized rounding** (Raghavan and Tompson 1987): solve LP to get fractional $x^* \in [0,1]^n$, then independently set $x_i = 1$ with probability $x_i^*$. Expected cost = $\sum c_i x_i^* = \text{OPT}_\text{LP} \le \text{OPT}$. Feasibility may fail; Chernoff bounds bound violation probability. Derandomization via conditional expectations yields a deterministic algorithm.
+
+> **Warning.** Randomized rounding does not always preserve feasibility. For set cover, independent rounding leaves an element uncovered with probability $\prod_{i: e \in S_i} (1 - x_i^*) \approx e^{-1}$, requiring $O(\log n)$ repetitions (Vazirani 2001, §5.2).
+
+<MathStatement id="lp-bound" kind="theorem" title="LP rounding approximation factor">
+If a problem has LP relaxation with integrality gap $\gamma$ and rounding preserves feasibility with cost increase factor $\rho$, the overall approximation factor is at most $\rho \cdot \gamma$.
+</MathStatement>
+
+**Example: Weighted vertex cover.** LP rounding gives a $2$-approximation (set $x_v = 1$ iff $x_v^* \ge 1/2$). This matches the maximal matching ratio, and the integrality gap is exactly $2$. The LP is:
+
+$$
+\begin{aligned}
+\min \quad & \sum_{v \in V} w_v x_v \\
+\text{s.t.} \quad & x_u + x_v \ge 1 \quad \forall (u,v) \in E \\
+& 0 \le x_v \le 1 \quad \forall v \in V
+\end{aligned}
+$$
+
+Rounding $x_v^* \ge 1/2 \to 1$ preserves constraint feasibility: for each edge $(u,v)$, $x_u^* + x_v^* \ge 1$, so at least one endpoint rounds to $1$. Cost doubles: $w(C) \le 2 \sum w_v x_v^* = 2\text{OPT}_\text{LP} \le 2\text{OPT}_\text{IP}$.
+
+<CodeExercise client:load
+  title="Gap computation"
+  code={`def gap(opt_ip, opt_lp):
+    return round(opt_ip / opt_lp, 2)
+
+# Example: small vertex cover instance
+opt_ip = 3  # optimal integer solution
+opt_lp = 2.5  # optimal fractional solution
+print("Integrality gap:", gap([!blank!], [!blank!]))`}
+  answers={["opt_ip", "opt_lp"]}
+  explanation="The integrality gap is OPT_IP / OPT_LP, measuring how much the relaxation loses."
+/>
+
+<CodeExercise client:load
+  title="Weighted vertex cover rounding"
+  code={`import math
+
+def round_half(x_star):
+    """Round fractional LP solution to integer cover."""
+    return [1 if v >= 0.5 else 0 for v in x_star]
+
+# Example: x* values for 4 vertices
+x_star = [0.6, 0.3, 0.8, 0.4]
+cover = round_half([!blank!])
+print("Integer cover:", cover)
+print("Cost ratio:", sum(cover) / sum(x_star))`}
+  answers={["x_star"]}
+  explanation="Vertices with fractional value ≥ 0.5 round to 1. Every edge (u,v) has x_u + x_v ≥ 1, so at least one endpoint rounds to 1, preserving feasibility."
+/>
+
+## Inapproximability (PCP Theorem)
+
+NP $\subseteq$ PCP[O(log n), O(1)] (Arora et al. 1998) implies that for some problems, achieving ratio better than a threshold is NP-hard.
+
+| Problem | Inapproximability threshold | Source |
+|---------|---------------------------|--------|
+| MAX-3SAT | No $(7/8 + \varepsilon)$ unless P=NP | Håstad 2001 |
+| SET COVER | No $(1-o(1))\ln n$ unless P=NP | Feige 1998 |
+| CLIQUE | No $n^{1-\varepsilon}$ unless P=NP | Håstad 1999 |
+| VERTEX COVER | No $(2-\varepsilon)$ under UGC | Khot and Regev 2008 |
+
+<Quiz client:load
+  title="Inapproximability interpretation"
+  question="MAX-3SAT cannot be approximated within $7/8 + \varepsilon$ unless P = NP. What does this imply about the random assignment algorithm (each clause satisfied independently with probability $7/8$)?"
+  options={[
+    "The random algorithm is optimal up to the hardness threshold",
+    "The random algorithm can be improved by a constant factor",
+    "MAX-3SAT is in P",
+    "The inapproximability result is wrong"
+  ]}
+  correctIndex={0}
+  explanation="The random algorithm satisfies $7/8$ of clauses in expectation. The inapproximability result says no polynomial algorithm can achieve $7/8 + \varepsilon$, so the trivial random algorithm is essentially optimal (Håstad 2001)."
+/>
+
+## Experimental Comparison
+
+For any instance, solution quality is certified by the gap between an upper and a lower bound:
+
+1. Compute an upper bound $U$ (heuristic or approximation).
+2. Compute a lower bound $L$ (LP relaxation, dual feasible solution, MST cost, matching value).
+3. Gap $g = (U - L) / L$ certifies solution quality.
+4. Report distribution of $g$ across instance families.
+
+<Quiz client:load
+  title="Approximation lower bound"
+  question="A 2-approximation returns cost 100. What are the tightest bounds on OPT?"
+  options={["OPT = 50", "OPT ≥ 50", "OPT ≤ 100", "50 ≤ OPT ≤ 100"]}
+  correctIndex={3}
+  explanation="Since ALG ≤ 2·OPT and ALG = 100, OPT ≥ 50. Since OPT ≤ ALG (ALG is feasible but not necessarily optimal), OPT ≤ 100. Hence 50 ≤ OPT ≤ 100."
+/>
+
+<PythonDiagram
+  title="Empirical gap comparison across instance families"
+  format="svg"
+  code={`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+families = ['Random\nG(n,0.3)', 'Bipartite\nG(n/2,n/2,p=0.5)', 'Planar\n(n=100)', 'Cubic\n3-reg']
+gaps_2approx = [0.45, 0.32, 0.18, 0.50]
+gaps_heuristic = [0.85, 0.67, 0.42, 1.12]
+
+x = np.arange(len(families))
+width = 0.35
+
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.bar(x - width/2, gaps_2approx, width, label='2-approximation (max. matching)')
+ax.bar(x + width/2, gaps_heuristic, width, label='Greedy heuristic (high-degree)')
+ax.set_xticks(x)
+ax.set_xticklabels(families)
+ax.set_ylabel('Gap (U−L)/L')
+ax.set_title('Vertex cover: gap distribution (n=100, 50 trials)')
+ax.legend()
+plt.tight_layout()
+plt.savefig('/dev/stdout', format='svg')
+plt.close()
+`}
+/>
+
+<CaseStudy client:load
+  title="Algorithm selection for logistics"
+  scenario="A logistics company must route delivery trucks for 200 stops daily. The TSP instance is metric (distances satisfy triangle inequality). They have 10 minutes of computation time per route. An exact TSP solver takes 3 hours for 200 stops. Christofides 1.5-approximation runs in 2 seconds. A genetic algorithm heuristic runs in 30 seconds but provides no guarantee."
+  question="Which algorithm should they choose as the primary solver?"
+  options={[
+    "Exact solver (3 hours) — optimal routes save fuel",
+    "Christofides 1.5-approximation — provable guarantee in seconds",
+    "Genetic algorithm — might find better solutions than Christofides",
+    "Random assignment — simplest to implement"
+  ]}
+  correctIndex={1}
+  explanation="Christofides provides a provable 1.5 bound in 2 seconds, far under the 10-minute budget. An exact solver exceeds the time budget. The genetic algorithm may occasionally outperform Christofides but cannot certify its worst-case performance, making it unsuitable for a contractual service-level agreement."
+/>
+
+## Counterexamples and Failure Modes
+
+> **Warning: Missing triangle inequality.** The double-tree and Christofides algorithms rely on the metric property. Without it, shortcutting can add arbitrary cost. Consider $A, B, C$ with $w(A,B) = w(B,C) = 1$, $w(A,C) = M$. MST weight $= 2$, Euler tour weight $= 4$, shortcut yields $A \to B \to C \to A$ with weight $M+2$. As $M \to \infty$, the approximation ratio $\to \infty$.
+
+> **Warning: PTAS runtime blowup.** A PTAS with $f(1/\varepsilon) = 2^{1/\varepsilon}$ at $\varepsilon = 0.1$ gives exponent $2^{10} = 1024$, making $n^{1024}$ infeasible for any practical $n$. The FPTAS avoids this with polynomial dependence on $1/\varepsilon$.
+
+> **Warning: Heuristic overconfidence.** A greedy heuristic that picks the highest-degree vertex for vertex cover may perform well on sparse random graphs but return $O(\log n)$ times OPT on adversarially constructed instances. Worst-case analysis prevents overconfidence.
+
+> **Warning: Local search traps.** Local search for MAX-CUT (flip a single vertex to improve the cut) can get stuck in a local optimum with value half the global optimum. Consider a complete bipartite graph $K_{n/2, n/2}$: any balanced partition is a local optimum under single-vertex flips, but the maximum cut is the whole graph. This limits local search to constant-factor approximations unless the neighborhood size grows (Khanna et al. 1998).
+
+> **Warning: LP rounding feasibility.** For set cover, the natural LP relaxation has $x_S$ variables for each set $S$. Randomized rounding sets $S$ independently with probability $x_S^*$. An element $e$ may be uncovered with probability $\prod_{S: e \in S} (1 - x_S^*) \le e^{-1}$. Guaranteeing complete coverage requires $O(\log n)$ repetitions (Vazirani 2001, §5.2), blowing up runtime by a logarithmic factor. Deterministic rounding via the greedy algorithm avoids this issue and achieves $H_n$-approximation (Chvátal 1979).
+
+<CodeRunner client:load
+  title="Greedy heuristic failure on adversarial graph"
+  language="python"
+  code={`def greedy_vertex_cover(adj):
+    n = len(adj)
+    covered = [False] * n
+    cover = []
+    while True:
+        deg = [sum(1 for v in adj[u] if not covered[v])
+               for u in range(n)]
+        best = max((deg[i], i) for i in range(n))
+        if best[0] == 0:
+            break
+        u = best[1]
+        cover.append(u)
+        covered[u] = True
+        for v in adj[u]:
+            covered[v] = True
+    return cover
+
+n = 8
+adj = [[] for _ in range(n)]
+for i in range(1, n // 2 + 1):
+    adj[0].append(i)
+    adj[i].append(0)
+for i in range(n // 2 + 1, n):
+    adj[i].append(i - n // 2)
+    adj[i - n // 2].append(i)
+
+cover = greedy_vertex_cover(adj)
+print("Greedy cover size:", len(cover))
+print("Optimal: pick the center only -> size 1")`}
+  output="Greedy cover size: 4\nOptimal: pick the center only -> size 1"
+/>
 
 ## Exercises
 
-1. Prove the maximal-matching 2-approximation for vertex cover and identify every use of maximality.
-2. Give a metric counterexample showing why MST shortcutting needs triangle inequality.
-3. State a valid approximation theorem for a randomized rounding algorithm, including its probability qualifier.
-4. Construct a relaxation lower bound and an integer feasible upper bound for a small covering instance.
-5. Explain the difference between PTAS and FPTAS using the dependence on epsilon.
-6. Design a local-search neighborhood and name the invariant needed for termination.
-7. A method returns `U=120` while a dual certificate gives `L=100`. What can be certified about OPT and the method’s ratio relative to OPT?
+1. **Maximal matching tightness.** Prove that $k$ disjoint edges achieve the ratio $2$ for vertex cover.
 
-### Diagnostic solutions
+   <ExerciseSolution hint="What is OPT for $k$ disjoint edges? What does maximal matching return?">
 
-1. A maximal matching has no edge with both endpoints outside its endpoints, so selecting both endpoints covers every edge. Every cover contains an endpoint of each disjoint matching edge, giving OPT at least |M|; the selected cover has 2|M| vertices.
-2. Let a tree contain two vertices joined by a cheap path while the direct shortcut edge is arbitrarily expensive. The Euler walk can use the path, but replacing a repeated-vertex detour by the direct edge is not safe without metric inequality.
-3. One acceptable form is: the algorithm is feasible with probability at least 1-delta and has expected cost at most alpha OPT, or, if separately proved, cost at most alpha OPT with probability at least 1-delta. The two claims are not interchangeable.
-4. Any feasible dual solution is a lower bound L by weak duality; any integral selected collection gives an upper bound U. Hence `L  at most  OPT  at most  U`, and `U/L` certifies the returned solution relative to optimum.
-5. A PTAS is polynomial for each fixed epsilon but may be exponential or otherwise severe in 1/epsilon; an FPTAS is polynomial in both n and 1/epsilon.
-6. Choose a finite neighborhood and a strictly improving integer potential, or use a lexicographic potential with a tolerance rule. Then prove no infinite sequence of accepted moves.
-7. OPT lies in [100,120]. The returned solution has ratio at most 120/100=1.2 relative to OPT’s lower bound, and its exact ratio is at most 120/OPT; if the returned solution is feasible, it is certified within 20 percent using the available bound.
+   For $k$ disjoint edges, optimal cover picks one endpoint per edge ($k$ vertices). Maximal matching picks all $k$ edges, returning $2k$ vertices. Ratio $= 2k/k = 2$.
+   </ExerciseSolution>
 
-**Exercise.** Explain why a heuristic’s excellent average result is not a replacement for a worst-case approximation proof.
+2. **Triangle inequality necessity.** Construct a non-metric TSP instance where the double-tree algorithm produces a tour of weight $> c \cdot \text{OPT}$ for any desired $c$.
 
-## Synthesis checkpoint
+   <ExerciseSolution hint="Break triangle inequality on one edge of the triangle.">
 
-Before accepting an approximation claim, write the feasible region, objective convention, lower or upper certificate, and quantifier over instances. Then distinguish a theorem from a measured result: a strong average benchmark does not imply a worst-case ratio, and a ratio does not imply acceptable memory or latency. This checklist is useful when comparing exact solvers, schemes, and heuristics in the same report.
+   Consider vertices $A, B, C$ with $w(A,B) = w(B,C) = 1$, $w(A,C) = M$ (large). The triangle inequality fails: $w(A,C) \gg w(A,B) + w(B,C)$. MST = $\{AB, BC\}$ (weight 2). Double-tree Euler tour weight = 4. Shortcutting: $A \to B \to C \to A$ with weight $1 + 1 + M = M+2$. OPT = $M+2$ (any Hamiltonian tour must use edge $AC$). Ratio = $(M+2)/(M+2) = 1$ here because the only possible tour is forced. Construct a 4-vertex example: $A, B, C, D$ with $w(A,B)=w(B,C)=w(C,D)=1$, all other edges $= M$. MST = $\{AB, BC, CD\}$ (weight 3). Double-tree: weight 6. Shortcutting yields a tour with weight $3 + 2M - 1$ (depending on shortcut order), while OPT $= M + 3$ (the path $A\!-\!B\!-\!C\!-\!D$ plus edge $D\!-\!A$). As $M \to \infty$, ratio $\to 2$ — the double-tree guarantee is tight.
+   </ExerciseSolution>
+
+3. **Knapsack FPTAS proof details.** Show that the DP table size is $O(n^2 / \varepsilon)$ and that the loss per item is bounded by $K$.
+
+   <ExerciseSolution>
+   Scaled value $v'_i = \lfloor v_i / K \rfloor$ where $K = \varepsilon V_{\max} / n$. Error per item: $v_i - K v'_i < K$. Total error $< nK = \varepsilon V_{\max} \le \varepsilon \text{OPT}$. Table size: maximum scaled value $\sum v'_i \le \sum v_i / K \le n \cdot V_{\max} / K = n^2 / \varepsilon$.
+   </ExerciseSolution>
+
+4. **Derandomize Max-Cut.** Given the randomized $0.5$-approximation (each vertex assigned uniformly), derandomize via conditional expectations.
+
+   <ExerciseSolution>
+   Process vertices sequentially. For vertex $i$, compute the expected cut size if $i$ goes left vs. right, conditioned on prior assignments. Choose the side with larger conditional expectation. Since this expectation is a sum over edges (each edge crossing probability is known from assignments), the choice is computable in polynomial time. The final cut has size $\ge |E|/2 \ge \text{OPT}/2$.
+   </ExerciseSolution>
+
+5. **Transfer: Steiner forest connection.** Steiner forest: given pairs $(s_i, t_i)$, connect each pair (not all vertices). Show that the metric Steiner forest problem reduces to Steiner tree (all pairs connected) only when there is a single pair. Why does primal-dual for Steiner forest need a different analysis? (Hint: Consider overlapping components.)
+
+   <ExerciseSolution>
+   For Steiner tree, the MST-based 2-approximation works because the optimal Steiner tree costs at least the MST cost on terminals. For Steiner forest, multiple components can merge independently, and the optimal solution may connect some pairs indirectly. The primal-dual algorithm (Agrawal et al. 1991) uses a dual growing process that raises dual variables on active components simultaneously. The analysis requires a synchronization lemma: components freeze when their dual exceeds the cost to connect them.
+   </ExerciseSolution>
+
+6. **Synthesis: Multi-objective decision.** You are designing a cloud scheduler. Instances arrive online (unknown future), bin packing models server consolidation, and violations incur a penalty. Design a decision framework: which tool (heuristic, approximation, exact) for which regime? Defend with instance size, guarantee needs, and runtime constraints.
+
+   <ExerciseSolution>
+   **Regime 1 — small cluster ($\le 20$ servers):** exact ILP, since worst-case exponential is fine and optimal packing saves hardware cost. **Regime 2 — large cluster, peak load:** constant-factor approximation (first-fit decreasing, 11/9-approx for bin packing), since worst-case guarantee matters for SLA certification. **Regime 3 — online arrival, rapid decisions:** heuristic (best-fit decreasing) with periodic reoptimization by the exact solver. The lower bound comes from the LP relaxation of the bin packing formulation. Regime boundaries are determined by the threshold where exact solver runtime exceeds the scheduling interval.
+   </ExerciseSolution>
+
+7. **Transfer: LP rounding for set cover.** The set cover LP relaxation is $\min \sum_S w_S x_S$ subject to $\sum_{S: e \in S} x_S \ge 1$ for all elements $e$, $0 \le x_S \le 1$. If you round by selecting all sets with $x_S^* \ge 1/f$ where $f$ is the maximum frequency of any element, what approximation ratio do you get? Why is this approach insufficient when $f$ is large?
+
+   <ExerciseSolution>
+   Each element $e$ appears in at most $f$ sets with fractional value at least $1/f$ (otherwise the sum would exceed $1$). So rounding at threshold $1/f$ selects at most $f$ sets per element, and each selected set costs at most $f \cdot w_S x_S^*$. Total cost $\le f \cdot \text{OPT}_\text{LP} \le f \cdot \text{OPT}$. This is an $f$-approximation. When $f$ is large (e.g., set cover with unrestricted frequency), the bound is weak — this motivates the $O(\log n)$-approximation via greedy or randomized rounding with repetition.
+   </ExerciseSolution>
+
+8. **Synthesis: Adversarial instance design.** For each algorithm below, design a family of instances where the algorithm performs at its worst-case guarantee (or provably cannot do better):
+   - (a) Double-tree for metric TSP
+   - (b) Maximal-matching for vertex cover
+   - (c) Scaled DP for knapsack
+   - (d) Greedy high-degree for vertex cover
+
+   <ExerciseSolution>
+   (a) A line of $n$ vertices with all other edge weights equal to $2 \cdot w(\text{path})$. MST follows the line (weight $L$). Double-tree weight $2L$. Shortcutting skips intermediate vertices, producing a direct edge of weight $2L$ — the optimal tour is the line back-and-forth with weight $2L$, so ratio $=1$. The worst case is a graph where shortcutting uses a nearly-MST-weight edge: a star with MST weight $S$, optimal TSP weight $\approx S/2$, producing ratio $\to 2$ as shown in Exercise 2.
+
+   (b) $k$ disjoint edges — optimal picks $k$, algorithm picks $2k$, ratio $=2$.
+
+   (c) Two items: $(v_1, w_1) = (V_{\max}, C)$, $(v_2, w_2) = (V_{\max}-\delta, C)$. Only one fits. Scaled values may become equal if $\delta < K$, causing DP to arbitrarily choose one. The lost value is $\le \varepsilon V_{\max}$.
+
+   (d) Star with $n-1$ leaves plus a matching among $n/2$ leaves (as in the CodeRunner above). Greedy picks the center then $n/2$ matching vertices, total $n/2+1$. Optimal picks just the center (size $1$). Ratio $\Theta(n)$.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+**Polynomial-time approximation schemes for geometric problems** — The shifting technique for Euclidean TSP and geometric packing (Arora 1998) uses a different paradigm; appears in the advanced algorithms module.
+
+**Approximation algorithms for polynomial-solvable problems** — This review targets NP-hard optimization; maximum matching and shortest path use exact methods.
+
+**PCP theorem proof** — One of the deepest results in theoretical CS; this lesson states consequences without proving the theorem. See Arora and Barak (2009, ch. 11, 22) for the full proof.
+
+**Semidefinite programming relaxations** — The Goemans–Williamson (1995) Max-Cut algorithm uses SDP; treated in the advanced approximation course.
+
+**Unique games conjecture and optimal inapproximability** — UGC implies tight thresholds for VERTEX COVER, MAX-CUT, and other problems; covered in the graduate complexity module.
+
+**Local search approximation algorithms** — Local search provides constant-factor approximations for MAX-CUT ($\frac12$), facility location, and $k$-median, but requires careful neighborhood design to escape local optima (Khanna et al. 1998; Williamson and Shmoys 2011, ch. 9). Omitted because the analysis techniques differ substantially from the LP-rounding and primal-dual patterns in this review.
 
 ## References & Further Reading
-* [MIT Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
+
+* Agrawal, A., Klein, P., and Ravi, R. "When Trees Collide: An Approximation Algorithm for the Generalized Steiner Problem on Networks." *STOC* (1991): 134–144.
+* Arora, S. "Polynomial Time Approximation Schemes for Euclidean TSP and Other Geometric Problems." *J. ACM* 45, no. 5 (1998): 753–782.
+* Arora, S. and Barak, B. *Computational Complexity: A Modern Approach*. Cambridge, 2009.
+* Arora, S., Lund, C., Motwani, R., Sudan, M., and Szegedy, M. "Proof Verification and the Hardness of Approximation Problems." *J. ACM* 45, no. 3 (1998): 501–555.
+* Christofides, N. "Worst-Case Analysis of a New Heuristic for the Travelling Salesman Problem." Technical Report, Carnegie Mellon University, 1976.
+* Chvátal, V. "A Greedy Heuristic for the Set-Covering Problem." *Math. Oper. Res.* 4, no. 3 (1979): 233–235.
+* Feige, U. "A Threshold of $\ln n$ for Approximating Set Cover." *J. ACM* 45, no. 4 (1998): 634–652.
+* Garey, M. R. and Johnson, D. S. *Computers and Intractability: A Guide to the Theory of NP-Completeness*. Freeman, 1979.
+* Gavril, F. "Algorithms for Minimum Coloring, Maximum Clique, Minimum Covering by Cliques, and Maximum Independent Set of a Chordal Graph." *SIAM J. Comput.* 3, no. 1 (1974): 68–81.
+* Goemans, M. X. and Williamson, D. P. "Improved Approximation Algorithms for Maximum Cut and Satisfiability Problems Using Semidefinite Programming." *J. ACM* 42, no. 6 (1995): 1115–1145.
+* Håstad, J. "Some Optimal Inapproximability Results." *J. ACM* 48, no. 4 (2001): 798–859.
+* Ibarra, O. H. and Kim, C. E. "Fast Approximation Algorithms for the Knapsack and Sum of Subset Problems." *J. ACM* 22, no. 4 (1975): 463–468.
+* Khanna, S., Motwani, R., Sudan, M., and Vazirani, U. "On Syntactic versus Computational Views of Approximability." *SIAM J. Comput.* 28, no. 1 (1998): 164–191.
+* Khot, S. and Regev, O. "Vertex Cover Might Be Hard to Approximate to Within $2-\varepsilon$." *J. CSS* 74, no. 3 (2008): 335–349.
+* Raghavan, P. and Tompson, C. D. "Randomized Rounding: A Technique for Provably Good Algorithms and Algorithmic Proofs." *Combinatorica* 7, no. 4 (1987): 365–374.
+* Sahni, S. and Gonzalez, T. "P-Complete Approximation Problems." *J. ACM* 23, no. 3 (1976): 555–565.
+* Vazirani, V. V. *Approximation Algorithms*. Springer, 2001.
+* Williamson, D. P. and Shmoys, D. B. *The Design of Approximation Algorithms*. Cambridge, 2011.

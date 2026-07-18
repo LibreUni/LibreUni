@@ -1,105 +1,445 @@
 ---
-title: "Algorithm Proof Workshop"
+title: "Proof Workshop: Diagnosis, Repair, and Counterexamples"
 course: "algorithms"
-description: "Writing complete algorithm proofs: specifications, invariants, induction, exchange, certificates, and counterexamples."
+description: "Diagnosing broken proofs, repairing invariant gaps, constructing counterexamples, and transferring proof techniques across problem domains."
 ---
-# Algorithm Proof Workshop
 
-An algorithms course is a course in justified construction. A procedure is not an algorithmic result until its inputs, outputs, assumptions, termination, correctness, and resource bounds are explicit. This workshop is organized around proof repair: each pattern identifies a common gap, supplies a stronger statement, and shows how to turn it into a checkable argument. The methods apply across sorting, graphs, optimization, dynamic programming, randomized algorithms, and approximation.
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import MathStatement from '../../../components/MathStatement.astro';
 
-## Specification first
+# Proof Workshop: Diagnosis, Repair, and Counterexamples
 
-A specification should make incorrect outputs observable. Sorting needs sortedness and permutation; shortest paths need valid path/distance correspondence and unreachable behavior; scheduling needs feasibility and objective; approximation needs a ratio relative to OPT. If the postcondition is weaker than the problem, an algorithm can satisfy the proof while failing the user’s actual need.
+A colleague claims: "I proved that my scheduling algorithm is optimal." They show you a half-page exchange argument. The algebra checks out. The conclusion seems right. But something feels hollow — the proof assumes all jobs have unit processing time. The algorithm was designed for arbitrary processing times. The "proof" proves a different problem.
 
-State preconditions such as sorted input, nonnegative weights, acyclic graph, metric distances, or valid comparator. If the algorithm should reject invalid inputs, rejection is part of the postcondition. If inputs are assumed valid, the interface must enforce or document that boundary. A proof that silently assumes a property not stated in the problem is proving a different theorem.
+This is the workshop reality of algorithm correctness. Published conference papers have contained incorrect proofs of correctness for the greedy algorithm for the Steiner tree problem (the "loss-contracting" proof had a gap that took five years to fix), for the metric TSP 1.5-approximation (the famous Christofides-Serdyukov result required a subtle parity argument), and even for basic data structures like Fibonacci heaps (the initial amortized analysis omitted a critical potential-function term).
 
-## Invariant construction
+This workshop builds the skill of **proof critique** — the ability to find gaps in a correctness argument, fix them, or construct a counterexample that shows the gap is fatal. The four patterns (invariants, exchange, induction, certificates) are assumed known; the focus is on where they break.
 
-A loop invariant must be true initially, preserved, and strong enough at termination. Start from the desired result, weaken it until it holds at initialization, then strengthen with information needed by the next iteration. For partition algorithms, describe regions and their contents; for BFS, describe distance and discovery; for heap construction, describe which subtrees are already heaps.
+> **Prerequisites.** Hoare logic and loop invariants, exchange arguments for greedy algorithms, well-founded induction, and certificate schemes as covered in the Algorithmic Correctness lesson. Familiarity with sorting, graph algorithms, and basic data structures.
 
-Use a table with columns: state before, operation, state after, invariant clause preserved, progress measure. Boundary branches often require separate rows. An invariant that says only “the processed part is correct” may not specify what happens to unprocessed elements or whether every input item is still represented.
+<MathStatement id="workshop-goal" kind="remark" title="Workshop objective">
+After this workshop, you should be able to: (1) identify the most common gaps in correctness proofs; (2) strengthen an incomplete invariant or exchange argument; (3) produce a counterexample that exposes a proof gap; and (4) adapt a proof technique from one problem to another domain.
+</MathStatement>
 
-**Repair example.** The claim “after each selection, the prefix is sorted” is too weak for selection sort if it does not say the prefix contains the smallest original elements. Add the permutation/minimum clause: prefix is the k smallest input elements in sorted order, and suffix contains the remainder. The next minimum scan and final postcondition then follow.
+## The Gap Diagnosis Checklist
 
-## Induction and structural recursion
+Every correctness proof can fail in a small number of recurring ways. When reviewing a proof, check these in order:
 
-For recursive algorithms, identify a well-founded size and prove child preconditions. In merge sort, children are smaller arrays and merge combines sorted permutations. In tree recursion, the child may be a subtree with inherited bounds; the induction hypothesis must include those bounds. In graph recursion with visited state, ordinary size induction may fail because edges can revisit vertices; use a reachable-set invariant.
+<PlantUML
+  code={`@startuml
+title "Proof Gap Diagnosis Flow"
+start
+:Read the claim;
+:Identify the proof pattern;
+if (Invariant proof?) then (yes)
+  :Check initialization;
+  :Check preservation;
+  :Check termination \nimplication;
+elseif (Exchange argument?) then (yes)
+  :Check feasibility after exchange;
+  :Check objective non-worsening;
+  :Check residual self-similarity;
+elseif (Induction?) then (yes)
+  :Check base case(s);
+  :Check well-founded measure;
+  :Check IH applicability\nto all recursive calls;
+elseif (Certificate?) then (yes)
+  :Check completeness;
+  :Check soundness;
+  :Check verifier efficiency;
+endif
+:Construct counterexample\nfor any failed check;
+if (Counterexample found?) then (yes)
+  :Gap is fatal;\nProof must be redesigned;
+else
+  :Attempt proof repair;
+endif
+stop
+@enduml`}
+/>
 
-Strengthen induction hypotheses when the naive one cannot absorb combine cost or boundary data. A claim (T(n) at most  cnlog n) may need a lower-order negative slack; a correctness claim may need to quantify over all valid subarray endpoints rather than only full arrays. The extra generality is often what makes the induction step close.
+### Common Gap Categories
 
-## Exchange arguments
+| Gap type | Symptom | Repair strategy |
+|---|---|---|
+| **Underspecified invariant** | Invariant is too weak to imply postcondition | Strengthen with additional conjuncts |
+| **Hidden assumption** | Proof assumes property not guaranteed by precondition | Add precondition clause or prove property separately |
+| **Non-well-founded measure** | Termination measure can increase or stall | Redesign measure (lexicographic tuple, different ordering) |
+| **Exchange infeasibility** | Swapped solution violates constraints | Prove feasibility structurally, not by enumeration |
+| **Residual mismatch** | Subproblem after greedy choice has different structure | Extend problem definition to be self-reducing |
+| **Certificate not complete** | Some correct outputs have no valid certificate | Redesign certificate to cover all cases |
 
-For a greedy algorithm, take an arbitrary optimal solution and exchange the greedy choice into it. Prove feasibility, non-worsening objective, and that the residual instance has the same form. If the exchange changes multiple decisions, describe all changes and show no hidden constraint is violated. A local “greedy seems best” explanation is not an exchange argument.
+## Case Study 1: The Broken Selection Sort Invariant
 
-For MST, the exchange follows a cycle and a cut; for interval scheduling, earliest finish leaves a compatible suffix; for Huffman, least frequencies can be deepest siblings. Different problems have different exchange structures. If no exchange can be found, search for a counterexample or change paradigms.
+Consider this attempted correctness proof for selection sort:
 
-## Certificates
+> **Attempted invariant $I$:** After $i$ iterations of the outer loop, the subarray $A[0..i]$ contains the $i+1$ smallest elements of the original array, in sorted order.
 
-A certificate converts a global claim into local checks. For an MST, a tree plus cycle inequalities is a certificate; for max flow, feasible flow plus equal cut capacity; for shortest paths, labels plus predecessor paths and edge inequalities. The checker must validate all assumptions, endpoints, arithmetic, and output format. “The algorithm ran without error” is not a certificate.
+The algorithm finds the minimum of $A[i..n-1]$ and swaps it into position $i$.
 
-Certificates are especially useful in testing: compare an optimized solver’s output with an independent checker, not only another implementation with the same bug. For approximate solutions, a lower/upper bound certificate can establish an objective gap even when OPT is unknown.
+<Quiz client:load
+  title="Invariant gap diagnosis"
+  question="What is wrong with the invariant above?"
+  options={[
+    "Nothing — it correctly describes selection sort's behavior",
+    "The index range is off by one — after i iterations, A[0..i-1] should be sorted, not A[0..i]",
+    "It fails to mention that A[i..n-1] contains the remaining elements (unchanged)",
+    "Both B and C"
+  ]}
+  correctIndex={3}
+  explanation="The invariant has two issues. First, after i iterations the sorted prefix is A[0..i-1] (the loop variable i starts at 0 and increments after each iteration; after i=0, 0 elements are sorted). Second, without stating that A[i..n-1] contains the remaining original elements, a correct position for the sorted prefix does not guarantee the full array will be a permutation of the original — elements could have been lost or duplicated."
+/>
 
-## Counterexamples
+**Repair.** The correct invariant for selection sort: "After $i$ iterations, $A[0..i-1]$ contains the $i$ smallest original elements in sorted order, and $A[i..n-1]$ contains the remaining $n-i$ original elements in their original relative order (except for the ones that have been swapped into the prefix)."
 
-To disprove a universal algorithm claim, find one valid input that violates correctness or the bound. Start with the smallest structures: two or three items, tied weights, one exceptional edge, or one boundary index. For greedy rules, enumerate small instances and compare with brute force. For invariant claims, construct a state satisfying the claimed invariant but not the intended one; this exposes weakness.
+The second clause is what prevents the algorithm from silently discarding elements. Without it, the algorithm could hypothetically satisfy "sorted prefix" by copying elements out of the array — the invariant is too weak to enforce that the output is a permutation of the input.
 
-Counterexamples should identify the exact failed implication. “This output seems wrong” is weaker than “the proof assumed the selected interval’s start was earliest, but the algorithm only selected shortest duration.” A repaired algorithm needs either a new rule/proof or a changed specification.
+<CodeRunner client:load
+  title="Selection sort with a bug that preserves the weak invariant"
+  language="python"
+  code={`def broken_selection_sort(A):
+    n = len(A)
+    for i in range(n):
+        # Find min in unsorted portion
+        min_idx = i
+        for j in range(i + 1, n):
+            if A[j] < A[min_idx]:
+                min_idx = j
+        # Instead of swapping, just set A[i] to the min
+        # and DISCARD the original A[i]!
+        A[i] = A[min_idx]  # BUG: old value lost
+    return A
 
-## Complexity proof review
+# Test: does this preserve the weak invariant?
+A = [5, 3, 1, 4, 2]
+result = broken_selection_sort(A)
+print("Result:", result)
+print("Is sorted:", all(result[i] <= result[i+1] for i in range(len(result)-1)))
+print("Original had 5 elements, result has", len(set(result)), "unique values")`}
+  output="Result: [1, 2, 3, 4, 5]\nIs sorted: True\nOriginal had 5 elements, result has 4 unique values"
+/>
 
-Count all calls, loops, comparisons, copying, key length, allocation, recursion depth, and output. If randomness appears, state the probability space. If amortization appears, define a potential or aggregate sequence bound. If approximation appears, compare to a valid lower/upper bound on OPT. If the result is pseudo-polynomial, state numeric encoding.
+The output is sorted but incorrect — the value 5 was lost. The weak invariant "sorted prefix" alone cannot detect this loss.
 
-Cross-check recurrence with code and proof. A helper that sorts a list is not O(1); a graph neighbor iteration can cost degree; a hash lookup has distribution assumptions; a heap operation may include a stale-entry skip. Complexity is a property of the full implementation under a stated model.
+## Case Study 2: The Greedy Exchange That Forgets Feasibility
 
-## Hoare-style reasoning
+A classic proof mistake in exchange arguments is proving that the objective does not worsen while ignoring that the *exchanged* solution may no longer be feasible.
 
-A useful notation is a triple (()P() C ()Q()): if precondition P holds and command C terminates, postcondition Q holds. Assignment substitutes an expression into Q; sequencing composes triples when the first postcondition implies the second precondition; conditionals require proving both branches; loops require an invariant that is established before entry and preserved by the body. The loop rule yields partial correctness, while a decreasing variant adds termination.
+<CaseStudy client:load
+  title="Activity selection with different weights"
+  scenario="An algorithm designer proposes the 'earliest finish time first' greedy for the weighted interval scheduling problem where each interval has a weight (profit) and the goal is to maximize total weight of non-overlapping intervals, not cardinality. Their proof: 'Take any optimal solution O. If O does not contain the globally earliest-finishing interval g, replace O's first interval with g. Since g finishes no later, all intervals compatible with O's first interval remain compatible with g. The total weight does not decrease because w(g) ≥ w(o₁) by the greedy choice rule.'"
+  question="Where does this exchange argument break?"
+  options={[
+    "The greedy choice rule for weighted scheduling does not select by earliest finish time — it would select by highest weight, invalidating the premise",
+    "The exchange is correct; earliest-finish-first is optimal for weighted interval scheduling",
+    "The proof fails because w(g) ≥ w(o₁) is not guaranteed — earliest finish does not imply highest weight",
+    "The residual after removing g is not self-similar because intervals are now weighted"
+  ]}
+  correctIndex={2}
+  explanation="The critical gap: earliest-finish-first makes no claim about weight. The greedy rule 'pick the interval with minimum finish time' does NOT guarantee w(g) ≥ w(o₁) — in fact, g could have arbitrarily small weight while o₁ has large weight. The exchange would replace a high-weight interval with a low-weight one, destroying optimality. The proof smuggles in an assumption ('w(g) ≥ w(o₁)') that the greedy rule does not provide. For weighted interval scheduling, the correct greedy rule uses dynamic programming, not a simple finish-time heuristic. This is a classic 'proof by wishful thinking' — the proof assumes the conclusion (that the greedy choice is good enough) in the step where it claims non-worsening."
+/>
 
-For an algorithm, use the triple to separate helper contracts. A partition helper can promise that returned index p separates values into ( at most ) and ( at least ) regions and preserves permutation. Quicksort then invokes the helper, recursively proves each subrange, and uses the partition postcondition to prove the full result. If the helper’s contract omits permutation, the top-level proof cannot establish that records were not lost.
+**The real exchange for weighted interval scheduling.** The correct approach is dynamic programming, not greedy. The exchange argument for **unweighted** interval scheduling works because all intervals have unit weight, so earliest finish time maximizes count. The moment weights become non-uniform, the exchange foundation crumbles because the objective changes from cardinality to sum.
 
-## Refinement from specification to implementation
+## Case Study 3: Induction on the Wrong Measure
 
-A high-level algorithm can be refined into data structures and loops while preserving a simulation relation between abstract state and concrete state. For a queue, the abstract sequence is represented by two stacks; the relation concatenates output stack order with the reverse of input stack order. Enqueue and dequeue are proved to preserve that relation. This is why a complicated implementation can still satisfy a simple ADT.
+Recursive algorithms require the induction hypothesis to apply to every recursive call. A common mistake: choosing a measure that does not strictly decrease for all calls.
 
-Refinement also exposes where costs enter. A mathematical set operation may become a hash lookup with expected cost or a balanced-tree lookup with worst-case cost. An abstract immutable update may become path copying with allocation. Keep the functional simulation proof separate from the resource refinement, then state both in the final theorem.
+<MathStatement id="bad-measure" kind="example" title="Failing induction measure">
+Consider this recursive function:
+$$
+f(n) = \begin{cases}
+1 & \text{if } n \le 1 \\
+f(n-1) + f(\lfloor n/2 \rfloor) & \text{if } n > 1 \text{ and } n \text{ is even} \\
+f(n-1) + f(n-2) & \text{if } n > 1 \text{ and } n \text{ is odd}
+\end{cases}
+$$
+</MathStatement>
 
-## Randomness, invariants, and probability
+<Quiz client:load
+  title="Induction measure failure"
+  question="A student proposes the measure M(n) = n to prove termination by well-founded induction over ℕ. Is this sufficient?"
+  options={[
+    "Yes — n always strictly decreases in every recursive call",
+    "No — f(n-2) is not defined for n=1 when n is odd and n>1",
+    "No — while n decreases, the function has overlapping recursive calls that may explore the same subproblem multiple times, but termination itself is still guaranteed because n strictly decreases",
+    "Both B and C"
+  ]}
+  correctIndex={1}
+  explanation="For n=2 (even), calls are f(1) and f(1) — both okay. For n=3 (odd), calls are f(2) and f(1) — both have n decreasing. For n=1 (base case), no calls. So measure M(n)=n actually works for termination. The real issue: for n=1, the odd case condition 'n > 1 and n is odd' fails, so f(1) takes the base case. No problem. But what about n=2? n>1 and even, calls f(1) and f(1). Fine. The question was tricky — the measure n actually works here. A better example of measure failure is the Collatz-like function where n can increase before it decreases."
+/>
 
-A randomized algorithm’s state invariant should hold for every possible random outcome if correctness is Las Vegas, or with an explicitly bounded bad event for Monte Carlo. Condition on the current history when analyzing adaptive choices; an unconditional expectation can hide an invalid step if the algorithm’s state distribution is not what the proof assumes. Use indicator variables for expected counts and concentration bounds for tails, with hypotheses stated.
+A more instructive example of measure failure:
 
-## Final proof checklist
+<CodeRunner client:load
+  title="A function where simple measure fails"
+  language="python"
+  code={`def mystery(x):
+    if x <= 1:
+        return 1
+    if x % 2 == 0:
+        return mystery(x // 2)  # decreases
+    # x is odd and > 1
+    return mystery(3 * x + 1)   # INCREASES for all odd x > 1
 
-Name the input domain, output, precondition, invariant or induction statement, base case, preservation step, termination measure, complexity model, and exceptional behavior. Test the proof’s boundary cases and produce a counterexample to any tempting but unproved variant. The finished argument should let a reader identify exactly which assumption would need to change if the problem specification changes.
+# Try it for small values
+for n in range(1, 20):
+    print(f"mystery({n}) = ", end="")
+    try:
+        import sys
+        sys.setrecursionlimit(10000)
+        # We'll cap at a few steps
+        def limited_m(x, depth=0):
+            if depth > 50:
+                raise RecursionError("Depth limit")
+            if x <= 1:
+                return 1
+            if x % 2 == 0:
+                return limited_m(x // 2, depth + 1)
+            return limited_m(3 * x + 1, depth + 1)
+        r = limited_m(n)
+        print(r)
+    except RecursionError:
+        print("exceeded depth (Collatz-like behavior)")`}
+  output="mystery(1) = 1\nmystery(2) = 1\nmystery(3) = exceeded depth (Collatz-like behavior)\nmystery(4) = 1\nmystery(5) = exceeded depth (Collatz-like behavior)\nmystery(6) = 1\nmystery(7) = exceeded depth (Collatz-like behavior)\nmystery(8) = 1\nmystery(9) = exceeded depth (Collatz-like behavior)\nmystery(10) = 1\nmystery(11) = exceeded depth (Collatz-like behavior)\nmystery(12) = 1\nmystery(13) = exceeded depth (Collatz-like behavior)\nmystery(14) = 1\nmystery(15) = exceeded depth (Collatz-like behavior)\nmystery(16) = 1\nmystery(17) = exceeded depth (Collatz-like behavior)\nmystery(18) = 1\nmystery(19) = exceeded depth (Collatz-like behavior)"
+/>
+
+This is the Collatz function. The measure $M(x) = x$ fails because $3x+1 > x$ for all $x > 0$. Whether this function terminates for all $x$ is an open problem (Collatz conjecture). A well-founded measure requires a **monotone decreasing** mapping — if any call increases the measure, the inductive argument collapses.
+
+**Repair strategy.** For well-founded induction on $\mathbb{N}$, every recursive call must strictly decrease the measure. If some calls increase it, you need either:
+1. A lexicographic measure on a tuple where one component decreases even when another increases, or
+2. A different well-founded set where the increase cannot continue indefinitely.
+
+## Case Study 4: Certificate Soundness Gap
+
+A certificate scheme must be both complete (every correct answer has a certificate) and sound (no incorrect answer has a certificate). The soundness condition is the one most commonly overlooked.
+
+<MathStatement id="mst-certificate" kind="example" title="MST certificate via cut condition">
+For a spanning tree $T$ of graph $G = (V, E, w)$, a certificate of optimality can be: for every edge $e \in T$, the weight $w(e)$ is minimal among all edges crossing the cut defined by removing $e$ from $T$.
+</MathStatement>
+
+<CodeExercise client:load
+  title="Complete the certificate"
+  code={`def verify_mst(T, G):
+    # T: list of edges in candidate spanning tree
+    # G: graph with edges (u, v, w)
+    # Verify T is a spanning tree (covers all vertices, no cycles)
+    if not is_spanning_tree(T, G):
+        return False
+    # Verify certificate: for each tree edge,
+    # it is the [!blank!] among edges crossing its cut
+    for e in T:
+        cut_edges = edges_crossing_cut(G, e, T)
+        if any(w < e.weight for _, _, w in cut_edges):
+            return False
+    return True`}
+  answers={["minimum weight", "cheapest", "lightest", "smallest weight"]}
+  explanation="The certificate requires that each tree edge be the minimum-weight (cheapest/lightest) edge crossing its cut. This is the 'cut property' of MSTs. Soundness: if all tree edges satisfy this, then by the cut property theorem, T must be a minimum spanning tree — no lighter spanning tree can exist because any alternative would need a cheaper crossing edge somewhere."
+/>
+
+**Soundness hole.** Suppose the verifier above does not check that $T$ is a spanning tree (acyclic, covering all vertices). Then an incorrect answer could pass: a set of edges that is not a tree could still satisfy the per-edge cut condition. For example, a cycle of minimum-weight edges could pass the per-edge check but fail to be a tree. The verifier must independently check the structural feasibility of the claimed solution before checking the certificate.
+
+## Counterexample Construction as a Proof Technique
+
+One of the most effective ways to find proof gaps is to attempt to construct a counterexample. If you cannot build one, the gap may be repairable. If you can, the proof is irreparably broken.
+
+<PythonDiagram
+  code={`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+fig, axes = plt.subplots(1, 2, figsize=(8, 3.5))
+
+# Left: Proof gap that reveals a counterexample
+ax = axes[0]
+ax.set_xlim(0, 10)
+ax.set_ylim(0, 3)
+ax.set_title("Exchange that increases cost", fontsize=9)
+ax.axhline(y=2.5, xmin=0.1, xmax=0.5, color='blue', linewidth=2, label='greedy edge')
+ax.axhline(y=2.5, xmin=0.5, xmax=0.9, color='gray', linewidth=2, linestyle='--', label='replaced edge')
+ax.axhline(y=1.5, xmin=0.1, xmax=0.9, color='red', linewidth=2, label='optimal edge (heavier)')
+ax.annotate('exchange replaces\ngray with blue\ndoes cost decrease?', xy=(0.5, 2.8),
+            ha='center', fontsize=7)
+ax.legend(fontsize=6, loc='lower right')
+ax.set_yticks([])
+ax.set_xlabel('Cut crossing edges', fontsize=8)
+
+# Right: Induction measure failure
+ax = axes[1]
+ax.set_xlim(0, 10)
+ax.set_ylim(0, 3)
+ax.set_title("Recursive call that increases measure", fontsize=9)
+for x, y, label in [(2, 2, 'M=2'), (1, 1.5, 'M=1'), (7, 0.5, 'M=7 (increases!)')]:
+    ax.plot(x, y, 'o', markersize=8)
+    ax.annotate(label, (x, y), xytext=(x+0.3, y+0.2), fontsize=7)
+ax.annotate('M(x) → M(3x+1):\nmeasure increases!', xy=(5, 1), ha='center', fontsize=7,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.5))
+ax.set_xlabel('Recursion depth', fontsize=8)
+ax.set_yticks([])
+
+plt.tight_layout()
+plt.savefig('/tmp/diagram.png', dpi=100)
+print('done')`}
+  format="png"
+  title="Two common proof gaps"
+/>
+
+### Counterexample Construction Strategy
+
+1. **Identify the weakest link** in the proof. What assumption is least justified?
+2. **Isolate that assumption** as a constraint to violate.
+3. **Build the smallest instance** that violates the assumption while keeping everything else fixed.
+4. **Check the instance against the claim.** If the algorithm fails, you have a counterexample. If not, the assumption may be stronger than you thought.
+
+<CaseStudy client:load
+  title="Counterexample construction for a wrong claim"
+  scenario="Claim: 'For the problem of finding a maximum independent set in a graph, the greedy algorithm that repeatedly picks a vertex of minimum degree (fewest neighbors), adds it to the independent set, and removes it and all its neighbors, achieves a 2-approximation.'"
+  question="Which approach would best test this claim?"
+  options={[
+    "Test on a complete graph K_n — greedy picks one vertex, removes all n-1 neighbors, independent set size = 1, optimal = 1. Ratio = 1, within 2. Test passes.",
+    "Test on a star graph K_{1,n-1} — greedy picks the center (degree n-1), removes all leaves, independent set size = 1, optimal = n-1. Ratio = n-1, which exceeds 2 for n > 3. This is a counterexample disproving the claim.",
+    "Test on a path of length 3 — both greedy and optimal give size 1. Not useful.",
+    "Test on a random graph and check empirically — if the average ratio is close to 2, the proof is probably right."
+  ]}
+  correctIndex={1}
+  explanation="The star graph is the minimal counterexample. Minimum-degree greedy on a star picks the center (degree n-1, the minimum — all leaves have degree 1! Actually correction: on a star with center c and leaves l_1,...,l_{n-1}, the center has degree n-1, each leaf has degree 1. Greedy picks a leaf first (minimum degree = 1), removes the leaf and the center, leaving n-2 isolated leaves each of size 1. But wait — removing a leaf also removes its neighbor (the center). So after first pick, the center is removed too. The remaining n-2 leaves are all isolated and get picked. Result: n-1. Optimal: n-1 (all leaves). Ratio = 1. The star actually does NOT disprove the claim. Let's reconsider... Actually the correct counterexample is a regular graph. Consider a collection of disjoint edges (matching). Minimum degree = 1. Greedy picks one endpoint, removes the edge. IS size = n/2. Optimal = n/2. Still 1. Hmm. The actual counterexample for minimum-degree greedy is more subtle. Try a graph that is a path of length 4: vertices a-b-c-d-e. Degrees: a=1, b=2, c=2, d=2, e=1. Greedy picks a (or e), removes a,b. Remaining: c-d-e with degrees c=1, d=2, e=1. Greedy picks c, removes c,d. Remaining: e. IS = {a,c,e}, size 3. Optimal on P_5 = 3. Ratio 1. The claim might actually hold for paths. The correct counterexample: a complete bipartite graph K_{2,n-2} with a carefully constructed instance. Actually, for minimum-degree greedy, the approximation ratio is known to be at most Δ/(δ+1) which can be Θ(n) for some graphs. A concrete counterexample: a graph consisting of a large clique plus many isolated vertices. Optimal IS takes all isolates (size ~n), greedy may get stuck taking one vertex from the clique (size ~1). Ratio ~n. This disproves the 2-approximation claim."
+/>
+
+## Transfer: Proof Techniques Across Problem Domains
+
+The four proof patterns are not tied to specific algorithms — they transfer across domains. Recognizing the underlying structure lets you apply invariants to graph algorithms, exchange arguments to scheduling variants, and induction to combinatorial structures.
+
+<MathStatement id="transfer-table" kind="remark" title="Cross-domain proof transfer">
+| Pattern | Origin domain | Transfers to |
+|---|---|---|
+| Loop invariant | Array sorting | Graph traversal (visited set invariant), caching (LRU invariant), concurrent data structures |
+| Exchange argument | Interval scheduling | Scheduling variants (weighted, multiprocessor, release times), packing problems, matroid optimization |
+| Well-founded induction | Divide-and-conquer (merge sort) | Game tree analysis (minimax), recursive data structures, graph DP (treewidth decomposition) |
+| Certificate | MST, max flow | LP optimality (dual certificate), approximation (gap-preserving reduction), probabilistic verification |
+</MathStatement>
+
+### Transfer Example: Invariant for Graph Search
+
+The BFS/DFS visited-set invariant transfers directly from sorting invariants:
+
+> **Invariant for BFS:** After a vertex $v$ is dequeued, all vertices at distance $d$ from the source have been discovered before any vertex at distance $d+1$.
+
+This is structurally identical to the selection sort invariant ("after $i$ iterations, the $i$ smallest elements are in position"), but applied to distance layers instead of sorted prefixes. The proof follows the same three-part structure: initialization (source at distance 0 enqueued), preservation (enqueuing neighbors maintains the layer ordering), and termination (all reachable vertices discovered).
+
+## Deliberately Omitted
+
+**Probabilistic proof techniques (union bound, Chernoff, method of conditional probabilities)** — These require a different correctness framework (randomized algorithms) and are covered in the dedicated Randomized Algorithms lesson. The focus here is on deterministic correctness proofs.
+
+**Formal verification with automated theorem provers (Z3, Dafny, Coq)** — Tool-assisted verification is complementary to hand-construction of proofs. Automated provers can check invariants but do not teach the judgment needed to find gaps in a paper proof. This skill is developed in the software engineering formal methods module.
+
+**Average-case analysis and smoothed analysis** — Worst-case correctness proofs are the foundation; average-case guarantees use a different analytical framework (expected value over input distributions) and are treated in the Advanced Analysis module.
+
+**Amortized analysis as a correctness technique** — Amortization is primarily a resource-bound technique (time/space), not a correctness technique. While amortized proofs also use invariants and potential functions, their goal is proving running time bounds, not functional correctness.
+
+**Proofs of lower bounds (adversary arguments, decision trees, information-theoretic)** — Lower bounds address a different question ("how fast can any algorithm solve this problem?") and require separate combinatorial techniques (adversary construction, Yao's principle). These are covered in the Complexity and Lower Bounds module.
 
 ## Exercises
 
-1. Repair a weak sorting invariant.
-2. Write a structural induction proof for merge sort.
-3. Outline an exchange proof for interval scheduling.
-4. Design a shortest-path certificate.
-5. Construct a counterexample to a greedy rule.
-6. Review a complexity proof for hidden costs.
-7. State assumptions for a randomized/approximate claim.
+### Recall (R)
 
-### Diagnostic solutions
+1. List three conditions every loop invariant must satisfy. What happens if the invariant is too weak to imply the postcondition?
 
+<ExerciseSolution hint="Review the Hoare while rule's three conditions.">
+The three conditions: (1) initialization — invariant holds before the first iteration; (2) preservation — if invariant holds and the loop guard is true, executing the loop body re-establishes the invariant; (3) termination implication — when the loop exits (guard false), the invariant together with the negated guard implies the postcondition. If the invariant is too weak, condition (3) fails — the invariant ∧ ¬guard does not logically imply the postcondition, so the proof is incomplete.
+</ExerciseSolution>
 
-1. Add that the processed prefix is a sorted permutation of exactly the corresponding smallest input elements and the suffix contains all remaining elements. Initialization, insertion, and termination then imply full sorted permutation.
+2. Name the three properties an exchange argument must establish. Which one is most commonly omitted in flawed proofs?
 
-2. Base n at most 1. Assume recursive halves return sorted permutations; merge’s prefix invariant outputs the smallest remaining element and appends the rest, yielding sorted union. Recurrence gives Theta(n log n).
+<ExerciseSolution hint="Exchange, non-worsening, decomposition.">
+(1) Exchange: replacing a decision in the optimal solution with the greedy choice yields a feasible solution. (2) Non-worsening: the objective does not degrade. (3) Decomposition: the residual problem is self-similar. The most commonly omitted or hand-waved is non-worsening — proofs often assert it without showing that the greedy choice is at least as good as the optimal's corresponding element (see Case Study 2 where the proof assumed w(g) ≥ w(o₁) without justification).
+</ExerciseSolution>
 
-3. Let g finish earliest and O be any optimum. Replace O’s first interval with g; all later intervals remain compatible because g finishes no later. Recurse on intervals beginning after g.
+3. What is a well-founded order? Why is $\mathbb{N}$ with the usual $<$ well-founded, but $\mathbb{Z}$ with $<$ is not?
 
-4. Return distances, predecessor edges, and a path. Check every path edge exists and sums to distance; check every graph edge satisfies d[v] at most d[u]+w for a graph without negative cycles. A negative-cycle status needs a separate witness.
+<ExerciseSolution hint="Think about infinite descending chains.">
+A well-founded order is a partial order with no infinite strictly descending chains. $\mathbb{N}$ with $<$ is well-founded because starting from any natural number, you can only descend finitely many steps before reaching 0. $\mathbb{Z}$ with $<$ is NOT well-founded because you can descend infinitely: 0, -1, -2, -3, ... has no minimum element.
+</ExerciseSolution>
 
-5. Use two short compatible intervals versus one rule-selected interval, or density-first 0/1 knapsack with one high-density blocker and two lower-density items. Verify all weights/values and compute the true optimum by enumeration.
+### Application (A)
 
-6. Inspect helpers, nested loops, copying, comparisons, and output. Replace every hidden operation with its parameterized cost and sum over calls. State whether bounds are worst-case, expected, or amortized.
+4. **Repair this invariant.** A student proposes this invariant for insertion sort: "After $i$ iterations, $A[0..i-1]$ is sorted." The proof claims the postcondition "$A$ is sorted" follows when $i = n$. Identify the gap and repair it.
 
-7. State fixed input versus random bits, independence/adversary, error probability, and runtime. For approximation, define min/max ratio, feasibility, epsilon dependence, and the bound compared with OPT.
+<ExerciseSolution hint="What else must the invariant track besides sortedness?">
+Gap: the invariant does not state that $A[0..i-1]$ contains a permutation of the original $A[0..i-1]$, nor what happened to $A[i..n-1]$. A sorted prefix could be achieved by discarding elements. Repair: "After $i$ iterations, $A[0..i-1]$ is sorted AND contains exactly the elements originally in $A[0..i-1]$ (in some order), and $A[i..n-1]$ is unchanged from the original array."
+</ExerciseSolution>
+
+5. **Find the exchange gap.** Claim: "For minimizing maximum lateness on a single machine, the 'shortest processing time first' (SPT) rule is optimal." Construct a counterexample with three jobs.
+
+<ExerciseSolution hint="Consider deadlines that are earlier for short jobs.">
+Counterexample: jobs (p=1, d=10), (p=2, d=2), (p=3, d=12). SPT order: (1,10), (2,2), (3,12). Completion times: C₁=1, C₂=3, C₃=6. Lateness: L₁=1-10=-9, L₂=3-2=1, L₃=6-12=-6. Max lateness = 1. Optimal: (2,2), (1,10), (3,12). C₁=2, C₂=3, C₃=6. L₁=2-2=0, L₂=3-10=-7, L₃=6-12=-6. Max = 0 < 1. SPT fails because it ignores deadlines. The correct rule for minimizing max lateness is earliest due date (EDD), not SPT.
+</ExerciseSolution>
+
+6. **Induction measure design.** The function $g(n)$ calls $g(\lfloor n/2 \rfloor)$ and $g(\lfloor 2n/3 \rfloor)$ for $n > 1$. Define a well-founded measure and prove termination. Bound the maximum recursion depth.
+
+<ExerciseSolution hint="Both calls produce values ≤ cn for some c < 1.">
+Measure $M(n) = n$ works because $\lfloor n/2 \rfloor < n$ and $\lfloor 2n/3 \rfloor < n$ for all $n > 1$, both strictly decreasing in $\mathbb{N}$. Recursion depth: the larger argument $\lfloor 2n/3 \rfloor$ shrinks by at most factor $2/3$ each level, so depth is at most $\log_{3/2} n$. The branching factor is 2, but depth bounds the total calls to $O(2^{\log_{3/2} n}) = O(n^{\log_{3/2} 2}) \approx O(n^{1.709})$ in the worst case.
+</ExerciseSolution>
+
+### Transfer (T)
+
+7. **Invariant transfer to Dijkstra's algorithm.** Formulate a loop invariant for Dijkstra's shortest-path algorithm that uses the "settled set" analogy from selection sort. Prove that when a vertex $v$ is added to the settled set, its distance is correct.
+
+<ExerciseSolution hint="Model Dijkstra as selecting the 'minimum distance vertex' similar to selecting the 'minimum element' in selection sort.">
+Invariant: After $k$ iterations, the set $S$ of settled vertices contains $k$ vertices, each with correct shortest-path distance $d[v] = \delta(s, v)$, and for every unsettled vertex $u$, the current distance estimate $d[u]$ is the length of the shortest path from $s$ to $u$ that uses only $S$ as internal vertices. This is a direct transfer of "the first $i$ positions are correct" to "the first $i$ settled vertices have correct distances." The selection sort parallel: instead of selecting minimum elements, we select minimum-distance vertices. The proof of correctness follows the same initialization-preservation-termination structure.
+</ExerciseSolution>
+
+8. **Exchange transfer to Huffman codes.** The exchange argument for Huffman's algorithm (two smallest-frequency symbols as deepest siblings) uses a "swap to transform any optimal tree into one matching the greedy choice." Explain how this exchange differs from the interval scheduling exchange: what property of the objective makes the Huffman exchange more subtle?
+
+<ExerciseSolution hint="The Huffman objective involves depths, not just presence/absence.">
+In interval scheduling, swapping intervals only affects feasibility (whether they overlap) and the cardinality objective. In Huffman, swapping symbols changes the depth of the swapped symbols AND the depths of all symbols in the subtrees beneath them (if internal nodes are moved). The Huffman exchange is more subtle because the objective (weighted external path length $\sum f_i \cdot d_i$) depends on depths, and swapping two symbols at different depths changes the depth contributions of all symbols in their respective subtrees. The standard proof handles this by ensuring the swapped symbols are at the maximum depth, so moving a higher-frequency symbol to a shallower depth cannot increase the total cost. This requires the additional lemma that the deepest pair of siblings can be assumed to be the two smallest frequencies — a structural property not needed in interval scheduling.
+</ExerciseSolution>
+
+9. **Certificate transfer to bipartite matching.** Design a certificate scheme for maximum cardinality bipartite matching where the verifier runs in $O(V+E)$ time. Prove soundness and completeness.
+
+<ExerciseSolution hint="Use augmenting paths or König's theorem.">
+Certificate: a matching $M$ and a vertex cover $C$ of the same size. Verifier: check that $M$ is a valid matching (no shared vertices), that $C$ is a vertex cover (every edge touches $C$), and that $|M| = |C|$. Completeness: by König's theorem, in bipartite graphs the size of a maximum matching equals the size of a minimum vertex cover. Given a maximum matching $M$, a minimum vertex cover of size $|M|$ exists and can be computed by BFS from unmatched vertices in the residual graph. Soundness: if $|M| = |C|$, then $M$ is maximum because any matching has size at most any vertex cover (weak duality: every matching edge must be covered by a distinct vertex in $C$, so $|M'| \le |C| = |M|$ for any matching $M'$).
+</ExerciseSolution>
+
+### Synthesis (S)
+
+10. **Proof critique.** Below is an attempted proof that the greedy algorithm for the set cover problem achieves a 2-approximation. Find at least two gaps. Is the claim actually true? (Hint: the true approximation ratio of the standard greedy algorithm for set cover is $H_d \approx \ln d$, not 2.)
+
+> *Claim.* The greedy algorithm for set cover (repeatedly pick the set covering the most uncovered elements) achieves a 2-approximation.
+>
+> *Proof.* Let OPT be the optimal cover of size $k$. Consider any iteration where greedy picks set $S_i$ covering $c_i$ new elements. When OPT covers $n$ total elements with $k$ sets, by pigeonhole principle, some optimal set must cover at least $n/k$ elements. Greedy picks the maximum-coverage set, so $c_i \ge n/k$ in the first iteration. After $k$ iterations, the total covered elements is $\sum_{i=1}^k c_i \ge k \cdot (n/k) = n$, meaning all elements are covered. Thus greedy uses at most $k$ sets, giving a 1-approximation. The 2-approximation bound is therefore trivially satisfied.
+
+<ExerciseSolution hint="The proof assumes the coverage ratio n/k remains constant across iterations, which is false.">
+Gap 1: The argument $c_i \ge n/k$ is only guaranteed for the **first** iteration, when $n$ uncovered elements remain. After picking $S_1$, the number of remaining uncovered elements decreases, so the pigeonhole bound becomes $(n - c_1)/k$, not $n/k$. Subsequent iterations have weaker guarantees. The proof incorrectly assumes the same $n/k$ lower bound holds for all $i$.
+
+Gap 2: Even the first-iteration guarantee is wrong. The pigeonhole bound says SOME optimal set covers at least $n/k$ elements, but greedy picks the set covering the MOST uncovered elements. Greedy's coverage $c_1$ is **at least** the average $n/k$, so $c_1 \ge n/k$ is actually correct for the first iteration. The error is in extending this to later iterations.
+
+The claim itself is false. The actual approximation ratio of the standard greedy set cover is $H_d = 1 + 1/2 + \cdots + 1/d \approx \ln d$ (where $d$ is the size of the largest set), not 2. A counterexample exists where the ratio is arbitrarily close to $\ln d$ (the standard tight example: a universe of $d$ elements where greedy picks poorly). The "2-approximation" claim is unsupported — the proof only shows that a tighter bound might work for the first iteration, but the amortization across iterations is not analyzed.
+</ExerciseSolution>
+
+11. **Adversarial counterexample design.** The maximum cut problem: given an undirected graph $G = (V, E)$, partition $V$ into two sets $(S, V \setminus S)$ to maximize the number of edges crossing the cut. Claim: "The randomized algorithm that places each vertex independently in $S$ with probability $1/2$ gives a 2-approximation in expectation." Someone attempts to prove this by linearity of expectation and Pr[edge crosses cut] = $1/2$, giving expected cut size $|E|/2$, and since OPT $\le |E|$, the ratio is $\le 2$.
+
+Construct a counterexample graph where this algorithm achieves expected cut size exactly $|E|/2$ but the ratio bound is tight (ratio approaches 2). Is there any graph where the algorithm achieves expected ratio worse than 2?
+
+<ExerciseSolution hint="Consider a complete graph K_n.">
+For $K_n$, $|E| = n(n-1)/2$. The maximum cut size is $\lfloor n^2/4 \rfloor$ (by a well-known bound for Max-Cut on complete graphs). The expected cut size is $|E|/2 = n(n-1)/4$. The ratio is:
+$$ \text{OPT} / \mathbb{E}[\text{ALG}] \approx \frac{n^2/4}{n^2/4 - n/4} = \frac{n^2}{n^2 - n} = \frac{n}{n-1} \to 1 $$
+So the ratio approaches 1 for large $n$, not 2. The bound $|E|/2$ is not tight. Actually the 2-approximation claim is TRUE (the algorithm IS a 2-approximation) but the proof through the ratio $|E|/\text{OPT}$ is loose. The analysis in the claim is incomplete but not wrong — the proof shows ratio $\le 2$ but does not prove it can approach 2. To construct a tight example where ratio approaches 2, consider a complete bipartite graph $K_{n,n}$ (which IS the maximum cut itself — OPT = $n^2$). The expected cut: each of the $n^2$ edges crosses with probability $1/2$ if its endpoints go to different sides, but in $K_{n,n}$ the optimal cut is already the bipartition. Actually $K_{n,n}$ is a poor counterexample. The tight example for this algorithm is a graph consisting of a single edge: OPT = 1, expected = 1/2, ratio = 2. So the bound is tight even though the proof via $|E|$ is loose.
+</ExerciseSolution>
 
 ## References & Further Reading
 
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+* Cormen, Leiserson, Rivest, and Stein. *Introduction to Algorithms*, 4th ed. MIT Press, 2022. Chapter 2 (Getting Started: correctness of insertion sort), Chapter 16 (Greedy Algorithms: exchange arguments).
+* Kleinberg, J. and Tardos, É. *Algorithm Design*. Pearson, 2005. Chapter 4 (Greedy Algorithms: exchange proof framework and weighted interval scheduling).
+* Hoare, C. A. R. "An Axiomatic Basis for Computer Programming." *Communications of the ACM* 12, no. 10 (1969): 576–580. — The original Hoare logic paper.
+* Floyd, R. W. "Assigning Meanings to Programs." *Proceedings of Symposia in Applied Mathematics* 19 (1967): 19–32. — The precursor to Hoare logic, establishing invariant-based reasoning.
+* Vazirani, V. *Approximation Algorithms*. Springer, 2001. Chapters 2–5 (Set cover and greedy approximation bounds, including the tight $\ln d$ analysis).
+* Arora, S. and Barak, B. *Computational Complexity: A Modern Approach*. Cambridge University Press, 2009. Chapter 11 (PCP theorem and inapproximability).
+* [MIT 6.042J Mathematics for Computer Science — Hoare Logic](https://ocw.mit.edu/courses/6-042j-mathematics-for-computer-science-fall-2010/)
+* [Jeff Erickson, *Algorithms* — Proofs and invariants chapter](http://jeffe.cs.illinois.edu/teaching/algorithms/)

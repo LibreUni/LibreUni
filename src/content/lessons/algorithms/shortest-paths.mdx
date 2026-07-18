@@ -1,103 +1,387 @@
 ---
 title: "Shortest Paths"
 course: "algorithms"
-description: "Relaxation, Dijkstra, Bellman-Ford, potentials, path reconstruction, and negative-cycle reasoning."
+description: "Relaxation lemma, Dijkstra, Bellman-Ford, Johnson, Floyd-Warshall, potentials, negative cycle detection, and path reconstruction."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import TikZ from '../../../components/TikZ.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Shortest Paths
 
-Given a weighted graph and source s, the single-source shortest-path problem asks for the minimum path distance from s to every reachable vertex and often a predecessor tree that reconstructs paths. The algorithm depends critically on edge-weight assumptions. Dijkstra requires nonnegative weights; Bellman-Ford tolerates negative edges and detects reachable negative cycles; DAG relaxation works with arbitrary weights when the graph is acyclic. A path-length answer without these assumptions is not a complete algorithm.
+In 1956, Edsger Dijkstra sat down at a cafe in Amsterdam to think about a practical problem: given a road map, what is the shortest route from Rotterdam to Groningen? Within twenty minutes, working without pencil or paper, he designed the algorithm we now know as Dijkstra's algorithm (Dijkstra 1959).
 
-## Relaxation
+Breadth-first search finds the fewest *edges* between two vertices — but on a road map, a route with fewer road segments may be much longer if those segments are slow. The actual goal is the *minimum-weight* path, where weight represents distance, time, or cost.
 
-For edge (u,v) with weight w, relaxation tests whether (d[v] greater than d[u]+w). If so, set d[v]=d[u]+w and predecessor[v]=u. Initialize d[s]=0 and all others infinity. The fundamental invariant is that every finite label is the length of some s-to-v path, while labels may be upper bounds on the true optimum. Relaxation preserves the upper-bound property because replacing a label with a concrete path length remains a valid path.
+**Prerequisites.** Familiarity with directed graphs, adjacency lists, and big-O analysis. The BFS algorithm for unweighted graphs provides a useful comparison point.
 
-If no edge can relax after a complete pass over all edges, the labels satisfy (d[v] at most  d[u]+w(u,v)) for every edge. Any path’s edge inequalities telescope to (d[t] at most ) length(path), while concrete-path upper bounds give (d[t] at least delta(s,t)) in the appropriate direction; together labels equal shortest distances when no reachable negative cycle invalidates the minimum.
+**Problem (single-source shortest paths).** Given a directed graph $G = (V,E)$ with edge-weight function $w: E \to \mathbb{R}$ and a source vertex $s$, find $\delta(s,v)$, the minimum weight of any path from $s$ to $v$, for every reachable $v \in V$. If a negative-weight cycle is reachable from $s$, report its existence.
 
-## Dijkstra’s algorithm
+The choice of algorithm depends on the weight structure: Dijkstra's algorithm exploits nonnegative weights to settle vertices greedily in $O((V+E)\log V)$; Bellman–Ford handles arbitrary weights with $O(VE)$ systematic passes and detects negative cycles; on directed acyclic graphs, a single topological pass suffices in $O(V+E)$. This lesson develops each algorithm with complete proofs of correctness.
 
-Dijkstra maintains a settled set S. It repeatedly extracts the unsettled vertex u with smallest tentative d[u], settles it, and relaxes outgoing edges. With nonnegative weights, the smallest tentative label is final: any alternative path entering u through an unsettled vertex has prefix distance at least d[u], and adding a nonnegative final edge cannot improve it.
+## Relaxation: The Universal Primitive
 
-**Worked example.** Edges from A: A→B=4, A→C=1; C→B=2, C→D=5; B→D=1. Start d(A)=0, B=4,C=1,D=∞. Settle C and improve B=3,D=6. Settle B and improve D=4. Settle D. Predecessors yield A→C→B→D of cost 4. A negative edge C→B could invalidate the settle proof; a negative edge from a later vertex might improve B after B was settled.
+<MathStatement id="relaxation" kind="definition" title="Edge relaxation">
+For edge $(u,v)$ with weight $w(u,v)$, relaxation is:
+$$
+\text{if } d[v] > d[u] + w(u,v) \text{ then } d[v] \leftarrow d[u] + w(u,v), \text{ pred}[v] \leftarrow u.
+$$
+</MathStatement>
 
-With a binary heap, each edge relaxation can decrease a key and each vertex is extracted, giving O((V+E)log V) time and O(V+E) space. A simple array priority queue costs O(V^2+E), which can be preferable for dense graphs. Lazy heap insertion avoids decrease-key by pushing a new pair; stale pairs are skipped when their key no longer equals d[u]. The skip rule is part of correctness and complexity.
+<MathStatement id="relaxation-lemma" kind="lemma" title="Relaxation lemma">
+1. **Upper bound invariant:** $d[v] \ge \delta(s,v)$ for all $v$, where $\delta$ is the true shortest-path distance (or $-\infty$ for vertices reachable from a negative cycle).
+2. **Path property:** If $d[v]$ is finite, it is the length of some $s$-$v$ path.
+3. **Convergence:** If $s \rightsquigarrow u \to v$ is a shortest path and $d[u] = \delta(s,u)$ before relaxation, then $d[v] = \delta(s,v)$ after relaxation.
+4. **Monotonicity:** $d[v]$ never increases.
+</MathStatement>
 
-## Bellman-Ford
+<MathProof id="relaxation-lemma-proof" for="relaxation-lemma">
+(1) Initial values are $0 = \delta(s,s)$ and $\infty \ge \delta$. Each relaxation sets $d[v]$ to a concrete path length, which is at least the shortest distance. (2) By induction: $d[s] = 0$ is the empty path; each update prepends an edge to the path achieving $d[u]$. (3) After $d[u] = \delta(s,u)$, the inequality $\delta(s,v) \le \delta(s,u) + w(u,v) = d[u] + w(u,v)$ holds by the triangle inequality for shortest paths (Cormen et al. 2022, Lemma 24.10). If $d[v] > d[u] + w(u,v)$, relaxation corrects it. (4) $d$ is only decreased. ∎
+</MathProof>
 
-Bellman-Ford scans every edge repeatedly for V-1 passes. Any simple shortest path has at most V-1 edges, so after k passes all shortest paths using at most k edges have been correctly relaxed by induction. A further pass that relaxes an edge reachable from s proves a reachable negative cycle: paths can keep decreasing by traversing that cycle.
+The relaxation lemma is the foundation: every shortest-path algorithm is a strategy for choosing *which edges to relax in which order*. The convergence property says that once a vertex's distance is correct, relaxing its outgoing edges propagates correctness to its neighbors.
 
-The algorithm handles negative edges but not a finite shortest distance to vertices reachable from a negative cycle; the infimum is minus infinity. Mark vertices affected by a detected cycle and propagate reachability if the application needs to report undefined distances. Early termination is safe when a full pass makes no changes.
+## Dijkstra's Algorithm
 
-## DAG shortest paths
+<MathStatement id="dijkstra" kind="theorem" title="Dijkstra's algorithm correctness" proofId="dijkstra-proof">
+Let $G = (V,E)$ have nonnegative edge weights. Dijkstra's algorithm maintains a set $S$ of settled vertices whose distance labels are final. It extracts $\min_{v \notin S} d[v]$, settles it, and relaxes its outgoing edges. Upon termination, $d[v] = \delta(s,v)$ for all $v$.
+</MathStatement>
 
-Topologically order vertices and relax outgoing edges once in order. Every path to v ends at a predecessor processed earlier, so when v is processed, all possible predecessor distances are final. Negative edges are safe because cycles are absent. The time is O(V+E), often better than general algorithms.
+<MathProof id="dijkstra-proof" for="dijkstra" collapsible open>
+By induction on $|S|$. Base: $S = \{s\}$, $d[s] = 0 = \delta(s,s)$. Inductive step: assume $d[u] = \delta(s,u)$ for all $u \in S$. Let $v$ be the vertex with minimum $d[v]$ among $V \setminus S$. Consider any $s$-$v$ path $P$. Let $x$ be the first vertex on $P$ outside $S$ (possibly $x = v$), and let $y$ be its predecessor in $S$. Since $w(y,x) \ge 0$ and $d[y] = \delta(s,y)$ by induction:
 
-Topological ordering itself can be obtained by DFS finish times or indegree-based Kahn processing. If not all vertices are ordered, the graph has a cycle and the DAG algorithm’s precondition fails. A graph may have negative edges and still be solvable efficiently if it is acyclic.
+$$
+\text{length}(P) \ge d[y] + w(y,x) \ge d[x] \ge d[v].
+$$
 
-## Path reconstruction
+The first inequality follows from $P$ having prefix $s \rightsquigarrow y \to x$; the second because $d[x]$ is an upper bound on the shortest $s$-$x$ path; the third because $d[v]$ is the minimum among unsettled vertices. Thus $d[v] \le \text{length}(P)$ for every $s$-$v$ path $P$, so $d[v] = \delta(s,v)$. Settle $v$ and relax its outgoing edges; the invariant is preserved for $S \cup \{v\}$. ∎
+</MathProof>
 
-A predecessor array stores one edge on a shortest path. Follow predecessors backward from target to source, then reverse. If predecessor pointers form a cycle, the implementation accepted a bad update or is reconstructing a vertex affected by a negative cycle. Unreachable targets have no predecessor path and should return an explicit unreachable result.
+**Complexity:** $O((V+E)\log V)$ with binary heap, $O(V^2 + E)$ with array.
 
-Tie-breaking affects reproducibility but not distance. Choose smaller predecessor ID, earlier edge, or first relaxation, and ensure updates on equal distance do not create cycles. For all-pairs or many-target queries, predecessor storage can be O(V) per source; output requirements determine whether it is worth storing.
+**Visualizing Dijkstra on a four-vertex graph.** Below: the graph from the code example with vertices A–C along a path and A–D both directly and via C.
 
-## Potentials and reweighting
+<TikZ
+  code={String.raw`
+\draw[->,>=stealth,thick] (0,0) node[draw,circle,fill=blue!10,inner sep=2pt] (A) {A} -- (2,1) node[draw,circle,fill=green!10,inner sep=2pt] (B) {B} node[midway,above] {4};
+\draw[->,>=stealth,thick] (0,0) -- (2,-1) node[draw,circle,fill=orange!10,inner sep=2pt] (C) {C} node[midway,below] {1};
+\draw[->,>=stealth,thick] (2,1) -- (4,0) node[draw,circle,fill=red!10,inner sep=2pt] (D) {D} node[midway,above] {1};
+\draw[->,>=stealth,thick] (2,-1) -- (2,1) node[midway,right] {2};
+\draw[->,>=stealth,thick] (2,-1) -- (4,0) node[midway,below] {5};
+\draw[->,>=stealth,thick,red,dashed] (0,0) .. controls (1,-0.5) .. (4,0) node[midway,below,red] {4 (wrong)};
+\node[below] at (A.south) {$d=0$};
+\node[below] at (B.south) {$d=3$};
+\node[below] at (C.south) {$d=1$};
+\node[below] at (D.south) {$d=4$};
+`}
+/>
 
-Johnson’s algorithm handles sparse all-pairs shortest paths when there are no negative cycles. Bellman-Ford computes a potential h(v) such that reweighted edge (w'(u,v)=w(u,v)+h(u)-h(v)) is nonnegative. Every path from s to t gains the same offset h(s)-h(t), so shortest paths are preserved while Dijkstra becomes applicable from each source.
+The figure shows settled distances after the algorithm runs. The path A → C → B → D (total 4) is correctly chosen over the direct A → D path (weight 5) that does not exist as a single edge.
 
-The potential is valid only if h(v) at most h(u)+w(u,v) for every edge, precisely the Bellman-Ford feasible-label condition. If a negative cycle exists, no such finite potential can satisfy all inequalities. Reweighting changes numerical distances but not path ordering between a fixed pair.
+<CodeRunner client:load
+  title="Dijkstra implementation"
+  language="python"
+  code={`import heapq
 
-## Special cases and failure modes
+def dijkstra(graph, start):
+    dist = {v: float('inf') for v in graph}
+    dist[start] = 0
+    pq = [(0, start)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d != dist[u]: continue
+        for v, w in graph[u]:
+            if dist[v] > d + w:
+                dist[v] = d + w
+                heapq.heappush(pq, (dist[v], v))
+    return dist
 
-Unweighted shortest paths use BFS: every edge has unit weight, and vertices discovered at distance k are processed before distance k+1. Zero-weight edges are safe for Dijkstra but can create many equal-distance ties. Negative cycles require an explicit application policy; shortest paths may be undefined rather than merely large negative.
+graph = {
+    'A': [('B',4), ('C',1)],
+    'B': [('D',1)],
+    'C': [('B',2), ('D',5)],
+    'D': []
+}
+print(dijkstra(graph, 'A'))`}
+  output="{'A': 0, 'B': 3, 'C': 1, 'D': 4}"
+/>
 
-Integer nonnegative weights can support bucket queues or radix heaps, changing practical and asymptotic costs under word assumptions. Dense adjacency matrices may make scanning all outgoing edges appropriate. Parallel edges are harmless if relaxation considers each; self-loops matter only when negative or when path definitions permit them.
+### Failure Mode: Negative Edges
 
-## Proof boundaries and implementation details
+Dijkstra's algorithm fails on graphs with negative edge weights because it settles vertices prematurely. Once a vertex is extracted from the priority queue, its distance is never reconsidered — but a negative edge discovered later could shorten it.
 
-The infinity sentinel must not overflow when adding an edge weight. Guard relaxation with d[u] finite, or use arbitrary-precision/checked arithmetic. If weights can be negative, a fixed-width distance can wrap and falsely appear smaller. Define behavior for unreachable vertices and for distances beyond representable range; numerical correctness is part of algorithm correctness.
+**Example.** Graph $s \to a$ weight 2, $s \to b$ weight 5, $b \to a$ weight $-10$. Dijkstra initializes $d[s]=0$, $d[a]=2$, $d[b]=5$, settles $a$ (smallest estimate), then $b$. The algorithm finalizes $d[a]=2$, but the true shortest path to $a$ is $s \to b \to a$ with total weight $-5$. The negative edge $b \to a$ created a cheaper route to $a$ after $a$ was already settled.
 
-Priority queues may contain stale entries under lazy decrease-key. When extracting (key,u), skip it if key differs from the current d[u]. If the implementation settles a vertex on its first extraction without checking staleness, a stale larger key can waste work but a stale smaller key cannot occur if keys are only decreased; state and prove the chosen invariant. A visited flag is safe for Dijkstra only when the nonnegative-weight finality theorem holds.
+This is not a bug in the implementation — it is a fundamental limitation: Dijkstra's correctness proof relies on the nonnegativity assumption. When negative weights are possible, use Bellman–Ford instead.
 
-## Output-sensitive path systems
+<Quiz client:load
+  title="Settled vertex trap"
+  question="Why can Dijkstra settle a vertex with an incorrect distance when negative weights exist?"
+  options={["It extracts the minimum from unsettled vertices, so a negative edge to an already settled vertex cannot be processed", "The heap is buggy", "Negative weights break the monotonicity invariant", "The graph is too sparse"]}
+  correctIndex={0}
+  explanation="Dijkstra never revisits settled vertices. A negative edge from a later vertex to an already-settled one could reduce the settled distance, but the algorithm has already committed."
+/>
 
-If only one target is needed, terminate Dijkstra when that target is settled. If many targets share a source, complete the reachable region or stop when all targets settle. If only distances are needed, predecessor storage can be omitted; if paths are required, store enough predecessor information and define ties. For a sequence of changing edge weights, recomputing from scratch may be necessary unless the application uses a dynamic shortest-path structure with a different update contract.
+## Bellman–Ford Algorithm
 
-## Testing shortest-path implementations
+<MathStatement id="bellman-ford" kind="theorem" title="Bellman–Ford correctness" proofId="bellman-ford-proof">
+Let $G = (V,E)$ have arbitrary edge weights with no negative cycles reachable from $s$. After $|V|-1$ passes of relaxing every edge, $d[v] = \delta(s,v)$ for all $v$.
+</MathStatement>
 
-Compare against Floyd-Warshall or exhaustive simple-path enumeration on tiny graphs, including disconnected graphs, zero edges, parallel edges, negative edges without cycles, and reachable negative cycles. Verify every returned path consists of valid edges, its weight equals the reported distance, and no edge relaxation inequality is violated when the graph has no negative cycle. Test graph representation variants separately; a correct algorithm over a broken adjacency list still yields wrong output.
+<MathProof id="bellman-ford-proof" for="bellman-ford" collapsible open>
+By induction on path length. Let $\delta^{(k)}(s,v)$ be the minimum weight of an $s$-$v$ path using at most $k$ edges. Claim: after $k$ passes, $d[v] \le \delta^{(k)}(s,v)$.
 
-## Choosing the algorithm
+Base $k=0$: $\delta^{(0)}(s,s)=0$, $d[s]=0$; for $v \ne s$, $\delta^{(0)}(s,v)=\infty$, $d[v]=\infty$.
 
-Use BFS for unit weights, DAG relaxation for acyclic graphs, Dijkstra for nonnegative weights, Bellman-Ford when negative edges or cycle detection matter, and Johnson for sparse all-pairs problems without negative cycles. Dense all-pairs instances may favor matrix-based methods. The decision follows graph structure, weight assumptions, output requirement, and density—not the algorithm’s popularity.
+Inductive step: assume after $k$ passes, $d[v] \le \delta^{(k)}(s,v)$. Consider a path achieving $\delta^{(k+1)}(s,v)$. If it has at most $k$ edges, the inductive bound applies. Otherwise it ends with edge $(u,v)$ and its prefix $s \rightsquigarrow u$ has at most $k$ edges and weight $\delta^{(k)}(s,u)$. After pass $k+1$, edge $(u,v)$ is relaxed:
+
+$$
+d[v] \le d[u] + w(u,v) \le \delta^{(k)}(s,u) + w(u,v) = \delta^{(k+1)}(s,v).
+$$
+
+Thus after $|V|-1$ passes, $d[v] \le \delta^{(|V|-1)}(s,v) = \delta(s,v)$ (since any shortest path is simple and has at most $|V|-1$ edges). Combined with the upper bound invariant ($d[v] \ge \delta(s,v)$), equality holds. This argument follows Bellman (1958) and the exposition in Section 24.1 of Cormen et al. (2022). ∎
+</MathProof>
+
+**Negative cycle detection.** After $|V|-1$ passes, if any edge can still be relaxed, a reachable negative cycle exists. Reason: a path with $\ge V$ edges must repeat a vertex, forming a cycle that reduces distance arbitrarily.
+
+<CodeRunner client:load
+  title="Bellman–Ford with cycle detection"
+  language="python"
+  code={`def bellman_ford(edges, V, start):
+    dist = [float('inf')] * V
+    dist[start] = 0
+    for _ in range(V - 1):
+        for u, v, w in edges:
+            if dist[u] != float('inf') and dist[v] > dist[u] + w:
+                dist[v] = dist[u] + w
+    for u, v, w in edges:
+        if dist[u] != float('inf') and dist[v] > dist[u] + w:
+            return None  # negative cycle
+    return dist
+
+edges = [(0,1,4),(0,2,1),(2,1,2),(1,3,1),(2,3,5)]
+print(bellman_ford(edges, 4, 0))`}
+  output="[0, 3, 1, 4]"
+/>
+
+### Edge Relaxation Order
+
+Any order works for correctness, but the FIFO (queue-based) variant (SPFA) is faster in practice. Worst-case $O(VE)$ still holds; SPFA can be exponential for adversarial inputs (see Karp 1978 for cycle detection complexity).
+
+## DAG Shortest Paths
+
+When the graph is a directed acyclic graph, the problem simplifies dramatically.
+
+**Algorithm.** Topologically sort vertices; process in order, relaxing outgoing edges.
+
+**Correctness.** In a DAG, every $s$-$v$ path's vertices appear in topological order. When $v$ is processed, all its predecessors have been processed and their distances are final. One pass suffices.
+
+**Complexity.** $O(V+E)$, suitable for arbitrary weights (including negative) when the graph is acyclic — no priority queue needed.
+
+<CodeExercise client:load
+  title="Complete DAG shortest paths"
+  code={`def dag_shortest_paths(graph, V, start):
+    # topological order is given
+    topo_order = [0, 1, 2, 3]
+    dist = [float('inf')] * V
+    dist[start] = 0
+    for u in topo_order:
+        for v, w in graph[u]:
+            if dist[v] > dist[u] + w:
+                dist[v] = dist[u] + w  # relax
+    return dist
+
+# Complete the graph: edges (u, v, w)
+# 0 -> 1 weight 3
+# 0 -> 2 weight 6
+# 1 -> 3 weight 2
+# 2 -> 3 weight 1
+graph = [[(1, 3), (2, 6)], [(3, 2)], [(3, 1)], []]
+print(dag_shortest_paths(graph, 4, 0))`}
+  answers={["dist[v] = dist[u] + w"]}
+  explanation="Relaxation is the same operation as in Dijkstra and Bellman-Ford, but on a DAG one topological pass suffices because all predecessors are processed before their successors."
+/>
+
+## Johnson's Algorithm for All-Pairs
+
+<MathStatement id="johnson" kind="theorem" title="Johnson's algorithm" proofId="johnson-proof">
+Given $G = (V,E)$ with arbitrary edge weights and no negative cycles, Johnson's algorithm computes all-pairs shortest paths in $O(VE + V^2 \log V)$ time.
+</MathStatement>
+
+<MathProof id="johnson-proof" for="johnson">
+Add a super-source $s'$ with zero-weight edges to all vertices. Run Bellman–Ford from $s'$ to compute potentials $h(v) = \delta(s', v)$. These satisfy $h(v) \le h(u) + w(u,v)$ for all $(u,v)$ — this is the optimality condition for shortest paths, also known as the dual feasibility condition in linear programming (Ahuja, Magnanti, and Orlin 1993). Reweight: $w'(u,v) = w(u,v) + h(u) - h(v) \ge 0$.
+
+For any $s$-$t$ path, the reweighted sum telescopes:
+
+$$
+\sum w'(u,v) = \sum (w(u,v) + h(u) - h(v)) = \left(\sum w(u,v)\right) + h(s) - h(t).
+$$
+
+Thus shortest paths under $w$ are shortest under $w'$, and vice versa. Since $w' \ge 0$, run Dijkstra from each vertex. The original distances are recovered as $\delta(s,t) = \delta'(s,t) - h(s) + h(t)$. ∎
+</MathProof>
+
+<Quiz client:load
+  title="Johnson's potentials"
+  question="Why must edge potentials satisfy $h(v) \le h(u) + w(u,v)$?"
+  options={["To ensure reweighted edges are nonnegative", "To ensure paths are simple", "To guarantee termination", "To reduce complexity"]}
+  correctIndex={0}
+  explanation="The inequality guarantees $w'(u,v) = w(u,v) + h(u) - h(v) \ge 0$, enabling Dijkstra. Bellman-Ford from a super-source computes such potentials."
+/>
+
+## Floyd–Warshall Algorithm
+
+<MathStatement id="floyd-warshall" kind="theorem" title="Floyd–Warshall DP recurrence">
+Let $d^{(k)}[i][j]$ be the shortest path from $i$ to $j$ using only intermediate vertices from $\{1,\ldots,k\}$. Then:
+$$
+d^{(k)}[i][j] = \min\left( d^{(k-1)}[i][j], \; d^{(k-1)}[i][k] + d^{(k-1)}[k][j] \right).
+$$
+</MathStatement>
+
+**Proof.** A shortest path using vertices $\{1,\ldots,k\}$ either avoids $k$ entirely (first case) or visits $k$ exactly once (second case, since subpaths of shortest paths are shortest). The min of these two covers all possibilities. Base $d^{(0)}[i][j] = 0$ if $i=j$, $w(i,j)$ if $(i,j) \in E$, $\infty$ otherwise. After $n$ iterations, $d^{(n)}[i][j] = \delta(i,j)$. This DP was published by Floyd (1962) as Algorithm 97.
+
+**Complexity:** $O(V^3)$ time, $O(V^2)$ space.
+
+**Transitive closure:** Boolean variant uses logical OR and AND instead of min and addition.
+
+## Algorithm Selection Guide
+
+The choice among shortest-path algorithms depends on three properties: graph structure, weight signs, and whether single-source or all-pairs distances are needed.
+
+<PlantUML
+  code={`
+start
+:Input: weighted graph G, source s;
+if (Negative edges?) then (no)
+  :Dijkstra O((V+E)log V);
+  stop
+else (yes)
+  if (Graph is a DAG?) then (yes)
+    :Topological sort + one pass O(V+E);
+    stop
+  else (no)
+    :Bellman-Ford O(VE);
+    if (Negative cycle detected?) then (yes)
+      :Report negative cycle;
+      stop
+    else (no)
+      :Distances correct;
+    endif
+    if (All-pairs needed?) then (yes)
+      :Johnson O(VE + V^2 log V);
+      stop
+    else (no)
+      stop
+    endif
+  endif
+endif
+  `}
+/>
+
+## Properties and Extensions
+
+**Shortest-path tree.** Predecessor pointers form a tree rooted at $s$ where the unique path to each vertex is a shortest path. For multiple shortest paths, any tie-breaking rule yields a valid tree.
+
+**Potential theory for shortest paths.** A function $h: V \to \mathbb{R}$ is a *feasible potential* if $h(v) \le h(u) + w(u,v)$ for all edges. This is the dual solution in the linear programming formulation of shortest paths (Papadimitriou and Steiglitz 1982). Feasibility is equivalent to the absence of negative cycles.
+
+**Edge relaxation order for Bellman–Ford.** Any order works, but the FIFO (queue-based) variant (SPFA) is faster in practice. Worst-case $O(VE)$ still holds; SPFA can be exponential for adversarial inputs.
+
+## Counterexample: Floyd–Warshall with Negative Cycles
+
+Consider a three-vertex graph with edges $1 \to 2$ weight 1, $2 \to 3$ weight 1, $3 \to 1$ weight $-3$. Floyd–Warshall computes finite entries for all pairs because the recurrence does not check for negative cycles during intermediate iterations — it only produces the correct result if no negative cycles exist. The entries are not meaningful because repeated traversal of the cycle can make paths arbitrarily short. A detection pass (checking $d[i][i] < 0$ after the main loop) is standard practice.
 
 ## Exercises
 
-1. State and prove the relaxation upper-bound invariant.
-2. Run Dijkstra on a weighted graph and show settlement order.
-3. Give a counterexample to Dijkstra with a negative edge.
-4. Prove Bellman-Ford’s V-1 pass bound.
-5. Explain DAG shortest paths with negative weights.
-6. Reconstruct a path and diagnose a predecessor cycle.
-7. Prove Johnson reweighting preserves shortest paths.
+### Recall
 
-### Diagnostic solutions
+1. State the relaxation lemma. What four properties does it assert about distance labels?
 
+2. What is the time complexity of Dijkstra's algorithm with a binary heap? With an array?
 
-1. Initially 0 is the empty path and infinity is a vacuous upper bound. A relaxation replaces d[v] with a concrete path through u, so it remains a path length and cannot be below the true minimum unless the path itself were invalid. Monotone decreases preserve the invariant.
+3. How many passes does Bellman–Ford require, and why is this number sufficient?
 
-2. Initialize source zero, repeatedly choose smallest unsettled label, and relax all outgoing edges. Record labels and predecessors after each extraction. The finality proof requires every edge weight nonnegative; do not infer it from a successful trace.
+### Application
 
-3. Let s→a=2, s→b=5, b→a=-10. Dijkstra settles a at 2 before b, but the path s→b→a costs -5, so a’s label should improve after settlement. The nonnegative-edge premise is violated.
+4. **Dijkstra counterexample.** Construct a graph with one negative edge where Dijkstra gives a wrong answer. Show the execution trace.
 
-4. Any simple shortest path has at most V-1 edges. After pass k, induction shows every path using at most k edges has its endpoint label relaxed to at most that path length. Thus after V-1 passes every finite shortest distance is present; another relaxation signals a reachable negative cycle.
+   <ExerciseSolution hint="Dijkstra settles vertices in order of their current distance estimate. A negative edge can make a path to an already-settled vertex cheaper after settlement.">
 
-5. A topological order processes all predecessors before a vertex, so one relaxation pass covers every path’s final edge. Negative weights do not create later feedback because there are no cycles.
+   Let $s \to a = 2$, $s \to b = 5$, $b \to a = -10$. Dijkstra initializes $d[s]=0$, $d[a]=2$, $d[b]=5$, settles $a$ (smallest), then $b$. Dijkstra finalizes $d[a]=2$, but the true shortest path to $a$ is $s \to b \to a$ with weight $-5$.
+   </ExerciseSolution>
 
-6. Follow predecessor pointers, marking visited vertices. Reaching source terminates a valid path; reaching null means unreachable; revisiting a vertex indicates a cycle, which may come from an invalid equal-distance update or a negative-cycle-affected result.
+5. **Relaxation convergence.** Prove that if all edge weights are nonnegative and $d[v] = \min_{(u,v) \in E} (d[u] + w(u,v))$ holds for all $v \ne s$, then $d[v] = \delta(s,v)$.
 
-7. For any path s=v0,...,vk=t, reweighted sum telescopes to original sum+h(s)-h(t), a constant for fixed endpoints. Therefore path ordering and shortest paths are unchanged. Feasibility of h makes every reweighted edge nonnegative.
+   <ExerciseSolution hint="Show that the equation together with $d[s] = 0$ implies $d[v] = \delta(s,v)$ by induction on the shortest-path distance.">
+
+   The equation says every edge's endpoint has a label consistent with relaxation from all incoming neighbors. Since $d$ is an upper bound, and the equation matches the definition of shortest-path by optimal substructure, $d$ must be exact. This is precisely the optimality condition for the DP formulation: $d[v] = \min_{(u,v) \in E} (d[u] + w(u,v))$ with $d[s] = 0$.
+   </ExerciseSolution>
+
+6. **Bellman–Ford early termination.** Modify Bellman–Ford to detect when no distance changes occur during a pass and terminate early. Prove correctness of this optimization.
+
+   <ExerciseSolution>
+   Track whether any relaxation occurred in a pass. If none, all distances are final (since any future relaxation would require a prior change). Return early. Proof: if no edges relaxed in pass $p$, then $d[v] \le d[u] + w(u,v)$ for all edges, which is the optimality condition, so distances are exact.
+   </ExerciseSolution>
+
+7. **Floyd–Warshall path reconstruction.** Augment the Floyd–Warshall DP to support path reconstruction. Store a predecessor matrix $next[i][j]$ initialized to $j$ if $(i,j)$ is an edge, and updated when a shorter path via $k$ is found.
+
+   <ExerciseSolution>
+   Initialize $next[i][j] = j$ if $w(i,j) < \infty$, else $null$. When $d[i][j] > d[i][k] + d[k][j]$, update $next[i][j] = next[i][k]$. To reconstruct the path from $i$ to $j$, follow $next$ pointers: while $i \ne j$, output $i$, set $i = next[i][j]$.
+   </ExerciseSolution>
+
+### Transfer
+
+8. **Urban transit network.** A city's transit network contains edges labeled with expected travel time (always positive). Some edges represent express routes that skip stations but have higher variance. The transit authority wants both shortest *expected* time and an alternative route that minimizes worst-case time. Which algorithm variant(s) would you recommend for each metric? Can the same graph representation serve both queries without recomputation?
+
+9. **Currency arbitrage.** Given exchange rates between $n$ currencies, the profit from a cycle is the product of the exchange rates around the cycle. Convert this to a shortest-path problem and show how to detect an arbitrage opportunity (a cycle with product $> 1$) using Bellman–Ford. What transformation makes the product condition additive?
+
+### Synthesis
+
+10. **Design a shortest-path system.** Specify the interface and algorithm choices for a routing service with these requirements:
+    - Road network with $10^6$ vertices, nonnegative weights
+    - 95% of queries are single-source, single-target with a small search radius
+    - 5% are all-pairs for a subset of $10^3$ "hub" vertices
+    - Edge weights change periodically (hourly traffic updates)
+    
+    Justify your algorithm for each query type, estimate complexity, and identify the data structure choices that dominate memory usage.
+
+11. **Limits of reduction.** Johnson's algorithm reduces all-pairs shortest paths with arbitrary weights to $V$ invocations of Dijkstra plus one Bellman–Ford. Prove or disprove: any reduction from all-pairs shortest paths with arbitrary weights to a single-source algorithm must incur at least $\Omega(VE)$ preprocessing. (Hint: consider the information-theoretic lower bound for detecting a negative edge.)
+
+## Deliberately Omitted
+
+- **SPFA and exponential worst-case behavior.** Queue-based Bellman–Ford variants (Shortest Path Faster Algorithm) are briefly noted above; their adversarial analysis is an implementation detail that does not change the $O(VE)$ bound and is better studied alongside algorithm engineering techniques.
+- **Bidirectional Dijkstra and A\* search.** Goal-directed search with admissible heuristics belongs in an AI search lesson rather than in a treatment of provably optimal graph algorithms; the algorithmic core is the same relaxation primitive, but the correctness argument shifts to the heuristic consistency condition.
+- **Min-plus matrix squaring for all-pairs.** The $O(V^3 \log V)$ repeated-squaring approach is noted in the matrix multiplication section below but its analysis — especially the base-case dependence and the log-factor improvement over Floyd–Warshall — is deferred to an advanced topics module on algebraic algorithms.
+- **Dynamic shortest paths.** Updating distances after edge weight changes (incremental, decremental, and fully dynamic) is a separate research area with different data structures and analysis techniques.
+- **Parallel shortest-path algorithms.** \(\Delta\)-stepping, work-efficient parallel BFS, and GPU-based relaxation are beyond the scope of this single-source lesson.
+
+## Matrix Multiplication for Shortest Paths
+
+Define the distance product (min-plus or "tropical") matrix multiplication $(A \otimes B)[i][j] = \min_{k} (A[i][k] + B[k][j])$. Then $d^{(k)}$ (paths with at most $k$ edges) satisfies $d^{(k)} = d^{(k-1)} \otimes W$ where $W$ is the weight matrix. Repeated squaring gives $d^{(2^p)}$ in $O(V^3 \log n)$ time, computing all-pairs shortest paths by repeated squaring.
+
+<CaseStudy client:load
+  title="Routing infrastructure"
+  scenario="A logistics company needs to compute delivery routes across a continent. The road network has 50,000 vertices (cities and junctions) and 200,000 directed edges with positive weights (travel time in minutes). A small number of edges (about 0.1%) represent ferry routes that can be delayed and have negative effective weight when accounting for subsidies (i.e., a small number of negative edges exist, but no negative cycles). The operation needs: (a) daily recomputation of the fastest route from each distribution center to every other hub, and (b) on-demand queries for the fastest route from any city to any other city."
+  question="Which combination of algorithms best fits these requirements?"
+  options={["Johnson's algorithm (Bellman–Ford to compute potentials, then Dijkstra from each hub) for daily recomputation; on-demand queries use the stored all-pairs table", "Floyd–Warshall for everything since negative edges exist", "Bellman–Ford from each source for all queries", "Dijkstra from each source on demand, ignoring the 0.1% negative edges"]
+  }
+  correctIndex={0}
+  explanation="The 0.1% negative edges rule out plain Dijkstra. The graph is sparse enough that Johnson's $O(VE + V^2 \log V)$ is feasible for daily recomputation from hubs. Floyd–Warshall's $O(V^3)$ is prohibitive at 50K vertices. On-demand single-target Dijkstra (bidirectional) handles ad-hoc queries without storing $V^2$ distances."
+/>
 
 ## References & Further Reading
 
-* [MIT 6.006 Dijkstra lecture materials](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/pages/lecture-notes/)
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+* Dijkstra, E. W. "A Note on Two Problems in Connexion with Graphs." *Numerische Mathematik* 1 (1959): 269–271.
+* Bellman, R. "On a Routing Problem." *Quarterly of Applied Mathematics* 16 (1958): 87–90.
+* Floyd, R. W. "Algorithm 97: Shortest Path." *Communications of the ACM* 5, no. 6 (1962): 345.
+* Johnson, D. B. "Efficient Algorithms for Shortest Paths in Sparse Networks." *J. ACM* 24, no. 1 (1977): 1–13.
+* Karp, R. M. "A Characterization of the Minimum Cycle Mean in a Digraph." *Discrete Mathematics* 23 (1978): 309–311.
+* Ahuja, R. K., T. L. Magnanti, and J. B. Orlin. *Network Flows: Theory, Algorithms, and Applications.* Prentice Hall, 1993.
+* Papadimitriou, C. H., and K. Steiglitz. *Combinatorial Optimization: Algorithms and Complexity.* Prentice Hall, 1982.
+* Cormen, T. H., C. E. Leiserson, R. L. Rivest, and C. Stein. *Introduction to Algorithms*, 4th ed., MIT Press, 2022. Chapters 22–24.
+* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)

@@ -1,99 +1,441 @@
 ---
 title: "Asymptotic Analysis and Cost Models"
 course: "algorithms"
-description: "Input size, growth rates, tight bounds, machine models, loop reasoning, and honest complexity claims."
+description: "Rigorous asymptotic analysis: Landau notation, substitution and recursion-tree methods, master theorem with proof, Akra–Bazzi generalization, decision-tree lower bounds, amortized analysis, and multi-variable asymptotics."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Asymptotic Analysis and Cost Models
 
-Algorithm analysis predicts resource growth as input size increases. The prediction is meaningful only after defining the input representation, cost model, resource being measured, and whether the claim is worst-case, average-case, expected, amortized, or empirical. This lesson builds the mathematical vocabulary used to compare algorithms and to detect analyses that hide expensive operations behind constant-time assumptions.
+**Prerequisites.** Limit definitions, induction, basic combinatorics, and the definition of $O$, $\Omega$, $\Theta$, $o$, $\omega$ notation. Prior exposure to recurrence relations is helpful but not required — the substitution method is developed from first principles.
 
-## Input size and representation
+Suppose you are given two sorting programs. Program A runs in $0.1n^2$ seconds on an input of size $n$; program B runs in $5n \log_2 n$ seconds. Which is faster?
 
-Choose a size measure that captures the encoded input. For an array, n elements is natural; for a graph, use V and E; for a binary integer x, input length is (lfloorlog_2xrfloor+1), not x. An algorithm polynomial in numeric x may be exponential in its binary encoding. For strings, key length ell matters if comparisons or hashing inspect characters.
+For $n = 10$, A finishes in 10 seconds and B in about 166 seconds. For $n = 100$, A takes 1000 seconds and B about 3320 seconds. A wins at both sizes. At $n = 1000$, A needs 100,000 seconds (over a day); B needs about 49,850 seconds (under 14 hours). Now B is faster. The crossover occurs near $n \approx 440$, where $0.1n^2 = 5n \log_2 n$.
 
-A multi-parameter bound should retain relevant parameters. BFS is O(V+E), not simply O(n), unless n is defined to include both. A matrix algorithm may be O(V^3); a sparse-list algorithm may be O(V+E). Replacing a graph with a single “input size” can hide density transitions and misrepresent which instances are expensive.
+No single number can capture which algorithm is better. The answer depends on $n$, and the gap grows without bound — at $n = 10^6$, A would take over 3000 years; B finishes in a little over 3 years. A language that describes how resource consumption *scales* with input size, abstracting away constant factors and machine details, is needed.
 
-## Asymptotic notation
+Asymptotic notation provides that language. Paul Bachmann introduced the $O$ symbol in 1894 to bound the error term of asymptotic series in number theory; Edmund Landau formalized its use in 1909. The notation entered computer science through Donald Knuth's 1976 article "Big Omicron and Big Omega and Big Theta" [Knuth, 1976].
 
-For eventually nonnegative functions, (f=O(g)) if there are constants c,n0 such that f(n) at most c g(n) for n at least n0. (f=Omega(g)) reverses the inequality, and (f=Theta(g)) means both. Little-o means f/g- greater than 0; little-omega means f/g- greater than infinity. Constants and lower-order terms disappear, but only after the threshold n0; asymptotics do not assert that one function is faster at every practical size.
+The formal definition: $f(n) = O(g(n))$ if there exist constants $c > 0$ and $n_0$ such that $f(n) \le c \cdot g(n)$ for all $n \ge n_0$. The $O$ hides constants and lower-order terms; only the growth rate survives. In our example, $0.1n^2 = \Theta(n^2)$ and $5n\log_2 n = \Theta(n \log n)$. Because $n \log n = o(n^2)$, the asymptotic analysis correctly predicts that B is eventually faster — which no constant-factor comparison could.
 
-Useful rules include (log_a n=Theta(log_b n)) for fixed bases, polynomial terms dominate logarithms, and the highest-degree polynomial term dominates lower degrees. Products and nested loops need structural analysis, not blind multiplication: an inner loop may depend on the outer index, yielding a sum such as (sum_()i=1()^n i=Theta(n^2)).
+Algorithm designers classify algorithms by their asymptotic growth rates, knowing that an $O(n \log n)$ algorithm will eventually outpace an $O(n^2)$ algorithm on all sufficiently large inputs, regardless of hardware or implementation language. The threshold "sufficiently large" may be $n = 10$ or $n = 10^6$ depending on constants, but the asymptotic ordering is invariant.
 
-**Worked loop analysis.** For i=1 to n, set j=1 and repeatedly double j while j at most i. The inner loop runs (Theta(log i)) times, so total work is (sum_()i=1()^nTheta(log i)=Theta(nlog n)), not (Theta(nlog n)) by treating every inner bound as log n without justification. The upper bound follows from log i at most log n; the lower bound uses the last half of i values, each with u03a9(log n) iterations.
+## When Asymptotics Mislead
 
-## Cost models
+Asymptotic analysis predicts long-term growth, but it can mislead in several practically important situations:
 
-The unit-cost RAM model treats word arithmetic, array access, and pointer operations as O(1), usually for word-sized values. A bit-complexity model charges for arithmetic on ell-bit integers; addition is not constant when ell grows. A comparison model charges only comparisons, useful for sorting lower bounds. An external-memory model charges block transfers; a cache model distinguishes lines and capacity.
+> **Counterexample 1: Large constants.** An algorithm with $T(n) = 10^{-6} \cdot 2^n$ is $O(2^n)$, while $T'(n) = 10^{12} \cdot n^2$ is $O(n^2)$. Asymptotically $2^n \gg n^2$, but the crossover is astronomically large: $10^{-6} \cdot 2^n > 10^{12} \cdot n^2$ only when $n > 110$. For all practical input sizes below this threshold, the "exponential" algorithm is faster than the "quadratic" one. Asymptotic analysis alone cannot predict real-world performance on finite inputs.
 
-State which model supports a claim. “Hash lookup is O(1)” may mean expected probes under a load assumption while ignoring key hashing cost. “Matrix multiplication is O(n^3)” may mean scalar arithmetic in RAM, not bytes moved or big-integer bit operations. Model choice is not pedantry; it determines what the algorithm is allowed to do in one step.
+> **Counterexample 2: Hidden additive terms.** A function $f(n) = 10^{100}n$ is $O(n)$, and $g(n) = n \log n$ is asymptotically larger. Yet for any machine-representable $n$, $n \log n$ is smaller than $10^{100}n$. The asymptotic notation swallows the constant into the existential quantifier, but the constant's magnitude may dominate all feasible inputs.
 
-## Worst-case, average, expected, amortized
+> **Counterexample 3: Non-uniform growth.** The function $f(n) = n^{1 + \sin n}$ is $O(n^2)$ and $\Omega(n^0)$, but it oscillates unpredictably: at $n = 2\pi k$, $f(n) = n$; at $n = 2\pi k + \pi/2$, $f(n) = n^2$. A single asymptotic bound masks this oscillation, and worst-case analysis that uses the $O$ upper bound may be overly pessimistic for typical inputs.
 
-Worst-case (T(n)) is the maximum cost over all size-n inputs and internal randomness if randomness is adversarially fixed. Average-case takes an input distribution and computes expected cost over that distribution. Expected randomized analysis averages over algorithmic random choices, often for every fixed input. Amortized analysis bounds total cost over every operation sequence, distributing occasional expensive work.
+These failure modes do not invalidate asymptotic analysis — they define its domain of applicability. Asymptotics describe *scaling behavior*, not absolute performance. When comparing algorithms for practical deployment, combine asymptotic insight with constant-factor measurement and input-distribution profiling.
 
-Quicksort has expected O(n log n) comparisons under random pivots, but O(n^2) for an unlucky pivot sequence. Dynamic-array append has O(1) amortized cost but an O(n) resize operation. A hash table has expected O(1) lookup under a distribution or universal hash assumption but can have linear worst-case lookup. Do not collapse these claims into “the algorithm is O(1)” without qualifiers.
+<PythonDiagram
+  code={`
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
-## Correctness and complexity together
+n = np.linspace(1, 20, 200)
+plt.figure(figsize=(8, 4))
+plt.plot(n, n**2 / 10, label=r'$n^2/10$', color='#3b82f6')
+plt.plot(n, 5 * n * np.log2(n), label=r'$5n\\log_2 n$', color='#ef4444')
+plt.axvline(10, color='gray', linestyle='--', alpha=0.4)
+plt.text(10.5, 50, 'crossover ≈ 10', fontsize=8, color='gray')
+plt.xlabel('input size n')
+plt.ylabel('cost (normalized)')
+plt.legend()
+plt.title('Crossover: small constants can delay asymptotic ordering')
+plt.tight_layout()
+plt.savefig('/tmp/crossover.png', dpi=100)
+  `}
+  format="png"
+  title="Growth rate crossover with constant factors"
+/>
 
-An algorithm description should include a termination argument, correctness proof, and cost analysis. A loop invariant can support both: it describes progress and bounds the remaining work. For binary search, the invariant is that any target lies within the active interval if present; interval length halves each iteration, giving O(log n) comparisons. If midpoint arithmetic overflows or the interval fails to shrink, both correctness and termination fail despite the textbook recurrence.
+## Multiple-Variable Asymptotics
 
-For recursive algorithms, define the subproblem size and prove the recurrence matches actual calls and nonrecursive work. An algorithm may call a subroutine whose cost is not constant; hiding a sort or a tree traversal inside a “helper” changes the total. Sum costs over recursion paths and account for output size, copying, and allocation.
+When an algorithm depends on multiple parameters (e.g., $V$ and $E$ for graphs, $n$ and $d$ for high-dimensional data), the Landau definition must be extended. For $f : \mathbb{N}^k \to \mathbb{R}^{\ge 0}$, we say $f \in O(g)$ if there exist $c > 0$ and $n_1, \ldots, n_k$ such that for all $n_i \ge n_{i,0}$, $f(n_1, \ldots, n_k) \le c \cdot g(n_1, \ldots, n_k)$.
 
-## Lower and upper bounds
+This definition is sensitive to the order of quantification. A bound $O(V+E)$ on a graph algorithm means the cost is linear in the total input size; collapsing to $O(n)$ loses the distinction between sparse ($E = O(V)$) and dense ($E = \omega(V)$) regimes. A correct multiple-variable bound like $O(V \log V + E)$ for Dijkstra with a binary heap captures both regimes: $O(V \log V)$ when $E = O(V)$, and $O(V \log V + E) = O(E)$ when $E = \Omega(V \log V)$.
 
-An upper bound gives an algorithm. A lower bound says every algorithm in a model needs at least a resource on some inputs or in the worst case. The comparison sorting lower bound uses decision trees; an input-specific lower bound may use adversarial arguments. Matching upper and lower bounds establish optimality in that model, but a stronger model such as word operations or randomization may evade a comparison lower bound.
+<Quiz client:load
+  title="Multi-variable bound interpretation"
+  question="A graph algorithm runs in $O(V^2 + E)$ time. What does this imply when the graph is sparse ($E = O(V)$)?"
+  options={["$O(V^2)$", "$O(E)$", "$O(V^2 + E)$ is the best simplification", "$O(V^3)$"]}
+  correctIndex={0}
+  explanation="When $E = O(V)$, substitute: $O(V^2 + O(V)) = O(V^2)$. The quadratic term dominates."
+/>
 
-Output size itself is a lower bound: enumerating k objects costs u03a9(k) time to write them. Range reporting should be O(search+k), not claimed O(log n) independent of output. Reading the entire input costs u03a9(input length), so an algorithm with a smaller stated bound has omitted work or uses an oracle.
+## Recurrence Solving: Substitution Method
 
-## Recurrences and recursion trees
+The substitution method proves an asymptotic bound by guessing the closed form and proving it by induction. The induction must account for floors, ceilings, and base cases.
 
-A recurrence describes the cost of recursive calls only when the subproblem overlap and nonrecursive work are specified. Merge sort has two subproblems of size n/2 and linear merge work: (T(n)=2T(lfloor n/2rfloor)+Theta(n)). Binary search has one subproblem of size n/2 and constant work: (T(n)=T(lfloor n/2rfloor)+Theta(1)). A recurrence with floors, ceilings, or unequal sizes can usually be bounded by monotonic upper/lower recurrences, but the inequalities must be directionally correct.
+<MathStatement id="substitution-example" kind="theorem" title="Substitution method example">
+If $T(n) = 2T(\lfloor n/2\rfloor) + n$ with $T(1) = 1$, then $T(n) = O(n \log n)$.
+</MathStatement>
 
-The recursion-tree method expands each level. In merge sort, level j has (2^j) calls of size n/2^j, so the total merge work is Theta(n) per level and there are Theta(log n) levels. The leaves contribute Theta(n), yielding Theta(n log n). For (T(n)=2T(n/2)+Theta(n^2)), level costs shrink geometrically upward from the root’s n^2 term, so the total is Theta(n^2). Looking at the tree reveals which level dominates rather than relying on a memorized case.
+**Proof.** Guess $T(n) \le c n \log n$ for some $c > 0$. Assume the inequality holds for all $m < n$. For $n \ge 2$:
 
-## Loop and recursion invariants
+$$
+\begin{aligned}
+T(n) &\le 2 \cdot c \lfloor n/2\rfloor \log \lfloor n/2\rfloor + n \\
+&\le 2 \cdot c (n/2) \log (n/2) + n \\
+&= c n (\log n - \log 2) + n = c n \log n - c n + n.
+\end{aligned}
+$$
 
-A loop invariant must hold before each iteration, survive the body, and combine with termination to imply the postcondition. A termination measure is a well-founded quantity that strictly decreases; a bound on iterations is separate from logical correctness. For nested loops, prove the inner postcondition before using it in the outer invariant. For recursion, the induction hypothesis applies only to strictly smaller subproblems satisfying the precondition.
+We need $T(n) \le c n \log n$, which holds if $-c n + n \le 0$, i.e., $c \ge 1$. Choose $c = 1$; verify base case $T(1) = 1 \le 1 \cdot 1 \cdot \log 1 = 0$ fails because $\log 1 = 0$. Adjust by adding a lower-order term: guess $T(n) \le c n \log n + d$. Then:
 
-For divide-and-conquer, the proof should match the partition invariant and the recurrence. Quicksort’s correctness comes from the partition ensuring every left item is no greater than every right item, then induction on subarrays; its cost comes from pivot-dependent subproblem sizes. An implementation can be correct for every pivot while having worst-case quadratic cost, so correctness and efficiency are related but distinct claims.
+$$
+T(n) \le 2(c (n/2) \log (n/2) + d) + n = c n \log n - c n + 2d + n = c n \log n + (1-c)n + 2d.
+$$
 
-## Constant factors and engineering
+Choose $c = 2$, $d = 1$. Then $(1-2)n + 2 = -n + 2 \le 0$ for $n \ge 2$, and $T(1) = 1 \le 2\cdot 1 \cdot 0 + 1 = 1$ holds. □
 
-Asymptotics are deliberately coarse. A hash lookup, a pointer chase, and a vectorized scan may all be O(1) per item but have different cache and branch costs. For small n, a quadratic algorithm with contiguous memory can beat a logarithmic or n log n algorithm with expensive allocation. Hybrid algorithms choose a threshold empirically while retaining a large-input bound. Document the threshold and test that the fallback preserves correctness.
+This demonstrates the importance of the base case in the substitution method: a guess that works inductively may fail at the boundary, requiring a slack term or a larger constant.
 
-If an algorithm is intended for a service, include memory, allocation count, recursion depth, and tail latency in the resource contract. An O(n log n) algorithm that allocates O(n) temporary objects per request may exhaust memory under concurrency. “Time complexity” is one projection of a multidimensional cost, not the entire performance specification.
+## Master Theorem
+
+The master theorem solves recurrences of the form $T(n) = a T(n/b) + f(n)$ where $a \ge 1$, $b > 1$, and $f$ is asymptotically positive.
+
+<MathStatement id="master-theorem" kind="theorem" title="Master theorem" proofId="master-theorem-proof">
+Let $T(n) = a T(n/b) + f(n)$ where $n/b$ is interpreted as $\lfloor n/b\rfloor$ or $\lceil n/b\rceil$. Then:
+
+1. **Leaf-dominated:** If $f(n) = O(n^{\log_b a - \epsilon})$ for some $\epsilon > 0$, then $T(n) = \Theta(n^{\log_b a})$.
+2. **Equal work per level:** If $f(n) = \Theta(n^{\log_b a})$, then $T(n) = \Theta(n^{\log_b a} \log n)$.
+3. **Root-dominated:** If $f(n) = \Omega(n^{\log_b a + \epsilon})$ for some $\epsilon > 0$, and $a f(n/b) \le c f(n)$ for some $c < 1$ and all sufficiently large $n$ (regularity condition), then $T(n) = \Theta(f(n))$.
+</MathStatement>
+
+<MathProof id="master-theorem-proof" for="master-theorem" title="Proof sketch" collapsible>
+Expand the recurrence to depth $k = \log_b n$:
+
+$$
+T(n) = a^k T(n/b^k) + \sum_{j=0}^{k-1} a^j f(n/b^j).
+$$
+
+The leaf term is $n^{\log_b a} T(1)$. The sum represents work across levels. Compare $f(n/b^j)$ to the branching factor $a^j$:
+
+**Case 1.** $f$ grows slower than the branching factor: $a^j f(n/b^j) = O(a^j (n/b^j)^{\log_b a - \epsilon}) = O(n^{\log_b a} (b^{-\epsilon})^j)$. The geometric series $\sum (b^{-\epsilon})^j$ converges, so the sum is dominated by the leaf term.
+
+**Case 2.** $f(n) = \Theta(n^{\log_b a})$, so $a^j f(n/b^j) = \Theta(a^j (n/b^j)^{\log_b a}) = \Theta(n^{\log_b a})$. All $\log_b n$ levels contribute equally, giving $\Theta(n^{\log_b a} \log n)$.
+
+**Case 3.** The regularity condition ensures $a^j f(n/b^j) \le c^j f(n)$ for $c < 1$, so the root term dominates: $\sum_{j=0}^{k-1} a^j f(n/b^j) \le f(n) \sum_{j=0}^{k-1} c^j = O(f(n))$. ∎
+</MathProof>
+
+The regularity condition $a f(n/b) \le c f(n)$ is essential. Without it, Case 3 can fail even when $f(n) = \Omega(n^{\log_b a + \epsilon})$. For example, $T(n) = 2T(n/2) + n \cos n$ does not satisfy the regularity condition because $f(n/2) \approx (n/2) \cos(n/2)$ may not dominate $f(n)$.
+
+<Quiz client:load
+  title="Master theorem case identification"
+  question="Which case applies to T(n) = 4T(n/2) + n^2?"
+  options={["Case 1 (leaf-dominated)", "Case 2 (equal work per level)", "Case 3 (root-dominated)", "Master theorem does not apply"]}
+  correctIndex={1}
+  explanation="a=4, b=2, log_b a = 2. f(n) = n^2, so f(n) = Θ(n^{log_b a}) = Θ(n^2). This is Case 2, giving T(n) = Θ(n^2 log n)."
+/>
+
+### Master Theorem Limitations
+
+The master theorem does not cover:
+- **Unequal subproblem sizes:** $T(n) = T(n/3) + T(2n/3) + n$.
+- **Non-polynomial gap:** $T(n) = 2T(n/2) + n \log n$ (Case 2 applies, but the gap between $n^{\log_b a}$ and $f(n)$ is polylogarithmic, not $n^\epsilon$).
+- **Subproblem with negative or non-constant $a$:** $T(n) = \sqrt{n}\, T(\sqrt{n}) + n$.
+- **Floors and ceilings that change the branching structure:** Already handled by bounding arguments if $T$ is eventually nondecreasing.
+
+For these cases, use the Akra–Bazzi theorem or direct substitution.
+
+## Akra–Bazzi Theorem
+
+<MathStatement id="akra-bazzi" kind="theorem" title="Akra–Bazzi theorem">
+Let $T(n) = \sum_{i=1}^k a_i T(n/b_i) + f(n)$ where $a_i > 0$, $b_i \in (0, 1)$, and $f$ is nonnegative and satisfies a polynomial growth condition. Then:
+
+$$
+T(n) = \Theta\left( n^p + n^p \int_1^n \frac{f(u)}{u^{p+1}} \, du \right)
+$$
+
+where $p$ is the unique real satisfying $\sum_{i=1}^k a_i b_i^p = 1$.
+</MathStatement>
+
+**Example.** $T(n) = T(n/3) + T(2n/3) + n$. Here $a_1 = a_2 = 1$, $b_1 = 1/3$, $b_2 = 2/3$. Solve $(1/3)^p + (2/3)^p = 1$. The solution is $p = 1$ because $1/3 + 2/3 = 1$. Then:
+
+$$
+T(n) = \Theta\left( n + n \int_1^n \frac{u}{u^{2}} \, du \right) = \Theta\left( n + n \int_1^n \frac{1}{u} \, du \right) = \Theta(n \log n).
+$$
+
+**Example.** $T(n) = 2T(n/4) + \sqrt{n}$. Solve $2 \cdot (1/4)^p = 1$, i.e., $(1/4)^p = 1/2$, so $p = 1/2$. Compute:
+
+$$
+T(n) = \Theta\left( \sqrt{n} + \sqrt{n} \int_1^n \frac{\sqrt{u}}{u^{3/2}} \, du \right) = \Theta\left( \sqrt{n} + \sqrt{n} \int_1^n \frac{du}{u} \right) = \Theta(\sqrt{n} \log n).
+$$
+
+## Comparison Model and Decision Trees
+
+A comparison-based algorithm receives information only through pairwise comparisons of elements. The model captures sorting, selection, and certain search problems.
+
+<PlantUML
+  code={`@startuml
+start
+if (a : b ?) then (≤)
+  if (b : c ?) then (≤)
+    :(a,b,c);
+    stop
+  else (>)
+    :(a,c,b);
+    stop
+  endif
+else (>)
+  if (a : c ?) then (≤)
+    :(b,a,c);
+    stop
+  else (>)
+    :(b,c,a);
+    stop
+  endif
+endif
+@enduml`}
+/>
+
+<MathStatement id="decision-tree" kind="definition" title="Decision tree model">
+A decision tree for input size $n$ is a binary tree where each internal node is labeled by a comparison $a_i : a_j$ and each leaf is labeled by an output. The running time on input $x$ is the depth of the leaf reached. The worst-case running time is the tree height.
+</MathStatement>
+
+<MathStatement id="sorting-lower-bound" kind="theorem" title="Comparison sorting lower bound">
+Every comparison-based sorting algorithm requires $\Omega(n \log n)$ comparisons in the worst case.
+</MathStatement>
+
+**Proof.** The output is a permutation of $n$ elements, and there are $n!$ possible permutations. A binary decision tree of height $h$ has at most $2^h$ leaves. To distinguish $n!$ distinct outputs, we need $2^h \ge n!$, so $h \ge \log_2 (n!) = \sum_{i=1}^n \log_2 i \ge \int_{1}^n \log_2 x \, dx = n \log_2 n - n/\ln 2 + O(1) = \Omega(n \log n)$. □
+
+This lower bound is tight because merge sort and heapsort achieve $O(n \log n)$ comparisons.
+
+An **adversary argument** strengthens lower bounds: the adversary maintains a set of possible inputs consistent with comparisons seen so far. For comparison sorting, the adversary can always answer comparisons to keep the largest possible set of permutations alive, forcing $\log_2(n!)$ comparisons. The adversary's strategy: for a comparison $x : y$, answer according to the outcome that eliminates fewer remaining permutations. Since the initial set has $n!$ elements and each comparison eliminates at most half, at least $\lceil \log_2 (n!) \rceil$ comparisons are needed.
+
+<Quiz client:load
+  title="Decision tree leaf count"
+  question="A decision tree for sorting 5 elements must have at least how many leaves?"
+  options={["32", "120", "5", "10"]}
+  correctIndex={1}
+  explanation="There are 5! = 120 possible outputs (permutations). Each leaf corresponds to a distinct output, so the tree must have at least 120 leaves."
+/>
+
+## Input Size and Representation Pitfalls
+
+Choosing the wrong size measure leads to pseudopolynomial algorithms. A primary-testing algorithm that is $O(\sqrt{x})$ in numeric value $x$ is exponential in the input bit length $b = \lfloor \log_2 x \rfloor + 1$, because $\sqrt{x} \approx 2^{b/2}$. An algorithm polynomial in $b$ is truly polynomial; an algorithm polynomial in $x$ is exponential in the input size and is called *pseudopolynomial*.
+
+<MathStatement id="pseudopolynomial" kind="definition" title="Pseudopolynomial algorithm">
+An algorithm whose running time is polynomial in the numeric value of the input (or in the largest integer appearing) but exponential in the input length (number of bits) is called pseudopolynomial. Example: dynamic programming for knapsack runs in $O(nW)$ where $W$ is the capacity; this is exponential in $\log W$, making it weakly NP-hard.
+</MathStatement>
+
+## Amortized Analysis
+
+Amortized analysis bounds the total cost of a sequence of operations, distributing expensive operations across cheap ones. Unlike worst-case per-operation analysis, amortized analysis accounts for the fact that an expensive operation may create favorable state that makes future operations cheap.
+
+**Example: dynamic array append.** Consider an array that doubles its capacity when full. A single append that triggers a resize costs $O(n)$ to copy $n$ elements. Over a sequence of $n$ appends starting from an empty array, the total cost is $1 + 2 + 4 + \cdots + 2^{\lfloor \log_2 (n-1) \rfloor + 1} < 2n = O(n)$ (each element is copied at most once per resize, and resize events happen at power-of-two boundaries). The amortized cost per append is $O(1)$.
+
+Three methods exist:
+- **Aggregate:** Sum the total cost over $n$ operations and divide by $n$.
+- **Accounting:** Credit cheap operations with extra "charges" that fund expensive ones later.
+- **Potential:** Define a potential function $\Phi$ over the data structure's state; amortized cost = actual cost $+ \Delta\Phi$.
+
+These are developed in full in the data structures course on amortized analysis.
+
+<Quiz client:load
+  title="Amortized vs worst-case"
+  question="In the dynamic array example, what is the worst-case cost of a single append and the amortized cost per append over $n$ operations?"
+  options={["$O(n)$ worst-case, $O(1)$ amortized", "$O(1)$ worst-case, $O(1)$ amortized", "$O(n)$ worst-case, $O(n)$ amortized", "$O(n^2)$ worst-case, $O(n)$ amortized"]}
+  correctIndex={0}
+  explanation="A single append that triggers a resize copies all $n$ elements ($O(n)$ worst-case), but each element is copied at most $O(1)$ times on average, giving $O(1)$ amortized."
+/>
+
+## Recurrence Tables and Recursion Trees
+
+The recursion-tree method expands the recurrence level by level, summing work at each level and then over all levels.
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+rectangle "n^2" as root
+rectangle "n^2/16" as l1a
+rectangle "n^2/16" as l1b
+rectangle "n^2/16" as l1c
+rectangle "..." as l1d
+rectangle "n^2/16^j" as lja
+rectangle "..." as ljb
+rectangle "n^2/16^j" as ljc
+rectangle "size n/4^j" as ljd
+rectangle "T(1)" as leafa
+rectangle "..." as leafb
+rectangle "T(1)" as leafc
+
+root -down-> l1a
+root -down-> l1b
+root -down-> l1c
+root -down-> l1d
+l1a -down-> lja
+l1b -down-> ljb
+l1c -down-> ljc
+l1d -down-> ljd
+lja -down-> leafa
+ljb -down-> leafb
+ljc -down-> leafc
+@enduml`}
+/>
+
+**Worked example: $T(n) = 3T(n/4) + n^2$.** The root does $n^2$ work. At depth $j$, there are $3^j$ subproblems, each of size $n/4^j$, each contributing $(n/4^j)^2 = n^2 / 16^j$ work. Total at depth $j$: $3^j \cdot n^2 / 16^j = n^2 (3/16)^j$. The geometric series $\sum_{j=0}^\infty (3/16)^j = 1/(1-3/16) = 16/13$, so $T(n) = \Theta(n^2)$.
+
+**Worked example: $T(n) = 2T(n/2) + n/\log n$.** At depth $j$, there are $2^j$ subproblems of size $n/2^j$, each costing $(n/2^j) / \log(n/2^j) = n / (2^j (\log n - j \log 2))$. Level total: $2^j \cdot n / (2^j (\log n - j)) = n/(\log n - j)$. Summing over $j = 0$ to $\log n - 1$:
+
+$$
+T(n) = \sum_{j=0}^{\log n - 1} \frac{n}{\log n - j} = n \sum_{k=1}^{\log n} \frac{1}{k} = n H_{\log n} = \Theta(n \log \log n).
+$$
+
+The master theorem does not apply directly because $n/\log n$ is not $\Theta(n)$ and not $O(n^{1-\epsilon})$. The recursion tree resolves it.
+
+## Correctness and Complexity Together
+
+A loop invariant supports both correctness and complexity analysis. For binary search, the invariant is "if target $t$ exists in $A$, then $t \in A[lo..hi)$." The termination measure $hi - lo$ halves each iteration, providing an $O(\log n)$ bound on iterations. But the invariant also proves correctness: at termination ($lo \ge hi$), if the invariant held, then $t \notin A$ because the active interval is empty.
+
+<CodeRunner client:load
+  title="Binary search with invariant tracing"
+  language="python"
+  code={`def binary_search(A, t):
+    lo, hi = 0, len(A)
+    # INV: if t in A then t in A[lo:hi]
+    # VAR: hi - lo
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if A[mid] == t:
+            return mid
+        elif A[mid] < t:
+            lo = mid + 1
+        else:
+            hi = mid
+    return -1
+
+A = [2, 5, 8, 12, 19, 24, 31]
+for t in [8, 31, 1, 20]:
+    print(f"search({t}) = {binary_search(A, t)}")`}
+  output="search(8) = 2\nsearch(31) = 6\nsearch(1) = -1\nsearch(20) = -1"
+/>
+
+<CodeExercise client:load
+  title="Analyze the worst-case depth"
+  code={`def search_depth(A, t):
+    lo, hi = 0, len(A)
+    depth = 0
+    while lo < hi:
+        depth += 1
+        mid = (lo + hi) // 2
+        if A[mid] == t:
+            return depth
+        elif A[mid] [!blank!] t:
+            lo = mid + 1
+        else:
+            hi = mid
+    return -depth
+
+# Run on array of size n, worst case (target missing)
+n = 1024
+A = list(range(n))
+print(search_depth(A, -1))`}
+  answers={["<"]}
+  explanation="When A[mid] < t, the target (if it exists) is in the right half, so lo advances past mid. The operator must be '<' for the invariant A[lo:hi] to remain valid."
+/>
 
 ## Exercises
 
-1. Choose size measures for arrays, graphs, strings, and binary integers.
-2. Prove a loop with inner bound log i costs Theta(n log n).
-3. Distinguish expected, average-case, and amortized claims.
-4. Analyze binary search with a loop invariant and termination measure.
-5. Give a model where integer sorting avoids comparison lower bounds.
-6. Explain why output size lower bounds range reporting.
-7. Find a hidden nonconstant operation in a proposed complexity argument.
+0. **Notation recall.** (a) State the definition of $f(n) = O(g(n))$. (b) State the definition of $f(n) = o(g(n))$. (c) Explain what it means for a recurrence to satisfy the regularity condition of the master theorem.
 
-### Diagnostic solutions
+   <ExerciseSolution>
+   (a) $f(n) = O(g(n))$ if $\exists c > 0, n_0$ such that $\forall n \ge n_0$, $f(n) \le c \cdot g(n)$.
+   (b) $f(n) = o(g(n))$ if $\forall c > 0, \exists n_0$ such that $\forall n \ge n_0$, $f(n) < c \cdot g(n)$. Equivalent to $\lim_{n\to\infty} f(n)/g(n) = 0$.
+   (c) $a f(n/b) \le c f(n)$ for some constant $c < 1$ and all sufficiently large $n$. This ensures the work per level decreases geometrically, so the root term dominates.
+   </ExerciseSolution>
 
+1. **Landau limits.** Prove that $\sqrt{n} \in o(n^{\epsilon})$ for any $\epsilon > 1/2$. Show the limit using L'Hôpital's rule. Then prove $n^{\sin n} \notin O(\sqrt{n})$ by finding a subsequence where the ratio diverges.
 
-1. Array n; graph V,E; string length ell; binary integer bit length u230alog2 xu230b+1. Preserve multiple parameters when density or key length affects the work.
+   <ExerciseSolution hint="Use L'Hôpital's rule for the first limit. For the second, consider values of $n$ where $\sin n = 1$.">
 
-2. The inner count is Theta(log i). Upper bound by n log n. For i at least n/2, log i=u03a9(log n), and there are Theta(n) such i, giving u03a9(n log n).
+   $\lim_{n\to\infty} \sqrt{n} / n^\epsilon = \lim_{n\to\infty} n^{1/2 - \epsilon} = 0$ when $\epsilon > 1/2$. For $n^{\sin n}$, take $n = 2\pi k + \pi/2$, where $\sin n = 1$. Then $n^{\sin n}/ \sqrt{n} = n^{1 - 1/2} = \sqrt{n} \to \infty$, so $n^{\sin n} \notin O(\sqrt{n})$.
+   </ExerciseSolution>
 
-3. Expected averages random algorithm choices for a fixed input; average-case averages over an input distribution; amortized bounds total cost of every valid operation sequence. State the probability or sequence quantifier.
+2. **Limit nonexistence.** Construct $f, g : \mathbb{N} \to \mathbb{R}^+$ such that $f \in \Theta(g)$ but $\lim_{n\to\infty} f(n)/g(n)$ does not exist.
 
-4. Invariant: if target exists, it lies in [lo,hi]. Choose midpoint, compare, and retain the half that can contain target. Use interval length as a decreasing nonnegative measure; after O(log n) iterations it is empty or one element.
+   <ExerciseSolution hint="Use a bounded oscillating function such as $\sin n$ to prevent the ratio from converging.">
 
-5. Counting sort or radix sort inspect bounded integer digits and use O(n+k) or O(d(n+b)) time under domain parameters. The comparison decision-tree lower bound does not apply because the algorithm obtains information from representations without pairwise comparisons.
+   Let $f(n) = n$, $g(n) = n \cdot (2 + \sin n)$. The ratio oscillates between $1/3$ and $1$, never converging, but both $f \in O(g)$ and $g \in O(f)$ hold because $n \le n(2 + \sin n) \le 3n$.
+   </ExerciseSolution>
 
-6. Returning k records requires writing or visiting k outputs, so any explicit-output algorithm needs u03a9(k) time. A range query with O(log n+k) is output-sensitive; omitting k is impossible for large output.
+3. **Master theorem.** Solve exactly using the master theorem (or argue why it fails):
+   - $T(n) = 7T(n/2) + n^2$
+   - $T(n) = 4T(n/2) + n^2 \log n$
+   - $T(n) = 2T(n/2) + n/\log n$
+   - $T(n) = T(n/2) + n(2 - \cos n)$
 
-7. A loop may call a helper that scans a list, compare strings of length ell, resize an array, or allocate/copy a result. Replace the constant claim with its parameterized cost and sum it over calls.
+   <ExerciseSolution>
+   (a) $a=7$, $b=2$, $\log_b a \approx 2.807$. $f(n) = n^2 = O(n^{2.807 - \epsilon})$, Case 1: $T(n) = \Theta(n^{\log_2 7})$.
+   (b) $a=4$, $b=2$, $\log_b a = 2$. $f(n) = n^2 \log n = \Theta(n^2 \log^{0+} n)$, but the gap is polylogarithmic. The master theorem's Case 2 extends: $T(n) = \Theta(n^2 \log^2 n)$.
+   (c) Falls in the polylogarithmic gap between Case 1 and Case 2. Use recursion tree: $T(n) = \Theta(n \log \log n)$.
+   (d) $f(n) = n(2 - \cos n)$ oscillates between $n$ and $3n$; the master theorem does not require monotonicity. $a=1$, $b=2$, $\log_b a = 0$, $f(n) = \Omega(n^\epsilon)$ for any $\epsilon \le 1$. The regularity condition fails because $f(n/2)$ may not dominate $f(n)$. Use Akra–Bazzi: $p=0$, $T(n) = \Theta(\int_1^n f(u)/u \, du) = \Theta(\int_1^n (2-\cos u) \, du) = \Theta(n)$.
+   </ExerciseSolution>
 
+4. **Akra–Bazzi.** Solve $T(n) = T(n/2) + T(n/3) + T(n/6) + n$.
 
+   <ExerciseSolution>
+   Solve $1/2^p + 1/3^p + 1/6^p = 1$. Try $p=1$: $1/2 + 1/3 + 1/6 = 1$. Then $T(n) = \Theta(n + n \int_1^n u / u^2 \, du) = \Theta(n \log n)$.
+   </ExerciseSolution>
+
+5. **Decision tree height lower bound.** Let $\Pi$ be a problem with $m$ distinct possible outputs on inputs of size $n$. Prove that any comparison-based algorithm for $\Pi$ requires $\Omega(\log m)$ comparisons in the worst case. Apply this to: (a) sorting ($m = n!$), (b) finding the minimum of $n$ elements ($m = n$), (c) determining whether all $n$ elements are distinct ($m = 2$).
+
+   <ExerciseSolution>
+   A binary decision tree of height $h$ has at most $2^h$ leaves. Each leaf corresponds to a distinct output. To accommodate $m$ outputs, $2^h \ge m$, so $h \ge \lceil \log_2 m \rceil$.
+   (a) $m = n!$, so $h \ge \log_2(n!) = \Omega(n \log n)$.
+   (b) $m = n$, so $h \ge \lceil \log_2 n \rceil$. This is tight: tournament-style comparison finds the minimum in exactly $n-1$ comparisons, but the decision-tree height bound only gives $\Omega(\log n)$. The $n-1$ lower bound requires an adversary argument, not a leaf-counting one.
+   (c) $m = 2$ (all distinct vs. at least one duplicate), so $h \ge 1$. Again the bound is weak; a tighter lower bound of $\Omega(n \log n)$ for element distinctness requires a more sophisticated algebraic decision tree model.
+   </ExerciseSolution>
+
+6. **Amortized multi-pop.** A stack supports $\text{push}(x)$, $\text{pop}()$, and $\text{multipop}(k)$ which pops up to $k$ elements. Using the potential method with $\Phi = \text{size}$, prove that the amortized cost of each operation is $O(1)$.
+
+   <ExerciseSolution>
+   Let $\Phi = \text{size}$. For push: actual cost 1, $\Delta\Phi = 1$, amortized = $1+1 = 2$. For pop: actual cost 1, $\Delta\Phi = -1$, amortized = $1-1 = 0$. For multipop(k): actual cost $\min(k, \text{size})$, $\Delta\Phi = -\min(k, \text{size})$, amortized = $0$. All are $O(1)$.
+   </ExerciseSolution>
+
+7. **Substitution method.** Solve $T(n) = 3T(n/2) + n \log n$ by the substitution method. Show the full induction with base cases.
+
+   <ExerciseSolution>
+   Guess $T(n) \le c n^{\log_2 3} - d n$. Verify by induction: $T(n) \le 3(c (n/2)^{\log_2 3} - d (n/2)) + n \log n = 3c n^{\log_2 3} / 2^{\log_2 3} - (3d/2)n + n \log n = c n^{\log_2 3} - (3d/2)n + n \log n$. We need this $\le c n^{\log_2 3} - d n$, i.e., $-(3d/2)n + n \log n \le -d n$, or $n\log n \le (d/2)n$, i.e., $d \ge 2 \log n$, which fails for all $n$. The master theorem gives $T(n) = \Theta(n^{\log_2 3})$ because $f(n) = o(n^{\log_2 3})$.
+   </ExerciseSolution>
+
+8. **Synthesis: design and analyze.** You are given an array of $n$ distinct integers and a target threshold $t$. Design an algorithm that counts the number of pairs $(i,j)$ with $i < j$ such that $A[i] + A[j] \ge t$. Analyze its worst-case running time using the appropriate tool (master theorem, Akra–Bazzi, or direct summation). Provide a $\Theta$ bound. Then construct an input family that forces your algorithm to reach its worst-case bound.
+
+   <ExerciseSolution hint="Consider sorting the array first, then using two pointers scanning from both ends.">
+
+   Sort the array ($O(n \log n)$ using merge sort). Then set $lo = 0$, $hi = n-1$, and while $lo < hi$: if $A[lo] + A[hi] \ge t$, then all pairs $(lo, lo+1), \ldots, (lo, hi)$ are valid, so add $hi - lo$ to the count and decrement $hi$; else increment $lo$. Each iteration advances one pointer, giving $O(n)$. Total: $\Theta(n \log n)$. The worst case occurs for any input — sorting dominates. For a $\Theta(n^2)$ alternative, consider the naive double loop without sorting.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+- **Soft-O notation and polylogarithmic factors.** The $\tilde{O}$ notation that hides $\text{poly}(\log n)$ factors is used in the literature but is not central here; explicit polylog terms are written out throughout.
+- **Concrete complexity and instruction-level analysis.** Counting individual machine instructions (RAM model constant factors) is architecture-dependent and in tension with the asymptotic philosophy. Remarks on when constant factors matter appear, but concrete complexity theory is not developed.
+- **Worst-case optimal join algorithms and AGM bound.** Information-theoretic lower bounds for database joins use a different analytical framework (fractional edge cover, AGM inequality) covered in the database systems module.
+- **Average-case and smoothed analysis.** These refinements are important for algorithms whose worst-case bound is rarely attained (e.g., quicksort, simplex method), but the present lesson focuses on worst-case asymptotic analysis as the foundation.
+- **Lower bounds via algebraic decision trees.** The element distinctness problem requires $\Omega(n \log n)$ comparisons in the algebraic decision tree model, but the proof uses degree arguments beyond the combinatorial counting approach here.
 
 ## References & Further Reading
 
-* [MIT 6.006 Introduction to Algorithms syllabus](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/pages/syllabus/)
-* [MIT 6.046 Design and Analysis of Algorithms lecture notes](https://www.ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/pages/lecture-notes/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+- Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed., Chapters 3–4.
+- Knuth, D. E. "Big Omicron and Big Omega and Big Theta." *SIGACT News* (1976).
+- Graham, Knuth, and Patashnik, *Concrete Mathematics*, Chapter 9 (asymptotics).
+- Akra, M. and Bazzi, L. "On the Solution of Linear Recurrence Equations." *Computational Optimization and Applications* 10, no. 2 (1998): 195–210.
+- [MIT 6.042J Mathematics for Computer Science — Asymptotics](https://ocw.mit.edu/courses/6-042j-mathematics-for-computer-science-fall-2010/)
+- Blum, M., Floyd, R. W., Pratt, V., Rivest, R. L., and Tarjan, R. E. "Time bounds for selection." *Journal of Computer and System Sciences* 7, no. 4 (1973): 448–461. (Median selection lower bound via adversary argument.)

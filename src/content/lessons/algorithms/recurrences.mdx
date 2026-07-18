@@ -1,103 +1,393 @@
 ---
 title: "Recurrences and the Master Method"
 course: "algorithms"
-description: "Exact and asymptotic recurrence solving by expansion, substitution, recursion trees, and the Master theorem."
+description: "Solving recurrences by substitution, recursion trees, generating functions, characteristic equations, domain transformations, the Master theorem, and Akra–Bazzi."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import PlantUML from '../../../components/PlantUML.astro';
+import TikZ from '../../../components/TikZ.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Recurrences and the Master Method
 
-Recursive algorithms reduce a problem to smaller instances and combine their results. A recurrence expresses total cost, but only after the algorithm’s call structure, base cases, partition overhead, and parameter rounding are understood. Solving recurrences is therefore part of algorithm design, not bookkeeping after code is written. This lesson develops several methods and highlights conditions under which a shortcut is invalid.
+How many operations does merge sort perform on $10^6$ items? The algorithm divides the array in half, sorts each half recursively, and merges. The cost is
 
-## Translating code to a recurrence
+$$
+T(n) = 2T(n/2) + n, \qquad T(1) = 1.
+$$
 
-For a recursive routine, define T(n) as worst-case cost on size n. Count the number and sizes of recursive calls, the nonrecursive work, and the base threshold. If an algorithm makes two calls on n/2 and performs a linear merge, (T(n)=2T(n/2)+cn) for n greater than n0, with T(n)=Theta(1) below n0. If partitions are unequal, preserve those sizes: replacing n/3 and 2n/3 with two n/2 calls can change the analysis.
+Unrolling one level: $T(10^6) = 2T(500,000) + 10^6$. Two levels: $4T(250,000) + 2\cdot 10^6$. After $k$ levels, $T(10^6) = 2^k T(10^6/2^k) + k \cdot 10^6$. The recursion bottoms out when $10^6/2^k \approx 1$, i.e., $k = \log_2 10^6 \approx 20$. The total: $10^6 \cdot 1 + 20 \cdot 10^6 = 21 \cdot 10^6$ operations.
 
-The chosen unit matters. T(n) may count comparisons, arithmetic operations, bytes moved, or wall-clock work. A recurrence for comparisons can ignore the cost of copying a large record; a recurrence for time cannot. If a subroutine has cost S(n), include S(n) rather than calling it constant without a bound.
+Unrolling level by level works for simple recurrences but is impractical when branching is irregular. For $T(n) = T(n/3) + T(2n/3) + n$, the branching produces a combinatorial explosion of paths. A *closed form* — an expression giving $T(n)$ directly — eliminates iteration. The oldest known recurrence in Western mathematics, Fibonacci's $F_n = F_{n-1} + F_{n-2}$ (1202), admits the closed form $F_n = (\phi^n - \psi^n)/\sqrt{5}$, which reveals exponential growth invisible from the recurrence alone.
 
-**Worked translation.** A procedure scans an array to find a pivot, recursively processes subarrays of sizes a and n-a-1, and performs constant partition bookkeeping. The recurrence is (T(n)=T(a)+T(n-a-1)+Theta(n)). If a is near n/2, the solution is Theta(n log n); if a=0 at every level, it is Theta(n^2). The code is the same; input/pivot behavior determines the branch.
+Every recursive program generates a recurrence. The major solution methods are substitution with induction, recursion trees, linear recurrences and characteristic equations, generating functions, and the Master Theorem — a single theorem solving $T(n) = aT(n/b) + f(n)$ by comparing $f(n)$ to $n^{\log_b a}$.
 
-## Expansion and substitution
+## Linear Recurrences: Exact Solutions
 
-Expansion repeatedly replaces recursive terms. For (T(n)=T(n/2)+c), after k expansions (T(n)=T(n/2^k)+kc). The recursion stops when n/2^k at most n0, so k=Theta(log n), yielding Theta(log n). For (T(n)=2T(n/2)+cn), level j has 2^j calls of size n/2^j and total cn, producing Theta(n log n).
+Divide-and-conquer recurrences are typically inhomogeneous. But many algorithms — including dynamic programming, combinatorial enumeration, and probabilistic analysis — yield **linear recurrences** with constant coefficients. These can be solved exactly via the characteristic equation.
 
-Substitution proves a guessed bound by induction. To prove (T(n)=O(n log n)) for merge sort, assume the claim for smaller inputs, substitute (2c(n/2)log(n/2)+dn), and choose c large enough to absorb the lower-order term and base cases. A naive guess may fail because the induction needs slack; use (c nlog n-dn) or another strengthened hypothesis when necessary.
+<MathStatement id="linear-recurrence" kind="definition" title="Linear homogeneous recurrence">
+A $k$th-order linear homogeneous recurrence is:
+$$
+T(n) = c_1 T(n-1) + c_2 T(n-2) + \cdots + c_k T(n-k)
+$$
+with $c_k \neq 0$. Its characteristic polynomial is $x^k - c_1 x^{k-1} - \cdots - c_k = 0$.
+</MathStatement>
 
-For lower bounds, reverse the inequality. If the recurrence has at least two calls and linear combine work, prove Omega(n log n) by showing each recursion level contributes Omega(n) until the leaves. State floor/ceiling effects or bound them by constant factors.
+**Example: Fibonacci.** $F_n = F_{n-1} + F_{n-2}$ with $F_0 = 0$, $F_1 = 1$. The characteristic polynomial $x^2 - x - 1 = 0$ has roots $\phi = (1 + \sqrt{5})/2$ and $\psi = (1 - \sqrt{5})/2$. The general solution is $F_n = A \phi^n + B \psi^n$. Using initial conditions:
 
-## Recursion trees
+$$
+F_0 = A + B = 0, \quad F_1 = A\phi + B\psi = 1.
+$$
 
-A recursion tree groups equal-depth calls. For (T(n)=aT(n/b)+f(n)), level j has a^j nodes of size n/b^j, so level work is (a^j f(n/b^j)). The height is log_b n. Sum all levels and leaves. If level costs increase, leaves dominate; if decrease, the root or upper levels dominate; if equal, multiply by height.
+Solving yields $A = 1/\sqrt{5}$, $B = -1/\sqrt{5}$, giving Binet's formula:
 
-**Three patterns.** For (2T(n/2)+n), every level costs n and there are log n levels, giving n log n. For (2T(n/2)+n^2), level j costs n^2/2^j, giving n^2. For (2T(n/2)+1), internal work sums to n and leaves contribute n, giving n. The tree makes the dominant source visible.
+$$
+F_n = \frac{1}{\sqrt{5}}\left( \phi^n - \psi^n \right) = \Theta(\phi^n).
+$$
 
-## Master theorem
+**Inhomogeneous recurrences.** For $T(n) = T(n-1) + f(n)$, the homogeneous solution is $T_h(n) = A \cdot 1^n = A$, and a particular solution depends on $f(n)$. If $f(n)$ is a polynomial of degree $d$, try a polynomial of degree $d$; if $f(n) = r^n$, try $C \cdot r^n$ (unless $r$ is a root of the characteristic polynomial, in which case multiply by $n$).
 
-For (T(n)=aT(n/b)+f(n)), with a at least 1, b greater than 1, compare f(n) to (n^()log_b a()).
+<Quiz client:load
+  title="Characteristic equation"
+  question="What is the characteristic equation of T(n) = 5T(n-1) - 6T(n-2)?"
+  options={["x^2 - 5x + 6 = 0", "x^2 + 5x - 6 = 0", "x^2 - 5x - 6 = 0", "x^2 + 5x + 6 = 0"]}
+  correctIndex={0}
+  explanation="Moving all terms: x^2 - 5x + 6 = 0, which factors as (x-2)(x-3) = 0."
+/>
 
-1. If (f(n)=O(n^()log_b a-epsilon())) for epsilon greater than 0, then (T(n)=Theta(n^()log_b a())).
-2. If (f(n)=Theta(n^()log_b a()log^k n)) for k at least 0, then (T(n)=Theta(n^()log_b a()log^()k+1()n)).
-3. If (f(n)=Omega(n^()log_b a+epsilon())) and the regularity condition (a f(n/b) at most  c f(n)) for c less than 1 holds, then (T(n)=Theta(f(n))).
+## The Substitution Method
 
-The regularity condition prevents f from oscillating so that a single level unexpectedly dominates. The theorem does not directly apply to unequal subproblem sizes, additive subproblem sizes, or functions falling between the stated cases without an extended theorem. Do not force a recurrence into the template.
+The substitution method proves an asymptotic bound by induction. It requires a guess and careful handling of base cases.
 
-## Akra-Bazzi intuition
+<MathStatement id="substitution" kind="method" title="Substitution method protocol">
+1. **Guess** the form of the solution: $T(n) = O(g(n))$.
+2. **Assume** the bound holds for all $m < n$.
+3. **Substitute** into the recurrence and simplify.
+4. **Choose constants** to satisfy the inequality for large $n$.
+5. **Verify base cases** — adjust constants or add lower-order terms if needed.
+</MathStatement>
 
-For unequal fixed fractions, a recurrence (T(x)=sum_i a_iT(b_i x)+g(x)) can be analyzed by finding p satisfying (sum_i a_i b_i^p=1), then integrating the combine cost. This generalizes the Master method. For (T(n)=T(n/3)+T(2n/3)+n), p=1 because 1/3+2/3=1, and the solution is Theta(n log n) under regularity. The recursion tree has unequal shapes but total work per broad level remains linear.
+**Worked example: $T(n) = 4T(n/2) + n$.** Guess $T(n) = O(n^2)$. Inductive assumption: $T(m) \le c m^2$ for $m < n$.
 
-## Recurrences with overlap
+$$
+T(n) \le 4c (n/2)^2 + n = 4c (n^2/4) + n = c n^2 + n.
+$$
 
-Divide-and-conquer recurrence trees assume recursive calls are independent. Naive Fibonacci recursion has (T(n)=T(n-1)+T(n-2)+O(1)) and exponential growth because the same subproblems repeat. Memoization changes the dependency graph from a tree to a DAG and computes each state once, often reducing time to O(n). The recurrence for the memoized algorithm is not the same as the call-count recurrence for the naive one.
+We need $c n^2 + n \le c n^2$, which is false. The guess $O(n^2)$ is correct asymptotically, but the induction needs slack. Strengthen the hypothesis: $T(n) \le c n^2 - d n$.
 
-Dynamic programming is therefore a recurrence-design transformation: identify state, transitions, dependency order, and base cases; count states and transition work. A table can use bottom-up order or top-down memoization. Space can often be reduced if each state depends only on a bounded frontier, but reconstructing a solution may require storing decisions.
+$$
+T(n) \le 4(c(n/2)^2 - d(n/2)) + n = c n^2 - 2d n + n = c n^2 - (2d - 1)n.
+$$
 
-## Base cases and rounding
+We need $c n^2 - (2d - 1)n \le c n^2 - d n$, i.e., $-(2d - 1) \le -d$, i.e., $d \ge 1$. Choose $d = 1$, $c$ large enough for base cases.
 
-A recurrence is incomplete without a base threshold and a statement about floors and ceilings. If (T(n)=T(lfloor n/2rfloor)+1), the argument reaches 0 or 1 after Theta(log n) steps; an implementation must ensure that the recursive call is strictly smaller. Using (n/2) in the proof is safe only when floors preserve a constant-factor bound and the base case handles n=0, n=1, and any empty subproblem.
+### Dealing with Floors and Ceilings
 
-Partition algorithms often create empty subarrays. A recurrence that assumes every recursive call has positive size may not describe a valid implementation. Define T(0) and T(1), and include the cost of partitioning even when one recursive side is empty. For a randomized analysis, condition on the pivot rank and take the expected sum over ranks; for a worst-case analysis, choose the most unbalanced allowed rank.
+When the recurrence uses $\lfloor n/2\rfloor$ or $\lceil n/2\rceil$, the substitution must handle the rounding. A common technique: prove the bound for powers of 2, then extend to all integers via monotonicity.
 
-## Iterative recurrences and amortization
+**Lemma (monotonic extension).** If $T(n)$ is nondecreasing and $T(n) = O(g(n))$ for $g$ that is eventually nondecreasing and satisfies $g(2n) = O(g(n))$, then $T(n) = O(g(n))$ for all $n$.
 
-Not every nested computation is recursive. A loop whose work depends on a shrinking variable can be analyzed with a sum or a recurrence over state. For example, repeatedly remove half the remaining items and scan the current set costs (n+n/2+n/4+cdots=O(n)). If each phase doubles a work parameter and performs a scan of that parameter, the total is a geometric sum. Writing the phase recurrence often prevents counting every scan as n.
+**Proof sketch.** For any $n$, let $m = 2^{\lceil \log_2 n\rceil}$ be the next power of 2. Then $T(n) \le T(m) \le c g(m) \le c g(2n) \le c C g(n) = O(g(n))$. The condition $g(2n) = O(g(n))$ (polynomial growth) is essential; it holds for all common growth rates ($n$, $n \log n$, $n^k$, $2^n$).
 
-Recurrences can describe amortized rebuilds as well. A table rebuild at sizes (1,2,4,ldots) has costs that sum geometrically; a sequence recurrence (C(m) at most  C(m-1)+1+text()rebuild()(m)) can be bounded by aggregate accounting. The operation-level worst case remains high, so state whether the desired result is total sequence cost or per-operation latency.
+<Quiz client:load
+  title="Substitution base cases"
+  question="When proving T(n) = 4T(n/2) + O(n) = O(n^2) by substitution, why is it necessary to strengthen the inductive hypothesis from T(n) ≤ c n^2 to T(n) ≤ c n^2 − d n?"
+  options={["The guess O(n^2) is wrong; the true bound is O(n^3)", "The inequality fails for large n without a lower-order term to absorb the additive n", "Base cases cannot be satisfied with c n^2 alone", "Both B and C"]}
+  correctIndex={3}
+  explanation="The additive n in the recurrence cannot be absorbed by c n^2 alone because the induction step produces c n^2 + n, and the n must be handled by a slack term −d n. Base cases then require choosing c large enough to dominate the initial values while keeping d fixed."
+/>
 
-## Recurrence proof checklist
+## Recursion Trees
 
-Before applying a theorem, verify: the subproblem parameter is an integer or can be bounded monotonically; every call decreases it; all calls are counted; combine work includes copying and comparisons; base cases cover malformed or empty inputs; and any regularity or distribution assumption is stated. Then solve with a method whose hypotheses match the recurrence. If two methods disagree, inspect the translation before trusting either algebraic manipulation.
+The recursion-tree method provides an intuitive picture of cost distribution across levels. It is especially useful when the master theorem does not apply.
 
-When presenting a solution, give both an asymptotic result and a short reason: dominant recursion-tree level, induction inequality, or theorem case. A student should be able to reconstruct why the answer holds and identify what would change if the partition ratio, combine work, or memoization policy changed.
+<MathStatement id="recursion-tree-cost" kind="theorem" title="Recursion tree cost formula">
+For $T(n) = aT(n/b) + f(n)$, the total cost is:
+
+$$
+T(n) = \Theta(n^{\log_b a}) + \sum_{j=0}^{\log_b n - 1} a^j f(n/b^j).
+$$
+
+The first term accounts for leaf costs ($n^{\log_b a}$ leaves, each $\Theta(1)$). The sum tracks internal work.
+</MathStatement>
+
+**Worked example: $T(n) = 2T(n/2) + n/\log n$.** The master theorem does not apply because $n/\log n$ is not $\Theta(n)$ nor $O(n^{1-\epsilon})$. Use the recursion tree.
+
+At depth $j$, there are $2^j$ nodes of size $n/2^j$, each costing $(n/2^j) / \log(n/2^j) = (n/2^j) / (\log n - j \log 2)$. Level total:
+
+$$
+2^j \cdot \frac{n/2^j}{\log n - j} = \frac{n}{\log n - j}.
+$$
+
+Summing over $j = 0$ to $\log n - 1$:
+
+$$
+T(n) = \sum_{j=0}^{\log n - 1} \frac{n}{\log n - j} = n \sum_{k=1}^{\log n} \frac{1}{k} = n H_{\log n} = \Theta(n \log \log n).
+$$
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+skinparam rectangle {
+  BackgroundColor lightyellow
+  BorderColor black
+}
+rectangle "n" as root
+rectangle "n/2" as l1
+rectangle "n/2" as r1
+rectangle "n/4" as l2
+rectangle "n/4" as m2
+rectangle "n/4" as r3
+rectangle "n/4" as r4
+root --> l1
+root --> r1
+l1 --> l2
+l1 --> m2
+r1 --> r3
+r1 --> r4
+note right of root : level 0: cn
+note right of l1 : level 1: c(n/2)*2 = cn
+note right of l2 : level 2: c(n/4)*4 = cn
+@enduml`}
+/>
+
+## Master Theorem
+
+<MathStatement id="master-theorem" kind="theorem" title="Master theorem (full form)">
+Let $a \ge 1$, $b > 1$, $f$ asymptotically positive. Define $T(n) = aT(n/b) + f(n)$ with $n/b$ rounded to floor or ceiling. Then:
+
+1. If $f(n) = O(n^{\log_b a - \varepsilon})$ for $\varepsilon > 0$, then $T(n) = \Theta(n^{\log_b a})$.
+2. If $f(n) = \Theta(n^{\log_b a} \log^k n)$ for $k \ge 0$, then $T(n) = \Theta(n^{\log_b a} \log^{k+1} n)$.
+3. If $f(n) = \Omega(n^{\log_b a + \varepsilon})$ and $a f(n/b) \le c f(n)$ for some $c < 1$ and all $n \ge n_0$, then $T(n) = \Theta(f(n))$.
+</MathStatement>
+
+<MathProof id="master-case2-proof" for="master-theorem" title="Case 2 derivation" collapsible open>
+Assume $f(n) = n^{\log_b a}$. The recursion tree has height $h = \log_b n$. At depth $j$, work is $a^j f(n/b^j) = a^j (n/b^j)^{\log_b a} = n^{\log_b a} (a/b^{\log_b a})^j = n^{\log_b a}$. Each level contributes $\Theta(n^{\log_b a})$, and there are $\log_b n$ levels, giving $\Theta(n^{\log_b a} \log n)$.
+
+For $f(n) = n^{\log_b a} \log^k n$, the depth-$j$ work is $n^{\log_b a} \log^k (n/b^j)$. The sum $\sum_{j=0}^{h-1} \log^k (n/b^j) = \Theta(\log^{k+1} n)$ by the integral approximation $\sum_{j=0}^{h-1} (\log n - j \log b)^k \sim \int_0^{\log n} (\log n - x)^k \, dx = \Theta(\log^{k+1} n)$.
+</MathProof>
+
+<TikZ
+  code={String.raw`\begin{tikzpicture}[scale=1.2]
+  \draw[->] (-0.3,0) -- (6,0) node[below] {$\log n$};
+  \draw[->] (0,-0.3) -- (0,4) node[left] {$\log T(n)$};
+  \draw[blue,thick] (0,0) -- (5,2.5) node[right] {$n^{\log_b a}$ (Case 1)};
+  \draw[red,thick] (0,0) -- (5,3) node[right] {$n^{\log_b a}\log n$ (Case 2)};
+  \draw[green!50!black,thick] (0,0) -- (5,3.5) node[right] {$f(n)$ (Case 3)};
+  \draw[dashed] (2,0) -- (2,3.5);
+  \node at (2,-0.3) {$n_0$};
+  \node[blue] at (3,1.2) {$\varepsilon > 0$ gap};
+\end{tikzpicture}`}
+/>
+
+<CodeRunner client:load
+  title="Verifying recurrence bounds with Python"
+  language="python"
+  code={`def T_merge(n, memo={}):
+    if n <= 1: return 1
+    if n not in memo:
+        memo[n] = 2 * T_merge(n//2, memo) + n
+    return memo[n]
+
+def closed_merge(n):
+    return n + n * (n.bit_length() - 1)
+
+for n in [1, 2, 4, 8, 16, 32, 64, 128]:
+    t = T_merge(n)
+    c = closed_merge(n)
+    print(f"n={n:4d}  T(n)={t:6d}  n log n={c:6d}  match={t==c}")`}
+  output={`n=   1  T(n)=     1  n log n=     1  match=True
+n=   2  T(n)=     4  n log n=     4  match=True
+n=   4  T(n)=    12  n log n=    12  match=True
+n=   8  T(n)=    32  n log n=    32  match=True
+n=  16  T(n)=    80  n log n=    80  match=True
+n=  32  T(n)=   192  n log n=   192  match=True
+n=  64  T(n)=   448  n log n=   448  match=True
+n= 128  T(n)=  1024  n log n=  1024  match=True`}
+/>
+
+## Counterexample: When the Master Theorem Fails
+
+The Master Theorem is widely applicable but not universal. Applying it without checking preconditions produces erroneous bounds.
+
+> **Counterexample: Naive application of Case 1.**  
+> $T(n) = 2T(n/2) + n / \ln n$. Here $\log_b a = \log_2 2 = 1$, and $f(n) = n / \ln n$. Compare $f(n)$ to $n^{1-\varepsilon}$: for any $\varepsilon > 0$, $n / \ln n$ eventually exceeds $n^{1-\varepsilon}$ because $\ln n$ grows slower than $n^\varepsilon$. Thus $f(n)$ is **not** $O(n^{1-\varepsilon})$; Case 1 does not apply. Neither does Case 2 ($f$ is not $\Theta(n)$) nor Case 3 ($f$ is not $\Omega(n^{1+\varepsilon})$). The Master Theorem is silent. The recursion tree resolves it to $\Theta(n \log \log n)$.
+
+> **Counterexample: Regularity condition failure.**  
+> $T(n) = 2T(n/2) + n(2 - \cos n)$. Here $\log_b a = 1$, $f(n) = \Theta(n)$, so Case 2 appears applicable, giving $\Theta(n \log n)$. But $f$ oscillates: the hidden constant in $f(n) = \Theta(n)$ masks that $f$ takes values arbitrarily close to $n$ and $3n$ across large spans. The recursion tree's level sums do not converge uniformly. This recurrence still yields $\Theta(n \log n)$ by a more careful bound, but a mechanical Master Theorem application that only checks $f(n) = \Theta(n)$ without verifying the polylog factor domain is not a full justification.
+
+> **Non-example: Non-polynomial $f$.**  
+> $T(n) = 2T(n/2) + 2^n$: $f$ grows so fast the root dominates, giving $T(n) = \Theta(2^n)$. Case 3 applies (regularity holds: $2 \cdot 2^{n/2} \le c \cdot 2^n$ for $c = 1/2$, $n \ge 4$). This is a valid application, not a counterexample — included to contrast with the cases above where the theorem fails.
+
+<Quiz client:load
+  title="Master Theorem case selection"
+  question="Which case of the Master Theorem applies to T(n) = 3T(n/3) + n?"
+  options={["Case 1: T(n) = Θ(n)", "Case 2: T(n) = Θ(n log n)", "Case 3: T(n) = Θ(n)", "The Master Theorem does not apply"]}
+  correctIndex={1}
+  explanation="a=3, b=3, log_b a = 1. f(n) = n = Θ(n^{log_b a}) = Θ(n). This is Case 2 with k=0, giving T(n) = Θ(n log n)."
+/>
+
+## Akra–Bazzi Theorem
+
+<MathStatement id="akra-bazzi" kind="theorem" title="Akra–Bazzi theorem">
+Let $T(n) = \sum_{i=1}^k a_i T(b_i n + h_i(n)) + f(n)$, where:
+- $a_i > 0$, $b_i \in (0, 1)$,
+- $|h_i(n)| = O(n / \log^2 n)$ (handling floors/ceilings),
+- $f$ satisfies $|f'(n)| = O(n^{\delta})$ for some $\delta$ (polynomial growth).
+Define $p$ by $\sum_{i=1}^k a_i b_i^p = 1$. Then:
+
+$$
+T(n) = \Theta\left( n^p \left(1 + \int_1^n \frac{f(u)}{u^{p+1}} \, du \right) \right).
+$$
+</MathStatement>
+
+**Proof sketch.** Expand the recurrence to depth where subproblems reach constant size. The number of subproblems of size $u$ at some level is approximately $\Theta(u^{p-1})$ (by the branching equation). The total work is the integral of $f(u)$ weighted by the density of subproblems at size $u$:
+
+$$
+\int_1^n (\text{number of subproblems of size } u) \cdot f(u) \, du \approx \int_1^n u^{p-1} f(u) \, du.
+$$
+
+But $u^{p-1} = u^{p} / u$, and when $f(u) = u^q$, the integral gives $\Theta(n^p + n^q)$ depending on $q$ vs $p$. More precisely, when $f(n)$ is polynomial, the leading term is $n^{\max(p, q)}$ with log factor when $p = q$.
+
+**Example: $T(n) = T(n/2) + T(n/3) + T(n/6) + n$.** Solve $(1/2)^p + (1/3)^p + (1/6)^p = 1$. Try $p=1$: $1/2 + 1/3 + 1/6 = 1$. Then:
+
+$$
+T(n) = \Theta\left( n + n \int_1^n \frac{u}{u^{2}} \, du \right) = \Theta(n + n \log n) = \Theta(n \log n).
+$$
+
+## Domain Transformations
+
+Some recurrences are not directly in the Akra–Bazzi or master-theorem form but can be transformed by changing variables.
+
+**Example: $T(n) = 2T(\sqrt{n}) + \log n$.** Let $m = \log n$, so $n = 2^m$ and $\sqrt{n} = 2^{m/2}$. Then:
+
+$$
+T(2^m) = 2T(2^{m/2}) + m.
+$$
+
+Define $S(m) = T(2^m)$. Then $S(m) = 2S(m/2) + m$. By the master theorem, $S(m) = \Theta(m \log m)$. Substituting back: $T(n) = \Theta(\log n \cdot \log \log n)$.
+
+**Example: $T(n) = \sqrt{n}\, T(\sqrt{n}) + n$.** Let $m = \log n$, $n = 2^m$, $\sqrt{n} = 2^{m/2}$. Define $S(m) = T(2^m) / 2^m$. Then:
+
+$$
+S(m) = \frac{T(2^{m/2})}{2^{m/2}} + 1 = S(m/2) + 1.
+$$
+
+Solving $S(m) = S(m/2) + 1$ gives $S(m) = \Theta(\log m)$. Therefore $T(n) = n S(\log n) = \Theta(n \log \log n)$.
+
+## Smoothness and Regularity
+
+For the master theorem, $f$ must be *smooth* — $f(bn) = \Theta(f(n))$ for the relevant $b$ — for the bounds to transfer across floors and ceilings.
+
+<MathStatement id="smoothness" kind="definition" title="Smooth function">
+$f : \mathbb{N} \to \mathbb{R}^{\ge 0}$ is smooth if $f(\Theta(n)) = \Theta(f(n))$ and $f$ is eventually nondecreasing. For positive nondecreasing $f$, smoothness is equivalent to $f(2n) = \Theta(f(n))$.
+</MathStatement>
+
+All common algorithm costs are smooth: $n^k$, $n^k \log^m n$, $2^n$. Functions like $2^{n \bmod k}$ or $n^{1 + \sin n}$ are not smooth and produce irregular costs.
+
+## Generating Functions for Recurrences
+
+Generating functions provide exact closed forms for sequences satisfying linear recurrences.
+
+<MathStatement id="generating-function" kind="definition" title="Ordinary generating function">
+For sequence $\{a_n\}$, define $A(x) = \sum_{n=0}^\infty a_n x^n$.
+</MathStatement>
+
+**Example: Catalan numbers.** $C_0 = 1$, $C_{n+1} = \sum_{i=0}^n C_i C_{n-i}$. The generating function satisfies $C(x) = 1 + x C(x)^2$, giving $C(x) = (1 - \sqrt{1 - 4x}) / (2x)$. Series expansion gives $C_n = \frac{1}{n+1}\binom{2n}{n} = \Theta(4^n / n^{3/2})$.
+
+**Example: Divide-and-conquer recurrences.** For $T(n) = 2T(n/2) + n$, the generating function approach is less natural because the recurrence operates on $n/b$ rather than $n-1$. The Akra–Bazzi framework handles this more directly.
+
+## Recurrence Application: Matrix Multiplication
+
+Standard: $T(n) = 8T(n/2) + \Theta(n^2) = \Theta(n^3)$. Strassen: $T(n) = 7T(n/2) + \Theta(n^2) = \Theta(n^{\log_2 7})$. The improvement comes from reducing $a$ from 8 to 7. The exponent $\log_b a$ drops from 3 to about 2.807. Further reductions (Coppersmith–Winograd, $O(n^{2.376})$, and subsequent improvements) use tensor algebra rather than divide-and-conquer alone.
+
+## Recurrence Application: Selection
+
+Quickselect's expected-time recurrence $T(n) \le T(3n/4) + \Theta(n)$ gives $T(n) = \Theta(n)$ by the master theorem (Case 3: $a=1$, $b=4/3$, $\log_b a = 0$, $f(n) = n = \Omega(n^{0+\epsilon})$; regularity: $f(3n/4) = 3n/4 \le (3/4) n$ with $c = 3/4$).
+
+Median-of-medians: $T(n) \le T(n/5) + T(7n/10) + \Theta(n)$. By Akra–Bazzi, $p \approx 0.839$ and the integral gives $T(n) = \Theta(n)$.
 
 ## Exercises
 
-1. Derive the recurrence for merge sort and solve it by a recursion tree.
-2. Solve (T(n)=T(n/2)+1) by expansion.
-3. Use substitution to prove a Theta(n log n) merge recurrence.
-4. Apply the Master theorem to three cases and identify an invalid case.
-5. Analyze unequal recurrence (T(n)=T(n/3)+T(2n/3)+n).
-6. Explain why memoized Fibonacci has a different cost recurrence.
-7. State what a recurrence omits when records have variable length.
+1. **Characteristic equation.** Solve $T(n) = 5T(n-1) - 6T(n-2)$ with $T(0) = 0$, $T(1) = 1$ exactly.
 
-### Diagnostic solutions
+   <ExerciseSolution hint="Write the characteristic polynomial $x^2 - 5x + 6 = 0$, find its roots, then determine the constants from the initial conditions.">
 
+   Characteristic equation $x^2 - 5x + 6 = 0$, roots $r_1 = 2$, $r_2 = 3$. General: $T(n) = A \cdot 2^n + B \cdot 3^n$. Use $T(0) = A + B = 0$, $T(1) = 2A + 3B = 1$, so $A = -1$, $B = 1$. Exact: $T(n) = 3^n - 2^n$.
+   </ExerciseSolution>
+2. **Inhomogeneous linear.** Solve $T(n) = 3T(n-1) + 2^n$ with $T(0) = 0$.
 
-1. (T(n)=2T(n/2)+Theta(n)). Each level has total Theta(n) combine work and Theta(log n) levels; leaves contribute Theta(n), so T=Theta(n log n).
+   <ExerciseSolution hint="The homogeneous solution is $A \cdot 3^n$. For the particular solution, try $C \cdot 2^n$ and solve for $C$.">
 
-2. After k expansions, (T(n)=T(n/2^k)+k). Stop at k=Theta(log n), so T=Theta(log n), including constant base cost.
+   Homogeneous: $T_h(n) = A \cdot 3^n$. Particular: try $C \cdot 2^n$. Substitute: $C \cdot 2^n = 3C \cdot 2^{n-1} + 2^n = (3C/2) \cdot 2^n + 2^n$, so $C = (3C/2) + 1$, i.e., $C = -2$. Thus $T(n) = A \cdot 3^n - 2 \cdot 2^n$. Use $T(0) = A - 2 = 0$, $A = 2$, so $T(n) = 2 \cdot 3^n - 2^{n+1}$.
+   </ExerciseSolution>
+3. **Substitution with slack.** Use the substitution method to prove $T(n) = 3T(n/2) + n \log n$ is $O(n^{\log_2 3})$. Show the induction with a strengthened hypothesis.
 
-3. Assume T(m) at most c m log m for smaller m. Then (2c(n/2)log(n/2)+dn=cnlog n-cn+dn at most  cnlog n) when c at least d, with base cases absorbed by a constant. A matching lower induction gives Theta.
+   <ExerciseSolution>
+   Guess $T(n) \le c n^{\log_2 3} - d n$. Substitute: $T(n) \le 3(c (n/2)^{\log_2 3} - d(n/2)) + n \log n = c n^{\log_2 3} - (3d/2)n + n \log n$. Need $-(3d/2)n + n \log n \le -d n$, i.e., $\log n \le d/2$, which fails for large $n$. Therefore the $-d n$ correction is insufficient when $f(n)$ is superlinear. Use the master theorem directly: $a=3, b=2, \log_b a \approx 1.585$, $f(n) = n \log n = O(n^{1.585 - \epsilon})$, Case 1: $T(n) = \Theta(n^{\log_2 3})$.
+   </ExerciseSolution>
+4. **Domain transformation.** Solve $T(n) = 4T(n/2) + n \log^2 n$ by applying the master theorem, then verify with a recursion tree.
 
-4. (2T(n/2)+n^2) is case 3 and Theta(n^2); (2T(n/2)+n) is case 2 and Theta(n log n); (2T(n/2)+1) is case 1 and Theta(n). Unequal (T(n/3)+T(2n/3)+n) is not directly the standard Master form.
+   <ExerciseSolution>
+   Master: $a=4$, $b=2$, $\log_b a = 2$, $f(n) = n \log^2 n$. Case 2 with $k=2$: $T(n) = \Theta(n^2 \log^3 n)$. Recursion tree confirms: each level contributes $n^2 \log^2 (n/2^j)$; sum is $\Theta(n^2) \cdot \Theta(\log^3 n)$.
+   </ExerciseSolution>
+5. **Floors and ceilings.** Prove that $T(n) = T(\lfloor n/2\rfloor) + T(\lceil n/2\rceil) + \Theta(n)$ still satisfies $T(n) = \Theta(n \log n)$ even though rounding introduces small imbalances.
 
-5. The critical exponent p solves (1/3)^p+(2/3)^p=1, giving p=1. The linear combine term matches n^p, and an unequal recursion tree has Theta(log n) effective levels, so T=Theta(n log n).
+   <ExerciseSolution>
+   Let $T(n) = T(\lfloor n/2\rfloor) + T(\lceil n/2\rceil) + cn$. For $n$ even, both halves are $n/2$. For $n$ odd, the halves differ by 1. Prove by induction: $T(n) \le c n \log_2 n + d n$. The imbalance does not affect the leading term.
+   </ExerciseSolution>
+6. **Akra–Bazzi.** Solve $T(n) = 2T(n/4) + 3T(n/6) + n$.
 
-6. Naive Fibonacci recomputes the same arguments through exponentially many calls. Memoization stores each integer state once and performs constant transition work, yielding O(n) time and O(n) space, or O(1) rolling space if only the value is needed.
+   <ExerciseSolution>
+   Solve $(1/4)^p + (1/6)^p = 1/2$? Wait: $2(1/4)^p + 3(1/6)^p = 1$. For $p=1$: $2/4 + 3/6 = 0.5 + 0.5 = 1$. So $p=1$. Then $T(n) = \Theta(n + n \int_1^n u / u^2 \, du) = \Theta(n \log n)$.
+   </ExerciseSolution>
+7. **Generating function.** Derive the closed form for $a_n = 2a_{n-1} + 1$ with $a_0 = 0$ using ordinary generating functions.
 
-7. It may omit key length, bit complexity, bytes copied, allocation, cache transfers, I/O, or output size. Add parameters or state a unit-cost assumption; otherwise an apparent constant operation may scale with representation length.
+   <ExerciseSolution>
+   Let $A(x) = \sum_{n=0}^\infty a_n x^n$. The recurrence: $\sum_{n\ge 1} a_n x^n = 2 \sum_{n\ge 1} a_{n-1} x^n + \sum_{n\ge 1} x^n$. So $A(x) - a_0 = 2x A(x) + x/(1-x)$. Since $a_0 = 0$, $A(x)(1 - 2x) = x/(1-x)$, so $A(x) = x / ((1-x)(1-2x)) = 1/(1-2x) - 1/(1-x)$. Series: $a_n = 2^n - 1$.
+   </ExerciseSolution>
 
+8. **Synthesis: choose the method.** The runtime of a recursive algorithm is described by: given an array of size $n$, partition it into subarrays of sizes $\lfloor n/4\rfloor$ and $\lfloor 3n/4\rfloor$, recurse on each, and combine in $\Theta(n)$ time. Derive the recurrence, decide which method solves it, and give the asymptotic bound.
+
+   <ExerciseSolution>
+   $T(n) = T(n/4) + T(3n/4) + \Theta(n)$. Akra–Bazzi: $a_1=1$, $b_1=1/4$, $a_2=1$, $b_2=3/4$. Solve $(1/4)^p + (3/4)^p = 1$. By inspection $p=1$ because $1/4 + 3/4 = 1$. Then $T(n) = \Theta(n + n \int_1^n u / u^2 \, du) = \Theta(n \log n)$.
+   </ExerciseSolution>
+
+9. **Synthesis: method comparison.** Two students try to bound $T(n) = 3T(n/3) + \sqrt{n}$.
+   - Student A applies the Master Theorem: $a=3$, $b=3$, $\log_b a = 1$, $f(n) = \sqrt{n} = n^{0.5}$. Case 1: $f(n) = O(n^{1-\varepsilon})$ with $\varepsilon = 0.5$, so $T(n) = \Theta(n)$.
+   - Student B builds a recursion tree: at depth $j$, $3^j$ nodes each of size $n/3^j$, cost $\sqrt{n/3^j}$ per node.
+
+   Who is correct? If either is wrong, identify the error and give the correct bound.
+
+   <ExerciseSolution>
+   Student A is correct. $\sqrt{n} = n^{0.5}$, $\log_3 3 = 1$, so $0.5 < 1$. Case 1 applies with $\varepsilon = 0.5$: $T(n) = \Theta(n)$. Student B's confusion arises from incorrectly summing the geometric series — the level costs form a geometric progression with ratio $r = \sqrt{3} \approx 1.732$, and the geometric sum $\sum_{j=0}^{\log_3 n} (\sqrt{3})^j \sqrt{n} = \Theta(n)$ after simplification.
+   </ExerciseSolution>
+
+10. **Transfer: adversarial regularity.** Consider $T(n) = 2T(n/2) + n^{1.5}$. Apply the Master Theorem. Now consider $T'(n) = 2T(n/2) + f(n)$ where $f(n) = n^{1.5}$ when $n$ is a power of 2, and $f(n) = 0$ otherwise. Does the Master Theorem apply to $T'$? Why or why not? What is the asymptotic behavior of $T'$?
+
+    <ExerciseSolution>
+    For $T$, Case 3 applies: $\log_2 2 = 1$, $f(n) = n^{1.5} = \Omega(n^{1+\varepsilon})$ with $\varepsilon = 0.5$, regularity $2 (n/2)^{1.5} = 2^{-0.5} n^{1.5} \le c n^{1.5}$ with $c = 2^{-0.5} < 1$, so $T(n) = \Theta(n^{1.5})$.
+
+    For $T'$, $f(n)$ is not smooth. When $n$ is a power of 2, the root cost is $\Theta(n^{1.5})$, and the level costs form a geometric series with ratio $2^{-0.5}$. The total remains $\Theta(n^{1.5})$, but the Master Theorem's proof via the regularity condition requires the inequality for *all sufficiently large n*, which fails here. An ad-hoc recursion tree argument is required.
+    </ExerciseSolution>
+
+## Deliberately Omitted
+
+> **Generating functions for divide-and-conquer recurrences.** Applying generating functions to recurrences of the form $T(n) = aT(n/b) + f(n)$ requires advanced analytic combinatorics; the Akra–Bazzi framework covers these cases more directly.
+>
+> **Adversarial lower bounds for specific recurrences.** Proving that a given recurrence cannot be solved in a certain form (e.g., no closed form exists) is a topic in differential algebra, beyond the scope of algorithm analysis.
+>
+> **Recurrences with non-constant coefficients and irregular branching.** When the branching factor $a$ or subproblem ratio $b$ depends on $n$ (e.g., $T(n) = \log n \cdot T(n/2) + n$), the standard methods fail and ad-hoc approaches like domain transformation are illustrated only for textbook examples.
 
 
 ## References & Further Reading
 
-* [MIT 6.006 Recurrences lecture notes](https://live.ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/1869dbf640ded6b31f1bd369d2001ef5_MIT6_006S20_r03.pdf)
-* [MIT 6.046 Design and Analysis of Algorithms lecture notes](https://www.ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/pages/lecture-notes/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed., Chapter 4.
+* Graham, Knuth, and Patashnik, *Concrete Mathematics*, Chapters 6–7 (generating functions, recurrences).
+* Akra, M. and Bazzi, L. "On the Solution of Linear Recurrence Equations." *Computational Optimization and Applications* 10, no. 2 (1998): 195–210.
+* [MIT 6.042J Mathematics for Computer Science — Recurrences](https://ocw.mit.edu/courses/6-042j-mathematics-for-computer-science-fall-2010/)

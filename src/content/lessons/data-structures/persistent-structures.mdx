@@ -3,89 +3,268 @@ title: "Persistent and Immutable Data Structures"
 course: "data-structures"
 description: "Versions, structural sharing, path copying, persistence models, and correctness under immutable updates."
 ---
+
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+
 # Persistent and Immutable Data Structures
 
-A mutable structure has one current state; an update destroys or changes the previous representation. A persistent structure preserves access to prior versions while producing a new version. Immutability simplifies reasoning, supports undo and snapshots, and makes concurrent readers safer, but it can increase allocation and memory traffic. Structural sharing lets versions reuse unchanged substructure rather than copying the entire value.
+Git stores every version of every file without using $1000\times$ the space of a single checkout. A text editor supports unbounded undo. A database provides snapshot isolation under concurrent writers. These systems rely on **persistent data structures**: structures that preserve prior versions when modified.
 
-## Versions and semantics
+The foundational treatment is Driscoll, Sarnak, Sleator, and Tarjan (1989), "Making Data Structures Persistent." The core mechanism—**path copying**—creates a new root-to-leaf path for each update while sharing every unchanged subtree. Each version costs $O(\log n)$ space and time under balanced trees, not $O(n)$ for a full copy. This technique underpins functional programming collections, version-control internals, and database MVCC.
 
-An immutable sequence operation does not change its input. A set operation on version v returns a new version v' such that v' differs at i while v remains observable and unchanged. A version is a root handle into a representation graph. The abstract correctness condition is functional: AF(v') is the specified result and AF(v) remains the old value for every previously returned version.
+Requires: understanding of binary search trees and asymptotic analysis.
 
-Persistence can be partial or full. In partial persistence, updates are allowed only on the newest version but all versions can be queried. In full persistence, any version can be updated to produce a new branch. Confluent persistence permits merging versions, a harder model because two histories must be combined. State which model an API offers; a version pointer alone does not define update legality.
+<MathStatement id="persistence-def" kind="definition" title="Persistence">
+A data structure is **persistent** if every update produces a new distinguishable version and all prior versions remain observable and unchanged. An **ephemeral** structure discards prior versions on update. **Partial persistence** permits queries on any version but updates only on the newest. **Full persistence** permits updates on any version, creating a branching history graph. **Confluent persistence** additionally permits merging two versions.
+</MathStatement>
 
-Aliasing is intentional inside a persistent implementation but invisible at the abstract level. If two versions share a node and neither operation mutates nodes, sharing is safe. A single accidental in-place write corrupts every version that reaches that node. Use private constructors, immutable fields, copy-on-write checks, or a type system to enforce the no-mutation invariant.
+<StructureDiagram kind="versions" title="Persistent version roots" caption="Each update publishes a new root while old roots remain valid and readable." />
 
-## Path copying in trees
+| Model | Old versions queryable | Old versions updatable | History shape |
+| --- | --- | --- | --- |
+| Ephemeral | no | — | single state (discarded) |
+| Partial persistence | yes | no | linear timeline |
+| Full persistence | yes | yes | tree (branching) |
+| Confluent persistence | yes | yes (mergeable) | DAG |
 
-A persistent binary search tree can implement insertion by copying nodes along the root-to-insertion path and reusing untouched subtrees. If old root r has left child a and a new key belongs in the right subtree, create a new r' with the same key and left pointer a, and a newly constructed right path. The old root and all old nodes remain unchanged.
+<Quiz client:load
+  title="Persistence semantics"
+  question="Which guarantee does a persistent data structure provide?"
+  options={[
+    "Earlier versions remain observable and unchanged",
+    "Every update copies the entire structure",
+    "Old roots are immediately garbage-collected",
+    "All operations execute in constant time"
+  ]}
+  correctIndex={0}
+  explanation="Persistence is a semantic guarantee about version visibility. Structural sharing (path copying) is the implementation technique that achieves it efficiently."
+/>
 
-**Worked update.** Let version v contain root 8, left subtree keys 3,5, and right subtree 10. To insert 4, copy 8, then copy 3, then create a leaf 4 under 3’s right; reuse 8’s right subtree and 3’s left subtree. The new version has O(log n) new nodes if the tree is balanced, while v still yields the original sorted set. The abstraction proof follows the copied path and unchanged-subtree equality.
+## Path copying in binary search trees
 
-Deletion uses the same path-copying idea, including successor replacement. Balancing adds rotations: copy every node whose child pointer changes, and ensure no new version mutates an old node. A rotation can share subtrees that remain in the same position, but parent pointers complicate sharing because a shared child cannot have two mutable parent fields. Functional trees usually omit parent pointers or represent navigation through recursion.
+<MathStatement id="path-copying" kind="proposition" title="Path copying correctness">
+Let $T_v$ be a balanced BST with root $r_v$. An insertion of key $k$ into $T_v$ produces a new version $T_{v'}$ by copying every node on the root-to-insertion-path, reusing all other subtrees by reference. Then:
+1. $T_v$ is observationally unchanged—every query on $r_v$ returns the original set.
+2. $T_{v'}$ is a valid BST containing $\text{set}(T_v) \cup \{k\}$.
+3. The update allocates $O(\log n)$ new nodes and completes in $O(\log n)$ time.
+</MathStatement>
+
+<MathProof id="path-copying-proof" for="path-copying" collapsible>
+Proceed by induction on tree height. The base case (empty tree) creates one node. For the inductive step, let $r_v$ store key $x$ and have left child $L$, right child $R$. If $k < x$, recurse into $L$: construct new left child $L'$ by path copying, then allocate $r_{v'}$ with key $x$, left pointer to $L'$, and right pointer to $R$ (shared). The case $k > x$ is symmetric. Since the tree is balanced, recursion depth is $O(\log n)$. Exactly one node per level is allocated. The old root $r_v$ retains its original pointers, so queries on $r_v$ traverse the unchanged $L$ and $R$. Thus set equality holds for both versions.
+</MathProof>
+
+### Worked example: BST insertion
+
+Let $v$ contain root **8**, left subtree $\{3,5\}$, right subtree $\{10\}$. Insert **4**:
+
+1. Copy **8** (new node, same key).
+2. $4 < 8$, so recurse left. Copy **3**.
+3. $4 > 3$, so recurse right. Create leaf **4** under copied **3**.
+4. Point copied **3**'s left to existing **5** (shared). Point copied **8**'s right to existing **10** (shared).
+
+Result: $v'$ has three new nodes (8, 3, 4). $v$ still yields $\{3,5,8,10\}$; $v'$ yields $\{3,4,5,8,10\}$. Shared subtrees $\{5\}$ and $\{10\}$ occupy exactly one copy in memory.
+
+### Worked example: Deletion with successor replacement
+
+Delete **3** from the same tree. Copy **8**, then copy its left path. Node **3** has right child **5** (leaf), so replace **3** with **5** in the copied path. No additional allocation for **5**—it is shared. The old version $v$ retains **3** and its original linkage. Deletion copies $O(\log n)$ nodes; balancing rotations (if needed) copy every node whose child pointers change.
+
+<CodeRunner client:load
+  title="Persistent BST in Python"
+  language="python"
+  code={`class Node:
+    __slots__ = ('key', 'left', 'right')
+    def __init__(self, key, left=None, right=None):
+        self.key = key
+        self.left = left
+        self.right = right
+
+def insert(root, key):
+    if root is None:
+        return Node(key)
+    if key < root.key:
+        return Node(root.key, insert(root.left, key), root.right)
+    elif key > root.key:
+        return Node(root.key, root.left, insert(root.right, key))
+    else:
+        return root  # duplicate; no new version
+
+# Build v0, then insert k=4 to produce v1
+v0 = insert(None, 8)
+v0 = insert(v0, 3)
+v0 = insert(v0, 5)
+v0 = insert(v0, 10)
+v1 = insert(v0, 4)
+
+def inorder(n):
+    return [] if n is None else inorder(n.left) + [n.key] + inorder(n.right)
+
+print("v0:", inorder(v0))
+print("v1:", inorder(v1))
+print("Roots differ:", v0 is not v1)
+print("Subtree 10 shared:", v0.right is v1.right)`}
+  output="v0: [3, 5, 8, 10]\nv1: [3, 4, 5, 8, 10]\nRoots differ: True\nSubtree 10 shared: True"
+/>
+
+<CodeExercise client:load
+  title="Complete the path copy"
+  code={`class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def insert(root, key):
+    if root is None:
+        return Node(key)
+    if key < root.key:
+        return Node(root.key, [!blank!], root.right)
+    elif key > root.key:
+        return Node(root.key, root.left, [!blank!])
+    return root`}
+  answers={["insert(root.left, key)", "insert(root.right, key)"]}
+  explanation="Recurse into the correct subtree while wrapping the result in a new root node; the unchanged child pointer is shared from the old root."
+/>
 
 ## Persistent sequences
 
-A singly linked list is naturally persistent: prepending x creates a new node pointing to the old head. Both versions share the old tail. Access remains O(i), and append requires copying the path or using a different tree representation. A persistent stack is therefore exceptionally simple; a persistent queue can use two immutable lists and lazy reversal, with care about evaluation and amortization.
+A singly linked list is naturally persistent: prepending $x$ creates a new node pointing to the old head. Both versions share the tail. Access remains $O(i)$, and append requires a tree representation or path copying through a finger.
 
-For random access, a tree of fixed branching factor stores a sequence in leaves and copies one root-to-leaf path per update. A bitmapped vector trie uses chunks and path copying to provide near-constant or logarithmic access with sharing. Updating the branching factor trades depth against node size and allocation. The representation invariant must describe logical length, child occupancy, and index mapping.
+<StructureDiagram kind="list" title="Persistent sequence update" caption="Prepending copies one node; the tail is shared between both versions." />
 
-## Persistent maps and hash tries
+A persistent queue can be built from two immutable lists (front and rear) with lazy reversal. When the front empties, the rear list is reversed to become the new front. The reversal is a delayed thunk to amortize cost. Under persistence, the same thunk may be forced in multiple branches, so memoization prevents duplicate work at the cost of additional storage.
 
-A persistent map can use a balanced tree, a trie, or a hash-array-mapped trie. A trie shares prefixes of keys; a hash trie uses hash bits at successive levels and handles collisions with a node storing equal-hash entries. Updating a key copies the nodes along the path and reuses unrelated branches. Hash stability and collision semantics remain part of correctness.
+<MathStatement id="persistent-queue" kind="definition" title="Persistent queue (lazy, amortized)">
+A persistent queue is a pair $(F, R)$ of immutable lists where $F$ is the front (head for dequeue) and $R$ is the rear (head for enqueue). Enqueue $x$ yields $(F, x :: R)$. Dequeue on non-empty $F$ yields $(\text{tail}(F), R)$. When $F$ is empty, the representation is rebuilt as $(\text{reverse } R, [])$, where the reversal is a delayed lazy computation. Each operation runs in $O(1)$ amortized time when shared forcing is accounted with memoization.
+</MathStatement>
 
-Structural sharing can reduce total memory from O(number of versions times n) to O(n+updates times depth) when updates are localized. It can also retain large subtrees longer than a mutable program would, because an old root keeps all reachable nodes alive. Garbage collection or reference counting reclaims a node only after no version reaches it. Lifetime analysis matters for snapshot-heavy workloads.
+## Counterexample: Shared-node mutation
+
+Suppose two versions $v_1$ and $v_2$ share node $n$ via path copying. An in-place write to $n$—for example, mutating `n.left` or `n.value`—immediately corrupts every version whose representation graph reaches $n$. The abstract value of $v_1$ changes even though the client never updated $v_1$. This is not permitted by the persistence definition.
+
+<StructureDiagram kind="tree" title="Corrupted sharing" variant="invalid-tree" />
+
+Consider this violation in Python:
+
+```python
+class EphemeralNode:
+    def __init__(self, key):
+        self.key = key
+        self.left = None
+        self.right = None
+
+# Pretend to be persistent, but mutate in place
+root = EphemeralNode(8)
+root.left = EphemeralNode(3)
+snapshot = root  # "version" v0
+root.key = 99    # oops — snapshot.key is now 99
+```
+
+The `snapshot` root no longer represents the original set. This is **not persistence**—it is mutable state with aliasing. Real persistent implementations enforce immutability through private constructors, frozen fields, or a type system (e.g., `@dataclass(frozen=True)` in Python, `final` fields in Java, or persistent collections in Clojure/ML).
+
+<Quiz client:load
+  title="Identifying violations"
+  question="Which operation violates persistence if applied to a node shared by two versions?"
+  options={[
+    "Reading the node's key",
+    "Assigning a new value to the node's key field",
+    "Comparing the node's address with another node",
+    "Passing the node to a pure function"
+  ]}
+  correctIndex={1}
+  explanation="A write to a shared field mutates both versions' observable state. Reads, comparisons, and pure uses are safe because they do not change reachable values."
+/>
+
+## Correctness and cost analysis
+
+<MathStatement id="correctness-claim" kind="theorem" title="Persistence correctness">
+For any sequence of updates applied to a persistent structure via path copying, every prior version returned to the client remains observationally equivalent to its state at the moment of creation. Formally, if $v$ is a version returned by operation $op$ at logical time $t$, and $q$ is any pure query, then $q(v) = q(v)$ for all logical times > $t$.
+</MathStatement>
+
+Proof follows by structural induction on the sharing graph: new nodes are allocated without mutating existing nodes, and every pointer in an old root points to a node whose fields have not been written since the root was created.
+
+**Cost.** In a balanced BST, path copying uses $O(\log n)$ new nodes and $O(\log n)$ time per update. Queries remain $O(\log n)$. A persistent trie (bitmapped vector trie) with branching factor $b$ copies $O(\log_b n)$ nodes per update. Unchanged subtrees are shared, reducing total memory across $m$ updates from $O(m \cdot n)$ to $O(n + m \cdot \log n)$.
+
+**Subtlety: amortization under persistence.** Okasaki (1998) showed that amortized bounds for ephemeral structures do not automatically hold under persistence because old versions preserve old potential. A lazy thunk forced in one branch and later forced in another may perform the same work twice. Solutions include memoization (share the forced result), scheduling (real-time guarantees), or explicit accounting that charges each branch independently.
 
 ## Persistence and concurrency
 
-Immutable versions can be read concurrently without locks because no reader observes fields changing. Publishing a new root still needs a memory-order guarantee: readers must see a fully initialized reachable graph, not a partially constructed node. Atomic root replacement provides a simple linearization point for publishing a version. Garbage reclamation remains necessary in manual memory systems if old roots can disappear while readers hold them.
+<CaseStudy client:load
+  title="Concurrent readers and one writer"
+  scenario="A web server maintains a configuration map. Several request handlers hold snapshots (old roots) while an admin publishes an updated map."
+  question="Why can persistence simplify the concurrency design?"
+  options={[
+    "Readers observe a consistent snapshot without locks because old roots are immutable",
+    "It eliminates all memory allocation costs",
+    "Every query becomes constant time",
+    "It forbids any form of sharing between versions"
+  ]}
+  correctIndex={0}
+  explanation="Immutable old roots avoid in-place data races. Readers can traverse a snapshot without synchronization. The writer still needs atomic root publication (e.g., an atomic pointer swap) and a reclamation protocol (epoch-based reclamation, hazard pointers, or a GC)."
+/>
 
-Snapshots provide consistent reads if a reader holds one root for the duration of a query. A mutable structure that is copied lazily must define which updates a snapshot sees and whether iteration is isolated. Version identifiers can support optimistic concurrency: a writer creates a new version only if the expected base version still matches, otherwise it reports a conflict.
-
-## Correctness and cost
-
-Prove persistence with two claims: old versions are observationally unchanged, and the new version has the requested abstract value. A structural induction over shared subtrees is useful. Cost analysis counts new nodes, pointer reads, traversal comparisons, and reclamation, not just abstract operations. Path copying in a height-h tree costs O(h) time and space per update, while queries cost O(h); a balanced tree yields O(log n).
-
-Persistence changes cache behavior and allocator load. Sharing can improve memory footprint but scattered nodes can harm locality. Batch updates may benefit from transient mutable builders that are frozen before publication; the freeze boundary must prevent later mutation through aliases. A fast implementation that violates the version contract is not a persistent structure.
-
-## Lazy evaluation and amortization
-
-A persistent queue built from front and rear lists can delay reversing the rear until the front is empty. If reversal is represented as a lazy computation, a single forced operation may perform linear work. An amortized proof must account for when that work is forced and ensure a computation is not forced repeatedly for many versions. Memoization can make a forced result shareable, but it adds storage and synchronization considerations.
-
-Persistence can make amortization more subtle because old versions preserve old potential. If two branches share a delayed computation and both force it independently, the total work may differ from a mutable one-version analysis. Define whether thunks are memoized, whether forcing mutates the thunk, and which version owns the potential. A proof that ignores branch sharing can undercount work.
-
-## Version algebra
-
-Versions form a history graph rather than a single timeline. A query should be pure with respect to the version it receives; an update should return a new root and leave its base root valid. For full persistence, updating an old root creates a branch without changing sibling branches. Testing can generate a version DAG, retain random roots, perform updates, and compare every root against a simple copied model. This directly tests the central guarantee that historical observations remain stable.
-
-## Failure and serialization
-
-If versions are persisted to disk or sent between processes, pointers cannot be serialized as raw addresses. Use stable node IDs, content hashes, or a traversal that writes shared nodes once and references them by offset. Recovery must preserve sharing or at least the abstract value, and cyclic representations require cycle-aware encoding. A partially written version should not become the published root; use a commit record or atomic rename boundary.
+Immutable versions can be read concurrently without locks. Publishing a new root requires an atomic store with release semantics so readers see a fully initialized graph. Reclamation must ensure no active reader holds a reference to a retired node. In garbage-collected languages (Java, Go, ML), the collector handles this automatically. In manual-memory languages (C++, Rust), epoch-based reclamation or hazard pointers are necessary.
 
 ## Exercises
 
-1. Specify partial persistence for a stack and prove old versions remain unchanged.
-2. Trace path-copying insertion in a BST and list shared nodes.
-3. Explain why mutable parent pointers complicate structural sharing.
-4. Analyze persistent linked-list prepend time and space.
-5. Design version publication for concurrent readers.
-6. Prove a balanced path-copying update uses O(log n) new nodes.
-7. Identify a memory-retention problem caused by long-lived roots.
+### Recall and application
 
-### Diagnostic solutions
+1. Trace path-copying insertion of key **6** into BST version with root **8**, left $\{3,5\}$, right $\{10\}$. List every copied node and every shared subtree.
 
+<ExerciseSolution hint="The search path is 8 → 3 → 5 (right child). Copy each visited node and create the new leaf.">
 
-1. Each push creates a new immutable node pointing to the prior root; pop returns the prior node and its next pointer. The old root is never written, so every earlier version’s traversal remains identical. New version size differs by one and operations are O(1).
-2. Copy each node on the search path from root to insertion, create the new leaf, and point copied nodes to copied child paths or shared untouched children. Shared nodes are exactly subtrees not on the path; no shared node may be mutated.
-3. A node shared by two versions cannot store one mutable parent pointer that is correct for both paths. Omitting parent pointers or copying every parent context avoids the conflict; otherwise the parent field leaks version identity and breaks old traversals.
-4. Prepend is O(1) time and one new node; the old list is shared as the new node’s tail. Access remains O(i), and appending requires copying all nodes or a tree-based representation.
-5. Fully construct an immutable graph, then atomically publish its root with release semantics. Readers acquire the root once and traverse immutable fields. Retire old roots only after a garbage collector, epoch, hazard pointer, or reference-count protocol proves no reader can reach them.
-6. A balanced tree has height O(log n). Path copying creates one new node per level plus a leaf or replacement, so O(log n) nodes and pointer updates. Unchanged subtrees are shared; the old root and nodes remain valid.
-7. A long-lived snapshot root keeps every subtree reachable from that version alive, including large data no current query needs. Limit snapshot lifetime, compact versions, use content-addressed sharing carefully, or release roots through a documented ownership protocol.
+Copied: **8** (new root), **3** (copied), and leaf **6**. Shared: **5** (left child of copied 3), right subtree **10** (right child of copied 8). Total: 3 new nodes.
+</ExerciseSolution>
 
+2. Explain why mutable parent pointers violate structural sharing.
 
+<ExerciseSolution>
+A node shared by two versions cannot store one parent pointer correct for both paths. If node **5** is shared by $v_1$ and $v_2$, its parent in $v_1$ is **3** but in $v_2$ could be a different copied node. A single `parent` field would be wrong for at least one version. Functional trees omit parent pointers or navigate via recursion paths in the call stack.
+</ExerciseSolution>
 
-## References & Further Reading
+3. Persistent linked-list prepend: analyze time and space relative to the number of versions.
 
-* [Open Data Structures](https://opendatastructures.org/)
-* Okasaki, *Purely Functional Data Structures*.
-* MIT 6.006, [Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/).
+<ExerciseSolution>
+Prepend is $O(1)$ time and allocates one new node per call. The old list is shared as the new node's tail. Appending $x$ to the end of an $n$-element list requires copying all $n$ nodes (or using a different representation, such as a finger tree). Memory across $m$ prepend operations is $O(n + m)$ rather than $O(m \cdot n)$ for full copies.
+</ExerciseSolution>
+
+### Transfer and synthesis
+
+4. Design a persistent hash map using a hash-array-mapped trie (HAMT) with branching factor 32. Each internal node stores a 32-element array of child pointers and a bitmap of occupied slots. Describe which nodes are copied on insertion and which are shared. How many new nodes does a single insertion allocate in expectation?
+
+<ExerciseSolution>
+A HAMT uses $h = \lceil \log_{32} N \rceil$ levels. Each insertion copies one node per level (the node whose child array changes). With a 32-way split and reasonable load, expected depth is $\log_{32} N \leq 5$ for $N \leq 33$ million. Expected new nodes per insertion: $h$ (about 2–5). All sibling branches at each level are shared. Collision nodes (for equal-hash entries) are copied when modified.
+</ExerciseSolution>
+
+5. A database uses persistent B-trees for MVCC snapshot isolation. Suppose a transaction $T_1$ holds a snapshot root and $T_2$ inserts a key, causing a node split. Which nodes must $T_2$ copy? Will the split affect $T_1$'s traversal? Explain.
+
+<ExerciseSolution>
+$T_2$ copies the split node and every node on the path from root to the split node (path copying in a B-tree). $T_1$'s root is unchanged; it traverses old nodes that still point to the pre-split children. The split is invisible to $T_1$. This is exactly the persistent B-tree semantics used in systems like CouchDB and ZFS for consistent snapshots.
+</ExerciseSolution>
+
+6. Prove that a persistent queue using two lists and lazy reversal satisfies the queue ADT under persistence with memoized thunks. What happens if the thunk is not memoized?
+
+<ExerciseSolution hint="Consider two branches that both force the same reversal thunk. Without memoization, each branch pays $O(n)$ for the reversal. The total work becomes $O(b \cdot n)$ for $b$ branches, making the amortized analysis invalid. With memoization (the thunk caches its result), the first branch pays $O(n)$ and all subsequent branches pay $O(1)$ to read the cached reversed list. Show the potential function must account for shared thunks.">
+The queue representation invariant: $F$ contains front elements in order, $R$ contains rear elements in reverse insertion order. When $F$ is empty, the thunk $\text{reverse } R$ is forced, producing a new $F'$ of length $|R|$. With memoization, this result is cached. A second branch that triggers reversal on the same $(F, R)$ state reuses the cached $F'$ without recomputation. The amortized cost per operation remains $O(1)$ even under full persistence when all thunks are memoized. The proof extends Okasaki's bank account method by charging each thunk once and distributing the cost across the operations that create it.
+</ExerciseSolution>
+
+## Deliberately omitted
+
+- **Fat-node and node-splitting (Driscoll–Sarnak–Sleator–Tarjan general transformation).** The fat-node method stores multiple field-version pairs per node and uses an explicit version stamp to select the correct field. It makes any pointer-based structure partially persistent but is rarely competitive with path copying in practice and adds version-stamp overhead on every pointer dereference.
+- **Confluent persistence and version merging.** Merging two versions produces a DAG version history. The shared-structure accounting changes significantly because the version graph is no longer a tree. Analysis is complex and specialized; the CLRS coverage is the standard reference.
+- **Persistent graphs with cycles.** Path copying cannot clone a simple cycle. Techniques such as indirection nodes, hash-consing, or explicit cycle breaking are needed. These are well covered in Peyton Jones (1987) *Implementation of Functional Programming Languages*.
+- **Persistent structures in lazy languages (Okasaki's scheduling framework).** A full treatment of real-time queues, implicit queues, and the scheduling approach to worst-case bounds. Okasaki (1998) is the authoritative source; this lesson assumes amortized analysis is sufficient for the conceptual introduction.
+- **Transactional memory and STM.** While persistent structures are used in STM implementations, the transaction model (conflict detection, retry, rollback) is independent of the data-structure persistence model and belongs in a concurrency course.
+
+## References
+
+1. Driscoll, J. R., Sarnak, N., Sleator, D. D., & Tarjan, R. E. (1989). Making data structures persistent. *Journal of Computer and System Sciences*, 38(1), 86–124. — The foundational paper defining partial, full, and confluent persistence with the fat-node and path-copying transformations.
+2. Okasaki, C. (1998). *Purely Functional Data Structures*. Cambridge University Press. — Standard reference for persistent data structures in lazy languages; amortization under persistence (Chapter 6), queues (Chapter 5), and the scheduling approach (Chapter 7).
+3. Patrignani, M. (2015). [Open Data Structures](https://opendatastructures.org/). — Chapters 14–15 cover persistent arrays and the implicit persistent BST in a language-agnostic presentation.
+4. Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. (2022). *Introduction to Algorithms* (4th ed.). MIT Press. — Section 13.5 covers persistent data structures including persistent red-black trees with path copying.
+5. Bagwell, P. (2001). [Ideal Hash Trees](https://lampwww.epfl.ch/papers/idealhashtrees.pdf). — Original publication of hash-array-mapped tries (HAMT), widely used in persistent maps in Clojure, Scala, and Elixir.
+6. MIT 6.006, [Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/). — Lectures on persistent data structures and path copying.

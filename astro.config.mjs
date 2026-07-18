@@ -4,6 +4,7 @@ import mdx from '@astrojs/mdx';
 import react from '@astrojs/react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import katex from 'katex';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -30,7 +31,7 @@ function checkPythonDiagramErrors() {
 
 // Common Markdown configuration for extreme performance
 const markdownConfig = {
-  remarkPlugins: [remarkMath],
+  remarkPlugins: [remarkMath, validateMathPlugin],
   rehypePlugins: [
     [rehypeKatex, { 
       output: 'mathml', // MUCH faster bundling due to smaller JS modules
@@ -46,6 +47,34 @@ const markdownConfig = {
     wrap: true,
   },
 };
+
+// Do not allow malformed TeX to silently become visible source text. The
+// normal KaTeX integration is intentionally lenient for unrelated Markdown;
+// course math is content and must fail the build when it is invalid.
+function validateMathPlugin() {
+  return (tree, file) => {
+    const visit = (node, ancestors = []) => {
+      if (node?.type === 'math' || node?.type === 'inlineMath') {
+        const value = String(node.value ?? '');
+        if (value.includes('$')) {
+          throw new Error(`Invalid nested dollar delimiter in math at ${file.path}:${node.position?.start?.line ?? '?'}`);
+        }
+        try {
+          katex.renderToString(value, {
+            displayMode: node.type === 'math',
+            output: 'mathml',
+            throwOnError: true,
+            strict: 'error',
+          });
+        } catch (error) {
+          throw new Error(`Invalid TeX at ${file.path}:${node.position?.start?.line ?? '?'}: ${error.message}`);
+        }
+      }
+      for (const child of node?.children ?? []) visit(child, [...ancestors, node]);
+    };
+    visit(tree);
+  };
+}
 
 // https://astro.build/config
 export default defineConfig({

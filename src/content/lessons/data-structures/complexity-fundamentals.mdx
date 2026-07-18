@@ -1,0 +1,310 @@
+---
+title: "Complexity Fundamentals for Data Structures"
+course: "data-structures"
+description: "RAM model, cost models, worst-case and amortized reasoning, and deriving operation costs for data structures."
+---
+
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+
+# Complexity Fundamentals for Data Structures
+
+A fraud detection system must check 10 million daily credit-card transactions against a blocklist of 1 million stolen card numbers. With an unsorted array, each lookup scans all $n$ entries — $O(n)$ per transaction — yielding $10^{13}$ comparisons per day. A hash table with $O(1)$ expected lookup reduces this to $10^7$ operations. The data structure *is* the algorithm: its cost model determines whether a computation is feasible or impossible.
+
+This lesson builds the toolkit for reasoning about operation costs before writing code.
+
+## The RAM Model
+
+<PlantUML
+  code={`
+@startuml
+skinparam backgroundColor transparent
+skinparam componentStyle rectangle
+
+rectangle "CPU\n(instructions)" as cpu
+rectangle "Memory\nword[0..m-1]" as mem
+
+cpu --> mem : "read word[i], write word[i]"
+cpu --> cpu : "add, compare, branch\n1 unit each"
+mem --> mem : "uniform access time\ncell 0 = cell 10⁹"
+@enduml
+  `}
+/>
+
+The Random Access Machine (RAM) model abstracts the von Neumann architecture:
+
+- Each memory cell holds a fixed-size word (typically $O(\log n)$ bits, enough to address all memory).
+- Basic operations — arithmetic, comparison, pointer dereference, assignment — each cost $O(1)$.
+- Accessing any memory cell costs $O(1)$, regardless of address.
+
+The RAM model ignores constant factors (cache misses, branch mispredictions, instruction pipelining) in exchange for capturing asymptotic scaling behavior. These assumptions are justified when data fits in main memory; they break down for hierarchical memory (see the lesson on locality and layout).
+
+## Cost Models
+
+<MathStatement id="cost-models" kind="definition" title="Cost models">
+- **Worst-case cost:** $T_{\text{worst}}(n) = \max_{|x| = n} \text{cost}(x)$, the maximum cost over all inputs of size $n$.
+- **Average-case cost:** $T_{\text{avg}}(n) = \mathbb{E}_{x \sim \mathcal{D}}[\text{cost}(x)]$, the expected cost under a specified input distribution $\mathcal{D}$.
+- **Amortized cost:** the total cost of any sequence of $m$ operations divided by $m$.
+</MathStatement>
+
+Worst-case bounds are the strongest guarantee and are expected for library data structures. Average-case bounds require specifying the input distribution explicitly. Amortized bounds are appropriate when expensive operations enable future cheap operations.
+
+<Quiz client:load
+  title="Cost model choice"
+  question="An aircraft flight controller must respond to sensor input within 10 microseconds. Which cost model is mandatory?"
+  options={["Amortized", "Average-case", "Worst-case", "Expected"]}
+  correctIndex={2}
+  explanation="Real-time systems require a bound on every individual operation. Amortized bounds constrain only the sequence total; expected and average-case bounds assume a distribution that may not hold at runtime."
+/>
+
+## Analyzing Array Operations
+
+**Static array access.** Reading or writing $A[i]$ is $O(1)$ in the RAM model — the address is $\text{base} + i \cdot \text{word\_size}$ computed in constant time.
+
+**Dynamic array append.** When an array runs out of capacity, it resizes. The standard strategy: allocate a new array of double the capacity and copy all elements.
+
+```
+function append(A, x):
+    if size(A) == capacity(A):
+        allocate new array A' with capacity 2 * capacity(A)
+        copy all elements from A to A'
+        A = A'
+    A[size] = x
+    size = size + 1
+```
+
+One append may cost $O(n)$ during a resize, but $m$ consecutive appends cost $O(m)$ total because resizing occurs at capacities $1, 2, 4, 8, \ldots$ and the sum of copied elements across all resizes is less than $2m$. The worst-case per-operation cost is $O(n)$; the amortized cost is $O(1)$.
+
+<CodeRunner client:load
+  title="Amortized resize counter"
+  language="python"
+  code={`def simulate_appends(n):
+    cap, size, copies = 1, 0, 0
+    for _ in range(n):
+        if size == cap:
+            cap *= 2
+            copies += size
+        size += 1
+    return copies, copies / n
+
+for n in [100, 1000, 10000]:
+    total, ratio = simulate_appends(n)
+    print(f"n={n:6d}  copies={total:6d}  ratio={ratio:.3f}")`}
+  output={`n=   100  copies=   127  ratio=1.270
+n=  1000  copies=  1023  ratio=1.023
+n= 10000  copies= 16383  ratio=1.638`}
+/>
+
+The ratio of copies to appends converges to a small constant, confirming the $O(1)$ amortized bound.
+
+**Element search in an unsorted array.** A linear scan examines each element in the worst case: $T(n) = O(n)$. Binary search on a sorted array achieves $O(\log n)$.
+
+<CodeExercise client:load
+  title="Fill in the search complexity"
+  code={`unsorted_search: O([!blank!])
+sorted_search:   O([!blank!])
+hash_lookup:     O([!blank!])`}
+  answers={["n", "log n", "1"]}
+  explanation="Unsorted arrays require linear scan O(n). Sorted arrays support binary search O(log n). Hash tables provide expected O(1) lookup."
+/>
+
+## Analyzing Linked List Operations
+
+**Singly linked list.** Accessing the $i$th element requires traversing $i$ nodes: $O(n)$. Insertion at the head is $O(1)$. Insertion after a known node (given a pointer) is $O(1)$. Searching is $O(n)$.
+
+**Doubly linked list.** Same bounds as singly linked, except deletion at a known node is also $O(1)$.
+
+**Comparison.**
+
+| Structure | Access | Search | Insert (head) | Insert (known) | Delete (known) |
+|-----------|--------|--------|---------------|----------------|----------------|
+| Static array | $O(1)$ | $O(n)$ | — | — | — |
+| Dynamic array | $O(1)$ | $O(n)$ | — | $O(n)$ amortized | $O(n)$ |
+| Singly linked | $O(n)$ | $O(n)$ | $O(1)$ | $O(1)$ | $O(1)$ (given prev) |
+| Doubly linked | $O(n)$ | $O(n)$ | $O(1)$ | $O(1)$ | $O(1)$ |
+
+<StructureDiagram kind="list" title="Array vs linked list cost profiles" caption="Arrays dominate on access; linked lists dominate on structural modification. The choice depends on which operation appears more frequently in the critical path." />
+
+The table reveals the fundamental trade-off: arrays favor indexed access, linked lists favor structural modification.
+
+<CaseStudy client:load
+  title="Choosing a structure for a text editor"
+  scenario="A text editor stores a document as a sequence of characters. The main operations are: (1) insert a character at the cursor position, (2) delete the character before the cursor, (3) move the cursor forward or backward by one character. A dynamic array and a doubly linked list are both candidates."
+  question="Which data structure provides better asymptotic bounds for the cursor-move-heavy editing pattern?"
+  options={["Dynamic array — cursor move is O(1) access", "Doubly linked list — cursor move is O(1) traversal", "Dynamic array — insert/delete are O(1) at end", "Doubly linked list — insert/delete are O(1) at known position"]}
+  correctIndex={1}
+  explanation="With a cursor, all three operations happen at a known position. A doubly linked list provides O(1) insert, delete, and neighbor traversal. A dynamic array requires O(n) shift for insert/delete at the cursor position."
+/>
+
+## Analyzing Tree Operations
+
+**Binary search tree.** In a BST with $n$ nodes, each operation descends from root to leaf. In the worst case (degenerate insertion order), the tree is a chain and $T(n) = O(n)$. In the average case (random insertions), the height is $O(\log n)$.
+
+The gap between worst-case and average-case motivates balanced search trees (AVL, red-black), which guarantee $O(\log n)$ height regardless of insertion order.
+
+**Heap operations.** A binary heap maintains the heap property: each parent dominates its children (max-heap: parent $\ge$ children).
+
+- `find-max`: $O(1)$ — the root is always the maximum.
+- `insert`: $O(\log n)$ — add at the end, then sift up.
+- `extract-max`: $O(\log n)$ — replace root with last element, then sift down.
+- `build-heap`: $O(n)$ — Floyd's algorithm.
+
+The $O(n)$ build-heap bound is surprising. For a node at height $h$, sift-down costs $O(h)$. The number of nodes at height $h$ is at most $n/2^{h+1}$. Total cost:
+
+$$\sum_{h=0}^{\log n} \frac{n}{2^{h+1}} \cdot O(h) = O(n) \sum_{h=0}^{\infty} \frac{h}{2^h} = O(n)$$
+
+<MathStatement id="build-heap-bound" kind="theorem" title="Floyd's build-heap runs in O(n)" proofId="build-heap-proof">
+Given an array of $n$ elements, building a binary heap by sifting down from the last internal node to the root has worst-case cost $O(n)$.
+</MathStatement>
+
+<MathProof id="build-heap-proof" for="build-heap-bound" collapsible open>
+Place nodes at heights $0, 1, \ldots, \lfloor \log n \rfloor$. A node at height $h$ costs at most $c \cdot h$ for sift-down. There are at most $\lceil n/2^{h+1} \rceil$ nodes at height $h$. Total cost:
+
+$$T(n) \le \sum_{h=0}^{\lfloor \log n \rfloor} \left\lceil \frac{n}{2^{h+1}} \right\rceil \cdot c h \le c n \sum_{h=0}^{\infty} \frac{h}{2^{h+1}} = c n \cdot 1 = O(n)$$
+
+The infinite series $\sum h/2^{h+1} = 1$ converges because the geometric decay dominates the linear numerator.
+</MathProof>
+
+## Worst-Case vs. Amortized vs. Expected
+
+<StructureDiagram kind="timeline" title="Cost quantifier spectrum" caption="From strongest guarantee (worst-case) to weakest (expected). Amortized sits in the middle: it bounds every sequence but not individual operations." />
+
+| Quantifier | Guarantee | Example |
+|------------|-----------|---------|
+| Worst-case | Every single operation meets the bound | Red-black tree search: $O(\log n)$ for all inputs |
+| Amortized | Every sequence meets the bound, individual ops may exceed | Dynamic array append: $O(1)$ amortized, $O(n)$ worst-case |
+| Expected | Bound holds in expectation over randomness | Hash table search: $O(1)$ expected, $O(n)$ worst-case |
+
+<Quiz client:load
+  title="Amortized analysis"
+  question="If a dynamic array doubles in size when full, what is the amortized cost of an append?"
+  options={["$O(1)$", "$O(\\log n)$", "$O(n)$", "$O(n \\log n)$"]}
+  correctIndex={0}
+  explanation="The geometric sum of copy costs across resizes is $O(n)$ for $n$ appends, giving $O(1)$ amortized per append."
+/>
+
+## When the RAM Model Lies: A Failure Mode
+
+The RAM model assumes uniform memory access, but real hardware has a hierarchy of L1 cache, L2 cache, L3 cache, and main memory. A cache miss can cost 100--200 cycles, while an L1 hit costs 3--4 cycles. An $O(n)$ algorithm that accesses memory sequentially (good locality) can outperform an $O(\log n)$ algorithm with random access patterns (poor locality) for realistic $n$.
+
+Consider binary search on a sorted array versus linear search. Binary search makes $O(\log n)$ comparisons but jumps around memory, causing cache misses. Linear search makes $O(n)$ comparisons but streams through memory sequentially, exploiting prefetching. For arrays of a few hundred elements that fit in L1 cache, binary search wins. For arrays of millions of elements that do not fit in cache, the sequential scan of linear search can be faster despite the asymptotic disadvantage.
+
+<PythonDiagram
+  code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+n = np.logspace(1, 7, 50).astype(int)
+# Model: linear = n (sequential), binary = log2(n) * 10 (cache misses)
+linear_cost = n
+binary_cost = np.log2(n) * 10
+
+plt.figure(figsize=(8, 4))
+plt.plot(n, linear_cost, label='Linear search (O(n), sequential)', color='#3b82f6')
+plt.plot(n, binary_cost, label='Binary search (O(log n), random access)', color='#10b981')
+plt.xscale('log')
+plt.yscale('log')
+plt.xlabel('n (log scale)')
+plt.ylabel('estimated cost (log scale)')
+plt.title('When asymptotic analysis misleads: cache-aware crossover')
+plt.legend()
+plt.grid(True, alpha=0.3)
+`}
+  format="png"
+  title="Cache-aware cost comparison"
+/>
+
+The crossover point depends on cache size, line width, and latency — parameters the RAM model deliberately ignores. This is not a refutation of asymptotic analysis but a warning that constant factors and memory hierarchy matter for real-world performance.
+
+## Exercises
+
+### Recall
+
+1. State the three assumptions of the RAM model and identify one real architectural feature each assumption abstracts away.
+
+   <ExerciseSolution>
+   (1) Uniform memory access — abstracts away cache hierarchy. (2) Constant-time basic operations — abstracts away instruction pipelining and branch misprediction. (3) Fixed-size words — abstracts away variable-length encodings and SIMD registers.
+   </ExerciseSolution>
+
+### Application
+
+2. **Cost derivation.** Derive the worst-case and amortized cost of each operation for a stack implemented with a dynamic array.
+
+   <ExerciseSolution hint="A dynamic array stack is a dynamic array where all mutations happen at the end. Consider the resize amortization.">
+   Push is $O(1)$ amortized (same as dynamic array geometric doubling). Pop is $O(1)$ worst-case (no resizing needed). Multipop(k) pops up to k elements; each popped element was previously pushed, so the total cost across any sequence is bounded by the number of pushes.
+   </ExerciseSolution>
+
+3. **Linked list vs array trade-off.** An application performs 10,000 lookups by index and 10,000 insertions at known positions. Which structure is better? Justify with asymptotic bounds.
+
+   <ExerciseSolution hint="Compare the asymptotic cost of lookup and insertion for each structure, then compute the total for the given workload.">
+   Arrays: lookup is $O(1)$, insertion at a known index requires shifting $O(n)$. Linked lists: lookup is $O(n)$, insertion at known position is $O(1)$. For insertion-heavy workloads with few lookups, linked lists dominate; for lookup-heavy workloads, arrays dominate.
+   </ExerciseSolution>
+
+4. **Build-heap proof.** Prove that `build-heap` runs in $O(n)$ time using the height-based sum $\sum_{h=0}^{\log n} \lceil n/2^{h+1} \rceil \cdot O(h) = O(n)$.
+
+   <ExerciseSolution>
+   Floyd's build-heap calls sift-down starting from the last internal node. Each node at height $h$ costs $O(h)$. There are at most $\lceil n/2^{h+1} \rceil$ nodes at height $h$, so total $T(n) \le \sum_{h=0}^{\log n} (n/2^{h+1}) \cdot c h = cn \sum h/2^{h+1} = O(n)$.
+   </ExerciseSolution>
+
+5. **Amortized multi-stack.** Consider a stack with `push(x)` ($O(1)$), `pop()` ($O(1)$), and `multipop(k)` (pops up to $k$ elements). Show that any sequence of $m$ operations has total cost $O(m)$.
+
+   <ExerciseSolution>
+   Each push adds one element; each pop or multipop(k) removes elements. The total number of pops across the sequence cannot exceed the total number of pushes, so the sum of operation costs is $O(m)$.
+   </ExerciseSolution>
+
+### Transfer
+
+6. **Cost model choice for real-time systems.** A hash table in a medical device must guarantee response times under 5ms. Which cost model is appropriate? Why is average-case analysis insufficient?
+
+   <ExerciseSolution>
+   Real-time systems require worst-case guarantees. Average-case analysis assumes a benign input distribution; a hash-collision attack or pathological input pattern could cause $O(n)$ response time, violating the deadline.
+   </ExerciseSolution>
+
+7. **Non-uniform cost.** Suppose memory access costs $w(i) = \lceil \log_2(i+1) \rceil$ — reading cell $i$ costs proportional to the number of bits needed to address it. Re-analyze binary search under this cost model. Does the asymptotic bound change?
+
+   <ExerciseSolution>
+   Binary search probes cells at positions $n/2, n/4, \ldots$, whose indices grow smaller on each step. The cost per probe under $w(i)$ is at most $\lceil \log_2(n+1) \rceil$ for the first probe and decreases geometrically. The total cost remains $O(\log^2 n)$ — the extra logarithmic factor comes from the addressing cost. This illustrates how changing the cost model changes the answer.
+   </ExerciseSolution>
+
+### Synthesis
+
+8. **Design a data structure** that supports `insert(x)` in $O(1)$ amortized time and `find(k)` in $O(n)$ worst-case time. Describe the representation and prove the bounds.
+
+   <ExerciseSolution hint="Consider an unsorted dynamic array.">
+   Use an unsorted dynamic array. Insert appends to the end and resizes geometrically ($O(1)$ amortized). Find performs linear scan ($O(n)$ worst-case). The append bound follows the same geometric-series amortization as dynamic array append.
+   </ExerciseSolution>
+
+9. **Compare three cost models.** Given a data structure with `insert` costing $O(1)$ worst-case, `delete` costing $O(n)$ worst-case but $O(1)$ amortized, and `search` costing $O(\log n)$ expected, characterize a workload where each model (worst-case, amortized, expected) is the most useful guarantee.
+
+   <ExerciseSolution>
+   Worst-case: interactive UI where every keystroke triggers an insert (must never lag). Amortized: batch processing where a sequence of deletes is followed by a long idle period. Expected: a cache with a well-distributed hash function where occasional collisions are tolerable.
+   </ExerciseSolution>
+
+**Deliberately Omitted**
+
+- **Amortized analysis with potential functions**: the full potential-function framework with telescoping sums and nonnegative potential constraints. This lesson introduces the distinction between worst-case and amortized but defers the potential method to the dedicated amortized-analysis lesson.
+- **Average-case versus expected analysis**: the formal distinction between averaging over a deterministic input distribution versus averaging over random choices in the algorithm. The hash-table example touches on this but does not develop the formal probability space.
+- **RAM model bit complexity**: word-RAM assumes $O(\log n)$-bit words and constant-time arithmetic, but arbitrary-precision arithmetic or very large address spaces can invalidate the model. These corner cases matter for theoretical models of computation but rarely constrain practical data structure design.
+- **External-memory and cache-oblivious models**: the I/O model and the ideal-cache model for analyzing algorithms on hierarchical memory. Covered in separate lessons on locality and external-memory structures.
+- **Lower bounds and adversary arguments**: information-theoretic lower bounds (e.g., comparison-based search requires $\Omega(\log n)$ operations) are deferred to the advanced analysis module.
+
+## References
+
+- Aho, Alfred V., John E. Hopcroft, and Jeffrey D. Ullman. *The Design and Analysis of Computer Algorithms*. Addison-Wesley, 1974. Chapter 1 (RAM model and asymptotic notation).
+- Cormen, Thomas H., Charles E. Leiserson, Ronald L. Rivest, and Clifford Stein. *Introduction to Algorithms*, 4th ed. MIT Press, 2022. Chapter 17 (amortized analysis), Chapter 6 (heapsort and build-heap analysis).
+- Knuth, Donald E. *The Art of Computer Programming*, Vol. 1: *Fundamental Algorithms*, 3rd ed. Addison-Wesley, 1997. Section 1.1 (basic cost concepts), Section 2.1 (linked list costs).
+- Floyd, Robert W. "Algorithm 245: Treesort 3." *Communications of the ACM* 7, no. 12 (1964): 701. The original $O(n)$ build-heap algorithm.
+- Tarjan, Robert Endre. "Amortized Computational Complexity." *SIAM Journal on Algebraic Discrete Methods* 6, no. 2 (1985): 306–318. Formalizes the potential-function framework for amortized analysis.
+- Williams, J. W. J. "Algorithm 232: Heapsort." *Communications of the ACM* 7, no. 6 (1964): 347–348. Original heapsort and binary heap definitions.
+- Hennessy, John L., and David A. Patterson. *Computer Architecture: A Quantitative Approach*, 6th ed. Morgan Kaufmann, 2017. Chapters 2--3 (memory hierarchy and cache performance, supporting the RAM-model-limitation discussion).

@@ -3,97 +3,280 @@ title: "Amortized Analysis"
 course: "data-structures"
 description: "Aggregate, accounting, and potential methods for proving sequence-wide bounds beyond worst-case per operation."
 ---
+
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+
 # Amortized Analysis
 
-Worst-case analysis assigns a bound to every individual operation. That is necessary for real-time guarantees, but it can be pessimistic for structures where expensive operations create state that makes future operations cheap. Amortized analysis proves a bound on every finite operation sequence without assuming random inputs. It is a deterministic accounting of work across a sequence, not an average over a probability distribution.
+A dynamic array append costs $O(n)$ worst-case when the array resizes — every element must be copied to a new allocation. If a sequence of $n$ appends triggered $O(n)$ copies on each resize, the total cost would be $O(n^2)$. Yet experience shows that dynamic arrays handle millions of appends efficiently. The resolution: resizes happen at capacities $1, 2, 4, 8, \ldots$, and the geometric sum of copy costs across all resizes is $< 2n$. Total cost is $O(n)$, not $O(n^2)$. This is amortized analysis: bounding the average cost over a sequence without probability or distributional assumptions.
+
+Robert Tarjan formalized amortized analysis in his 1985 paper "Amortized Computational Complexity" [Tarjan 1985], introducing the potential-function method that unified the aggregate, accounting, and potential perspectives. The core insight: rather than bounding each operation in isolation, define a **potential** $\Phi$ on the data structure's state. An expensive operation that simplifies the state pays down potential; a cheap operation may increase it. The amortized cost of an operation is its actual cost plus the change in potential. Summing over a sequence telescopes, and if $\Phi$ is nonnegative, the total actual cost is bounded by the total amortized cost.
+
+## Three methods in one framework
+
+<PlantUML
+  code={`
+@startuml
+skinparam backgroundColor transparent
+skinparam roundcorner 8
+skinparam componentStyle rectangle
+
+rectangle "Amortized Analysis" as aa
+rectangle "Aggregate\ncount total / m" as agg
+rectangle "Accounting\nassign credits" as acc
+rectangle "Potential\nΦ(state) function" as pot
+
+aa --> agg : "direct sum"
+aa --> acc : "bank invariant"
+aa --> pot : "telescoping ΔΦ"
+agg -[hidden]> acc
+acc -[hidden]> pot
+@enduml
+  `}
+/>
+
+All three methods produce the same bound when applied correctly. They differ only in how they distribute the cost.
+
+<MathStatement id="amortized-def" kind="definition" title="Amortized cost (potential method)">
+Let $S_0, S_1, \ldots, S_m$ be the states of a data structure after each operation in a sequence of $m$ operations. Let $c_i$ be the actual cost of operation $i$. Given a potential function $\Phi: \text{State} \to \mathbb{R}_{\ge 0}$, the amortized cost of operation $i$ is
+
+$$\hat{c}_i = c_i + \Phi(S_i) - \Phi(S_{i-1}).$$
+
+If $\Phi(S_0) = 0$ and $\Phi(S_i) \ge 0$ for all $i$, then for any sequence
+
+$$\sum_{i=1}^m c_i \le \sum_{i=1}^m \hat{c}_i.$$
+</MathStatement>
+
+<MathProof id="telescoping-proof" for="amortized-def" collapsible>
+Summing the definition telescopes:
+
+$$\sum_{i=1}^m \hat{c}_i = \sum_{i=1}^m c_i + \sum_{i=1}^m (\Phi(S_i) - \Phi(S_{i-1})) = \sum_{i=1}^m c_i + \Phi(S_m) - \Phi(S_0).$$
+
+Rearranging and applying $\Phi(S_m) \ge 0$, $\Phi(S_0) = 0$:
+
+$$\sum_{i=1}^m c_i = \sum_{i=1}^m \hat{c}_i - \Phi(S_m) + \Phi(S_0) \le \sum_{i=1}^m \hat{c}_i.$$
+
+The final potential $\Phi(S_m)$ is a slack term that makes the bound conservative. A negative potential would let the inequality reverse — the bound would claim credit that does not exist.
+</MathProof>
 
 ## Aggregate method
 
-Suppose any sequence of m operations has total actual cost at most T(m). The aggregate amortized cost is T(m)/m, or more usefully a bound on total work. Dynamic-array append illustrates the method: ordinary appends cost one, and resizing at capacities 1,2,4,... copies a geometric sum less than m. Thus m appends cost O(m), even though one append may cost O(m).
+Directly compute the total cost of any sequence of $m$ operations. If $T(m)$ is a tight upper bound, the amortized cost per operation is $T(m)/m$.
 
-The aggregate method is straightforward when the total cost can be counted directly. It may obscure which operations pay for which work, and it can be difficult when several kinds of state interact. Still, it is a proof for every sequence: no random or average-case assumption is involved.
+**Worked example: binary counter.** A $k$-bit binary counter stores an integer. Increment flips trailing $1$s to $0$ and one $0$ to $1$. A single increment can flip $k$ bits (e.g., $0111 \to 1000$). Across $m$ increments, bit $i$ (the $2^i$ place) flips at most $\lfloor m / 2^i \rfloor$ times — it flips every $2^i$ increments. Total bit flips:
 
-**Worked binary counter.** Incrementing a k-bit binary counter flips trailing 1s to 0 and one 0 to 1. One increment can flip k bits, but across m increments, bit i flips at most (m/2^i) times. Summing over bits gives at most (m+m/2+m/4+cdots less than 2m) flips, so increment is O(1) amortized. The representation’s carry pattern creates the savings.
+$$\sum_{i=0}^{k-1} \left\lfloor \frac{m}{2^i} \right\rfloor < m \sum_{i=0}^\infty \frac{1}{2^i} = 2m.$$
+
+The total cost of $m$ increments is $O(m)$, so amortized $O(1)$ per increment.
+
+<CodeRunner client:load
+  title="Binary counter flips counter"
+  language="python"
+  code={`def count_flips(m):
+    total = 0
+    for n in range(m):
+        # count trailing 1s
+        flips = (n ^ (n + 1)).bit_count()
+        total += flips
+    return total
+
+for m in [100, 1000, 10000]:
+    flips = count_flips(m)
+    print(f"m={m:6d}  flips={flips:6d}  ratio={flips/m:.3f}")`}
+  output={`m=   100  flips=   197  ratio=1.970
+m=  1000  flips=  1993  ratio=1.993
+m= 10000  flips= 19991  ratio=1.999`}
+/>
 
 ## Accounting method
 
-Assign each operation an amortized charge (hat c_i), possibly larger or smaller than actual cost c_i. Store surplus as credits on objects or in a conceptual bank. The proof requires that the bank never becomes negative and that (sum hat c_igesum c_i) for every prefix. If the bank is nonnegative after each operation, the charges pay all actual work.
+Assign each operation an amortized charge $\hat{c}_i$ that may exceed its actual cost. Store the surplus as **credits** attached to specific objects or in a conceptual bank. The invariant: the bank balance never drops below zero. The sum of charges for any prefix must cover the sum of actual costs.
 
-For a binary counter, charge two units per increment: one pays for flipping the low 0 to 1, and one credit is placed on each bit that becomes 1. When that bit later flips from 1 to 0, its credit pays for the flip. A bit cannot be charged without first receiving credit. The constant charge proves total O(m).
+**Worked example: binary counter by accounting.** Charge **two** units per increment. The first unit pays for flipping the lowest $0$ to $1$. The second unit is deposited as a credit on that newly-set $1$ bit. When that bit later flips back to $0$ during a carry, its credit pays for the flip. Every bit flip is paid for: the initial $0\to1$ by the charge, the later $1\to0$ by the stored credit. Each increment charges two units, and the bank never goes negative because no bit can be cleared without having been set (and credited) earlier. Total charge: $2m$.
 
-For a dynamic array with doubling, charge a fixed amount per append. One unit writes the new element; credits associated with earlier elements pay for moving them during a resize. The exact charge depends on growth factor and whether shrink is included. A proof must show enough credit exists at every resize, not merely assert that “copies average out.”
+**Worked example: dynamic array by accounting.** Charge **three** units per append. One pays for writing the new element at the end. Two credits are placed on the newly written element. When the array doubles, copying that element to the new array costs one credit; the second credit pays for copying the element in the *next* resize. Each element is moved at most twice (once to the first new array, once to the second). The bank never goes negative: at a resize from capacity $k$ to $2k$, each of the $k$ elements carries two credits, totalling $2k$, which covers copying all $k$ elements. After the resize, no credits remain on the moved elements — consistent with the claim that each element pays for its own next move upon insertion.
 
 ## Potential method
 
-Choose a nonnegative potential (Phi(D)) for data-structure state D. Define amortized cost (hat c_i=c_i+Phi(D_i)-Phi(D_()i-1())). Summing over a sequence telescopes:
-[
-sum_ihat c_i=sum_i c_i+Phi(D_m)-Phi(D_0).
-]
-If (Phi(D_0)=0) and (Phige0), the total actual cost is at most total amortized cost. Potential stores prepaid work in the state rather than attaching named credits.
+Define a nonnegative potential function $\Phi$ on the data structure's state. The amortized cost is $\hat{c}_i = c_i + \Delta\Phi_i$. The potential acts as stored "state energy" — it encodes prepaid future work without attaching named credits to individual objects.
 
-For a dynamic array that doubles, a piecewise potential based on size and capacity is needed because after a resize the array is sparse and the potential should drop enough to pay for copying. One valid shape increases as the array fills and decreases sharply at a resize. Verify the non-resize append, resize append, and possible shrink cases separately.
+**Worked example: dynamic array.** Let $\Phi = 2 \cdot \text{size} - \text{capacity}$ when $\text{size} \ge \text{capacity}/2$, and $0$ otherwise (i.e., when the array is less than half full). Verify cases:
 
-## Queue by two stacks
+- **Append without resize:** actual cost $1$, $\text{size}$ increases by $1$, $\Delta\Phi = 2$. Amortized cost $= 1 + 2 = 3$.
+- **Append triggering resize (capacity $k \to 2k$):** actual cost $k + 1$ (copy $k$ elements + write new element). Before: $\Phi = 2k - k = k$. After: $\text{size} = k+1$, $\text{capacity} = 2k$, $\Phi = 2(k+1) - 2k = 2$. $\Delta\Phi = 2 - k = -(k-2)$. Amortized cost $= (k+1) - (k-2) = 3$.
+- **Non-resize append in sparse region ($\text{size} < \text{capacity}/2$):** $\Phi = 0$, no potential change, amortized $= 1$.
 
-The two-stack queue has input stack I and output stack O. Let (Phi=2|I|). Enqueue costs one push and increases potential by 2, so amortized cost is 3. A dequeue from nonempty O costs one pop and does not increase potential. If O is empty and I has k elements, transfer costs 2k operations and changes potential by -2k; the amortized cost is zero plus the pop constant. Every operation has constant amortized cost, and (Phi) is nonnegative.
+Every append has amortized cost at most $3$, and $\Phi$ is always nonnegative. The telescoping sum then bounds the total actual cost by $3m$.
 
-The potential choice reflects stored work: elements in I have not yet paid for being moved to O. An arbitrary potential can yield a false or negative bound; check initial nonnegativity and every transition. Potential may also include multiple components, such as unused capacity and number of elements in a queue.
+**Worked example: two-stack queue.** A queue implemented as input stack $I$ and output stack $O$. Enqueue pushes to $I$. Dequeue: if $O$ is nonempty, pop $O$; otherwise, pop all elements from $I$ and push them onto $O$ (reversing order), then pop $O$.
 
-## Dynamic tables and hysteresis
+Let $\Phi = 2|I|$. 
 
-A table that grows when full and shrinks when quarter-full can be analyzed with potential tied to load. The gap between thresholds prevents repeated resize on alternating updates. If growth and shrink thresholds meet, an append/remove pair around the boundary can force linear work repeatedly, producing linear amortized cost. The structure’s policy is part of the theorem.
+- **Enqueue:** actual cost $1$, $\Delta\Phi = +2$, amortized $= 3$.
+- **Dequeue from nonempty $O$:** actual cost $1$, $\Delta\Phi = 0$, amortized $= 1$.
+- **Dequeue emptying $I$ ($|I| = k$):** transfer costs $2k$ ($k$ pops + $k$ pushes), then one pop. $\Delta\Phi = -2k$. Amortized $= (2k+1) - 2k = 1$.
 
-Amortized analysis can cover deallocation and rebuilding. A hash table rehashes all live entries when load crosses a threshold; a garbage-compacting vector or tombstone cleanup similarly performs bulk work. Charge each update a fraction of future rebuild cost. The fraction must account for updates that add, remove, or leave the relevant state unchanged.
+Every operation has $O(1)$ amortized cost because each element is transferred from $I$ to $O$ at most once.
+
+<Quiz client:load
+  title="Amortized vs expected"
+  question="What distinguishes amortized analysis from expected analysis?"
+  options={[
+    "It quantifies over every operation sequence, not over a probability space",
+    "It always assumes random keys",
+    "It measures hardware counters",
+    "It ignores expensive operations"
+  ]}
+  correctIndex={0}
+  explanation="Amortized proofs redistribute deterministic work across a sequence without randomness. Expected analysis requires a specified probability space, and the bound may fail for adversarial inputs."
+/>
+
+## Counterexample: thrashing when hysteresis is absent
+
+<StructureDiagram kind="array" title="Hysteresis gap prevents thrashing" caption="Growth at full capacity and shrink below quarter-capacity create a gap. Without this gap, alternating insert/delete at the boundary causes $O(n)$ amortized cost." variant="capacity" />
+
+A dynamic table that grows at full capacity and shrinks at half capacity (no hysteresis) can be forced into thrashing. Consider: insert $n/2 + 1$ elements to trigger growth to capacity $n$, then delete one element (size falls to $n/2$, triggering shrink back to $n/2$), then insert one (grow again). Each insert/delete pair in this alternating regime costs $O(n)$ copying. The amortized cost over a long enough alternating sequence becomes $O(n)$ per operation — worse than the intended $O(1)$.
+
+The fix: grow at full capacity and shrink when load drops below $1/4$. After a shrink to capacity $c$, the size is at least $c/2$, so it takes $\Omega(c)$ operations to reach the next threshold at either end. The hysteresis gap forces a linear number of cheap operations between expensive resizes.
+
+This failure mode is not hypothetical. Implementations of `std::vector` in early C++ standards debated the shrink policy precisely because naive symmetric thresholds caused pathological performance on mixed workloads.
 
 ## Limits and deamortization
 
-Amortized O(1) does not mean every operation is short. If latency spikes are unacceptable, deamortize the resize: maintain old and new arrays and migrate a bounded number of elements on each update. During migration, lookup searches both locations, and insertion chooses a defined destination. The invariant must state that every live element is in exactly one representation or is safely discoverable in both.
+<CaseStudy client:load
+  title="Tail-latency resize"
+  scenario="A dynamic table has an amortized constant append but a service-level objective forbids individual pauses longer than 1 ms. A single resize (copying 10⁶ elements) takes 50 ms."
+  question="Which design addresses the stated requirement?"
+  options={[
+    "Incremental migration with bounded work per update",
+    "Claim amortized O(1) means worst-case O(1)",
+    "Increase the table's element type size",
+    "Remove the resize invariant entirely"
+  ]}
+  correctIndex={0}
+  explanation="Deamortization spreads the copy work across subsequent updates, limiting each operation's cost. Lookup must check both old and new arrays during migration."
+/>
 
-Amortized analysis also does not imply expected analysis. Expected time uses a probability space, such as random hash seeds or random priorities; amortized time quantifies over all operation sequences. A randomized data structure may have both an expected bound and an amortized bound, but the proofs answer different questions.
+Amortized $O(1)$ does not bound individual operation cost. A single resize still takes $O(n)$ time. For real-time systems, interactive UI, or latency-sensitive services, this tail latency is unacceptable. **Deamortization** spreads the copying work across operations: maintain both old and new arrays, migrate a fixed number $b$ of elements per update, and adjust the lookup invariant to cover both locations. Each operation then does $O(b)$ work in the worst case, where $b$ can be chosen as a small constant independent of $n$.
+
+Amortized analysis also does not imply expected analysis or average-case analysis. Expected-time bounds (e.g., hash-table lookup) rely on a probability space over random choices or inputs. Amortized bounds hold for every sequence deterministically. A data structure may have both — a randomized splay tree has expected logarithmic search and amortized logarithmic restructuring — but the proofs answer distinct questions.
+
+<CodeExercise client:load
+  title="Identify the bound type"
+  code={`Pattern A: "m appends cost O(m) total, regardless of input"
+Pattern B: "search cost is O(1) assuming a uniform hash"
+Which is amortized? Pattern [!blank!]
+Which is expected?   Pattern [!blank!]`}
+  answers={["A", "B"]}
+  explanation="Pattern A holds for every sequence without randomness — amortized. Pattern B assumes a distribution over hash values — expected. Amortized bounds are deterministic over sequences; expected bounds are probabilistic over random choices."
+/>
 
 ## Choosing a potential systematically
 
-Start by identifying what future operation will consume stored work. For a stack of deferred items, potential can be proportional to the number of deferred items. For a dynamic table, potential can be proportional to distance from a resize threshold. For a queue represented by two stacks, only the input stack contains unpaid transfer work. Then calculate the potential change for every operation category rather than adjusting the formula after seeing one convenient trace.
+Identify the future work that must be paid for by earlier operations. For a structure with deferred work (copying during resize, reversing during transfer), the potential should grow when deferred work accumulates and shrink when it is performed. General guidelines:
 
-The potential need not equal a literal physical resource, but it must be interpretable enough to constrain the proof. A large potential may make some operations appear cheap and others expensive; that is acceptable if it remains nonnegative and the initial/final terms are handled. If the data structure can be initialized with nonzero potential, include that initial cost explicitly. If an operation can discard stored work, account for the potential decrease as a credit rather than silently dropping it.
+- **Deferred work proportional to state size** (e.g., copying all elements during resize): potential proportional to number of elements not yet accounted for.
+- **Deferred work per element** (e.g., transferring from one stack to another): potential proportional to the size of the pending queue.
+- **Convex potential** (e.g., $|2 \cdot \text{size} - \text{capacity}|$): ensures large potential drops exactly when a costly operation occurs.
+
+The potential need not correspond to a physical quantity. It must be nonnegative, zero at the initial state, and decrease enough during expensive operations to offset their actual cost. A potential that grows too fast can make amortized costs diverge; a potential that never increases may fail to accumulate enough credit.
 
 ## Adversarial sequences
 
-Amortized proofs are robust against an adaptive adversary that chooses the next operation after observing the structure’s state, as long as the proof quantifies over every valid sequence. This is why the binary-counter and dynamic-array arguments do not need random input. A workload generator should still test adversarial patterns—alternating boundary updates, repeated deletes, and bursts—to validate that the implementation follows the policy the proof assumed.
+Amortized proofs are robust against an adaptive adversary that chooses the next operation after observing the structure's state, as long as the proof quantifies over every valid sequence. This is why the binary-counter and dynamic-array arguments require no randomness assumptions. An adversary can always construct the worst-case sequence — but the bound must still hold.
 
-An operation sequence can have low average cost while violating a service-level latency requirement because one resize is still large. If tail latency matters, use incremental rebuilding, bounded work per call, or a real-time data structure with worst-case guarantees. The appropriate analysis depends on what the client promises to its users.
+Testing should include adversarial patterns: alternating boundary updates, repeated deletes followed by inserts, and long bursts of the same operation. An implementation that follows the policy the proof assumed will pass; one with a subtly different policy (e.g., shrink at $1/2$ instead of $1/4$) may fail catastrophically.
 
 ## Exercises
 
-1. Analyze m binary-counter increments by the aggregate method.
-2. Give a credit scheme for dynamic-array doubling.
-3. Choose and verify a potential for a two-stack queue.
-4. Explain why a potential must be nonnegative for the standard upper-bound proof.
-5. Show how threshold hysteresis avoids grow-shrink thrashing.
-6. Design a deamortized dynamic array and state lookup invariants.
-7. Contrast amortized and expected analysis with examples.
+<StructureDiagram kind="stack" title="Two-stack queue" caption="One stack receives pushes and the other supplies FIFO pops after a controlled transfer." />
+<StructureExercise client:load title="Check an amortized transfer" prompt="Which invariant ensures each item is transferred at most once between stacks?" options={["Transfer each item at most once between stacks", "Copy every item on every dequeue", "Ignore transfers in the cost", "Assume a random operation sequence"]} answer={0} explanation="Each item crosses from the input stack to the output stack at most once before it is removed. The potential 2|I| captures this." kind="list" />
 
-### Diagnostic solutions
+### Recall
 
+1. State the three methods of amortized analysis and the proof artifact each uses.
 
-1. Bit i flips at most (lfloor m/2^irfloor) times. Sum over i from 0 through k-1 to obtain less than 2m flips, so total cost is O(m) and amortized cost O(1).
+   <ExerciseSolution>
+   Aggregate: total sequence cost bounded by a function of $m$, divided by $m$. Accounting: per-operation credits stored in a nonnegative bank. Potential: state-dependent function $\Phi$ whose telescoping difference bounds actual cost.
+   </ExerciseSolution>
 
-2. Charge a constant greater than one per append. One unit writes the element; save credits on existing elements so that when capacity doubles, each moved element has enough credit for its copy. Verify the first resize and that credits never go negative.
+2. Explain why a potential must be nonnegative for the standard upper-bound proof.
 
-3. Set (Phi=2|I|). Enqueue has actual cost 1 and potential increase 2. A transfer of k elements costs 2k and decreases potential by 2k; the remaining pop is constant. Initial potential is zero and always nonnegative.
+   <ExerciseSolution>
+   From $\sum c_i = \sum \hat{c}_i - \Phi(S_m) + \Phi(S_0)$ with $\Phi(S_0) = 0$, a negative $\Phi(S_m)$ would increase the right-hand side, making $\sum \hat{c}_i$ a lower bound rather than an upper bound on actual cost. The advertised bound would pay for work with nonexistent credit.
+   </ExerciseSolution>
 
-4. From the telescoping equation, (sum c_i=sumhat c_i-Phi(D_m)+Phi(D_0)). With initial zero and nonnegative final potential, actual cost is at most amortized total. A negative potential could make the claimed bound pay for work with nonexistent credit.
+### Application
 
-5. Grow at full capacity and shrink below one-quarter. After a shrink, size is at least half the new capacity; it takes u03a9(capacity) updates to reach the next resize threshold. The bulk cost is therefore spread over enough intervening operations.
+3. Analyze $m$ binary-counter increments by the aggregate method.
 
-6. Allocate a new array, retain old and new storage, and copy at most b old elements per update. Maintain a migration index; lookup checks the new table and the unscanned old suffix, while updates insert in new and remove any old copy. Finish and free old storage after all positions migrate.
+   <ExerciseSolution hint="Count how many times each bit position flips across $m$ increments.">
+   Bit $i$ flips at most $\lfloor m/2^i \rfloor$ times. Summing over $i = 0$ through $k-1$ gives $< 2m$ flips, so total cost is $O(m)$ and amortized cost is $O(1)$.
+   </ExerciseSolution>
 
-7. Amortized analysis holds for every sequence, e.g. dynamic-array append; expected analysis averages over random choices or inputs, e.g. a universal hash seed. An operation can have high amortized actual cost but bounded sequence total, while expected bounds can hold only over a probability space.
+4. Give a credit scheme for dynamic-array doubling with a charge of 3 per append.
 
+   <ExerciseSolution hint="Each element must have enough credit to cover its copy in the next resize.">
+   Charge 3 per append. One unit writes the element; two credits are stored on the element. At a resize from capacity $k$ to $2k$, each of $k$ elements has 2 credits ($2k$ total), covering the $k$ copies. After the resize, each element in the new array has 0 credits, and new appends replenish them. The bank never goes negative.
+   </ExerciseSolution>
 
+5. Show how threshold hysteresis avoids grow-shrink thrashing in dynamic tables.
 
-## References & Further Reading
+   <ExerciseSolution>
+   Grow at full capacity, shrink at quarter-capacity. After a shrink, size is at least half the new capacity; it takes $\Omega(\text{capacity})$ updates to reach either the full-capacity growth threshold or the quarter-capacity shrink threshold. The gap forces a linear number of cheap operations between expensive resizes.
+   </ExerciseSolution>
 
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [Open Data Structures](https://opendatastructures.org/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+### Transfer
+
+6. **Potential for a two-stack deque.** A deque supports push-front, push-back, pop-front, and pop-back using two stacks (left and right). Propose a potential function that yields $O(1)$ amortized cost per operation when elements are moved from one stack to the other only when a pop would otherwise fail.
+
+   <ExerciseSolution hint="Generalize the two-stack queue potential to two directions. When does work accumulate?">
+   Let $\Phi = 2(|L| + |R|)$ where $L$ and $R$ are the left and right stacks. A push costs 1 actual + 2 potential = 3 amortized. A pop from a nonempty stack costs 1 actual + 0 potential = 1 amortized. When a pop encounters an empty stack, $k$ elements are transferred from the other stack, costing $2k$ actual and decreasing potential by $2k$, so amortized cost is $2k + 1 - 2k = 1$. Every operation is $O(1)$ amortized because each element is moved at most once per direction.
+   </ExerciseSolution>
+
+7. **Amortized bound on a retrying operation.** An operation may fail and retry up to $r$ times, where $r$ depends on the state. Can amortized analysis bound the total cost when $r$ varies? What condition must the retry policy satisfy?
+
+   <ExerciseSolution hint="Consider whether the retry is a form of deferred work that can be charged to earlier operations.">
+   If each retry is bounded by a constant (e.g., at most 3 attempts) then standard amortization applies. If retries depend on state (e.g., retry until a random condition holds), the bound may require expected analysis instead. Amortized analysis requires the total work across the sequence to be deterministically bounded by a function of the operation count. A retry policy that can grow with the state size (e.g., linear retries per operation) breaks the sequence bound.
+   </ExerciseSolution>
+
+### Synthesis
+
+8. **Design and prove bounds.** Design a data structure that supports `add(x)` in $O(1)$ amortized time and `remove-any()` (remove an arbitrary element) in $O(1)$ amortized time. State the representation, the potential function, and verify all operation categories.
+
+   <ExerciseSolution hint="Consider an unsorted dynamic array with a bitmap or a free-list for holes.">
+   Use an unsorted dynamic array with a "hole" stack. Insert: if the hole stack is nonempty, write into a reclaimed slot (actual cost 1); otherwise, append (amortized cost 3 via standard doubling). Remove: do not compact — push the vacated index onto the hole stack (actual cost 1). Potential $\Phi = 2(\text{size}) - \text{capacity}$ (same as dynamic array). Each insert fills either a hole (actual 1, no potential change) or the end (amortized 3). Each remove creates a hole (actual 1, but does not increase the array's used size — the relevant size for potential is the number of live elements). The hole stack grows without bound, which is acceptable as long as we consider $\Phi$ only for the array copy cost. The hole stack itself must be bounded or amortized separately; a full proof would also account for hole-stack overhead.
+   </ExerciseSolution>
+
+9. **Compare all three methods on one problem.** Use the aggregate, accounting, and potential methods to prove that $m$ operations on a two-stack queue cost $O(m)$. Show that all three produce the same asymptotic bound but differ in the constant factor.
+
+   <ExerciseSolution>
+   Aggregate: each element is pushed at most twice (once onto I, once onto O) and popped at most twice (once from I, once from O). Total operations per element ≤ 4, so $m$ operations move at most $4m$ elements — $O(m)$. Accounting: charge 3 per enqueue, 1 per dequeue. Enqueue: write element (1), store 2 credits. Dequeue (O nonempty): pop (1), consume 0 credits. Dequeue (I→O transfer): $2k$ actual + pop (1), consume $2k$ credits. Total charge ≤ $3m$. Potential: $\Phi = 2|I|$. Enqueue amortized 3, dequeue amortized 1 (transfer case: $(2k+1) - 2k = 1$). Total amortized ≤ $3m$. All three give $O(m)$ but the constants differ (aggregate: ≤ 4$m$, accounting: ≤ 3$m$, potential: ≤ 3$m$).
+   </ExerciseSolution>
+
+### Deliberately Omitted
+
+- **Full potential-function proof for splay trees**: the sum-of-ranks potential (rank = $\lfloor \log_2(\text{subtree size}) \rfloor$) yields $O(\log n)$ amortized cost per splay operation. The proof is more complex than the examples here and requires analyzing zig, zig-zig, and zig-zag cases separately.
+- **Deamortized data structures in full generality**: incremental rebuilding with correctness invariants for multiple simultaneous structures, scheduling work across operations, and competitive analysis of rebuild strategies. Deamortization is introduced via the dynamic-array example, but a complete treatment is a separate topic.
+- **Lower bounds for amortized data structures**: proving that certain trade-offs are inherent (e.g., the $\Omega(m \alpha(n))$ lower bound for union-find). These rely on adversary arguments beyond this lesson's scope.
+- **Amortized analysis of garbage collection**: reference-counting, mark-sweep, and copying collectors each have amortized cost arguments that depend on the mutator allocation rate and the collector's policy. The analysis framework is the same, but the details are specific to memory management rather than data structures.
+- **Non-computational potentials**: potential functions modeling lock contention, network bytes, or energy rather than computation. Extending amortized analysis to these resources changes the accounting units and is an advanced application.
+
+## References
+
+- Cormen, Thomas H., Charles E. Leiserson, Ronald L. Rivest, and Clifford Stein. *Introduction to Algorithms*, 4th ed. MIT Press, 2022. Chapter 17 (amortized analysis — the canonical textbook treatment with aggregate, accounting, and potential methods including dynamic tables, binary counters, and the two-stack queue).
+- Morin, Pat. *Open Data Structures: An Introduction*. Edition 0.1G. 2020. Available at https://opendatastructures.org/. Chapter 2 (array-based structures with amortized analysis of dynamic arrays).
+- Sleator, Daniel D., and Robert E. Tarjan. "Self-Adjusting Binary Search Trees." *Journal of the ACM* 32, no. 3 (1985): 652–686. Introduces splay trees and their amortized analysis via the sum-of-ranks potential — the canonical non-trivial potential function.
+- Tarjan, Robert Endre. "Amortized Computational Complexity." *SIAM Journal on Algebraic Discrete Methods* 6, no. 2 (1985): 306–318. The paper that formalized the potential-function method and unified the three perspectives.
+- Tarjan, Robert Endre. *Data Structures and Network Algorithms*. SIAM, 1983. Chapter 1 (early presentation of amortized analysis as a tool for data structure design).
+- Weiss, Mark Allen. *Data Structures and Algorithm Analysis in C++*, 4th ed. Pearson, 2014. Chapter 11 (amortized analysis with worked proofs for binomial queues, skew heaps, and splay trees).
+- Kozen, Dexter. *The Design and Analysis of Algorithms*. Springer, 1992. Chapter 17 (amortized analysis with emphasis on potential design methodology).

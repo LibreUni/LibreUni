@@ -141,6 +141,43 @@ test.describe('production smoke checks', () => {
     await expect(search).toHaveValue('galois');
   });
 
+  test('data-structures playground exposes explicit state controls', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto('/lessons/data-structures/balanced-search-trees.html', { waitUntil: 'networkidle' });
+
+    const playground = page.locator('.interactive-playground').first();
+    await expect(playground.getByRole('img', { name: /rotation/i })).toBeVisible();
+    await playground.getByRole('button', { name: /next step/i }).click();
+    await expect(playground).toContainText(/step 2 of 2/);
+    await playground.getByRole('button', { name: /reset/i }).click();
+    await expect(playground).toContainText(/step 1 of 2/);
+    expect(errors).toEqual([]);
+  });
+
+  test('data-structures visuals and math are rendered, not leaked source', async ({ page }) => {
+    const dataStructures = LESSON_ROUTES.filter((lesson) => lesson.url.startsWith('/lessons/data-structures/'));
+    const failures = [];
+    for (const lesson of dataStructures) {
+      await page.goto(lesson.url, { waitUntil: 'domcontentloaded' });
+      const article = page.locator('article');
+      const visibleText = await article.evaluate((root) => {
+        const clone = root.cloneNode(true);
+        clone.querySelectorAll('pre, code, svg, details, script, style, annotation').forEach((node) => node.remove());
+        return clone.textContent || '';
+      });
+      const diagrams = page.locator('[data-structure-diagram]');
+      const renderedSvg = diagrams.locator('svg');
+      if ((await diagrams.count()) < 3) failures.push(`${lesson.url}: fewer than three structure diagrams`);
+      if ((await renderedSvg.count()) < 3) failures.push(`${lesson.url}: structure diagram SVG missing`);
+      if (/\\(?:sum|frac|sqrt|Theta|Omega|alpha|beta|ge|le|log|lfloor|rfloor)\b|(?<!\\)\$(?!\$)/.test(visibleText)) {
+        failures.push(`${lesson.url}: raw TeX visible in lesson text`);
+      }
+      if (visibleText.includes('\\n')) failures.push(`${lesson.url}: escaped newline leaked into lesson text`);
+    }
+    expect(failures, failures.join('\n')).toEqual([]);
+  });
+
   test('development quality page renders charts and supports table sorting', async ({ page }) => {
     const browserErrors = [];
     page.on('pageerror', (error) => browserErrors.push(error.message));

@@ -3,93 +3,319 @@ title: "Disjoint Sets and Union-Find"
 course: "data-structures"
 description: "Partition maintenance, forest representations, union heuristics, inverse-Ackermann analysis, and applications."
 ---
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+
+import CaseStudy from '../../../components/CaseStudy';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Disjoint Sets and Union-Find
 
-The disjoint-set ADT maintains a partition of a universe into nonoverlapping equivalence classes. Its core operations are find(x), which identifies the class representative, and union(x,y), which merges the classes containing x and y. The structure is designed for a particular operation pattern: many unions and finds, no need to split a class, and representative identity usually arbitrary. The resulting forest representation is simple, but its nearly constant amortized bound depends on two interacting heuristics.
+Kruskal's algorithm builds a minimum spanning tree by processing edges in weight order. For each edge (u,v), it needs to know whether u and v are already connected by previously chosen edges. That question is answered in near-constant time by a data structure that maintains a partition of vertices into connected components and merges components as edges are accepted. This structure is the disjoint-set ADT, also called union-find.
+
+**Prerequisites.** Equivalence relations and partitions; asymptotic analysis (big-O); tree representations.
 
 ## Partition semantics
 
-A partition of U is a collection of nonempty pairwise-disjoint subsets whose union is U. It induces an equivalence relation: x~y exactly when they lie in the same block. A union operation replaces two blocks by their union; a find returns a label identifying the block. If representatives are exposed, clients should not assume a representative remains stable after union unless the API specifies a tie policy.
+<MathStatement id="partition-def" kind="definition" title="Partition and equivalence">
+A **partition** of a universe $U$ is a collection of nonempty pairwise-disjoint subsets whose union is $U$. A partition induces an equivalence relation $\sim$ where $x \sim y$ iff $x$ and $y$ lie in the same block. The disjoint-set ADT maintains a partition under two operations:
 
-MakeSet(x) creates a singleton class. Correctness requires find(x)=find(y) iff x and y are connected by a sequence of performed unions. This equivalence is the abstract invariant. The structure need not store all pairwise relationships; a compact forest summarizes them through parent pointers.
+- $\text{MakeSet}(x)$ — creates a singleton block $\{x\}$.
+- $\text{Union}(x,y)$ — replaces the blocks containing $x$ and $y$ with their union.
+- $\text{Find}(x)$ — returns a canonical **representative** of the block containing $x$.
+
+The abstract invariant: $\text{Find}(x) = \text{Find}(y)$ iff $x$ and $y$ are connected by a sequence of performed $\text{Union}$ operations and share the same equivalence class.
+</MathStatement>
+
+The representative of a block is arbitrary. Clients must not assume a specific element remains the representative after a union unless the API documents a tie-breaking policy. The data structure exposes no operation to split a block — deletion is unsupported by design.
+
+A partition of $n$ elements begins with $n$ singleton blocks. Each union reduces the block count by exactly one. After $k$ unions, exactly $n-k$ blocks remain, provided no union joins two elements already in the same block.
 
 ## Forest representation
 
-Each element is a node with a parent pointer. A root points to itself and represents a set. Following parent pointers from x reaches its root. The RI is that parent pointers form a collection of rooted trees with no cycles, every element belongs to exactly one tree, and root metadata such as size or rank is valid. Initially each node is a root with size one.
+Each element is a node with a parent pointer. A root node points to itself and serves as its block's representative. Following parent pointers from any node reaches the root of its tree.
 
-Naïve union attaches one root below the other. If unions attach a large tree below a singleton repeatedly, the forest becomes a path and find costs O(n). The representative relation remains correct, but the representation’s height destroys performance. Heuristics change tree shape without changing partition semantics.
+<StructureDiagram
+  kind="union-find"
+  title="Union-find forest"
+  caption="Five nodes in two trees: {0,1,3,4} and {2}. find(3) traverses 3→1→0 and returns representative 0."
+  variant="default"
+/>
+
+The representation invariant: parent pointers form a forest of rooted trees with no cycles; every element belongs to exactly one tree; root metadata (size or rank) is valid at roots.
+
+### Naive union
+
+`Union(x,y)` finds the roots $r_x$ and $r_y$. If they differ, it attaches one root as a child of the other.
+
+<CodeRunner client:load
+  title="Naive union-find (Python)"
+  language="python"
+  code={`class NaiveUnionFind:
+    def __init__(self, n):
+        self.parent = list(range(n))
+
+    def find(self, x):
+        while self.parent[x] != x:
+            x = self.parent[x]
+        return x
+
+    def union(self, x, y):
+        rx, ry = self.find(x), self.find(y)
+        if rx != ry:
+            self.parent[ry] = rx
+
+# Demonstration
+uf = NaiveUnionFind(5)
+uf.union(0, 1)
+uf.union(2, 3)
+uf.union(1, 4)
+for i in range(5):
+    print(f"find({i}) = {uf.find(i)}")`}
+  output="find(0) = 0\nfind(1) = 0\nfind(2) = 2\nfind(3) = 2\nfind(4) = 1"
+/>
+
+The output reveals a problem: `find(4) = 1`, not `0`. After `union(1, 4)`, the root of 4 is 1, but 1 is not a root — 1 points to 0. Future `find(4)` traverses 4→1→0. This works correctly, but repeated naive unions can build a chain of height $n-1$, making `find` cost $\Theta(n)$.
+
+<Quiz client:load
+  title="Naive union cost"
+  question="Starting from n singleton nodes, what sequence of naive unions produces the worst-case find cost?"
+  options={[
+    "Repeatedly union the current root under a new singleton",
+    "Always union two trees of equal size",
+    "Union in random order",
+    "Union every node with node 0 in sequence"
+  ]}
+  correctIndex={0}
+  explanation="Attaching the larger tree under a singleton repeatedly builds a chain. Each find on the deepest node traverses n-1 parent pointers. Union-by-size prevents this by always attaching the smaller root under the larger root."
+/>
 
 ## Union by size or rank
 
-Union by size attaches the smaller root under the larger root and adds sizes. The size invariant implies that when a node’s depth increases, the size of the tree containing it at least doubles. A node can therefore have its depth increased at most (log_2 n) times. Without path compression, find is O(log n) worst case under union by size.
+Union by size attaches the smaller root under the larger root and updates the size of the new root. The key property: when a node's depth increases, the size of the tree containing it at least doubles.
 
-Union by rank stores an upper bound on height, not exact size. Attach the lower-rank root beneath the higher-rank root; if ranks tie, choose one root and increment its rank. A rank-r root has at least (2^r) nodes under the standard induction: rank zero has one; equal-rank union combines two trees of at least (2^r) nodes and produces rank r+1. Thus rank is at most log n.
+<MathStatement id="size-bound" kind="lemma" title="Height bound under union by size">
+If union always attaches the smaller tree under the larger tree by node count, then the height of any tree with $n$ nodes is at most $\lfloor \log_2 n \rfloor$. Consequently, $\text{Find}$ costs $O(\log n)$ in the worst case.
+</MathStatement>
 
-**Worked sequence.** Make singleton nodes a,b,c,d. Union(a,b) attaches b under a and size(a)=2. Union(c,d) attaches d under c and size(c)=2. Union(a,c) attaches c under a and size(a)=4. A find(d) follows d→c→a. The class representative is a, and all four nodes are equivalent. If union used arbitrary roots, the same partition would be correct but future paths could be much taller.
+<MathProof id="size-bound-proof" for="size-bound">
+A node's depth increases only when its root is attached to a root with at least as many nodes. The node's tree size at least doubles on each such event. Starting from size 1, a node can double at most $\log_2 n$ times before reaching the full tree size. Union by rank stores a height upper bound instead of exact size. When two roots have equal rank, the new root's rank increments by one. A rank-$r$ root contains at least $2^r$ nodes, so rank never exceeds $\log_2 n$.
+</MathProof>
+
+<CodeRunner client:load
+  title="Union by size (Python)"
+  language="python"
+  code={`class UnionFind:
+    def __init__(self, n):
+        self.parent = list(range(n))
+        self.size = [1] * n
+
+    def find(self, x):
+        while self.parent[x] != x:
+            x = self.parent[x]
+        return x
+
+    def union(self, x, y):
+        rx, ry = self.find(x), self.find(y)
+        if rx == ry:
+            return
+        if self.size[rx] < self.size[ry]:
+            rx, ry = ry, rx
+        self.parent[ry] = rx
+        self.size[rx] += self.size[ry]
+
+uf = UnionFind(6)
+edges = [(0,1), (2,3), (4,5), (1,3), (3,5)]
+for u, v in edges:
+    uf.union(u, v)
+for i in range(6):
+    print(f"find({i}) = {uf.find(i)}")`}
+  output="find(0) = 0\nfind(1) = 0\nfind(2) = 0\nfind(3) = 0\nfind(4) = 0\nfind(5) = 0"
+/>
+
+Without path compression, `find` remains $O(\log n)$ under union by size. Path compression breaks the logarithmic bound.
 
 ## Path compression
 
-Path compression changes every parent pointer encountered during find(x) to point directly to the root. The returned representative is unchanged, but future finds on the path become faster. A recursive implementation finds the root first, then sets parent[x]=root while unwinding. An iterative implementation needs either a second pass or careful path halving/splitting.
+`Find(x)` traverses the path from $x$ to its root. Path compression redirects every node on the traversed path to point directly at the root. The returned representative is unchanged, but future finds on those nodes become $O(1)$.
 
-Path compression alone can have poor worst-case sequences; union by size/rank alone gives logarithmic height. Together they achieve amortized (O(alpha(n))) per operation, where (alpha) is the inverse Ackermann function and grows so slowly that it is at most a small constant for practical input sizes. The theorem is asymptotic and nontrivial; do not replace it with the false claim that every individual operation is constant time.
+<MathStatement id="compression-correct" kind="theorem" title="Path-compression correctness">
+Path compression preserves the abstract invariant: after $\text{Find}(x)$ with compression, every redirected node remains in the same equivalence class. No compression operation can create a cycle or detach a subtree.
+</MathStatement>
 
-The intuition is that compression flattens frequently traversed paths, while rank prevents the roots from forming tall structures. A full proof uses a hierarchy of rank levels and charges parent changes to rapidly growing bounds. For an undergraduate implementation, the essential correctness proof is simpler: compression only redirects a node to an ancestor root, so it cannot create a cycle or change the represented class.
+<MathProof id="compression-proof" for="compression-correct">
+Before compression, each node on the traversed path has a sequence of parent pointers ending at root $r$. Because $r$ is an ancestor of every node on the path, setting each node's parent to $r$ cannot change the reachable root. Since $r$ points to itself and no node is redirected to a descendant, the forest remains acyclic. Block membership (the root's label) stays unchanged because the root is preserved.
+</MathProof>
+
+### Interleaving the heuristics
+
+<MathStatement id="ackermann-bound" kind="theorem" title="Inverse-Ackermann amortized bound" proofId="ackermann-proof" dependsOn={[{ id: "size-bound", label: "height bound (union by size)" }, { id: "compression-correct", label: "path-compression correctness" }]}>
+A disjoint-set forest using both union by rank and path compression supports any sequence of $m$ $\text{Find}$ and $\text{Union}$ operations on $n$ elements in $O(m \, \alpha(n))$ time, where $\alpha$ is the inverse Ackermann function. For all practical $n$ ($n \leq 2^{2^{2^{16}}}$), $\alpha(n) \leq 4$.
+</MathStatement>
+
+<MathProof id="ackermann-proof" for="ackermann-bound" collapsible open>
+The full proof (Tarjan 1975, 1979) partitions nodes into rank groups and charges parent-pointer changes to nodes in a way that each node pays at most a constant number of times per group. Let $\alpha(n)$ be the inverse of Ackermann's function $A(k, n)$. Ranks are bounded by $\log_2 n$. For $k = \alpha(n)$, the $k$-th Ackermann value exceeds $\log_2 n$, so each node changes parent at most $O(\alpha(n))$ times. Summing over $n$ nodes and $m$ finds yields $O(m \, \alpha(n))$. The exponent $2^{2^{2^{16}}}$ arises because $A(4, 4) = 2^{2^{2^{65536}}}$, far exceeding any conceivable $n$.
+</MathProof>
+
+<CodeRunner client:load
+  title="Full union-find with path compression"
+  language="python"
+  code={`class UnionFind:
+    def __init__(self, n):
+        self.parent = list(range(n))
+        self.rank = [0] * n
+
+    def find(self, x):
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+
+    def union(self, x, y):
+        rx, ry = self.find(x), self.find(y)
+        if rx == ry:
+            return
+        if self.rank[rx] < self.rank[ry]:
+            rx, ry = ry, rx
+        self.parent[ry] = rx
+        if self.rank[rx] == self.rank[ry]:
+            self.rank[rx] += 1
+
+# Simulate Kruskal on a graph with 7 vertices
+edges = [(0,1,4), (1,2,8), (2,3,7), (3,4,9), (4,5,10),
+         (5,6,2), (0,6,6), (1,6,11), (2,6,3)]
+edges.sort(key=lambda e: e[2])
+uf = UnionFind(7)
+mst = []
+for u, v, w in edges:
+    if uf.find(u) != uf.find(v):
+        uf.union(u, v)
+        mst.append((u, v, w))
+print("MST edges:", mst)
+print("Total weight:", sum(w for _, _, w in mst))`}
+  output="MST edges: [(5, 6, 2), (2, 6, 3), (0, 1, 4), (0, 6, 6), (2, 3, 7), (3, 4, 9)]\nTotal weight: 31"
+/>
+
+## Counterexample: the equal-root bug
+
+A common implementation error: calling `union(x,y)` when `find(x) == find(y)` and still updating rank or size metadata on the "merged" root.
+
+```python
+# BUGGY union
+def union(self, x, y):
+    rx, ry = self.find(x), self.find(y)
+    # Missing: if rx == ry: return
+    self.parent[ry] = rx
+    self.rank[rx] += 1  # rank grows even when already connected!
+```
+
+Running this on a sequence where the same pair is unioned repeatedly inflates rank to $n$, destroying the rank invariant. The root's rank no longer bounds tree height, the inverse-Ackermann bound no longer applies, and a find may traverse $O(n)$ pointers.
+
+<Quiz client:load
+  title="Equal-root invariant"
+  question="What is the consequence of omitting the equal-root check in union?"
+  options={[
+    "The data structure becomes incorrect — find may return wrong representatives",
+    "The rank or size becomes an overestimate, breaking the logarithmic height bound",
+    "The code enters an infinite loop",
+    "Nothing — the extra update is harmless"
+  ]}
+  correctIndex={1}
+  explanation="Skipping the equal-root check inflates metadata at the root. For union by rank, the rank no longer bounds tree height. For union by size, the size becomes a double-counted overestimate. The partition remains correct, but the performance guarantee vanishes."
+/>
+
+## Failure modes and limitations
+
+Union-find cannot delete edges or split classes. Removing a single element from a block requires rebuilding the partition from scratch. Offline reversal can convert deletions into additions when the full operation sequence is known in advance; online deletion demands richer structures.
+
+<CaseStudy client:load
+  title="Social-network component tracker"
+  scenario="A social network tracks connected components as users join (new node), become friends (add edge), or unfriend (remove edge). The system runs online: each query must be answered before the next operation arrives. The developer proposes union-find because it is fast and simple."
+  question="Which property makes union-find unsuitable for this workload?"
+  options={[
+    "Find returns the wrong representative after an edge deletion",
+    "Union-find cannot delete edges or split components online",
+    "Union-find requires more than O(n) memory",
+    "Find is too slow for social-network scale"
+  ]}
+  correctIndex={1}
+  explanation="Union-find supports only union operations. Deleting a friendship edge that may split a component is impossible because parent pointers deliberately discard edge-level history. The system needs a fully dynamic connectivity structure (e.g., link-cut trees or a time-segment-tree offline method)."
+/>
+
+Path compression also interacts poorly with concurrent access. Two simultaneous unions can race, metadata updates can be lost, and a find can observe a partially linked structure. Concurrent union-find needs explicit synchronization or lock-free protocols like compare-and-swap.
 
 ## Applications
 
-Kruskal’s minimum-spanning-tree algorithm sorts edges by weight and accepts an edge if its endpoints are in different components. Union-find tests that condition and merges after acceptance. The invariant is that components are exactly the connected components of the accepted-edge forest. If an edge joins vertices already connected, adding it creates a cycle and cannot improve the minimum-spanning-tree construction under the cut argument.
+**Kruskal's MST algorithm.** Sort edges by weight, iterate, and accept an edge if its endpoints have different roots. Union merges components. The correctness invariant: components equal the connected components of the accepted-edge forest. If an edge joins already-connected vertices, the edge would create a cycle and cannot be in any minimum spanning tree under the cut property.
 
-Grid connectivity uses union-find to merge adjacent open cells as they appear. Percolation experiments can ask whether a top row component connects to a bottom row component. Image segmentation merges neighboring pixels under a similarity rule. Offline equivalence constraints use union to combine symbols; a later find checks whether two symbols must be equal.
+**Grid percolation.** In an $n \times n$ grid, cells become open with probability $p$. Union-find merges adjacent open cells. Percolation occurs when any cell in the top row connects to any cell in the bottom row. Adding a virtual top and bottom node simplifies the query to a single find.
 
-Union-find is poor when deletions or splits are required. Removing one edge can split a component, but parent pointers do not record enough information to undo arbitrary unions. Offline reverse processing can turn deletions into additions; dynamic connectivity with online deletions needs more advanced structures such as link-cut trees or offline divide-and-conquer techniques.
+**Image segmentation.** Neighboring pixels with similar intensity are merged. A region-growing segmentation uses union-find to maintain components: start with each pixel as a singleton, merge adjacent pixels whose intensity difference is below a threshold.
 
-## Amortized analysis intuition
+## Deliberately Omitted
 
-The inverse-Ackermann bound is an example of a result that is much stronger than logarithmic but not literally constant per operation. A sequence may contain an occasional long find, especially before compression, yet the total work over m operations on n elements is (O(malpha(n))). When presenting this theorem, distinguish worst-case cost of one call from amortized cost of a sequence. The latter is the useful guarantee for Kruskal and connectivity workloads.
-
-Path compression also has a practical locality effect: repeated queries on the same component quickly become short pointer walks. The first query may touch many nodes, while later queries touch the root and perhaps one edge. Measurement should include operation order because a random permutation and a clustered workload exercise different compression behavior.
-
-## Concurrency caution
-
-A sequential union-find cannot be made concurrent by merely marking parent writes atomic. Two unions may race, metadata updates may be lost, and a find can observe a partially linked path. Concurrent union-find algorithms use synchronization or carefully designed atomic compare-and-swap protocols, and they must specify linearizability or another consistency model. The sequential partition proof remains a building block but is not a complete concurrent proof.
-
-## Invariants and implementation
-
-For each node, parent must be a valid element. Roots satisfy parent[root]=root. Size or rank is meaningful only at roots; stale metadata on nonroots should not be read. Union must call find on both arguments before comparing roots. If roots are equal, it must do nothing; incrementing rank or size in this case corrupts future balance.
-
-Path compression must preserve a root. A buggy implementation that sets parent[x] to a descendant can create a cycle or detach a class. Use a validator that follows parent pointers with a visited bound, checks root self-pointers, and compares tracked class counts to a reference partition during randomized tests.
+- **The full inverse-Ackermann proof.** Tarjan's 1979 monotone-function proof and the more accessible Seidel-Sharir (2005) analysis each require several pages of rank-group accounting. This lesson states the theorem and gives the intuition; a full treatment appears in advanced algorithm textbooks.
+- **Link-cut trees and Euler-tour trees.** These structures support link, cut, and connectivity queries in $O(\log n)$ per operation — matching the disjoint-set limitation on deletions.
+- **Persistent union-find.** Making the structure support access to past states adds log-factor overhead; not required for the core understanding.
+- **Disjoint-set forests with union by size only (no path compression).** This is covered implicitly in the union-by-size section but a separate complexity analysis is secondary once both heuristics are understood.
 
 ## Exercises
 
-1. State the union-find abstract invariant and prove find correctness for a valid forest.
-2. Construct a tall tree under naïve union and calculate find cost.
-3. Prove union by size gives height O(log n).
-4. Explain path compression correctness and why it does not change classes.
-5. Analyze Kruskal’s use of union-find and its cycle invariant.
-6. Give a workload where union-find cannot directly support required deletions.
-7. Compare rank and size metadata and list a common equal-root bug.
+### 1. Recall: invariant statement
 
-### Diagnostic solutions
+State the abstract invariant of a disjoint-set data structure and explain why path compression preserves it.
 
+<ExerciseSolution hint="Relate each partition block to its tree root.">
+The invariant: find(x) = find(y) iff x and y belong to the same partition block. Path compression redirects parent pointers along the path to the root, preserving reachability to the same root and thus block membership. The root itself is unchanged.
+</ExerciseSolution>
 
-1. Two elements have the same representative iff they lie in the same partition block. In a rooted forest, following parent pointers ends at a root; compression redirects only along that path, so the root label and block membership remain unchanged.
+### 2. Application: trace a sequence
 
-2. Union singleton root under the previous root or arrange parent of the existing root under the new singleton repeatedly. The resulting chain has height n-1; find on the deepest node takes u0398(n) pointer traversals.
+Start with 8 singleton nodes labeled 0–7. Apply: union(0,2), union(4,6), union(2,6), union(1,5), union(5,7). Show the forest after each union under union by size. What is the final root of node 3? What is the final root of node 7?
 
-3. Whenever a node’s depth increases, its root’s size at least doubles because the node’s tree was the smaller one. Starting from size one, a node’s depth can increase at most floor(log2 n), so height is O(log n).
+<ExerciseSolution>
+After union(0,2): 0→0 (size 2), 2→0. After union(4,6): 4→4 (size 2), 6→4. After union(2,6): find(2)=0, find(6)=4, size(0)=2, size(4)=2 → tie, attach 4 under 0, size(0)=4. Path: 6→4→0, 2→0. After union(1,5): 1→1 (size 2), 5→1. After union(5,7): find(5)=1, find(7)=7, attach 7 under 1, size(1)=3. Final: root of 3 = 3 (singleton). Root of 7 = 1.
+</ExerciseSolution>
 
-4. A path consists of parent pointers ending at a root. Replacing each path node’s parent with that root preserves reachability to the same root and cannot introduce a cycle because the root points to itself and is not redirected.
+### 3. Transfer: detect cycles in an undirected graph
 
-5. Before processing an edge, components equal connected components of accepted edges. If endpoints have different roots, adding the edge merges exactly those components; if roots agree, the edge closes a cycle and is rejected. This maintains a forest and yields Kruskal’s correctness when edges are processed by nondecreasing weight.
+Design an algorithm using union-find that checks whether adding an edge to an undirected graph creates a cycle. Analyze its time complexity on a graph with $V$ vertices and $E$ edges.
 
-6. If an online system removes an edge and must immediately report whether two vertices remain connected, a prior union may have compressed away the edge’s history. Parent pointers cannot split a tree safely without additional information; use a different dynamic-connectivity method or offline reversal.
+<ExerciseSolution hint="What does it mean when find(u) == find(v) before union(u,v)?">
+Process edges in any order. For each edge (u,v), call find(u) and find(v). If the roots are equal, the edge connects two vertices already in the same component, so adding it creates a cycle. Otherwise, union(u,v). The total time is $O((V+E) \, \alpha(V))$ over all operations.
+</ExerciseSolution>
 
-7. Size counts members and is updated only at the chosen root; rank is a height upper bound and increments only when equal ranks merge. If union sees equal roots, it must return without changing either. Updating metadata for an already-connected pair can falsely increase future ranks or sizes.
+### 4. Synthesis: component size after unions
 
+Prove that under union by size, every node's depth is $O(\log n)$. Then derive the worst-case find cost without path compression.
 
+<ExerciseSolution hint="Use a charging argument: each time a node's depth increases, its tree at least doubles.">
+A node's depth increases only when its root is attached to a larger root. The node's tree size at least doubles on each such attachment because it was the smaller tree. Starting from size 1, the node can double at most $\log_2 n$ times. Thus height ≤ $\log_2 n$, and find without path compression costs $O(\log n)$.
+</ExerciseSolution>
 
-## References & Further Reading
+### 5. Synthesis: incremental connectivity for maze generation
 
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [Open Data Structures](https://opendatastructures.org/)
-* Tarjan, “Efficiency of a Good But Not Linear Set Union Algorithm,” *Journal of the ACM*.
+A maze on an $n \times n$ grid starts with all internal walls present (each cell isolated). Repeatedly pick a random wall between adjacent cells; if the cells are in different components, remove the wall and union the cells. When the top-left and bottom-right cells become connected, the maze has a solution. Implement this algorithm and analyze its expected running time using union-find.
+
+<ExerciseSolution hint="Use union by rank and path compression. How many union operations occur in the worst case?">
+Each wall removal reduces component count by one. There are $n^2$ cells, so at most $n^2 - 1$ unions occur before the entire grid is connected. Each union involves two find calls and at most $O(\alpha(n^2))$ work. Sorting walls is not needed — picking uniformly at random gives $O(n^2 \, \alpha(n^2))$ expected time for the union-find portion.
+</ExerciseSolution>
+
+### 6. Transfer: offline edge deletions
+
+Given a fully dynamic graph with a known sequence of additions, deletions, and connectivity queries, describe how to transform the problem into an incremental one using time intervals and a segment tree.
+
+<ExerciseSolution hint="Each edge is active over a contiguous time interval.">
+Assign each edge a set of time intervals during which it exists. Insert the edge into $O(\log Q)$ segment-tree nodes covering those intervals, where $Q$ is the total number of operations. Traverse the segment tree DFS-style, adding edges when entering a node and rolling back (via a union-find that supports undo) when leaving. Answer queries at their time points. The total complexity is $O((E+Q) \log Q \, \alpha(n))$.
+</ExerciseSolution>
+
+## References
+
+- Tarjan, R. E. "Efficiency of a Good But Not Linear Set Union Algorithm." *Journal of the ACM* 22, no. 2 (1975): 215–225. — Original inverse-Ackermann bound.
+- Tarjan, R. E. "A Class of Algorithms Which Require Nonlinear Time to Maintain Disjoint Sets." *Journal of Computer and System Sciences* 18, no. 2 (1979): 110–127. — Tighter analysis.
+- Cormen, T. H., C. E. Leiserson, R. L. Rivest, and C. Stein. *Introduction to Algorithms*, 4th ed., Chapter 19. MIT Press, 2022. — Standard textbook treatment with worked proofs.
+- Sedgewick, R., and K. Wayne. *Algorithms*, 4th ed., Section 1.5. Addison-Wesley, 2011. — Accessible case-study approach with percolation.
+- Morin, P. *Open Data Structures* (in pseudocode), Chapter 10. — Implementations in multiple languages.
+- Seidel, R., and M. Sharir. "Top-Down Analysis of Path Compression." *SIAM Journal on Computing* 34, no. 3 (2005): 515–525. — Simplified analysis of the inverse-Ackermann bound.

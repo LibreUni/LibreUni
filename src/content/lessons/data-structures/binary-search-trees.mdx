@@ -3,101 +3,370 @@ title: "Binary Search Trees and Ordered Maps"
 course: "data-structures"
 description: "Search-tree invariants, recursive and iterative operations, deletion, order statistics, and degeneration."
 ---
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+
 # Binary Search Trees and Ordered Maps
 
-A binary search tree stores keys so that an inorder traversal is sorted. This simple invariant turns comparisons into navigation: a search discards an entire subtree at each comparison. The benefit depends on height, which is determined by insertion history unless a balancing policy is added. Understanding the unbalanced structure first makes the obligations of AVL, red-black, treap, and external trees precise.
+A phone directory with 100,000 entries must support insert, delete, lookup by name, and range queries ("list all names starting with A–B"). A hash table gives $O(1)$ average lookup but cannot answer range queries efficiently — scanning the table for prefix "A" costs $O(n)$. A sorted array supports binary search ($O(\log n)$ lookup) and range queries via lower/upper bounds, but insertion shifts $O(n)$ elements. A linked list offers $O(1)$ insertion at a known position but $O(n)$ lookup.
+
+The binary search tree (BST) achieves $O(\log n)$ for all three operations simultaneously — provided the tree remains balanced. The key insight: store keys in a binary tree where every node's left subtree contains only smaller keys and its right subtree contains only larger keys. This local property guarantees that an inorder traversal visits keys in sorted order — the range-query property of a sorted array — while the branching structure supports insert and delete in $O(h)$ time, where $h$ is the tree height.
+
+The BST was discovered by Allen Newell, Cliff Shaw, and Herbert A. Simon in their 1955–1956 work on the Information Processing Language (IPL), and independently described by William F. Palmer in the 1950s [^knuth1998]. Each comparison during a search eliminates an entire subtree. At the root, the comparison discards either the left or right half of the stored keys — analogous to binary search on an array but without the shifting cost of insertion.
+
+The BST invariant is recursive: each subtree is itself a BST. This invites recursive algorithms and correctness proofs by induction on tree height. The price: the invariant alone does not bound height. Inserting keys in sorted order produces a chain of $n$ nodes with $h=n-1$, reducing all operations to $O(n)$. Maintaining logarithmic height requires additional invariants — the subject of balanced tree variants.
 
 ## Definition and duplicate policy
 
-A BST node contains a key, payload, and left and right child references. Under the strict policy, every left-subtree key is less than the node key and every right-subtree key is greater; duplicates are rejected or stored in a separate count. Under a non-strict policy, equal keys consistently go to one side, but deletion and height behavior change. State the comparator and duplicate semantics before proving anything.
+<MathStatement id="bst-invariant" kind="definition" title="Binary search tree invariant">
+Let $T$ be a binary tree where each node $x$ stores a key $x.key$ drawn from a totally ordered set. $T$ is a binary search tree if for every node $x$:
 
-The RI can be expressed with inherited bounds: a subtree rooted at x must contain only keys in an open interval (lo,hi), or closed intervals if duplicates are allowed. This recursive formulation catches violations that local parent-child checks miss. A node’s left child may be smaller than x but still violate an ancestor’s lower bound.
+- Every key in the left subtree of $x$ satisfies $key < x.key$.
+- Every key in the right subtree of $x$ satisfies $key > x.key$.
+- Both subtrees are themselves binary search trees.
+
+Equivalently, with inherited bounds: a subtree rooted at $x$ must contain only keys in the open interval $(\ell, u)$, where $\ell$ and $u$ are bounds inherited from ancestors. The root has bounds $(-\infty, +\infty)$.
+</MathStatement>
+
+<StructureDiagram kind="tree" title="Valid BST with bound intervals" caption="Every node's key lies inside the inherited lower and upper bounds from its ancestors. Node 6 lies in (3,8), node 4 in (3,6)." />
+
+| Policy | Equal keys | Proof consequence |
+| --- | --- | --- |
+| strict | reject or count separately | left $<$ root $<$ right |
+| left-biased | equal keys go left | deletion must preserve side rule |
+| right-biased | equal keys go right | iterators expose stable policy |
+
+<Quiz client:load
+  question="Why must a BST validator carry ancestor bounds rather than comparing only with the parent key?"
+  options={[
+    "Local parent comparisons miss violations where a node is valid relative to its parent but violates an older ancestor bound",
+    "The root has no key to compare against",
+    "Inorder traversal is always invalid without bounds",
+    "Bounds make deletion run in constant time"
+  ]}
+  correctIndex={0}
+  explanation="A node can be locally ordered with its parent while violating a bound inherited from a grandparent or older ancestor. The bounds-based invariant catches these global violations."
+/>
+
+A BST node contains a key, payload, and left and right child references. Under the strict policy, duplicates are rejected or stored in a separate count. State the comparator and duplicate semantics before proving anything about the tree.
 
 ## Search and insertion
 
-Search starts at the root. If the tree is empty, the key is absent. Otherwise compare target k with node key x: return on equality, descend left if k less than x, and descend right if k greater than x. The path is unique under strict ordering. An iterative implementation uses O(1) auxiliary space; recursive search uses O(h) call-stack space.
+Search starts at the root. If the tree is empty, the key is absent. Otherwise compare target $k$ with node key $x$: return on equality, descend left if $k < x$, descend right if $k > x$. The path is unique under strict ordering. An iterative implementation uses $O(1)$ auxiliary space; recursive search uses $O(h)$ call-stack space.
 
-Insert follows the unsuccessful search path and creates a leaf at the first null child. The existing tree satisfies the RI, and every key on the path establishes the new key’s bounds. A local comparison at the insertion parent is enough only because the path was chosen according to all ancestor comparisons; state that fact in the proof.
+Insert follows the unsuccessful search path and creates a leaf at the first null child. The existing tree satisfies the invariant, and every comparison on the path establishes the new key's bounds. A local comparison at the insertion parent is sufficient only because the path was chosen according to all ancestor comparisons.
 
-**Worked insertion.** Insert 8, 3, 10, 1, 6, 14, 4. The root is 8; 3 goes left and 10 right. 1 is left of 3; 6 right of 3; 14 right of 10; 4 is greater than 3 but less than 6, so it becomes 6’s left child. Inorder traversal is 1,3,4,6,8,10,14. The height is 3 edges, so search visits at most four nodes on this example.
+**Worked insertion.** Insert the sequence $[8, 3, 10, 1, 6, 14, 4]$ into an empty tree. The root is 8; 3 goes left and 10 right. 1 is left of 3; 6 right of 3; 14 right of 10; 4 is greater than 3 but less than 6, so it becomes 6's left child. Inorder traversal: $1, 3, 4, 6, 8, 10, 14$. Height is 3 edges; search visits at most four nodes.
+
+<CodeRunner client:load
+  title="BST search and insert simulation"
+  language="python"
+  code={`class BSTNode:
+    def __init__(self, key):
+        self.key = key
+        self.left = None
+        self.right = None
+
+def search(root, key):
+    if root is None:
+        return False
+    if key == root.key:
+        return True
+    if key < root.key:
+        return search(root.left, key)
+    return search(root.right, key)
+
+def insert(root, key):
+    if root is None:
+        return BSTNode(key)
+    if key < root.key:
+        root.left = insert(root.left, key)
+    elif key > root.key:
+        root.right = insert(root.right, key)
+    return root
+
+def inorder(root, result=None):
+    if result is None: result = []
+    if root:
+        inorder(root.left, result)
+        result.append(root.key)
+        inorder(root.right, result)
+    return result
+
+root = None
+for k in [8, 3, 10, 1, 6, 14, 4]:
+    root = insert(root, k)
+print("Inorder:", inorder(root))
+print("Search 6:", search(root, 6))
+print("Search 7:", search(root, 7))`}
+  output="Inorder: [1, 3, 4, 6, 8, 10, 14]\nSearch 6: True\nSearch 7: False"
+/>
 
 ## Deletion
 
-Deleting a leaf removes its parent pointer. For a node with one child, splice the child into the node’s position. For two children, find the successor y, the minimum node in the right subtree. Replace x’s key and payload with y’s, then delete y, which has no left child and therefore falls into the simpler zero/one-child case. If payload identity matters, move a node or update references instead of copying fields without a contract.
+<StructureDiagram kind="tree" title="Successor deletion" caption="Replacing a two-child node with its inorder successor preserves global ordering bounds." variant="successor" />
 
-The successor replacement preserves order: every key in x’s left subtree is less than x and hence less than y; y is the smallest key in the right subtree; keys after y remain greater. The physical deletion of y cannot require deleting a two-child node because y has no left child. Recursive deletion returns the new subtree root so parent links are updated correctly.
+Deleting a leaf removes its parent pointer. For a node with one child, splice the child into the node's position. For two children, find the successor $y$ — the minimum node in the right subtree. Replace $x$'s key and payload with $y$'s, then delete $y$, which has no left child and therefore falls into the simpler zero/one-child case.
+
+<MathStatement id="successor-deletion" kind="proposition" title="Successor deletion preserves BST order" proofId="successor-proof">
+Let $x$ be a node with two children in a BST, and let $y$ be the inorder successor of $x$ (the minimum key in $x$'s right subtree). Replacing $x$'s key with $y$'s key and deleting $y$ produces a valid BST containing the same set of keys minus $x$'s original key.
+</MathStatement>
+
+<MathProof id="successor-proof" for="successor-deletion" collapsible>
+Every key in $x$'s left subtree is less than $x.key$ and hence less than $y.key$ (since $y.key > x.key$ by definition of successor). Every key in $x$'s right subtree that is not $y$ is greater than $y.key$ because $y$ is the minimum of that subtree. The replacement therefore preserves the BST invariant at every node. The physical deletion of $y$ cannot require deleting a two-child node because $y$ has no left child (it is the minimum of its subtree). The deletion of $y$ is therefore a leaf or one-child case, which trivially preserves the BST invariant of the remaining subtree.
+</MathProof>
+
+**Worked deletion.** Delete 8 from the tree built above. Node 8 has two children (3 and 10). Its successor is 10 (the minimum of the right subtree). Replace 8's key with 10, then delete 10, which has a single child 14. Splice 14 into 10's position. The resulting tree has root 10, left child 3 (with subtree 1, 4, 6), right child 14. Inorder: $1, 3, 4, 6, 10, 14$. The operation runs in $O(h)$ time.
 
 ## Height and degeneration
 
-Let h be tree height. Search, insert, and delete take O(h), with O(h) recursion stack if implemented recursively. A balanced tree has h=O(log n), but an insertion sequence in sorted order creates a chain of height n-1. Random insertion into an initially empty BST has expected height O(log n) under a random-permutation model, but expected behavior is not a worst-case guarantee and can be invalid under correlated input.
+Let $h$ be tree height. Search, insert, and delete take $O(h)$, with $O(h)$ recursion stack if implemented recursively. A balanced tree has $h = O(\log n)$, but an insertion sequence in sorted order creates a chain of height $n-1$.
 
-The shape also affects iteration and memory locality. A chain has pointer traversal depth n; a compact balanced tree has logarithmic depth but may still have scattered nodes. A BST does not become balanced merely because it stores sorted keys; balance is a separate invariant or randomized policy.
+<CaseStudy client:load
+  title="Sorted insertion failure"
+  scenario="Keys arrive in ascending order [1, 2, 3, ..., n] into an initially empty BST that uses no balancing."
+  question="What property of the data structure changes first?"
+  options={[
+    "Height approaches the number of stored keys",
+    "The inorder order becomes unsorted",
+    "Every lookup becomes constant time",
+    "The abstraction stops being a set"
+  ]}
+  correctIndex={0}
+  explanation="The BST invariant remains valid for every node — each insertion still follows the ordering rule. But the shape degenerates to a chain, so path-based costs grow from O(log n) to O(n). Inorder traversal remains sorted because the invariant is satisfied."
+/>
+
+Random insertion into an initially empty BST has expected height $O(\log n)$ under a random-permutation model [^knuth1998]. Expected behavior is not a worst-case guarantee and can be invalidated by correlated input — for example, keys arriving in sorted order from a database query.
+
+The shape also affects iteration and memory locality. A chain has pointer traversal depth $n$; a compact balanced tree has logarithmic depth but may still have scattered nodes. A BST does not become balanced merely because it stores sorted keys; balance is a separate invariant or randomized policy.
+
+<CodeExercise client:load
+  title="Complete the BST search"
+  code={`def bst_contains(root, key):
+    if root is None:
+        return [!blank!]
+    if key == root.key:
+        return True
+    if key < root.key:
+        return bst_contains(root.[!blank!], key)
+    return bst_contains(root.right, key)`}
+  answers={["False", "left"]}
+  explanation="The base case returns False when the subtree is empty. When the target is smaller than the current key, the search continues in the left subtree."
+/>
 
 ## Ordered operations
 
-Minimum follows left children until null; maximum follows right. The successor of a node with a right subtree is the minimum there; without a right subtree, walk ancestors until the node is in a left branch. These rules support sorted iteration with a stack or parent pointers. Each node is pushed and popped at most once, so inorder traversal is O(n).
+<Quiz client:load
+  title="Range-reporting complexity"
+  question="What is the worst-case time complexity of reporting all keys in [a,b] from a balanced BST with n nodes, returning k keys?"
+  options={["O(n)", "O(log n + k)", "O(k)", "O(n log n)"]}
+  correctIndex={1}
+  explanation="The algorithm prunes subtrees outside the range. It visits O(log n) nodes on the boundary paths to locate the range, then visits each of the k reported nodes. The total is O(log n + k)."
+/>
 
-Range reporting for [a,b] prunes subtrees outside the range. At each node, recurse left only if x.key≥a, report x if in range, and recurse right only if x.key≤b. The time is O(h+k), where k is output size, in a balanced tree. Returning an iterator requires define mutation behavior and stack lifetime.
+Minimum follows left children until null; maximum follows right. The successor of a node with a right subtree is the minimum of that subtree; without a right subtree, walk ancestors until the node is a left child of its parent. These rules support sorted iteration with a stack or parent pointers. Each node is pushed and popped at most once, so inorder traversal is $O(n)$.
 
-Augment a node with subtree size to support select(i), the ith smallest, and rank(k). If left size is ell, select goes left for i less than ell, returns x for i=ell, and goes right with i-ell-1 otherwise. The size RI is (size(x)=1+size(left)+size(right)). Every insertion/deletion must update it along the changed path; rotations must recompute affected nodes.
+Range reporting for $[a,b]$ prunes subtrees outside the range. At each node, recurse left only if $x.key \ge a$, report $x$ if in range, and recurse right only if $x.key \le b$. The time is $O(h + k)$, where $k$ is output size, in a balanced tree.
 
-## Iterators and maps
-
-A map associates one payload with each key. Updating an existing key should not change tree shape; inserting a new key does. An iterator may use an explicit ancestor stack and yield keys in sorted order. If a mutation occurs, options include invalidation, weak consistency, or a fully specified live-order behavior. A fail-fast modification count detects many accidental mutations but is not a concurrency guarantee.
-
-## Correct recursive interfaces
-
-The cleanest recursive update returns the new root of the subtree. An insert operation returns the existing root if the key is already present; otherwise it recursively assigns the returned left or right child and returns the current root. A delete operation follows the same pattern and returns the replacement root in the zero/one-child cases. This return-value convention handles deletion of the global root without a special external parent pointer.
-
-Every recursive call should receive a subtree whose inherited bounds are known and should return a subtree satisfying the same bounds. The proof is structural induction on subtree size. The base case is null. The inductive step uses the comparator to choose a child, invokes the induction hypothesis on the corresponding interval, and reconnects the returned root. This is stronger than testing a few inorder traversals because it proves bounds and pointer structure together.
+Augment a node with subtree size to support $\text{select}(i)$ (the $i$th smallest) and $\text{rank}(k)$. If left size is $\ell$, select goes left for $i < \ell$, returns $x$ for $i = \ell$, and goes right with $i - \ell - 1$ otherwise. The size invariant is $\text{size}(x) = 1 + \text{size}(x.left) + \text{size}(x.right)$. Every insertion or deletion must update sizes along the changed path.
 
 ## Failure modes
 
-Common bugs include treating equality inconsistently, losing the successor’s right child during deletion, failing to update the parent when a child subtree root changes, and using a comparator that is inconsistent with stored equality. A tree can still produce sorted output after a failed parent-pointer update, then crash during successor traversal. Validate both local links and global bounds.
+<Quiz client:load
+  title="Non-transitive comparator failure"
+  question="What happens when a BST uses a comparator that is not transitive (e.g., a < b and b < c but a ≮ c)?"
+  options={[
+    "The tree may appear valid but produce incorrect search results",
+    "The tree throws an exception on insertion",
+    "Inorder traversal stops working",
+    "Duplicate keys are automatically rejected"
+  ]}
+  correctIndex={0}
+  explanation="A non-transitive comparator violates the strict total order requirement. The BST can still be built and traversed, but search results become unpredictable because the ordering assumption is broken at the comparator level."
+/>
 
-If keys have mutable comparison fields, modifying a key after insertion can place it in the wrong order. Search may fail even though inorder still reflects the old placement. Either make keys immutable while stored, remove/reinsert after mutation, or use an indirection whose ordering key cannot change.
+Common bugs include treating equality inconsistently, losing the successor's right child during deletion, failing to update the parent when a child subtree root changes, and using a comparator inconsistent with stored equality. A tree can still produce sorted output after a failed parent-pointer update, then crash during successor traversal. Validate both local links and global bounds.
 
-## Memory and external storage
+If keys have mutable comparison fields, modifying a key after insertion can place it in the wrong order. Search may fail even though inorder still reflects the old placement. Solutions: make keys immutable while stored, remove and reinsert after mutation, or use an indirection whose ordering key cannot change.
 
-A pointer BST incurs one or more pointers per node and unpredictable allocation. A packed implicit layout is efficient only for near-complete trees; a skewed BST wastes array positions. B-trees group many keys in a block and are preferable when cache lines or storage pages dominate. Their split/merge invariants generalize the BST order but require a different height and I/O analysis.
-
-For persistent or snapshot maps, parent pointers and in-place rotations are unsafe under sharing. Path-copy updates preserve old roots but allocate O(h) nodes. For a mutable ordered map with stable iterators, rotations can invalidate node addresses unless nodes are individually allocated and handles are stable. The client contract must identify which identities survive structural updates.
+The worst-case failure is silent corruption: a comparator that is not transitive (e.g., `a < b` and `b < c` but not `a < c`) can produce a tree that appears valid but yields incorrect search results. Verify that the comparator induces a strict total order on the key domain.
 
 ## Testing and model comparison
 
-Maintain a simple sorted list or reference map and execute randomized insert, update, delete, search, rank, and range operations against both implementations. After each mutation, verify inorder keys, size, bounds, parent links, and cached augmentation. Include duplicate keys, deletion of absent keys, deleting the root repeatedly, and comparator ties. Compare an iterator’s output to the reference sorted order and test mutations according to the documented invalidation rule.
+<CodeRunner client:load
+  title="Randomized BST vs reference list"
+  language="python"
+  code={`import random
+
+class BSTNode:
+    def __init__(self, key):
+        self.key = key
+        self.left = None
+        self.right = None
+
+def insert(root, key):
+    if root is None:
+        return BSTNode(key)
+    if key < root.key:
+        root.left = insert(root.left, key)
+    elif key > root.key:
+        root.right = insert(root.right, key)
+    return root
+
+def inorder(root, out=None):
+    if out is None: out = []
+    if root:
+        inorder(root.left, out)
+        out.append(root.key)
+        inorder(root.right, out)
+    return out
+
+# Randomized test: compare BST inorder with sorted reference
+keys = random.sample(range(100), 20)
+root = None
+for k in keys:
+    root = insert(root, k)
+bst_order = inorder(root)
+ref_order = sorted(keys)
+print("BST inorder matches sorted reference:", bst_order == ref_order)
+
+# Test degeneration: sorted insertion
+root2 = None
+for k in range(10):
+    root2 = insert(root2, k)
+print("Degenerate height:", end=" ")
+h = 0
+def height(r):
+    if r is None: return -1
+    return 1 + max(height(r.left), height(r.right))
+print(height(root2), "(expected 9)")`}
+  output="BST inorder matches sorted reference: True\nDegenerate height: 9 (expected 9)"
+/>
+
+Maintain a simple sorted list or reference map and execute randomized insert, update, delete, search, rank, and range operations against both implementations. After each mutation, verify inorder keys, size, bounds, parent links, and cached augmentation. Include duplicate keys, deletion of absent keys, deleting the root repeatedly, and comparator ties. Compare an iterator's output to the reference sorted order and test mutations according to the documented invalidation rule.
 
 ## Exercises
 
+<StructureDiagram kind="invalid-tree" title="Invalid BST ancestor bound" caption="A locally plausible child can still violate an ancestor's ordering bound." />
+
+<StructureExercise client:load
+  title="Find the BST violation"
+  prompt="What must a validator carry while descending into a BST?"
+  options={[
+    "Inherited lower and upper bounds",
+    "Only the parent key",
+    "Only the node's child count",
+    "The insertion timestamp"
+  ]}
+  answer={0}
+  explanation="A valid BST condition is global: every descendant must remain inside all ancestor-imposed bounds."
+  kind="tree"
+/>
+
+<details>
+<summary>Reveal exercises and solutions</summary>
+
 1. State a bound-based BST invariant and prove insertion preserves it.
-2. Trace search and insertion for a given sequence.
+
+   <ExerciseSolution hint="Consider the bounds each node inherits from its ancestors during the recursive descent">
+
+   Every subtree key lies between inherited lower and upper bounds, and strict duplicates are absent. The search path maintains bounds; the new leaf is inserted inside the final interval, so all ancestors' constraints remain true.
+   </ExerciseSolution>
+
+2. Trace search and insertion for the sequence [5, 2, 7, 1, 3, 6, 8] into an empty BST.
+
+   <ExerciseSolution hint="Record the comparison result at each node and follow the appropriate child pointer">
+
+   Compare at each node and record the path. A target smaller than the current key goes left; larger goes right; equality stops. Insert at the first null link reached by the same comparisons.
+   </ExerciseSolution>
+
 3. Prove successor deletion preserves sorted order.
-4. Construct a worst-case height sequence.
-5. Derive range-reporting complexity.
+
+   <ExerciseSolution>
+   The successor is the smallest key in the right subtree, so replacing x by it leaves all left keys smaller and all remaining right keys larger. The successor has no left child, so its deletion is a leaf or one-child splice that preserves the subtree invariant.
+   </ExerciseSolution>
+
+4. Construct a worst-case height sequence of 7 keys and compute the resulting height.
+
+   <ExerciseSolution>
+   Insert keys in increasing order [1, 2, 3, 4, 5, 6, 7]. Each new key follows right pointers to the current maximum, creating a chain of 7 nodes and height 6. Decreasing order [7, 6, 5, 4, 3, 2, 1] is the mirror image, producing a left-leaning chain.
+   </ExerciseSolution>
+
+5. Derive range-reporting complexity for a balanced BST.
+
+   <ExerciseSolution>
+   Search contributes $O(h)$. Subtrees whose bounds lie entirely outside $[a,b]$ are pruned; each reported node is visited and its boundary paths are $O(h)$, giving $O(h+k)$ time and $O(h)$ stack space.
+   </ExerciseSolution>
+
 6. Design subtree-size rank/select and update rules.
+
+   <ExerciseSolution>
+   Compare i with left subtree size and recurse. Store size at each node; update along insertion/deletion paths and recompute after rotations. The formula proves rank/select decisions correspond to inorder positions.
+   </ExerciseSolution>
+
 7. Explain why random insertion does not give a deterministic logarithmic bound.
 
-### Diagnostic solutions
+   <ExerciseSolution>
+   Expected height assumes a uniformly random insertion permutation. An adversary can supply sorted keys, and even a random-looking workload can be correlated with key order. Randomized priorities or explicit balancing are needed for a guaranteed policy.
+   </ExerciseSolution>
 
+### Transfer exercises
 
-1. Every subtree key lies between inherited lower and upper bounds, and strict duplicates are absent. The search path maintains bounds; the new leaf is inserted inside the final interval, so all ancestors’ constraints remain true.
+8. Design a data structure that supports insert, delete, and `count_in_range(a, b)` (number of keys in $[a,b]$) in $O(\log n)$ time. Augment the BST with subtree size and modify the range-reporting algorithm.
 
-2. Compare at each node and record the path. A target smaller than the current key goes left; larger goes right; equality stops. Insert at the first null link reached by the same comparisons.
+   <ExerciseSolution>
+   Augment each node with subtree size. Modify range reporting: at each node, if the entire subtree lies inside $[a,b]$, return its size instead of recursing. If the node's key is in range, count it. Recurse left only if $a \le x.key$ and recurse right only if $x.key \le b$. The algorithm runs in $O(\log n + k)$ for reporting, but $O(\log n)$ for counting (since whole-subtree sizes avoid descending into fully-contained subtrees).
+   </ExerciseSolution>
 
-3. The successor is the smallest key in the right subtree, so replacing x by it leaves all left keys smaller and all remaining right keys larger. The successor has no left child, so its deletion is a leaf or one-child splice that preserves the subtree invariant.
+9. You are given a BST where each node stores a mutable integer payload. After a series of insertions, a user modifies the payload of an internal node. Does this break the BST invariant? Why or why not?
 
-4. Insert keys in increasing order. Each new key follows right pointers to the current maximum, creating a chain of n nodes and height n-1. Decreasing order is the mirror image.
+   <ExerciseSolution>
+   Modifying the payload does not break the BST invariant — the invariant constrains only keys, not associated payloads. However, if the payload is used as part of the comparison key (e.g., a composite key), then mutation breaks the invariant. The solution is to keep keys immutable while stored, or use a separate indirection for the ordering key.
+   </ExerciseSolution>
 
-5. Search contributes O(h). Subtrees whose bounds lie entirely outside [a,b] are pruned; each reported node is visited and its boundary paths are O(h), giving O(h+k) time and O(h) stack space.
+10. Implement a persistent BST insert: given a root, return a new root that shares unchanged subtrees. What is the space complexity per insertion?
 
-6. Compare i with left subtree size and recurse. Store size at each node; update along insertion/deletion paths and recompute after rotations. The formula proves rank/select decisions correspond to inorder positions.
+    <ExerciseSolution>
+    Path-copying creates $O(h)$ new nodes along the insertion path. The unmodified subtrees are shared between old and new versions. Space per insertion is $O(h) \subseteq O(n)$ worst case, or $O(\log n)$ expected in a balanced tree. This is the basis of persistent functional maps in languages like Clojure and Scala.
+    </ExerciseSolution>
 
-7. Expected height assumes a uniformly random insertion permutation. An adversary can supply sorted keys, and even a random-looking workload can be correlated with key order. Randomized priorities or explicit balancing are needed for a guaranteed policy.
+</details>
 
+## Deliberately Omitted
 
+<Quiz client:load
+  title="Scope boundaries"
+  question="Why is 'optimal binary search trees (Knuth's DP)' omitted from this lesson?"
+  options={[
+    "It requires dynamic programming on a static access distribution and does not support dynamic updates",
+    "It is not a binary search tree",
+    "It was already covered in a previous lesson",
+    "It has no practical applications"
+  ]}
+  correctIndex={0}
+  explanation="Knuth's DP constructs a static tree for minimum expected search cost given known access frequencies. This is a different problem from dynamic BST operations and belongs in an algorithms course."
+/>
+
+- **Tree-drawing algorithms for visualization**: automatic layout of binary trees for pedagogical diagrams (Reingold–Tilford, etc.). These are a separate computational-geometry topic.
+- **Ternary search trees**: a hybrid between BST and trie that stores strings by comparing characters at each node. TSTs have different space/time trade-offs than BSTs and tries and are covered in the trie lesson.
+- **Cartesian trees and treap construction from arrays**: building a treap from a static array in $O(n)$ time using a stack. This is a niche construction technique that assumes known priorities and does not generalize to dynamic insertion.
+- **Optimal binary search trees (Knuth's DP)**: constructing a BST with minimum expected search cost given a known key-access distribution. This is a dynamic-programming problem that precomputes a static tree rather than supporting dynamic updates.
+- **Implicit treaps (Cartesian trees on array indices)**: a BST keyed by position rather than value, supporting split, merge, and range operations. This is a distinct data structure with different invariants.
+- **Weight-balanced trees**: a balance family that uses subtree weight (number of nodes) rather than height. These are covered in the balanced search trees lesson.
 
 ## References & Further Reading
 
-* [Open Data Structures](https://opendatastructures.org/)
-* [Cornell CS 2110 binary-search-tree lecture](https://www.cs.cornell.edu/courses/cs2110/2026sp/lectures/lec17/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+[^knuth1998]: Knuth, D. E. (1998). *The Art of Computer Programming, Volume 3: Sorting and Searching* (2nd ed.). Addison-Wesley. Section 6.2.2: Binary Tree Searching.
+
+* Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. (2022). *Introduction to Algorithms* (4th ed.). MIT Press. Chapter 12: Binary Search Trees.
+* Sedgewick, R. & Wayne, K. (2011). *Algorithms* (4th ed.). Addison-Wesley. Section 3.2: Binary Search Trees.
+* [Open Data Structures — Binary Search Trees](https://opendatastructures.org/)
+* Okasaki, C. (1999). *Purely Functional Data Structures*. Cambridge University Press. Chapter 2: Binary Search Trees in a functional setting.
+* [Cornell CS 2110 — Binary Search Trees](https://www.cs.cornell.edu/courses/cs2110/2026sp/lectures/lec17/)

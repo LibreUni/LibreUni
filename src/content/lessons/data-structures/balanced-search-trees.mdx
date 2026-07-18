@@ -3,94 +3,472 @@ title: "Balanced Search Trees"
 course: "data-structures"
 description: "Height invariants, rotations, AVL and red-black ideas, ordered dictionaries, and worst-case logarithmic operations."
 ---
+
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import TreeRotationPlayground from '../../../components/playgrounds/TreeRotationPlayground';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Balanced Search Trees
 
-A binary search tree (BST) supports ordered dictionaries by maintaining a local ordering invariant: every key in a node’s left subtree is smaller and every key in its right subtree is larger, under a stated duplicate policy. Search follows one root-to-leaf path, so its cost is proportional to height. An unbalanced insertion sequence can make height n; balancing restores logarithmic worst-case behavior while preserving sorted order.
+A BST can degenerate: inserting keys in sorted order produces a linear chain where search and update are $O(n)$ instead of $O(\log n)$. This is not a flaw in the BST invariant — it is a consequence of the invariant's weakness. The BST restricts relative ordering but places no constraint on tree shape. Balanced tree families add a **shape invariant** that forces logarithmic height while keeping restructuring local.
 
-## BST invariant and operations
+Two solutions emerged in the 1960s–1970s. Georgy Adelson-Velsky and Evgenii Landis (1962) showed that requiring left and right subtree heights to differ by at most one is strong enough to guarantee $O(\log n)$ height, yet weak enough to maintain with $O(1)$ local rotations after each mutation. Rudolf Bayer (1972) introduced a "colored" binary representation of B-trees, later refined by Leonidas Guibas and Robert Sedgewick (1978) into red-black trees, which enforce a black-height invariant that permits slightly more imbalance but requires fewer rotations on average.
 
-For a node x with key k, define lower and upper bounds inherited from ancestors. A valid BST has every descendant key within those bounds. Search compares the target with the current key and descends left or right. Insert follows the same path to an allowed empty child. Inorder traversal yields keys in sorted order; prove this by induction on subtree structure.
+<MathStatement
+  id="rotation-invariant"
+  kind="theorem"
+  title="Rotation preserves BST order"
+  proofId="rotation-proof"
+>
+A left or right rotation at any node in a BST changes local parent-child pointers but preserves the inorder sequence of keys. The dictionary abstraction (key $\mapsto$ value) is unchanged by any sequence of rotations.
+</MathStatement>
 
-Delete has three cases. A leaf is removed directly. A node with one child is replaced by that child. A node with two children is replaced by its inorder successor (minimum of the right subtree) or predecessor, then that simpler node is deleted. Copying the successor’s key/value instead of moving the node preserves the ordering invariant, but payload identity and external references must be considered.
+<MathProof id="rotation-proof" for="rotation-invariant" collapsible open>
+Let $y$ be a node with left child $x$. Let $A$ be the left subtree of $x$, $B$ the right subtree of $x$, and $C$ the right subtree of $y$. By the BST invariant, all keys satisfy $A < x < B < y < C$. A right rotation makes $x$ the new local root, $y$ its right child, and $B$ the new left subtree of $y$. The inorder sequence before rotation is $\text{inorder}(A), x, \text{inorder}(B), y, \text{inorder}(C)$. After rotation it is $\text{inorder}(A), x, \text{inorder}(B), y, \text{inorder}(C)$ — identical. Left rotation is symmetric. Thus the set of keys and their relative order are preserved.
+</MathProof>
 
-The height recurrence explains performance. A path-shaped BST has h=n-1, making search and update O(n). If every subtree splits evenly, (h=O(log n)). Balancing algorithms do not require perfect balance; they maintain a local condition strong enough to guarantee a logarithmic global height.
+<PlantUML code={`
+title BST right rotation
+rectangle "A" as A
+rectangle "x" as x
+rectangle "B" as B
+rectangle "y" as y
+rectangle "C" as C
+
+A -down- x
+x -down- B
+x -right- y
+y -down- C
+
+legend right
+Before rotation
+endlegend
+`} />
+
+<PlantUML code={`
+title After right rotation
+rectangle "A" as A
+rectangle "x" as x
+rectangle "B" as B
+rectangle "y" as y
+rectangle "C" as C
+
+A -down- x
+x -right- y
+B -down- y
+y -down- C
+
+legend right
+After rotation: same inorder
+endlegend
+`} />
+
+<StructureDiagram kind="rotation" title="Right rotation preserves inorder order" caption="A local pointer change while preserving the sequence A, x, B, y, C." />
+
+<TreeRotationPlayground client:load />
+
+<Quiz client:load
+  question="What property is preserved by every tree rotation?"
+  options={["BST inorder order", "Every pointer address", "The old root identity", "The insertion timestamp"]}
+  correctIndex={0}
+  explanation="A rotation changes local links but preserves the ordered set of keys. The inorder traversal produces the same sequence before and after."
+/>
+
+## BST invariant and height bound
+
+For a node $x$ with key $k$, define lower and upper bounds inherited from ancestors. A valid BST has every descendant key within those bounds. Search compares the target with the current key and descends left or right. Insert follows the same path to an allowed empty child. Inorder traversal yields keys in sorted order — provable by induction on subtree structure.
+
+| Balance family | Invariant | Height bound | Rotation cost |
+| --- | --- | --- | --- |
+| AVL | $|bf(x)| \le 1$ for all $x$ | $\le 1.44 \log_2 n$ | Up to $O(\log n)$ rotations on delete |
+| Red-black | Black-height equal; no red-red parent-child | $\le 2 \log_2 (n+1)$ | $O(1)$ amortized on insert |
+| Treap | Heap priority + BST order | $O(\log n)$ expected | Randomized shape, no deterministic cases |
+| Weight-balanced (BB[$\alpha$]) | Subtree weight ratio $\le \alpha$ | $O(\log n)$ | Different rotation policy, intricate analysis |
+
+<MathStatement
+  id="avl-height-bound"
+  kind="theorem"
+  title="AVL height is logarithmic"
+  proofId="avl-height-proof"
+  dependsOn={[{ id: "rotation-invariant", label: "rotation invariant" }]}
+>
+An AVL tree of $n$ nodes has height $h \le \log_\phi (\sqrt{5}(n+1)) - 2 \approx 1.44 \log_2 n$, where $\phi = (1 + \sqrt{5})/2$ is the golden ratio.
+</MathStatement>
+
+<MathProof id="avl-height-proof" for="avl-height-bound">
+Let $N(h)$ be the minimum number of nodes in an AVL tree of height $h$. The root's two subtrees must have heights differing by at most one, so at least one subtree has height $h-1$ and the other at least $h-2$. Thus $N(h) \ge 1 + N(h-1) + N(h-2)$, with $N(0) = 0$, $N(1) = 1$. This recurrence dominates the Fibonacci sequence: $N(h) \ge F_{h+2} - 1$. Since $F_k \ge (\phi^{k-2})$ for $k \ge 2$, we have $n \ge \phi^{h} / \sqrt{5} - 1$. Solving for $h$ gives $h \le \log_\phi (\sqrt{5}(n+1))$, and $\log_\phi 2 \approx 1.44$. The same recurrence shows the bound is tight: there exist AVL trees of height $h$ with $F_{h+2} - 1$ nodes.
+</MathProof>
+
+<Quiz client:load
+  question="What recurrence describes the minimum node count in an AVL tree of height $h$?"
+  options={["$N(h) \\ge 1 + N(h-1) + N(h-2)$", "$N(h) \\ge 2N(h-1)$", "$N(h) = n^h$", "$N(h) \\le N(h-1) + 1$"]}
+  correctIndex={0}
+  explanation="The root's two subtrees must have heights at least $h-1$ and $h-2$ because their balance factors differ by at most one. This yields the Fibonacci-like recurrence."
+/>
 
 ## Rotations
 
-A rotation changes local pointers while preserving inorder sequence. A right rotation around y with left child x makes x the new root of the local subtree, y its right child, and x’s former right subtree y’s left subtree. The keys remain in sorted inorder because the middle subtree lies between x and y. A left rotation is symmetric.
+A rotation changes local pointers while preserving inorder sequence. A right rotation around $y$ with left child $x$ makes $x$ the new root of the local subtree, $y$ its right child, and $x$'s former right subtree $y$'s left subtree. The keys remain in sorted inorder because the middle subtree $B$ lies between $x$ and $y$. A left rotation is symmetric.
 
-**Worked rotation.** Suppose y has key 30, left child x=20, x’s right subtree contains keys 25, and y’s right subtree contains 40. A right rotation yields 20 as local root, 30 as its right child, 25 as 30’s left child, and 40 remains to the right. Inorder is 20,25,30,40 before and after. A rotation changes height and parent links but not dictionary order.
+<PlantUML code={`
+title AVL insertion case structure
+state "Insert into AVL tree" as insert
+state "Balance factor violated?" as check
+state "LL case" as ll
+state "RR case" as rr
+state "LR case" as lr
+state "RL case" as rl
+state "Right rotate" as rr_op
+state "Left rotate" as lr_op
+state "Left then right" as lr_seq
+state "Right then left" as rl_seq
+[*] --> insert
+insert --> check : update heights up\nfrom inserted leaf
+check --> [*] : no violation
+check --> ll : bf = +2, left-left
+check --> rr : bf = -2, right-right
+check --> lr : bf = +2, left-right
+check --> rl : bf = -2, right-left
+ll --> rr_op
+rr --> lr_op
+lr --> lr_seq
+rl --> rl_seq
+rr_op --> [*]
+lr_op --> [*]
+lr_seq --> [*]
+rl_seq --> [*]
+`} />
 
-Parent pointers simplify upward rebalancing but add an RI: child.parent must equal the containing node, and the root.parent must be null or a sentinel. Without parent pointers, recursive return values must provide the new subtree root. Mixing conventions leads to lost subtrees or cycles.
+**Worked rotation.** Suppose $y$ has key 30, left child $x = 20$, $x$'s right subtree contains key 25, and $y$'s right subtree contains 40. A right rotation yields 20 as local root, 30 as its right child, 25 as 30's left child, and 40 remains to the right. Inorder is 20, 25, 30, 40 before and after. A rotation changes height and parent links but not dictionary order.
+
+Parent pointers simplify upward rebalancing but add an RI: child.parent must equal the containing node, and root.parent must be null or a sentinel. Without parent pointers, recursive return values must provide the new subtree root. Mixing conventions leads to lost subtrees or cycles.
+
+<CodeExercise client:load
+  title="Complete the rotation"
+  code={`def right_rotate(y):
+    x = y.left
+    B = x.right
+    x.right = [!blank!]
+    y.left = [!blank!]
+    return x`}
+  answers={["y", "B"]}
+  explanation="x.right becomes y (y becomes right child of x); y.left becomes B (the former right subtree of x becomes left child of y)."
+/>
 
 ## AVL trees
 
-An AVL tree maintains balance factor (bf(x)=height(left(x))-height(right(x))) in ()-1,0,1() for every node. Store height or derive it recursively; deriving repeatedly can turn an update into O(n), so cached height is part of the representation. After insertion, walk from the changed leaf toward the root, update heights, and rotate the first violated node using one of four cases: left-left, right-right, left-right, right-left.
+An AVL tree maintains balance factor $bf(x) = \text{height}(\text{left}(x)) - \text{height}(\text{right}(x))$ in $\{-1, 0, 1\}$ for every node. Store height at each node; deriving it recursively turns an update into $O(n)$, so cached height is part of the representation. After insertion, walk from the changed leaf toward the root, update heights, and rotate the first violated node using one of four cases: left-left, right-right, left-right, right-left.
 
-The minimum number (N(h)) of nodes in an AVL tree of height h satisfies (N(h)ge1+N(h-1)+N(h-2)), with base cases. This Fibonacci-like recurrence implies (N(h)) grows exponentially in h, so h=O(log n). The proof is a global consequence of the local balance invariant. Deletion may cause multiple ancestors to require rebalancing, but still performs O(log n) rotations and updates.
+The minimum node count $N(h)$ in an AVL tree of height $h$ satisfies $N(h) \ge 1 + N(h-1) + N(h-2)$. This Fibonacci-like recurrence grows exponentially, so $h = O(\log n)$. Deletion may require rebalancing at multiple ancestors but still performs $O(\log n)$ rotations.
 
-## Red-black balance
+**Worked AVL insertion trace on [10, 20, 30, 40, 50, 25].** Each node stores height $h$ and balance factor $bf = h(\text{left}) - h(\text{right})$.
 
-A red-black tree colors nodes red or black and maintains conditions such as: the root is black; red nodes have black children; every path from a node to a descendant null leaf has the same black height. These rules permit a little more imbalance than AVL but ensure logarithmic height. A standard proof shows the shortest root-to-leaf path has at least half the black nodes of the longest, and no root-to-leaf path contains more red nodes than black nodes; therefore (hle2log_2(n+1)) up to convention.
+Insert 10: node (10, $h=1$, $bf=0$).
 
-Insertion and deletion use recoloring and rotations to restore invariants. The exact cases are easier to verify with a state diagram, but the proof obligations remain local: preserve BST order, restore color conditions, and preserve black height. Red-black trees often offer fewer rotations under updates, while AVL trees can offer tighter search height. Both provide worst-case O(log n) dictionary operations.
+Insert 20: attach as right child of 10. Node 10: $h=2$, $bf=-1$. Node 20: $h=1$, $bf=0$. Invariant holds.
+
+Insert 30: attach as right child of 20. Node 30: leaf. Node 20: $h=2$, $bf=-1$. Node 10: $h=3$, $bf=-2$ — violated at 10. Right-right case: left-rotate at 10. After rotation, 20 is local root, left child 10 ($h=1$, $bf=0$), right child 30 ($h=1$, $bf=0$). Height: $h(20)=2$, $bf=0$. Invariant restored.
+
+Insert 40: attach as right child of 30. Updates: 30 $h=2$, $bf=-1$; 20 $h=3$, $bf=-1$; 10 and 20 unaffected below. Node 20: $bf=-1$, okay.
+
+Insert 50: attach as right child of 40. Updates propagate: 40 $h=2$, $bf=-1$; 30 $h=3$, $bf=-2$ — violated at 30. Right-right case: left-rotate at 30. After rotation, 40 is right child of 20, 30 is left child of 40. Heights: 30 $h=1$, 40 $h=2$, 20 $h=3$, $bf(20)=-1$. Invariant holds.
+
+Insert 25: attach as left child of 40. Updates: 25 $h=1$; 40 $h=2$, $bf=0$; 30 $h=2$, $bf=1$; 20 $h=4$, $bf=-2$ — violated at 20. Violation path is 20 $\to$ 30 $\to$ 25: a left-right case. Right-rotate at 30: 25 becomes right child of 20, 30 becomes right child of 25. Left-rotate at 20: 25 becomes new root, left child 20, right child 30. Heights: 20 $h=2$, 30 $h=2$, 25 $h=3$, $bf(25)=0$. Final tree is balanced.
+
+| Step | Tree shape (level-order) | Heights | Violation | Rotation |
+|------|--------------------------|---------|-----------|----------|
+| After 10 | 10 | $h=1$ | none | — |
+| After 20 | 10, 20 | $h=2, 1$ | none | — |
+| After 30 | 20, 10, 30 | $h=2, 1, 1$ | $bf(10)=-2$ | left at 10 |
+| After 40 | 20, 10, 30, -, -, -, 40 | $h=2, 1, 2, 1$ | none | — |
+| After 50 | 20, 10, 40, 30, 50 | $h=2, 1, 2, 1, 1$ | $bf(30)=-2$ | left at 30 |
+| After 25 | 25, 20, 40, 10, 30, -, 50 | $h=2, 1, 2, 1, 1, 1$ | $bf(20)=-2$ | right at 30, left at 20 |
+
+This trace shows that AVL rebalancing after insertion examines only the ancestor path and applies at most one double rotation. Each rotation preserves BST order while restoring the $\{-1, 0, 1\}$ balance factor invariant.
+
+<CodeRunner client:load
+  title="AVL tree validator"
+  language="python"
+  code={`
+class AVLNode:
+    def __init__(self, key):
+        self.key = key
+        self.left = None
+        self.right = None
+        self.height = 1
+
+def height(node):
+    return node.height if node else 0
+
+def balance_factor(node):
+    return height(node.left) - height(node.right) if node else 0
+
+def is_avl(node):
+    if not node:
+        return True
+    bf = balance_factor(node)
+    if abs(bf) > 1:
+        return False
+    return is_avl(node.left) and is_avl(node.right)
+
+def insert(root, key):
+    if not root:
+        return AVLNode(key)
+    if key < root.key:
+        root.left = insert(root.left, key)
+    else:
+        root.right = insert(root.right, key)
+    root.height = 1 + max(height(root.left), height(root.right))
+    return root
+
+# Build and validate
+root = None
+for k in [10, 20, 30, 40, 50, 25]:
+    root = insert(root, k)
+print("Height:", root.height if root else 0)
+print("AVL valid after all inserts:", is_avl(root))
+  `}
+  output={`
+Height: 3
+AVL valid after all inserts: True
+  `}
+/>
+
+## Red-black tree insertion: worked example
+
+Insert [10, 20, 30, 15] into an initially empty red-black tree. Standard convention: new nodes are red.
+
+Insert 10: becomes root, color it black. No violation.
+
+Insert 20: red node attached as right child of 10. Parent (10) is black: no red-red violation. Black-height: both paths have one black node.
+
+Insert 30: red node attached as right child of 20. Parent (20) is red: violation. Uncle (left of 10) is null (black). Insertion is on the **outside** (right-right) relative to grandparent (10). Solution: left-rotate at grandparent (10), then recolor. After rotation: 20 is root (black), 10 is left child (red), 30 is right child (red). Black-height: root-to-leaf paths each have one black node.
+
+Insert 15: red node attached as left child of 30. Parent (30) is red: violation. Uncle (10) is red. Solution: recolor parent, uncle, and grandparent — parent (30) becomes black, uncle (10) becomes black, grandparent (20) becomes red. Grandparent is root, recolor it black. Final tree: 20 (black), 10 (black), 30 (black), 15 (red) as left child of 30. Black-height: 2 black nodes on every root-to-leaf path.
+
+The red-black cases require a state diagram covering three subcases (uncle red, uncle black with outside insertion, uncle black with inside insertion). Each case preserves black-height and resolves the red-red violation locally, potentially propagating the redness upward.
+
+<CaseStudy client:load
+  title="Choosing a balanced tree"
+  scenario="A workload alternates between bursts of 10,000 insertions and 100,000 searches. The keys are sequential integers."
+  question="Which tradeoff is most relevant for this workload?"
+  options={[
+    "Red-black update behavior versus AVL search height",
+    "Hash load factor only",
+    "Heap completeness",
+    "Trie alphabet size"
+  ]}
+  correctIndex={0}
+  explanation="The sequential keys guarantee worst-case behavior for an unbalanced BST. AVL gives tighter search height ($1.44\\log n$ vs $2\\log n$) at the cost of more rotations during insert bursts. Red-black reduces update cost with slightly taller searches. The choice depends on whether the 10,000:100,000 ratio makes the height difference matter."
+/>
 
 ## Ordered operations
 
-Balanced BSTs support more than exact lookup. Minimum and maximum follow extreme paths; predecessor and successor use child subtrees or ancestor relationships; range reporting finds a split point and traverses only relevant subtrees plus a logarithmic search overhead. Augment a node with subtree size to support order statistics: select the kth smallest by comparing k with the left subtree size, and rank a key by accumulating sizes while descending.
+Balanced BSTs support more than exact lookup. Minimum and maximum follow extreme paths. Predecessor and successor use child subtrees or ancestor relationships. Range reporting finds a split point and traverses only relevant subtrees plus logarithmic search overhead.
 
-Augmentation requires an invariant for the extra field and update rules under rotations. For subtree size, (size(x)=1+size(left)+size(right)). A rotation changes only a constant number of nodes, so recompute those sizes bottom-up. An augmented field that is not updated during every mutation can silently return plausible but incorrect answers.
+Augment a node with subtree size to support order statistics: select the $k$th smallest by comparing $k$ with the left subtree size, and rank a key by accumulating sizes while descending.
+
+<MathStatement
+  id="augmentation-invariant"
+  kind="definition"
+  title="Subtree-size augmentation"
+>
+For a node $x$, define $\text{size}(x) = 1 + \text{size}(\text{left}(x)) + \text{size}(\text{right}(x))$. This field supports $\text{select}(k)$ and $\text{rank}(k)$ in $O(\log n)$ time on a balanced tree. After any rotation, $\text{size}$ must be recomputed bottom-up for the two affected nodes.
+</MathStatement>
+
+An augmented field that is not updated during every mutation can silently return plausible but incorrect answers. After a right rotation, recompute the old root ($y$) first from its new children, then the new root ($x$) from its children.
 
 ## Deletion and rebalancing discipline
 
-Deletion is where a proof must account for more than insertion intuition. In an AVL tree, replacing a two-child node by its successor preserves the BST order, but the physical deletion occurs in the successor’s subtree and can reduce its height. Walk upward recomputing height and rebalance every affected ancestor. Stopping after the first rotation is not generally justified for deletion because a height reduction can propagate to the root.
+Deletion is where intuitive reasoning about insertion fails. In an AVL tree, replacing a two-child node by its successor preserves BST order, but the physical deletion occurs in the successor's subtree and can reduce its height. Walking upward to recompute height and rebalance every affected ancestor is necessary — stopping after the first rotation is a documented source of implementation bugs because a height reduction can propagate to the root.
 
-In a red-black tree, deletion can remove a black node and create a black-height deficit. The repair cases move, recolor, or eliminate the deficit while preserving the inorder sequence. A sentinel null leaf simplifies the case analysis, but it is a real participant in the color and black-height invariant. Implementations that treat null as “not a node” in one case and as a black leaf in another often produce subtle violations.
+In a red-black tree, deletion can remove a black node and create a **black-height deficit**. The repair cases move, recolor, or eliminate the deficit while preserving the inorder sequence. A sentinel null leaf simplifies the case analysis, but it is a real participant in the color and black-height invariant. Implementations that treat null as "not a node" in one case and as a black leaf in another produce subtle violations that tests often miss.
 
-For any balanced tree implementation, use a validation routine that checks ordering bounds, parent links, cached heights or colors, subtree sizes, and root conditions. Run it after every mutation in tests. Validation is not the proof, but it localizes which operation first violated the invariant and makes rotation debugging tractable.
+For any balanced tree implementation, use a validation routine that checks ordering bounds, parent links, cached heights or colors, subtree sizes, and root conditions. Run it after every mutation in tests. Validation is not a proof, but it localizes which operation first violated the invariant.
+
+<CodeRunner client:load
+  title="Validation catches stale metadata"
+  language="python"
+  code={`
+class BadNode:
+    def __init__(self, key):
+        self.key = key
+        self.left = None
+        self.right = None
+        self.size = 1
+
+def right_rotate_bad(y):
+    x = y.left
+    # Forgot to recompute sizes!
+    y.left = x.right
+    x.right = y
+    return x
+
+# Build small tree: y=20, x=10
+y = BadNode(20)
+x = BadNode(10)
+x.right = BadNode(15)
+y.left = x
+y.right = BadNode(25)
+
+# After rotation without size update
+new_root = right_rotate_bad(y)
+print("old root size:", y.size)  # stale!
+print("new root size:", new_root.size)  # also stale!
+print("Correct size of new root should be:", 4)
+  `}
+  output={`
+old root size: 1
+new root size: 1
+Correct size of new root should be: 4
+  `}
+/>
+
+## Failure modes
+
+**Stale metadata after rotation.** Forgetting to recompute height or size after a rotation invalidates all subsequent operations. A rank query returns a plausible-looking integer that is wrong. Repair: always recompute bottom-up metadata for the two nodes directly affected by any rotation.
+
+**Parent pointer corruption.** A rotation changes which node is the child of the parent pointer. If the rotation function updates the child-parent links but forgets to update the parent of the rotated subtree, subsequent upward traversals follow a dangling link. The tree appears correct under inorder traversal but fails during rebalancing walks.
+
+**Inconsistent sentinel treatment.** In red-black deletion, treating null as "no node" in one branch and "black leaf" in another produces missing rotation or double-black elimination. The sentinel must be a uniform black leaf with no parent or key — never a conditional absence.
+
+**Key mutation after insertion.** If a key field changes while the node is in the tree, all ancestor bounds are violated. Search fails to find it at its stored position. Either make keys immutable while stored, or remove and reinsert. In languages without immutable references, enforce this by interface design, not convention.
+
+<CaseStudy client:load
+  title="Stale size corruption"
+  scenario="An AVL tree implementation performs rank queries correctly for 10,000 operations, then suddenly returns a rank of 5 for a key that is the 3,000th smallest. The tree passes all inorder validations."
+  question="What is the most likely cause?"
+  options={[
+    "A rotation handler omitted the size recomputation step",
+    "The hash function saturated",
+    "The tree was built from a sorted array",
+    "Comparison is done on memory address"
+  ]}
+  correctIndex={0}
+  explanation="Inorder tests pass because size is not part of the ordering invariant. Only a check that compares size = 1 + left.size + right.size across the whole tree would catch the stale metadata. The bug appears only on rank/select queries that depend on subtree sizes."
+/>
 
 ## Choice among ordered structures
 
-AVL trees keep tighter height and can favor read-heavy workloads. Red-black trees tolerate more structural slack and often bound update rotations well. Treaps assign random priorities and maintain heap order by rotations, giving expected logarithmic height without deterministic balance cases. B-trees widen nodes and reduce height and I/O operations, making them appropriate for external memory. The abstract ordered-map operations are similar, but memory hierarchy and failure model determine the right representation.
+AVL trees keep tighter height and favor read-heavy workloads. Red-black trees tolerate more structural slack and bound update rotations well. Treaps assign random priorities and maintain heap order by rotations, giving expected logarithmic height without deterministic balance cases. B-trees widen nodes to reduce height and I/O operations, appropriate for external memory.
 
-When comparing structures, state whether the bound is worst-case or expected, whether keys are adversarial, and whether the cost of comparison itself is constant. If keys are strings of length (ell), a comparison can cost O((ell)), so a tree’s O(log n) comparisons do not imply O(log n) character work. This distinction is important in real dictionaries and indexing systems.
+Always state whether the bound is worst-case or expected, whether keys are adversarial, and whether comparison itself is constant. If keys are strings of length $\ell$, a comparison costs $O(\ell)$, so $O(\log n)$ comparisons do not imply $O(\log n)$ character work. This distinction is critical in real dictionaries and indexing systems.
 
-Always state the input model explicitly in the specification.
+<Quiz client:load
+  question="A balanced BST stores 1,000,000 string keys of average length 100 characters. What does the $O(\\log n)$ operation bound actually mean?"
+  options={[
+    "$O(\\log n)$ comparisons, each costing $O(\\ell)$ character work",
+    "$O(\\log n)$ character comparisons total",
+    "Constant time regardless of string length",
+    "$O(\\log n)$ time for the entire operation"
+  ]}
+  correctIndex={0}
+  explanation="The tree guarantees $O(\\log n)$ key comparisons, but each comparison of two length-$\\ell$ strings may scan $O(\\ell)$ characters. The total operation cost is $O(\\ell \\log n)$. Ignoring the comparison cost is a common oversight in performance analysis of ordered dictionaries."
+/>
 
 ## Exercises
 
+<StructureDiagram kind="tree" title="Degenerate search-tree shape" caption="Sorted insertion creates a chain where height equals operation cost." variant="degenerate" />
+
+<StructureExercise client:load title="Rotate to restore balance" prompt="Which local repair preserves inorder order after a left-heavy insertion?" options={["Rotate toward the heavy side", "Reverse all keys", "Delete the root", "Rebuild an unrelated subtree"]} answer={0} explanation="A rotation changes local pointers while leaving the inorder sequence unchanged." kind="tree" />
+
 1. Prove inorder traversal of a valid BST yields sorted keys.
-2. Show a sorted insertion sequence produces a height-n BST.
+
+   <ExerciseSolution hint="Use induction on tree structure: left subtree keys are less than the root, right subtree keys are greater.">
+
+   By induction, inorder(left) is sorted and less than the root key, inorder(right) is sorted and greater, so concatenating left, root, right is sorted. The empty tree is the base case.
+   </ExerciseSolution>
+
+2. Show a sorted insertion sequence produces a height-$n$ BST.
+
+   <ExerciseSolution hint="Trace what happens when keys arrive in increasing order into an empty BST.">
+
+   Each new key exceeds all existing keys and descends right until a null child. The result is one node per level, height $n-1$, so search and updates are linear.
+   </ExerciseSolution>
+
 3. Perform a right rotation and prove inorder preservation.
-4. List AVL rotation cases for an insertion and explain balance restoration.
-5. Prove an AVL height is O(log n) from its minimum-node recurrence.
+
+   <ExerciseSolution>
+   Let $A$ be $x$'s left subtree, $B$ $x$'s right subtree, and $C$ $y$'s right subtree with keys $A < x < B < y < C$. Inorder before is $A, x, B, y, C$; after rotation it remains $A, x, B, y, C$. Only local pointers change; parent/root links must be repaired.
+   </ExerciseSolution>
+
+4. List the four AVL rotation cases and explain balance restoration.
+
+   <ExerciseSolution>
+   LL uses one right rotation, RR one left rotation, LR does left rotation at child then right at grandparent, and RL is the mirror. Heights are recomputed after rotations; the resulting subtree has balance factors within $\{-1,0,1\}$.
+   </ExerciseSolution>
+
+5. Prove an AVL tree height is $O(\log n)$ from its minimum-node recurrence.
+
+   <ExerciseSolution>
+   Let $N(h)$ be minimum nodes in an AVL tree of height $h$. $N(h) \ge 1 + N(h-1) + N(h-2)$, so $N$ grows at least as fast as Fibonacci, exponentially in $h$. Thus $n \ge c\phi^h$ for constants $c, \phi > 1$, giving $h = O(\log n)$.
+   </ExerciseSolution>
+
 6. Explain the red-black black-height argument for logarithmic height.
+
+   <ExerciseSolution>
+   If black height is $b$, the shortest root-to-leaf path has $b$ black nodes. The red-child rule means the longest path has at most $2b$ nodes. A tree of black height $b$ contains at least $2^b - 1$ internal nodes, so $b = O(\log n)$, and $h \le 2b$.
+   </ExerciseSolution>
+
 7. Design subtree-size augmentation and update it through a rotation.
 
-### Diagnostic solutions
+   <ExerciseSolution>
+   Store $\text{size}(x) = 1 + \text{size}(\text{left}) + \text{size}(\text{right})$. After a right rotation, recompute the old root first from its new children, then the new root from its children. The formula is preserved; rank/select follow by subtree-size comparisons.
+   </ExerciseSolution>
 
+### Transfer exercises
 
-1. By induction, inorder(left) is sorted and less than the root key, inorder(right) is sorted and greater, so concatenating left, root, right is sorted. The empty tree is the base case.
+8. **New balance invariant.** Suppose you define an "AVL-2" tree where the allowed balance factor range is $\{-2, -1, 0, 1, 2\}$. Derive the recurrence for the minimum node count $N_2(h)$. What is the asymptotic height bound? Under what workload might the larger tolerance reduce total rotation cost?
 
-2. Each new key is larger than all existing keys and descends right until a null child. The result is one node per level, height n-1, so search and updates can be linear.
+   <ExerciseSolution>
+   With tolerance $\pm 2$, at least one subtree has height $h-1$ and the other at least $h-3$ (since the difference can be 2). So $N_2(h) \ge 1 + N_2(h-1) + N_2(h-3)$. This grows more slowly than the AVL recurrence, giving a larger constant in the height bound. The tradeoff: fewer rotations during insertion (because more imbalance is tolerated) but taller trees make searches more expensive. An update-heavy workload with expensive rotations (e.g., disk-backed storage) might benefit.
+   </ExerciseSolution>
 
-3. Let A be x’s left subtree, B x’s right subtree, and C y’s right subtree with keys A less than x less than B less than y less than C. Before inorder is A,x,B,y,C; after rotation it remains A,x,B,y,C. Only local pointers change, and parent/root links must be repaired.
+9. **Red-black deletion case design.** Given a red-black tree where a black node has been removed from the left subtree of its parent, the left subtree now has a black-height deficit of 1. The sibling is black and has two black children. Diagram the repair. Then consider: the sibling is red. How does the repair change?
 
-4. LL uses one right rotation, RR one left rotation, LR left rotation at child then right at grandparent, and RL the mirror. Recompute child heights after rotations; the resulting local subtree has balance factors within the invariant.
+   <ExerciseSolution>
+   When the sibling is black with two black children: recolor the sibling red and propagate the deficit upward to the parent. If the parent was red, it becomes black and the deficit is resolved; if black, the deficit moves up.
+   When the sibling is red: rotate at the parent to bring the red sibling up, recolor the sibling black and the parent red, then re-enter the case analysis with the new sibling (which will be black). This is a transformation, not a resolution — it converts the red-sibling case into one of the black-sibling subcases.
+   </ExerciseSolution>
 
-5. Let N(h) be minimum nodes. (N(h)ge1+N(h-1)+N(h-2)), so N grows at least as fast as Fibonacci numbers, exponentially in h. Thus nu2265cu03c6^h for constants c,u03c6 greater than 1, giving h=O(log n).
+10. **Implementation audit.** A code review of a balanced BST implementation reveals that the height field is updated only inside the insert function, not in the delete function. The developer argues that "deletion just removes a node, it doesn't change heights." Identify precisely which operations will produce incorrect results and why.
 
-6. If black height is b, a shortest path has b black nodes. The red-child rule means a longest path has at most 2b nodes. Since a tree of black height b contains at least (2^b-1) internal nodes under standard conventions, b=O(log n), and hu22642b.
-7. Store size(x)=1+size(left)+size(right). After a right rotation, recompute the old root first from its new children, then the new root from its children. The formula is preserved and rank/select follows by subtree sizes.
+   <ExerciseSolution>
+   After deletion, the height of every ancestor of the removed node may have decreased. If heights are not updated, subsequent balance-factor checks at those ancestors use stale values. A node that now satisfies the balance invariant may appear violated (or vice versa), triggering unnecessary rotations or missing required ones. Any rotation that fires based on a stale height will produce a tree whose metadata does not reflect actual structure. The rank operation will be unaffected if it uses size (also stale), but search time and balance validation will be incorrect. The first symptom is likely an unexpected rotation — or a missing one that causes a cascade of violations.
+   </ExerciseSolution>
 
+{/* DELIBERATELY OMITTED
 
+**Weight-balanced trees (BB[$\alpha$] trees).** An alternative balance condition based on subtree weight ratios. Useful when both insertion and deletion must follow the same rotation policy, but the amortized analysis is more intricate than AVL or red-black. The optimal $\alpha$ depends on the workload and the cost model for rotations versus comparisons.
 
-## Synthesis checkpoint
+**Treap random-priority analysis.** Expected-height proof via random priorities. Treaps combine BST order with heap-order on random priorities; the proof that expected height is $O(\log n)$ relies on a permutation model that is instructive but duplicates analysis better covered in a probability review. The randomized nature means worst-case height is $O(n)$ with negligible probability, which matters in adversarial settings.
 
-An implementation review should separate the representation invariant from the rebalancing case analysis. After every rotation, verify ordering, parent links, subtree metadata, and the height or color condition before discussing asymptotic cost. A proof that only names the rotation is incomplete because stale metadata can silently invalidate later queries.
+**Optimal static BST (Knuth's DP) and dynamic optimality conjecture.** Constructing a BST with minimum expected search cost for a known key-access distribution, and the splay-tree conjecture that it is dynamically optimal. These are advanced data-structure theory topics that require amortized analysis and competitive analysis frameworks beyond the sequential invariant approach of this lesson.
+
+**Concurrent balanced trees.** Lock-free or transactional BSTs that support concurrent readers and writers. These require memory-ordering and synchronization reasoning that assumes a different correctness model (linearizability, serializability) and is covered in concurrent-data-structures material.
+
+**B-tree variant details.** The exact split-merge invariants of B-trees, the choice of minimum degree $t$, and the I/O complexity analysis belong to the B-tree lesson, which builds on the rotation and node-splitting concepts introduced here.
+
+*/}
 
 ## References & Further Reading
 
-* [Open Data Structures: binary search trees and balanced trees](https://opendatastructures.org/)
-* [Cornell CS 2110 binary-search-tree lecture](https://www.cs.cornell.edu/courses/cs2110/2026sp/lectures/lec17/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+1. Adelson-Velsky, G. M., & Landis, E. M. (1962). "An algorithm for the organization of information." _Doklady Akademii Nauk SSSR_, 146(2), 263–266. — The original AVL tree paper. Proves the height bound via the Fibonacci-like recurrence and presents the four rotation cases.
+
+2. Bayer, R. (1972). "Symmetric binary B-trees: Data structure and maintenance algorithms." _Acta Informatica_, 1(4), 290–306. — Introduces the red-black coloring scheme as a binary representation of B-trees.
+
+3. Guibas, L. J., & Sedgewick, R. (1978). "A dichromatic framework for balanced trees." _19th Annual Symposium on Foundations of Computer Science (FOCS)_, 8–21. — Refines Bayer's symmetric B-trees into the modern red-black formulation with the four-color and later two-color model.
+
+4. Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. (2022). _Introduction to Algorithms_ (4th ed.). MIT Press. Ch. 12 (BSTs), Ch. 13 (Red-black trees), Ch. 14 (Augmenting data structures), Ch. 15 (AVL trees in the 4th ed. appendix). — Standard reference for proofs, case analysis, and augmentation invariants.
+
+5. Sedgewick, R., & Wayne, K. (2011). _Algorithms_ (4th ed.). Addison-Wesley. Ch. 3.3 (Balanced search trees). — Accessible treatment of red-black BSTs from a left-leaning perspective.
+
+6. [Open Data Structures: Binary Search Trees and Balanced Trees](https://opendatastructures.org/) — Pseudocode implementations and analysis for AVL, red-black, treap, and scapegoat trees.

@@ -3,49 +3,145 @@ title: "Data Structures Capstone: Build an Indexed Event Store"
 course: "data-structures"
 description: "An end-to-end design project integrating ADTs, indexing, persistence, workload analysis, and invariant-driven implementation."
 ---
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Data Structures Capstone: Build an Indexed Event Store
 
-The capstone is to design an event store that accepts immutable event records, retrieves records by ID, enumerates records in timestamp order, answers prefix queries on event names, supports snapshots, and expires old records. The service must process a read-heavy workload, tolerate duplicate IDs according to a stated policy, and provide evidence that its chosen structures meet correctness and performance goals. You may implement a different domain, but preserve the same depth of specification and analysis.
+Every real-world system that processes time-ordered events — a metrics pipeline, a financial ledger, a CI/CD audit log — needs an **event store**: a structure that ingests immutable records and supports ID lookup, timestamp-range queries, type-prefix searches, and consistent snapshots. This capstone asks you to design and build one.
+
+The system must accept immutable event records, retrieve them by ID, enumerate them in timestamp order, answer prefix queries on event names, support snapshots, and expire old records. The service must process a read-heavy workload, tolerate duplicate IDs according to a stated policy, and provide evidence that its chosen structures meet correctness and performance goals.
 
 ## Requirements
 
-An event has a stable ID, timestamp, type string, payload reference, and optional priority. Operations are put(event), get(id), remove(id), range(t0,t1), prefix(typePrefix), snapshot(), and query(snapshot, ...). Define whether put replaces an existing ID, whether timestamps may tie, how records are ordered, what happens to missing IDs, and whether payloads are copied or shared. Expiration removes events before a moving cutoff; explain whether old snapshots retain expired records.
+| Requirement | Candidate structure |
+| --- | --- |
+| ID lookup | hash map |
+| timestamp range | balanced tree or B+ tree |
+| type prefix | trie |
+| snapshots | persistent map/tree |
 
-The workload is 10 million records, 90% ID lookups, 5% timestamp ranges, 4% type-prefix queries, and 1% writes/removals. Keys may be adversarial strings, timestamps arrive slightly out of order, and readers hold snapshots for seconds. Target expected O(1) ID lookup, O(log n+k) timestamp range reporting under a balanced index, prefix query cost proportional to prefix plus output, and bounded write amplification subject to a documented reindex policy. These are targets, not assumptions; justify the structures.
+An event has a stable ID, timestamp, type string, payload reference, and optional priority. Operations are `put(event)`, `get(id)`, `remove(id)`, `range(t0, t1)`, `prefix(typePrefix)`, `snapshot()`, and `query(snapshot, ...)`. Define whether `put` replaces an existing ID, whether timestamps may tie, how records are ordered, what happens to missing IDs, and whether payloads are copied or shared. Expiration removes events before a moving cutoff; explain whether old snapshots retain expired records.
 
-## Architecture choices
+The workload is 10 million records, 90% ID lookups, 5% timestamp ranges, 4% type-prefix queries, and 1% writes/removals. Keys may be adversarial strings, timestamps arrive slightly out of order, and readers hold snapshots for seconds. Target expected $O(1)$ ID lookup, $O(\log n + k)$ timestamp range reporting under a balanced index, prefix query cost proportional to prefix plus output, and bounded write amplification subject to a documented reindex policy.
 
-Use a hash map from stable ID to record handle for expected constant-time exact lookup, an ordered tree or B-tree keyed by (timestamp,ID) for range queries, and a trie or radix tree for type prefixes. A record may appear in several indexes, so ownership and removal coordination are central. The payload should be stored once; indexes store handles or immutable references. If records are immutable, snapshots can share index roots; if expiration mutates indexes, use persistent path-copy updates or a versioned root protocol.
-
-Alternative designs are acceptable. A single balanced tree can support ID lookup but loses expected constant-time behavior; a sorted array gives compact range scans but expensive writes; a database-like LSM structure can batch writes but changes read amplification. Compare at least two designs against the workload and state which assumption makes the chosen design win.
+<Quiz client:load question="Why must the capstone specify an operation mix?" options={["It determines which representation costs matter", "It makes invariants unnecessary", "It guarantees one best structure", "It removes all failure cases"]} correctIndex={0} explanation="Structure selection is workload-relative; read ratios, ranges, prefixes, and snapshots impose different costs. An LSM-tree wins a write-heavy mix but adds read amplification, so the same choice would be wrong for a 90%-read workload." />
 
 ## Representation invariants
 
-The primary store owns each live record exactly once. The ID map contains exactly one handle for each live ID and every handle points to a record whose ID matches the key. The timestamp index contains one entry per live record keyed by (timestamp,ID), with a deterministic tie order. The type trie contains one terminal record or handle for each type string according to duplicate policy and its subtree counts equal live descendants. A published snapshot root points to a self-consistent set of immutable index versions.
+<MathStatement id="invariant-primary" kind="definition" title="Primary store ownership">
+The primary store owns each live record exactly once. The ID map contains exactly one handle for each live ID, and every handle points to a record whose ID matches the key. The timestamp index contains one entry per live record keyed by (timestamp, ID), with a deterministic tie order. The type trie contains one terminal marker per type string and its subtree counts equal live descendants. A published snapshot root points to a self-consistent set of immutable index versions.
+</MathStatement>
 
-Expiration must update all indexes or mark records logically dead with a defined filtering rule. Lazy deletion can make writes cheap but requires queries to skip dead handles and a compaction bound. A record removed from the primary store must not remain returned by a range or prefix query. The invariant should distinguish physical presence from logical liveness if tombstones are used.
+<MathStatement id="invariant-liveness" kind="definition" title="Logical liveness under expiration">
+Expiration must update all indexes or mark records logically dead with a defined filtering rule. Lazy deletion can make writes cheap but requires queries to skip dead handles and a compaction bound. A record removed from the primary store must not remain returned by a range or prefix query. The invariant distinguishes physical presence from logical liveness if tombstones are used.
+</MathStatement>
+
+## Worked design decision: B-tree vs LSM
+
+Consider an event store with 10 million events, 90% ID lookups, 5% timestamp range queries (covering up to 1000 events), 4% prefix queries, and 1% writes. Average event size 256 bytes. The store runs on a server with 64 GB RAM and NVMe SSD.
+
+**Design A — B+ tree for timestamp index, hash map for ID, trie for prefix.** The ID index uses a separate hash map (expected $O(1)$ lookups). The timestamp index uses a B+ tree with 4 KB pages (fanout ~200). For 10 million records, B+ tree height $\approx \log_{200} 10^7 \approx 3$ levels. Range query cost: 3 random reads + $\lceil 1000/200 \rceil = 5$ sequential leaf reads = 8 I/Os. Write cost: 1 log write + 1 B+ tree leaf write (cached) + 1 hash map update + 1 trie update = ~4 I/Os amortized.
+
+**Design B — LSM-tree for timestamp index, hash map for ID, trie for prefix.** Timestamp index: LSM with 64 MB SSTables, level compaction with size ratio 4, bloom filters (1% false-positive rate). Memtable: 64 MB (flushes every ~250,000 inserts under 256-byte events). Range query cost: check memtable + L0 (4 SSTables) + L1 (bloom) + L2 (bloom) ≈ 2.1 random I/Os (with bloom filter false positives) + sequential leaf scan. Write cost: writes are batched into sequential SSTable flushes, so effective write I/O is nearly sequential (~1/10 the random I/O cost of B+ tree).
+
+<StructureDiagram kind="btree" title="B+ tree index structure" caption="Internal nodes direct search; linked leaves support sequential range scans." />
+
+| Metric | Design A (B+ tree) | Design B (LSM) |
+|--------|-------------------|----------------|
+| Point lookup I/O | 1 (hash) + 0 (B+ tree cached) | 1 (hash) + ~0.1 (bloom-filtered) |
+| Range query I/O | 8 (3 random + 5 seq) | 2.1 random + SSTable scan |
+| Write I/O | ~4 random (log + tree leaf + hash) | ~0.4 sequential-equivalent (batched flush) |
+| Space amplification | Low (no duplicates) | Moderate (compaction temporary + bloom filters) |
+| Write amplification | ~1× | ~4× (compaction) |
+
+**Decision**: For the stated workload (90% reads, 1% writes), the B+ tree design is preferred. The point-lookup throughput is dominated by the hash map in both designs. The range-query cost of 8 I/Os for B+ tree is acceptable for 5% of queries, while the LSM's write amplification adds unnecessary background I/O for a 1%-write workload. If the write ratio were to exceed 10%, the LSM's batched sequential writes would become advantageous.
 
 ## Operation contracts and proof obligations
 
+<MathStatement id="put-correctness" kind="proposition" title="Put atomicity" proofId="put-correctness-proof">
 Put first validates ID, timestamp, type encoding, payload ownership, and resource bounds. If replacing, remove the old index entries atomically with respect to the published version, then insert the new record. If the operation can fail after one index changes, construct new persistent roots before committing or log/rollback changes. The postcondition is that every query reflects one complete old or new state, never a mixture.
+</MathStatement>
 
-Get computes the ID hash and validates the handle. Range uses the ordered index to find the first key at or after (t0,minimumID), then iterates until timestamp exceeds t1, filtering liveness if needed. Prefix follows the trie path and enumerates descendants; it must not scan unrelated types. Snapshot returns a root token that pins or references all index versions needed by queries.
+<MathProof id="put-correctness-proof" for="put-correctness" collapsible>
+To prove put correctness, show the new primary record and all index entries correspond to one abstract event. Construct new persistent roots for the ID map, timestamp tree, and type trie before publishing. An atomic root swap (e.g., release-store on a composite root pointer) ensures readers see either all old or all new index versions. If allocation fails during new root construction, the old root remains published and no partial state is observable.
+</MathProof>
 
-Prove put correctness by showing the new primary record and all index entries correspond to one abstract event. Prove remove by showing no future query can return the record, including old handles and trie descendants under lazy deletion. Prove snapshot isolation by showing an old root never points to mutable nodes changed by a later update. If snapshots are allowed to see expiration only after creation, define that policy and test it.
+<MathStatement id="remove-correctness" kind="proposition" title="Remove finality" proofId="remove-correctness-proof">
+Remove must ensure no future query can return the record, including old handles and trie descendants under lazy deletion.
+</MathStatement>
+
+<MathProof id="remove-correctness-proof" for="remove-correctness" collapsible>
+If using logical deletion, write a tombstone marker in every index. Queries filter tombstones before returning results. A physical compaction pass later reclaims tombstoned entries. The invariant is: for any live root $R$, the set of records reachable from $R$ after filtering tombstones equals the set of non-removed records at version $R$.
+</MathProof>
+
+<MathStatement id="snapshot-isolation" kind="theorem" title="Snapshot isolation" proofId="snapshot-isolation-proof">
+An old snapshot root never points to mutable nodes changed by a later update. If snapshots are allowed to see expiration only after creation, define that policy and test it.
+</MathStatement>
+
+<MathProof id="snapshot-isolation-proof" for="snapshot-isolation" collapsible>
+Immutable path-copying guarantees that nodes reachable from an old root are never mutated. A writer creates new nodes for changed paths and publishes a new composite root. The old root and all nodes it references remain unchanged. Proof sketch: by construction, no write path modifies a node in the reachable set of any published root except the newest. Each new allocation creates a fresh node; old nodes are never written after publication.
+</MathProof>
 
 ## Complexity and memory
 
-Hash lookup is expected O(1) under bounded load and a stated hash model; an adversary can force collisions, so use keyed hashing and limits. Balanced timestamp-tree lookup is O(log n), and range reporting is O(log n+k). Trie traversal is O(|prefix|) plus output traversal, with child-lookup cost exposed. Persistent updates allocate O(log n) nodes per affected tree path, plus trie path and map changes; total write amplification depends on sharing and batching.
+<MathStatement id="complexity" kind="theorem" title="Operation costs">
+Under a balanced tree and bounded hash load, the following bounds hold:
+- Hash lookup: expected $O(1)$
+- Timestamp range: $O(\log n + k)$ where $k$ is output size
+- Trie prefix: $O(|prefix| + \text{descendants})$
+- Persistent update: $O(\log n)$ nodes allocated per affected tree path
+</MathStatement>
 
-Memory analysis counts one payload, primary metadata, handles, index nodes, child maps, tombstones, and snapshot-retained nodes. Long-lived snapshots can keep expired records reachable. Track live bytes, allocated bytes, retained bytes by root, and compaction debt. A benchmark that reports only operation time misses the principal cost of persistence and multi-index maintenance.
+Memory analysis must count: one payload, primary metadata, handles, index nodes, child maps, tombstones, and snapshot-retained nodes. Long-lived snapshots can keep expired records reachable. Track live bytes, allocated bytes, retained bytes by root, and compaction debt. A benchmark that reports only operation time misses the principal cost of persistence and multi-index maintenance.
+
+## Architecture choices
+
+<StructureDiagram kind="trie" title="Type prefix index" caption="Event-type prefixes follow shared paths and terminal markers in a trie." />
+
+Use a hash map from stable ID to record handle for expected constant-time exact lookup, an ordered tree or B-tree keyed by (timestamp, ID) for range queries, and a trie or radix tree for type prefixes. A record may appear in several indexes, so ownership and removal coordination are central. The payload should be stored once; indexes store handles or immutable references.
+
+Alternative designs are acceptable. A single balanced tree can support ID lookup but loses expected constant-time behavior. A sorted array gives compact range scans but expensive writes. A database-like LSM structure can batch writes but changes read amplification. Compare at least two designs against the workload and state which assumption makes the chosen design win.
 
 ## Failure and concurrency
+
+<CaseStudy client:load title="Snapshot publication" scenario="A writer builds a new index version while readers hold the previous snapshot." question="What must publication guarantee?" options={["Readers see either a complete old or complete new root", "Readers observe half-copied nodes", "Old snapshots mutate in place", "The manifest is optional"]} correctIndex={0} explanation="Atomic publication preserves snapshot semantics and prevents readers from observing an incomplete representation. A release-store on the composite root pointer is the linearization point." />
 
 If two writers update the same ID, use a lock, transaction, compare-and-swap version, or explicit last-writer policy. A reader must acquire one consistent root, not independently read the current root of each index. Publishing a new composite root is a linearization point. In manual memory management, old roots need epochs, reference counts, or hazard protection before reclamation.
 
 If allocation fails during a write, preserve the old root and return an error under the strong exception guarantee, or specify partial failure and recovery. If a process crashes during index rebuild, a durable commit marker or write-ahead log is needed. Persistence in the data-structure sense is not durability on disk; distinguish immutable versions from crash recovery.
 
+## Counterexample and failure mode
+
+Consider a naive event store that uses a single global mutable hash map for all indexes. The ID map, timestamp tree, and trie are all the same flat hash table. When a snapshot is requested, the store copies the entire table.
+
+**Why this fails.** A snapshot copy takes $O(n)$ time and memory. For 10 million records at 256 bytes each, a full copy costs ~2.5 GB of allocation per snapshot. If readers hold snapshots for seconds, each reader pins a separate full copy. The system runs out of memory after a few concurrent readers.
+
+**What breaks.** The representation invariant is violated because a `put` that modifies the global table while a snapshot is being copied can leave the snapshot observing a partially updated table. There is no atomic publication point. The snapshot isolation theorem fails because readers see a mutating structure.
+
+**The correct repair.** Use persistent data structures with path copying. Each index is an immutable version; snapshots are cheap root pointers. The hash map for ID lookup must be a persistent hash trie, not a mutable hash table. Publication uses an atomic composite root swap.
+
+<StructureDiagram kind="versions" title="Persistent version roots" caption="Snapshots retain old roots while new writes share unchanged substructures." />
+
 ## Experiments
+
+<Quiz client:load
+  title="Experimental design check"
+  question="Which statement best describes the role of a reference model in benchmark experiments?"
+  options={[
+    "It provides a known-correct implementation to compare against",
+    "It replaces the need for performance measurement",
+    "It eliminates the need for seed-controlled inputs",
+    "It makes analysis automatic"
+  ]}
+  correctIndex={0}
+  explanation="A reference model (naive but correct implementation) validates correctness of the optimized version. Without it, performance numbers are meaningless because they might measure a broken implementation."
+/>
 
 Implement a reference model using a copied map and sorted lists. Generate uniform, Zipfian, timestamp-sorted, out-of-order, long-prefix, collision-focused, and snapshot-heavy workloads. Validate every operation against the model and check all invariants. Benchmark warm and cold reads, write amplification, range output, prefix output, snapshot creation, memory retention, and expiration compaction.
 
@@ -53,9 +149,35 @@ Measure p50/p95/p99 latency and throughput, not just averages. Correlate slow op
 
 ## Deliverables
 
+<Quiz client:load
+  title="Deliverable scope check"
+  question="What is a required component of the capstone submission?"
+  options={[
+    "A design document with ADT contracts, proofs, and benchmark data",
+    "Only working source code",
+    "A slideshow summarizing the project",
+    "A user manual for the event store"
+  ]}
+  correctIndex={0}
+  explanation="The capstone requires a comprehensive design document that includes requirements, alternatives, diagrams, ADT contracts, representation invariants, operation proofs, complexity analysis, failure analysis, test plan, and benchmark data. Code alone is insufficient."
+/>
+
 Submit a design document with requirements, alternatives, diagrams, ADT contracts, RIs/AFs, operation proofs, complexity table, threat and failure analysis, test plan, benchmark data, and a postmortem for one deliberately injected bug. The implementation should expose a validator and deterministic seed controls. The oral defense should explain why each index exists, which workloads would invalidate the choice, and how to migrate if the distribution changes.
 
 ## Evaluation rubric
+
+<Quiz client:load
+  title="Rubric weight check"
+  question="Which two rubric categories together account for 40% of the grade?"
+  options={[
+    "ADT semantics and representation invariants",
+    "Complexity analysis and benchmark quality",
+    "Correctness proofs and failure recovery",
+    "Precise ADT semantics and benchmark quality"
+  ]}
+  correctIndex={0}
+  explanation="ADT and version semantics (20%) plus representation invariants, ownership, and atomicity (20%) together total 40%. These categories ensure the design is grounded in formal contracts, not just working code."
+/>
 
 * 20% precise ADT and version semantics.
 * 20% representation invariants, ownership, and atomicity.
@@ -64,31 +186,65 @@ Submit a design document with requirements, alternatives, diagrams, ADT contract
 * 15% differential testing and benchmark quality.
 * 10% failure recovery, clarity, and reproducibility.
 
-## Diagnostic guidance
+## Exercises
 
-If a range query returns a removed event, inspect whether liveness is checked and whether every index was updated. If a prefix query misses a replacement, compare terminal counts and handle identity. If an old snapshot changes, search for an in-place mutation of a shared node. If p99 writes spike, separate persistent path copying, hash resizing, and garbage collection. If collision tests collapse lookup time, the expected hash assumption was not met; measure probe/chain tails and apply a security policy.
+<StructureDiagram kind="timeline" title="Event lifecycle" caption="Writes, reads, expiration, and snapshot queries must agree on one documented timeline." />
 
-A design that uses one global mutable index may be simpler and faster in a single-threaded benchmark but cannot provide immutable snapshots without copying or versioning. A design that copies the entire store per snapshot provides isolation but violates the memory target. The capstone is successful when the tradeoff is explicit, the implementation matches the selected contract, and evidence supports—not replaces—the proofs.
+<StructureExercise client:load title="Choose capstone evidence" prompt="Which experiment tests whether a structure meets its workload contract?" options={["A reproducible operation mix with correctness checks and scaling data", "One hand-picked lookup", "A benchmark without input assumptions", "A diagram without measured behavior"]} answer={0} explanation="The capstone needs both correctness evidence and measurements under a documented workload model." kind="graph" />
 
-Include the exact workload seed, version identifiers, and invariant reports with the final submission so a reviewer can reproduce both the success case and the injected failure.
+1. **Recall: index structure mapping.** For each operation in the event store (`get`, `range`, `prefix`, `snapshot`), name the primary index structure that supports it and state its asymptotic bound.
 
-Document which measurements are cold, warm, or steady-state, and explain any omitted outliers rather than silently deleting them. The report should make uncertainty visible.
+   <ExerciseSolution hint="Map each operation to the index that makes it efficient.">
+   get(id) → hash map, expected $O(1)$. range(t0, t1) → B+ tree on (timestamp, ID), $O(\log n + k)$. prefix(type) → trie, $O(|prefix| + \text{descendants})$. snapshot() → persistent root copy, $O(1)$.
+   </ExerciseSolution>
 
-State confidence limits.
+2. **Application: design a write-heavy variant.** Recompute the B+ tree vs LSM decision for a workload with 10% writes, 50% ID lookups, 30% range queries, 10% prefix queries. Show the breakeven write ratio.
 
-and assumptions.
+   <ExerciseSolution hint="The LSM's sequential write advantage matters more when writes are a larger fraction.">
+   At 10% writes, the write amplification of LSM (4×) is still modest, and the batched sequential I/O reduces random write pressure. The B+ tree would incur 4 random I/Os per write. The breakeven occurs when write I/O dominates total I/O cost. For a 10% write ratio, LSM reduces total random I/O by ~30% compared to B+ tree, making it the preferred design.
+   </ExerciseSolution>
 
-explicitly.
+3. **Transfer: multi-tenant event store design.** Two tenants share the same event store process. Tenant A: 99% writes, 1% reads, events are small (64 bytes), retention is 1 hour. Tenant B: 50% point lookups, 50% range queries, events are large (4 KB), retention is 30 days. Each tenant must have isolated performance guarantees. Design a storage architecture that uses different index structures per tenant while sharing the underlying storage layer. Specify which index each tenant should use (hash, B+ tree, LSM, trie) and justify with workload ratios, event size, and retention policy. Describe the isolation mechanism (separate files, separate caches, or tenant-tagged pages) and how the compaction policy would differ.
 
-before interpretation.
+   <ExerciseSolution hint="Match index structure to workload; LSM trees batch sequential writes while B+ trees favor efficient range scans.">
+   Separate the write-heavy tenant (A) using an LSM-tree for the timestamp index (batched sequential flushes) with a hash map for ID lookups. The read-heavy tenant (B) uses a B+ tree for the timestamp index (efficient range scans) and a trie for type prefixes. Isolation can be achieved at the page level (tenant-id in page header) or through separate file groups with partitioned buffer pools. The compaction policy for tenant A must be aggressive (merge small SSTables quickly to bound space amplification); tenant B may disable compaction entirely if writes are rare.
+   </ExerciseSolution>
 
-by reviewers.
+4. **Synthesis: proving correctness under concurrent snapshot reads.** The event store supports snapshot reads: a reader acquires a root pointer and reads a consistent view while a concurrent writer modifies indexes. Design a linearization protocol for the multi-index publication: the writer must update the ID hash map, timestamp B+ tree, and type trie atomically from the reader's perspective. Prove that after the writer's linearization point, every reader observes either all of the old index versions or all of the new index versions. State the memory-ordering guarantees required (e.g., release/acquire semantics on the root pointer). Identify which index structures must be persistent (immutable) to support this guarantee and which can be mutable with copy-on-write.
 
-reliably. The audit is part of the deliverable.
+   <ExerciseSolution hint="Consider how readers acquire a consistent view of multiple indexes without locking.">
+   Define a composite root structure containing pointers to the current ID map root, timestamp index root, and type trie root. The writer constructs new index versions independently (using persistent path-copying or copy-on-write), assembles a new composite root, and publishes it with a release-store. Readers acquire the composite root with an acquire-load and read each index from that snapshot. The correctness invariant: for any reader's root $R$, every index reachable from $R$ is consistent with $R$'s version timestamp. The writer must ensure that no reader can observe a partially constructed composite root by publishing only after all index versions are fully initialized.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+<Quiz client:load
+  title="Omission rationale"
+  question="Why is distributed event store architecture (e.g., Kafka-style partitioning) deliberately omitted from this capstone?"
+  options={[
+    "It adds distribution concerns that are systems-engineering problems layered on top of data-structure design",
+    "It is not relevant to event stores",
+    "It was accidentally forgotten",
+    "It is too simple to include"
+  ]}
+  correctIndex={0}
+  explanation="Partitioning, replication, leader election, and exactly-once delivery are important systems-engineering topics but belong in a distributed systems course. The capstone focuses on the core data-structure design: multi-index coordination, persistence, and workload-driven index selection."
+/>
+
+**Distributed event store architectures (Apache Kafka, Apache Pulsar)**: partitioning, replication, leader election, and consumer-group semantics. These add distribution concerns (consensus, network partitions, exactly-once delivery) that are systems-engineering problems layered on top of the core data-structure design.
+
+**Time-series database optimizations**: downsampling, retention policies, data aging, columnar compression, and chunk-based storage (e.g., Gorilla compression). While the event store shares some characteristics with time-series workloads, the emphasis here is on multi-index design rather than specialized compression.
+
+**Cost-based query optimization and index selection**: automated selection of indexes based on a query workload. This is a database internals topic that uses cost models to recommend indexes; the capstone expects manual, reasoned index selection.
+
+**Hardware transactional memory (HTM) for index concurrency**: using Intel TSX or ARM TME to implement lock-free multi-index updates. HTM is available on specific hardware and its fallback paths introduce complexity that distracts from the data-structure-level design.
 
 ## References & Further Reading
 
 * [Open Data Structures](https://opendatastructures.org/)
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* Okasaki, *Purely Functional Data Structures*.
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+* MIT 6.006, [Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
+* Okasaki, *Purely Functional Data Structures* (Cambridge University Press, 1998).
+* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed. (MIT Press, 2022).
+* Driscoll, Sarnak, Sleator, and Tarjan, "Making Data Structures Persistent," *Journal of Computer and System Sciences* 38(1):86–124, 1989.
+* Kraska et al., "The Case for Learned Index Structures," SIGMOD 2018.
+* O'Neil et al., "The Log-Structured Merge-Tree (LSM-tree)," *Acta Informatica* 33(4):351–385, 1996.

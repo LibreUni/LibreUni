@@ -1,91 +1,429 @@
 ---
 title: "Greedy Algorithms and Exchange Arguments"
 course: "algorithms"
-description: "Greedy-choice proofs, matroids, interval scheduling, Huffman coding, and limits of local optimization."
+description: "Exchange arguments, matroid theory, greedy optimality, submodularity, failure modes, and approximation guarantees."
 ---
+
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import TikZ from '../../../components/TikZ.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+
 # Greedy Algorithms and Exchange Arguments
 
-A greedy algorithm makes a locally preferred choice, commits to it, and solves the remaining problem. Greedy design is attractive because it is often fast and simple, but local plausibility is not a correctness proof. The central task is to identify a structural property—an exchange argument, a cut property, or a matroid—that guarantees some optimal solution begins with the greedy choice. Without that property, a counterexample may defeat every local rule.
+Suppose you must connect $n$ cities with a road network of minimum total cost. The naive approach — list all subsets of the $n(n-1)/2$ candidate edges and check which are spanning trees, then pick the cheapest — enumerates $2^{O(n^2)}$ possibilities. Hopeless for even modest $n$.
 
-## Greedy-choice and optimal substructure
+A friend suggests: "Sort edges by cost. Start with an empty set. For each edge in increasing order, add it if it doesn't create a cycle." This greedy procedure — Kruskal's algorithm (1956) — produces an optimal minimum spanning tree. The proof follows from the **cut property**: for any cut, the cheapest crossing edge belongs to some MST. Local optimality aligns with global optimality.
 
-Optimal substructure means an optimal solution contains optimal solutions to appropriately defined residual subproblems. Greedy-choice means there exists an optimal solution compatible with the first greedy choice. The second is stronger and is where most proof work lies. Once the choice is fixed and safe, optimal substructure justifies recursion or iteration on the remainder.
+Now consider the knapsack problem: capacity $W = 50$, items with $(v_i, w_i)$ = (60, 10), (100, 20), (120, 30). The greedy analogue — "pick the item with best value-to-weight ratio, commit, repeat" — fails. Greedy picks in density order: item 1 (6.0), item 2 (5.0), then cannot fit item 3, yielding \$160. The optimal solution is \$220 (\$100 + \$120). The locally optimal choice is globally suboptimal.
 
-Use an exchange proof: take an arbitrary optimal solution O, identify its first choice, and replace that choice with the greedy choice without worsening objective value. The resulting solution remains feasible and optimal, so an optimal solution containing the greedy choice exists. Then recurse on the reduced instance. The exchange must preserve all constraints, not merely improve a numerical score.
+This tension — greedy works beautifully for MST but fails for knapsack — motivates the formal frameworks in this lesson. When does local optimality imply global optimality? The answer requires exchange arguments, matroid theory (Whitney 1935, Edmonds 1971), and, for problems where exact optimality is impossible, approximation guarantees via submodularity.
 
-## Interval scheduling
+<Quiz client:load
+  title="When greedy works"
+  question="What property distinguishes MST from 0/1 knapsack?"
+  options={["MST can be solved by exchange arguments; knapsack requires fractional choices for exchange to work", "MST has negative edge weights; knapsack has positive weights", "MST is NP-hard; knapsack is polynomial", "MST uses dynamic programming; knapsack is greedy"]
+  }
+  correctIndex={0}
+  explanation="MST admits an exchange argument where adding one edge and removing another preserves feasibility. For 0/1 knapsack, exchanging fractional amounts is not allowed under integrality constraints."
+/>
 
-Given intervals with start and finish times, choose a maximum-size set of pairwise nonoverlapping intervals. The greedy rule “select the interval with earliest finishing time, remove conflicts, repeat” is optimal. Let g be the earliest-finishing interval and O an optimal schedule. If O starts with interval o, replace o by g. Since `finish(g)  at most  finish(o)`, every interval after o in O remains compatible with g; the count is unchanged. The residual problem has the same form, proving optimality by induction.
+## The Exchange Argument Framework
 
-Other intuitive rules fail: shortest duration can block many later intervals; earliest start can choose a long interval; fewest conflicts can be misleading. The exchange proof depends specifically on the boundary that leaves the largest remaining suffix of time.
+<MathStatement id="exchange-framework" kind="theorem" title="Exchange argument theorem" proofId="exchange-proof" dependsOn={[]}>
+Let $P$ be a combinatorial optimization problem with feasible set $\mathcal{F}$, objective $f: \mathcal{F} \to \mathbb{R}$ (maximization). Greedy makes choice $g$ and then solves residual $P'$. Suppose:
 
-**Worked example.** Intervals (1,4),(3,5),(0,6),(5,7),(3,9),(5,9),(6,10),(8,11),(8,12),(2,14),(12,16). Choose (1,4), then (5,7), then (8,11), then (12,16), obtaining four. Choosing (0,6) first prevents several compatible intervals. The rule’s proof, not the example, establishes optimality.
+1. **Exchange:** For every optimal solution $O$ to $P$, there exists a solution $O'$ such that $g \in O'$, $|O'| = |O|$ (or $f(O') \ge f(O)$), and $O'$ is feasible.
+2. **Residual structure:** $P'$ has the same form as $P$ (self-reducibility).
 
-## Fractional knapsack and the integrality boundary
+Then the greedy algorithm produces an optimal solution.
+</MathStatement>
 
-In fractional knapsack, item i has value vi, weight wi, and fractions are allowed. Sort by density vi/wi and take highest density until capacity fills. If an optimal solution takes less density item while a higher-density available fraction remains, exchange weight from the lower to higher item and improve or preserve value. Therefore density-first is optimal.
+<MathProof id="exchange-proof" for="exchange-framework" collapsible open>
+Let $G$ be greedy's solution. By (1), some optimal $O^*$ contains $g$. The residual instance $P'$ after fixing $g$ inherits the same structure by (2). By the induction hypothesis, greedy solves $P'$ optimally. Thus $G = \{g\} \cup \text{greedy}(P')$ has total value $\ge \text{value}(O^*)$. Since $G$ is feasible, $G$ is optimal. The exchange must preserve feasibility, not just objective — replacing a choice in $O$ with $g$ must keep the solution within $\mathcal{F}$.
+</MathProof>
 
-0/1 knapsack forbids fractions, and density-first is not always optimal. A high-density small item can block a combination of lower-density items with greater total value. The difference illustrates a key warning: a greedy proof may depend on divisibility or an exchange that is impossible under integral constraints. Dynamic programming solves 0/1 knapsack pseudo-polynomially in capacity, not greedily in general.
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+title "Exchange argument flow"
+rectangle "Instance P" as P
+rectangle "Greedy choice g" as G
+rectangle "Residual P'" as Pr
+rectangle "Optimal solution O*" as O
+rectangle "Exchanged O' = (O\\{x}) ∪ {g}" as Oprime
+P --> G : "pick locally best g"
+P --> Pr : "remove g and conflicts"
+G --> Oprime : "g ∈ O'"
+O --> Oprime : "exchange preserves |O|"
+Oprime --> Oprime : "O' is optimal\nand contains g"
+Pr --> Oprime : "greedy(Pr) optimal\n(induction)"
+note right of Oprime : G = {g} ∪ greedy(Pr)\nis optimal
+@enduml`}
+/>
 
-## Minimum spanning trees
+<CodeExercise client:load
+  title="Exchange argument structure"
+  code={`def exchange_argument(items, predicate):
+    # Items sorted by some criterion.
+    # Implement the general exchange pattern:
+    # pick best, then recurse.
+    if not items:
+        return []
+    best = items[0]  # locally optimal choice
+    remaining = [x for x in items if [!blank!]]
+    return [best] + exchange_argument(remaining, predicate)`}
+  answers={["predicate(best, x)"]}
+  explanation="The predicate filters items that are compatible with the chosen best element — for example, intervals that do not overlap with the chosen interval, or edges that do not create a cycle."
+/>
 
-For a weighted undirected graph, a spanning tree with minimum total edge weight can be built by Kruskal or Prim. The cut property says that a lightest edge crossing any cut is safe: there exists an MST containing it. For Kruskal, consider the cut separating the components of the current forest; the next edge is the lightest edge crossing that cut and can be exchanged into an optimal completion. Union-find maintains acyclicity and components.
+## Interval Scheduling: Exchange by Earliest Finish
 
-Prim grows one connected tree. At each step choose the lightest edge from the current tree to an outside vertex. The cut property proves safety. A priority queue stores candidate edges; stale entries must be ignored when a better key has already been recorded. The greedy invariant is that the chosen edges can be extended to an MST, not that every chosen edge belongs to every MST.
+**Problem.** Given intervals $[s_i, f_i)$ with $s_i < f_i$, select a maximum-cardinality subset of pairwise non-overlapping intervals.
 
-## Huffman coding
+**Greedy rule.** Choose the interval with the smallest finish time, discard conflicts, repeat.
 
-Huffman coding constructs an optimal binary prefix code for symbol frequencies. Repeatedly merge the two least frequent trees into a parent whose weight is their sum; assign 0/1 branches. The sibling property and an exchange argument show that some optimal code has the two least frequent symbols as deepest siblings. Contract those siblings into one symbol, solve the smaller instance, and expand.
+<MathStatement id="interval-scheduling" kind="theorem" title="Interval scheduling optimality" proofId="interval-proof">
+The earliest-finish-time greedy algorithm produces a maximum-cardinality set of non-overlapping intervals.
+</MathStatement>
 
-The objective is weighted code length `sum f_i * ell_i`, not average bit length without frequencies. Equal frequencies permit multiple optimal codes. A prefix-free representation is necessary for instantaneous decoding; a variable-length code without the prefix property may be ambiguous. Canonical Huffman encodings choose a deterministic representation among optimal length profiles.
+<MathProof id="interval-proof" for="interval-scheduling" collapsible open>
+Let $G = \{g_1, g_2, \ldots, g_k\}$ with $g_1$ having the globally minimum finish time. Let $O = \{o_1, \ldots, o_m\}$ be any optimal solution, indexed by increasing finish time.
 
-## Matroids and greedy structure
+**Lemma 1.** $f(g_1) \le f(o_1)$ by greedy's choice rule.
 
-A matroid is a ground set with an independence system satisfying heredity and the exchange axiom: if A and B are independent with `|A|  less than  |B|`, some element of `B minus A` can be added to A. For any nonnegative weights, sorting elements by decreasing weight and adding an element when independence is preserved yields a maximum-weight independent set. The exchange axiom is the abstract reason greedy works.
+**Lemma 2.** There exists an optimal solution containing $g_1$. Construct $O' = (O \setminus \{o_1\}) \cup \{g_1\}$. Since $f(g_1) \le f(o_1)$, all intervals compatible with $o_1$ (starting at or after $f(o_1)$) start at or after $f(g_1)$, hence remain compatible with $g_1$. Feasibility is preserved and $|O'| = |O| = m$, so $O'$ is optimal and contains $g_1$.
 
-Spanning forests form a graphic matroid; maximum-weight independent edges give a maximum spanning forest. The family of independent sets of a uniform matroid models choosing at most k items. Many scheduling and packing constraints are not matroids, which explains why a greedy proof may fail. Recognizing a matroid is useful but not necessary; a direct exchange proof suffices.
+**Induction.** Remove $g_1$ and all intervals overlapping $g_1$. The residual instance has the same structure. By the induction hypothesis, greedy solves it optimally. Combined with $g_1$, this yields an optimal solution.
+</MathProof>
 
-## Counterexamples and repair
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+title "Interval Scheduling Exchange"
+rectangle "Greedy: g₁\n(min finish f(g₁))" as g
+rectangle "Optimal: o₁\n(any optimal solution)" as o
+rectangle "O' = (O\\{o₁}) ∪ {g₁}" as Oprime
+rectangle "Residual instance" as residual
+note right of g : f(g₁) ≤ f(o₁)
+g --> Oprime : g₁ replaces o₁
+o --> Oprime : same cardinality
+Oprime --> Oprime : still feasible, optimal
+Oprime --> residual : remove g₁ and conflicts
+note right of residual : greedy solves (induction)
+@enduml`}
+/>
 
-When a greedy rule is suspected, search for the smallest instance where its first choice differs from an optimal solution. Enumerate small instances, compare exact dynamic programming or brute force, and inspect the failed exchange. The repair may be a different greedy key, a richer state, dynamic programming, or approximation with a proven ratio.
+## Matroid Theory
 
-Tie-breaking can matter. A proof may allow any earliest-finishing interval, but a particular implementation must consistently handle equal endpoints and closed versus half-open intervals. If intervals that finish at time t are compatible with intervals starting at t, state that convention.
+Matroids provide the broadest known class of problems where the greedy algorithm is optimal for all weight functions.
 
-## Greedy proof checklist
+<MathStatement id="matroid-def" kind="definition" title="Matroid">
+A matroid $\mathcal{M} = (E, \mathcal{I})$ consists of a finite ground set $E$ and a family $\mathcal{I} \subseteq 2^E$ of *independent sets* satisfying:
 
-Before committing to a greedy algorithm, write the feasibility invariant after every choice, identify the exchange or cut that makes the choice safe, and define the residual instance. Test natural alternatives against exhaustive small cases, but treat a passing search as evidence for a conjecture, not a proof. Check whether weights can be negative, whether ties affect feasibility, and whether an item can be split. Small changes to the constraints often move a problem from greedy to dynamic programming or flow.
+1. **Heredity:** $\emptyset \in \mathcal{I}$; if $A \in \mathcal{I}$ and $B \subseteq A$, then $B \in \mathcal{I}$.
+2. **Exchange:** If $A, B \in \mathcal{I}$ and $|A| < |B|$, then $\exists e \in B \setminus A$ such that $A \cup \{e\} \in \mathcal{I}$.
+</MathStatement>
 
-Greedy algorithms are often online-friendly: the next choice can be made from current information, sometimes without seeing future input. Optimality may then require a stronger assumption, such as matroid independence or interval order. If future arrivals can invalidate a committed choice, analyze competitive ratio or use a deferred/offline algorithm instead of asserting offline optimality.
+<MathStatement id="greedy-matroid" kind="theorem" title="Greedy optimality on matroids" proofId="greedy-matroid-proof">
+For a matroid $\mathcal{M} = (E, \mathcal{I})$ with nonnegative weight function $w: E \to \mathbb{R}^{\ge 0}$, the algorithm that sorts $E$ by decreasing weight and adds an element if independence is preserved produces a maximum-weight independent set.
+</MathStatement>
+
+<MathProof id="greedy-matroid-proof" for="greedy-matroid" collapsible>
+Let $G = \{g_1, \ldots, g_k\}$ be the greedy set in weight order, and $O = \{o_1, \ldots, o_m\}$ be an optimal set (maximum-weight independent set). We prove $|G| = |O|$ and $w(g_i) \ge w(o_i)$ for all $i$.
+
+**Lemma 1:** $|G| = |O|$. If $|G| < |O|$, the exchange axiom applied to $G$ and $O$ yields some $e \in O \setminus G$ with $G \cup \{e\} \in \mathcal{I}$. But greedy rejected $e$ only if adding $e$ would violate independence, a contradiction.
+
+**Lemma 2:** $w(g_i) \ge w(o_i)$. Sort both sets by weight. Let $G_i = \{g_1, \ldots, g_i\}$ and $O_i = \{o_1, \ldots, o_i\}$. $G_i$ is independent and $O_i$ is independent with $|O_i| = i$. By exchange, $G_{i-1} \cup \{o_j\}$ is independent for some $o_j \in O_i \setminus G_{i-1}$. Greedy chose $g_i$ when this element was available, so $w(g_i) \ge w(o_j) \ge w(o_i)$ (since $o_i$ is the smallest in $O_i$). □
+</MathProof>
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+title "Matroid Exchange Property"
+rectangle "A ∈ ℐ\n|A| = 3" as A
+rectangle "B ∈ ℐ\n|B| = 4" as B
+rectangle "A ∪ {e} ∈ ℐ\nfor some e ∈ B\\A" as Aunion
+A --> Aunion : e added from B
+B --> Aunion : e ∈ B\\A
+note right of Aunion : Exchange ensures\nindependence preserved
+@enduml`}
+/>
+
+### Examples of Matroids
+
+**Graphic matroid.** $E =$ edges of $G$, $\mathcal{I} =$ acyclic edge subsets (forests). Exchange: if $F$ and $F'$ are forests with $|F| < |F'|$, some edge of $F'$ connects two components of $F$, preserving acyclicity. Greedy with weight $w(e)$ produces a maximum-weight forest (or minimum-weight spanning tree with negated weights).
+
+**Uniform matroid.** $E$ arbitrary, $\mathcal{I} = \{S \subseteq E : |S| \le k\}$. Greedy selects the $k$ heaviest elements. Exchange: if $|A| < |B| \le k$, pick any element from $B \setminus A$.
+
+**Partition matroid.** $E$ partitioned into $E_1, \ldots, E_m$ with capacities $c_i$. $\mathcal{I} = \{S : |S \cap E_i| \le c_i\}$. Greedy sorts all elements globally and adds if capacity remains in the partition.
+
+<Quiz client:load
+  title="Matroid identification"
+  question="Which of the following families forms a matroid?"
+  options={["All subsets of size ≤ k (uniform)", "All subsets of a bipartite graph forming a vertex cover", "All subsets of edges forming a perfect matching", "All subsets of intervals with no overlap (interval scheduling)"]}
+  correctIndex={0}
+  explanation="Uniform matroid satisfies both heredity and exchange. Vertex cover fails exchange (two covers of different sizes may not allow swapping). Perfect matching and interval scheduling also fail exchange."
+/>
+
+## Fractional Knapsack: Continuous Exchange
+
+**Greedy rule.** Sort items by density $v_i / w_i$, take items in decreasing density, taking a fraction of the last item if capacity is limited.
+
+<MathStatement id="fractional-knapsack" kind="theorem" title="Fractional knapsack optimality">
+The density-sorted greedy algorithm produces an optimal solution to the fractional knapsack problem.
+</MathStatement>
+
+**Proof.** Let $x_i$ be the amount taken of item $i$ in any feasible solution. Let $d_i = v_i / w_i$. Suppose an optimal solution has $x_j > 0$ and $x_i < w_i$ for some $i$ with $d_j < d_i$. Transfer $\epsilon = \min(x_j, w_i - x_i)$ weight from $j$ to $i$. The change in value is $\epsilon(d_i - d_j) > 0$, contradicting optimality. Therefore any optimal solution takes items in decreasing density with at most one fractional item. The greedy algorithm produces exactly this structure. □
+
+<CodeRunner client:load
+  title="Fractional knapsack"
+  language="python"
+  code={`def fractional_knapsack(items, capacity):
+    items = sorted(items, key=lambda x: x[0]/x[1], reverse=True)
+    total = 0.0
+    for v, w in items:
+        if capacity >= w:
+            total += v
+            capacity -= w
+        else:
+            total += v * (capacity / w)
+            break
+    return total
+
+items = [(60, 10), (100, 20), (120, 30)]
+print(fractional_knapsack(items, 50))`}
+  output="240.0"
+/>
+
+**Why it fails for 0/1 knapsack.** The exchange requires transferring a *fraction* of an item, which is not allowed under integrality constraints. A high-density small item may consume capacity that, together with other items, would yield more value.
+
+<CodeExercise client:load
+  title="0/1 knapsack failure"
+  code={`# Items: (value, weight)
+# capacity = 5
+items = [(10, 3), (7, 2), (6, 2)]
+# Greedy by density: pick (10,3) first (density 3.33)
+# then (7,2) (density 3.5) — wait, that's wrong!
+# Actually sorted by density descending:
+# (7,2) density 3.5, (6,2) density 3.0, (10,3) density 3.33...
+# Show greedy picks (7,2) then (6,2) = 13
+# Optimal: (10,3) + (6,2) = 16
+# Fill in: optimal value with capacity 5 is [!blank!]`}
+  answers={["16"]}
+  explanation="Greedy by density picks (7,2) then (6,2) for total 13. The optimal is (10,3)+(6,2)=16. Greedy fails because it cannot reserve space for a less dense but more valuable combination."
+/>
+
+## Huffman Coding: Full Optimality Proof
+
+<MathStatement id="huffman-lemma" kind="lemma" title="Huffman sibling lemma" proofId="huffman-lemma-proof">
+Let $a$ and $b$ be the two symbols with smallest frequencies $f_a \le f_b$ in alphabet $\Sigma$. There exists an optimal prefix code where $a$ and $b$ are siblings at the maximum depth (or tied for deepest).
+</MathStatement>
+
+<MathProof id="huffman-lemma-proof" for="huffman-lemma" collapsible>
+Let $T$ be an optimal binary prefix tree. Let $x$ and $y$ be a pair of deepest siblings in $T$ (maximum depth). If $\{x, y\} = \{a, b\}$, we are done. Otherwise, assume without loss that $a \ne x$. We have $f_a \le f_x$ (by definition of $a$ as minimum) and $\text{depth}(a) \le \text{depth}(x)$ (since $x$ is deepest). Construct $T'$ by swapping the subtrees of $a$ and $x$. The weighted path length changes by:
+
+$$
+\Delta = f_a(\text{depth}(x) - \text{depth}(a)) + f_x(\text{depth}(a) - \text{depth}(x)) = (f_a - f_x)(\text{depth}(x) - \text{depth}(a)).
+$$
+
+Since $f_a - f_x \le 0$ and $\text{depth}(x) - \text{depth}(a) \ge 0$, we have $\Delta \le 0$. Thus $T'$ is also optimal. After the swap, $a$ is at depth $\text{depth}(x)$. If $b$ is also not a sibling of $a$, repeat with $b$ and $y$. After at most two swaps, $a$ and $b$ are siblings in an optimal tree. □
+</MathProof>
+
+<MathStatement id="huffman-optimal" kind="theorem" title="Huffman optimality" proofId="huffman-optimal-proof">
+Huffman's algorithm produces an optimal prefix code.
+</MathStatement>
+
+<MathProof id="huffman-optimal-proof" for="huffman-optimal" collapsible>
+Proof by induction on $|\Sigma|$. Base: $|\Sigma| = 2$, the optimal code assigns 0 and 1 to the two symbols, and Huffman does the same.
+
+Inductive step: By the lemma, there exists an optimal code where the two least frequent symbols $a, b$ are siblings. Contract them into a meta-symbol $c$ with frequency $f_c = f_a + f_b$, and give $c$ the bit string assigned to the pair's parent in the original code. Solve the smaller instance $(\Sigma \setminus \{a,b\}) \cup \{c\}$ optimally by the induction hypothesis. Expanding $c$ back to $a,b$ with appended 0/1 preserves optimality because the contraction adds bit length 1 to $a$ and $b$, contributing $f_a + f_b$ to the total weighted length, which matches the cost of having $c$ at depth $d$ in the contracted tree. □
+</MathProof>
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+title "Huffman Exchange: Swap Lemma"
+rectangle "Optimal tree T" as T
+rectangle "Swap a ↔ x" as swap
+rectangle "T' also optimal" as Tprime
+T --> swap : f(a) ≤ f(x), depth(x) ≥ depth(a)
+swap --> Tprime : Δ = (fa - fx)(depth(x) - depth(a)) ≤ 0
+note right of Tprime : After ≤ 2 swaps,\na,b are siblings
+@enduml`}
+/>
+
+<CodeRunner client:load
+  title="Huffman encoding"
+  language="python"
+  code={`import heapq
+
+def huffman(freq):
+    heap = [[w, [sym, ""]] for sym, w in freq.items()]
+    heapq.heapify(heap)
+    while len(heap) > 1:
+        lo = heapq.heappop(heap)
+        hi = heapq.heappop(heap)
+        for pair in lo[1:]:
+            pair[1] = '0' + pair[1]
+        for pair in hi[1:]:
+            pair[1] = '1' + pair[1]
+        heapq.heappush(heap, [lo[0] + hi[0]] + lo[1:] + hi[1:])
+    return sorted(heap[0][1:], key=lambda p: len(p[1]))
+
+freq = {'a': 45, 'b': 13, 'c': 12, 'd': 16, 'e': 9, 'f': 5}
+print(huffman(freq))`}
+  output="[['a', '0'], ['b', '101'], ['c', '100'], ['d', '111'], ['e', '1101'], ['f', '1100']]"
+/>
+
+## Greedy Approximation: Set Cover
+
+When greedy is not optimal, it can still provide a provable approximation.
+
+**Set cover problem.** Given universe $U$ and a family of subsets $\mathcal{S}$, find a minimum-cardinality subfamily covering $U$.
+
+**Greedy rule.** At each step, choose the subset covering the maximum number of uncovered elements.
+
+<MathStatement id="set-cover-ratio" kind="theorem" title="Greedy set cover approximation ratio">
+The greedy algorithm for set cover has approximation ratio $H_n = \sum_{i=1}^n 1/i = \Theta(\log n)$, where $n = |U|$.
+</MathStatement>
+
+**Proof.** Let $OPT$ be the optimal cover size. Let $c_t$ be the number of elements covered for the first time by the $t$th greedy choice. At the start of step $t$, at most $n_{t-1}$ elements remain uncovered. Since $OPT$ sets cover all remaining elements, by the pigeonhole principle, some set covers at least $n_{t-1} / OPT$ elements. Greedy picks the best, so $c_t \ge n_{t-1} / OPT$. Therefore $n_t \le n_{t-1} (1 - 1/OPT)$. Unrolling: $n_T < n \cdot e^{-T / OPT}$. Setting $n_T < 1$, we need $T > OPT \cdot \ln n$. Thus greedy uses at most $OPT \cdot \ln n$ sets, giving ratio $\ln n = O(\log n)$. □
+
+This bound is tight: there exist instances where greedy achieves $\Omega(\log n)$ times optimal.
+
+## Submodularity: The General Structure
+
+A function $f: 2^E \to \mathbb{R}$ is *submodular* if for all $A \subseteq B \subseteq E$ and $e \notin B$:
+
+$$
+f(A \cup \{e\}) - f(A) \ge f(B \cup \{e\}) - f(B).
+$$
+
+Submodularity captures diminishing returns: adding an element to a smaller set yields at least as much gain as adding it to a superset. When greedy maximizes a monotone submodular function under a cardinality constraint, it achieves a $(1 - 1/e)$ approximation ratio.
+
+<Quiz client:load
+  title="Submodularity"
+  question="Which of the following functions is submodular?"
+  options={["Coverage function (number of elements covered by chosen subsets)", "Sum of weights (linear function)", "Both of the above", "Neither"]}
+  correctIndex={2}
+  explanation="Linear functions satisfy submodularity with equality. Coverage functions are submodular because covering a new element has diminishing returns. Both are submodular."
+/>
+
+## Failure Modes and Limitations
+
+Greedy algorithms fail when local optimality does not align with global optimality. Several distinct failure patterns exist:
+
+### Pattern 1: Capacity-constrained selection (0/1 knapsack)
+
+As shown above, fractional exchange is blocked by integrality. The greedy algorithm has no unbounded approximation ratio — it can be arbitrarily bad relative to the optimal solution.
+
+<TikZ
+  code={`\begin{tikzpicture}
+\draw[->] (0,0) -- (5,0) node[right] {capacity};
+\draw[->] (0,0) -- (0,3) node[above] {value};
+\draw[blue, thick] (0,0) rectangle (1,1) node[midway] {10};
+\draw[red, thick] (1,0) rectangle (3,2) node[midway] {20};
+\draw[green, thick] (3,0) rectangle (4,1.5) node[pos=0.5, above] {15};
+\draw[dashed] (4,0) -- (4,3) node[above] {W=4};
+\node at (0.5,-0.5) {dense};
+\node at (4.5,1.5) {optimal};
+\end{tikzpicture}`}
+/>
+
+### Pattern 2: Commit-and-suffer (traveling salesman)
+
+The nearest-neighbor heuristic for TSP chooses the closest unvisited city at each step. The resulting tour can be arbitrarily worse than optimal, even in metric spaces.
+
+### Pattern 3: Matroid structure violation
+
+When the feasible sets do not satisfy the exchange property, greedy can fail. For example, finding a maximum-weight vertex cover is NP-hard, even though finding a maximum-weight independent set (matroid-compatible) is easy.
+
+<CaseStudy client:load
+  title="Greedy vs dynamic programming"
+  scenario="A scheduling problem has overlapping subproblems: each decision affects which future jobs can be scheduled. A student proposes a greedy algorithm that selects jobs by earliest deadline."
+  question="When should you suspect greedy will fail?"
+  options={["When the exchange property is violated (future choices depend on today's choice in non-structural ways)", "Never — earliest deadline always works", "When there are more than 10 jobs", "When all weights are equal"]
+  }
+  correctIndex={0}
+  explanation="Greedy needs the exchange property: an optimal solution must exist that contains the greedy choice. When choices interact through resource constraints that cannot be swapped (e.g., knapsack, weighted interval scheduling), exchange fails and dynamic programming or branch-and-bound is required."
+/>
 
 ## Exercises
 
-1. Prove earliest-finish interval scheduling by exchange and induction.
-2. Give a counterexample to shortest-duration scheduling.
-3. Prove fractional-knapsack density ordering.
-4. Explain why the proof fails for 0/1 knapsack.
-5. Prove Kruskal’s cut exchange step.
-6. Explain Huffman’s two-least-frequencies lemma.
-7. Identify a matroid or give a non-matroid greedy failure.
+### Recall and Application
 
-### Diagnostic solutions
+1. **Matroid or not?** Determine whether each forms a matroid. If yes, give the ground set and independent sets; if no, show which axiom fails.
+   - Subsets of edges of $K_n$ that do not contain a Hamiltonian cycle.
+   - Subsets of vertices of a bipartite graph formable as a matching's endpoint set.
+   - $k$ colors: subsets $S$ of $E$ where no color appears more than $c_k$ times (partition matroid with $c_k$ limits).
 
-1. Let g finish first and O be optimal with first o. Replace o by g; every later interval compatible with o starts after `finish(o)  at least  finish(g)`, so remains compatible. The residual schedule is optimal by induction, and adding g preserves cardinality.
+   <ExerciseSolution hint="Test the exchange axiom carefully. For the Hamiltonian cycle case, construct a specific $A$ and $B$ where $|A| < |B|$ but no element of $B$ can extend $A$ without creating a cycle.">
 
-2. Intervals [0,10], [0,1], [1,2], [2,3], ... make shortest duration choose the many short intervals here, but adjust examples with a short interval that blocks two moderately compatible intervals; the key test is whether the selected criterion leaves maximum residual capacity. Always verify endpoints and objective when presenting a counterexample.
+   (a) Not a matroid. Exchange fails: let $A$ be an acyclic set that avoids a Hamiltonian cycle but $B$ is a Hamiltonian cycle itself (considered as a set of edges). Exchange may add an edge that creates the cycle. (b) Yes, it is the *transversal matroid*. (c) Yes, the partition matroid.
+   </ExerciseSolution>
 
-3. If a solution uses weight on density d2 while available capacity is assigned to lower density d1, transfer a small amount from d1 to d2. Value does not decrease. Repeating yields density order, including a final fractional item.
+2. **Scheduling with deadlines.** Each job $j$ has profit $p_j$ and unit processing time with deadline $d_j$. Show that the feasible subsets (jobs that can be scheduled without missing deadlines) form a matroid. Prove that scheduling jobs in decreasing profit, if a job can be placed in the schedule at or before its deadline, is optimal.
 
-4. The exchange may require taking a fraction or replacing only part of an integral item, which is infeasible. A locally denser item can consume capacity needed by a combination whose total value is larger; integrality destroys the continuous exchange.
+   <ExerciseSolution hint="Model the problem as a matroid on the set of jobs. The exchange property corresponds to swapping jobs in the schedule without violating deadlines.">
 
-5. Kruskal’s edge e is lightest across the cut between current forest components. In an MST completion, if e is absent, the tree path between its endpoints crosses the cut at another edge f with weight at least e. Replace f by e; acyclicity and connectivity remain, and weight does not increase.
+   Feasible subsets form a *scheduling matroid* (a special case of a transversal matroid). Exchange: if $A$ is feasible with $|A| < |B|$, schedule the jobs in $B \setminus A$ in deadline order and swap into $A$. Greedy by profit is optimal by the matroid greedy theorem.
+   </ExerciseSolution>
 
-6. In an optimal prefix code, two least-frequency symbols can be chosen as deepest siblings by swapping shallower/higher-frequency leaves without increasing weighted length. Contract them to a combined symbol, solve the smaller code, and expand; induction proves Huffman optimal.
+3. **Exchange proof for MST.** Formalize Kruskal's algorithm: prove by exchange that the lightest edge crossing a cut is safe using the cut property.
 
-7. A graphic matroid has acyclic edge sets and satisfies exchange, so weight-sorted independent selection is greedy-correct. 0/1 knapsack’s feasible sets do not satisfy a general exchange axiom; density greedy has counterexamples.
+   <ExerciseSolution>
+   Let $e$ be the lightest edge crossing cut $(S, V \setminus S)$. In any MST $T$, either $e \in T$ or there is a path in $T$ between $e$'s endpoints, which crosses the cut at some edge $f$ with $w(f) \ge w(e)$. Replace $f$ with $e$ to get a spanning tree $T'$ with weight $\le w(T)$. Thus every MST is at least as heavy as $T'$, and $T'$ is minimal.
+   </ExerciseSolution>
 
+### Transfer and Synthesis
+
+4. **Huffman variant.** Suppose the cost of a code tree is $\sum f_i \cdot 2^{\ell_i}$ (exponential in depth). Is Huffman still optimal? Show a counterexample or prove the algorithm adapts.
+
+   <ExerciseSolution>
+   Huffman fails for exponential cost. For frequencies 1, 1, 2, 3: Huffman merges 1+1 (2), then 2+2 (4), then 4+3 (7). Depths: symbols with freq 1: depth 3, freq 2: depth 2, freq 3: depth 1. Cost = $1\cdot 8 + 1\cdot 8 + 2\cdot 4 + 3\cdot 2 = 30$. The optimal under exponential cost places higher-frequency symbols at shallower depths more aggressively, but the sibling lemma (min-frequency symbols deepest) no longer holds because the cost penalty for deep placement is superlinear.
+   </ExerciseSolution>
+
+5. **Set cover tight example.** Construct an instance where greedy achieves $\Omega(\log n)$ times optimal.
+
+   <ExerciseSolution>
+   Create $n$ elements and sets $S_1, \ldots, S_k$ where $S_i$ covers $2^{i-1}$ new elements plus a tail. Greedy picks one set covering half, then one covering a quarter, etc., achieving $\log_2 n$ times optimal where the true optimum uses 2 sets.
+   </ExerciseSolution>
+
+6. **Counterexample design.** Construct a weighted interval scheduling instance with $n \ge 4$ where the greedy earliest-finish algorithm fails to maximize total weight. Explain which part of the exchange argument breaks.
+
+   <ExerciseSolution hint="Consider intervals with very different weights. The exchange lemma relies on cardinality — when weights differ, swapping intervals changes total value.">
+
+   Intervals: A = [0, 2) weight 100, B = [1, 4) weight 1, C = [3, 5) weight 100. Greedy earliest-finish picks A (f=2), then C is conflict-free (s=3 ≥ f(A)=2), yielding 200. This actually works here! For a proper counterexample: D = [0, 1) weight 1, E = [0.5, 3) weight 100, F = [2, 4) weight 100. Greedy picks D (earliest finish), then F, total 101; optimal picks E+F = 200. The exchange argument fails because replacing E with D does not preserve value — $w(D) < w(E)$, so the exchanged solution is not optimal.
+   </ExerciseSolution>
+
+7. **Synthesis: Greedy for matroid intersection.** Given two matroids $\mathcal{M}_1 = (E, \mathcal{I}_1)$ and $\mathcal{M}_2 = (E, \mathcal{I}_2)$ on the same ground set, the maximum-weight common independent set can be found by a generalized greedy algorithm (Edmonds' matroid intersection algorithm) in polynomial time. Why does the simple greedy (sorted weight, add if independent in both) fail? Construct a counterexample.
+
+   <ExerciseSolution hint="Consider two partition matroids where the exchange property is not simultaneously satisfiable.">
+
+   Let $E = \{a, b\}$ with $w(a) = 10, w(b) = 1$. $\mathcal{M}_1$: partition matroid with capacity 1 on $\{a\}$. $\mathcal{M}_2$: partition matroid with capacity 1 on $\{b\}$. Simple greedy picks $a$ (highest weight), then checks $b$ — but $\{a, b\}$ is not independent in either matroid. Greedy returns $\{a\}$ with weight 10. Optimal common independent set of size 1? Actually $\{a\}$ is optimal here. Better: $E = \{a, b, c\}$, $w(a)=10$, $w(b)=9$, $w(c)=8$. $\mathcal{M}_1$: partition with $c_1=1$ on $\{a,b\}$, $c_2=1$ on $\{c\}$. $\mathcal{M}_2$: partition with capacity 1 on $\{a,c\}$, capacity 1 on $\{b\}$. Greedy picks $a$, then checks $b$ (fails independence in $\mathcal{M}_2$), checks $c$ (fails independence in $\mathcal{M}_1$). Returns $\{a\}$, weight 10. Optimal: $\{b,c\}$, weight 17. The simple exchange argument fails because swapping must respect both matroid structures simultaneously.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+- **Greedy embedding and routing in metric spaces** — Using greedy embeddings for geographic routing in networks is a distributed-computing application, not a core greedy algorithm design technique.
+- **Polymatroid optimization and submodular flow** — The generalization of matroids to polymatroids and submodular function minimization extends greedy to continuous settings; this is a combinatorial optimization topic beyond the scope.
+- **Greedy approximation for maximum coverage beyond set cover** — The greedy $(1 - 1/e)$-approximation for maximum coverage is briefly noted; the full analysis of submodular maximization under matroid and knapsack constraints is covered in the approximation algorithms module.
+- **Matroid intersection algorithm (Edmonds)** — Finding a maximum-weight common independent set of two matroids is polynomial via augmenting paths, but the algorithm is substantially more involved than the single-matroid greedy.
+- **Online greedy algorithms and regret bounds** — Greedy strategies in adversarial or stochastic online settings (multi-armed bandits) form a separate body of theory.
 
 ## References & Further Reading
 
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* [Cornell CS 4820 algorithm lectures](https://www.cs.cornell.edu/courses/cs4820/2026sp/lectures/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+- Edmonds, J. "Matroids and the Greedy Algorithm." *Mathematical Programming* 1 (1971): 127–136.
+- Whitney, H. "On the Abstract Properties of Linear Dependence." *Amer. J. Math.* 57 (1935): 509–533.
+- Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed., Chapter 16.
+- Kleinberg, J. and Tardos, É. *Algorithm Design*. Addison-Wesley, 2005. Chapters 4 and 8.
+- Nemhauser, G. L., Wolsey, L. A., and Fisher, M. L. "An Analysis of Approximations for Maximizing Submodular Set Functions." *Math. Programming* 14 (1978): 265–294.
+- Korte, B. and Vygen, J. *Combinatorial Optimization: Theory and Algorithms*, 6th ed. Springer, 2018. Chapters 13–14.
+- Papadimitriou, C. H. and Steiglitz, K. *Combinatorial Optimization: Algorithms and Complexity*. Dover, 1998.
+- [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)

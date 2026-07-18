@@ -1,0 +1,294 @@
+---
+title: "LSM Trees and Write-Optimized Storage"
+course: "data-structures"
+description: "Immutable sorted runs, compaction, tombstones, and the read/write trade-offs behind modern storage indexes."
+---
+
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+
+import LSMCompactionPlayground from '../../../components/playgrounds/LSMCompactionPlayground';
+
+# LSM Trees and Write-Optimized Storage
+
+**Prerequisites**: B-trees, amortized analysis, bloom filters, sequential vs random I/O cost model.
+
+A single commodity SSD handles ~100,000 random 4 KB I/Os per second. A B-tree serving 1 million point lookups per second needs 4 million random I/Os — 40× the drive capacity. What if the workload is 1 million writes per second? A B-tree scatters each write to a random leaf page, then propagates splits upward. The bottleneck is not CPU: it is random I/O.
+
+LSM trees (O'Neil et al., 1996, "The Log-Structured Merge-Tree") solve this by converting random writes into sequential ones. Writes accumulate in an in-memory sorted structure (the **memtable**), which flushes to disk as an immutable **sorted run** (SSTable). Background **compaction** merges runs into larger sorted files, discarding overwritten and deleted entries. The cost: reads must consult multiple files, trading read amplification for an order-of-magnitude write throughput gain.
+
+## Structure and invariants
+
+<StructureDiagram kind="lsm" title="LSM write path" caption="Writes accumulate in memory, flush to sorted runs, and compact into larger levels." />
+
+<MathStatement id="lsm-structure" kind="definition" title="LSM-tree structure">
+An LSM-tree consists of:
+- A mutable **memtable** $M$ (balanced BST, skip list, or equivalent) that accepts all writes.
+- Zero or more immutable **sorted runs** $R_0, R_1, \ldots, R_{k-1}$ on disk, each a sorted sequence of key-value pairs.
+- A **compaction** policy that merges a subset of runs into a new sorted run, discarding overwritten and deleted entries.
+- A **tombstone** $\top$ that marks a key as deleted, shadowing any older value for that key.
+- A **manifest** that records which runs are active and at which level.
+</MathStatement>
+
+| Layer | Mutable? | Main concern | Recovery needed? |
+| --- | --- | --- | --- |
+| memtable | yes | fast writes, crash recovery | write-ahead log |
+| sorted run (SSTable) | no | read amplification across runs | no (immutable) |
+| compacted level | no | write and space amplification | no (immutable) |
+
+<Quiz client:load
+  question="What does an LSM flush create?"
+  options={["An immutable sorted run", "A random pointer graph", "A heap root", "A deleted vertex"]}
+  correctIndex={0}
+  explanation="Flushing turns the mutable in-memory table into sorted immutable storage that later compaction can merge."
+/>
+
+The memtable maintains exactly one value per key (the most recent write). Each immutable run is sorted, and a run may contain multiple versions of the same key or tombstones. A lookup checks the memtable first, then runs in reverse chronological order, stopping at the first match. A tombstone causes the lookup to return "absent" without consulting older runs. Compaction preserves the newest visible value per key and may discard shadowed versions only when no retained snapshot can observe them.
+
+<LSMCompactionPlayground client:load />
+
+## Formal cost model
+
+<MathStatement id="wa-def" kind="definition" title="Write amplification (WA)">
+Write amplification is the ratio of bytes written to storage to bytes of new data inserted by the application:
+$$ WA = \frac{\text{total bytes written to storage}}{\text{bytes of new data}}. $$
+</MathStatement>
+
+<MathStatement id="ra-def" kind="definition" title="Read amplification (RA)">
+Read amplification is the number of structures (memtable + immutable memtable + SSTables) that a point lookup must consult before finding the target key or determining it is absent.
+</MathStatement>
+
+<MathStatement id="lsm-wa" kind="theorem" title="Leveled LSM write amplification" proofId="lsm-wa-proof">
+For an LSM-tree with size ratio $R > 1$ between consecutive levels, flush size $F$, and $L$ levels, each byte of newly inserted data is written approximately $L \cdot \frac{R}{R-1}$ times. The total write amplification factor is:
+$$ WA \approx L \cdot \frac{R}{R-1}. $$
+</MathStatement>
+
+<MathProof id="lsm-wa-proof" for="lsm-wa" collapsible open>
+Level $i$ has target size $F \cdot R^i$. Data is compacted from level $i$ to $i+1$ when level $i$ fills. Each byte at level $i$ is read and rewritten approximately $R/(R-1)$ times because level $i$ can accept $R-1$ flushes from level $i-1$ before filling, and each flush triggers a compaction that rewrites the entire level. Summing over $L$ levels:
+$$ WA = \sum_{i=0}^{L-1} \frac{R}{R-1} = L \cdot \frac{R}{R-1}. $$
+For $R=4$, $L=3$: $WA = 3 \cdot 4/3 = 4$. Each byte of original data causes 4 bytes of storage writes. ∎
+</MathProof>
+
+## Worked example: insertion trace
+
+```python
+# Trace of LSM-tree insertions with memtable flush size=4, size ratio R=4
+# Model: memtable fills, flushes to L0, compaction merges to L1 then L2
+steps = {
+    "Insert 1,3,5,7": "memtable=[1,3,5,7]",
+    "Flush L0": "L0=[[1,3,5,7]]; memtable=[]",
+    "Insert 2,4,6,8": "memtable=[2,4,6,8]",
+    "Flush L0": "L0=[[1,3,5,7],[2,4,6,8]]; memtable=[]",
+    "Insert 9,10,11,12": "memtable=[9,10,11,12]",
+    "Flush L0": "L0=[[1,3,5,7],[2,4,6,8],[9,10,11,12]]",
+    "Compact L0→L1": "L0=[]; L1=[[1..12]]",
+    "Insert 13..20": "L0=[[13..16],[17..20]]; L1=[[1..12]]",
+    "Compact L0→L1→L2": "L0=[]; L1=[]; L2=[[1..20]]",
+}
+```
+
+Assume a memtable accepting 4 entries before flushing, L0 with size ratio 1 (each run is a full flush), L1 target size 16 entries with size ratio 4, L2 target size 64 entries.
+
+Insert keys: 1, 3, 5, 7 → memtable. Flush to L0 as SSTable `[1,3,5,7]`. Memtable empties.
+
+Insert keys: 2, 4, 6, 8 → memtable. Flush to L0: L0 has `[1,3,5,7]` and `[2,4,6,8]`.
+
+Insert keys: 9, 10, 11, 12 → memtable. Flush to L0: `[9,10,11,12]`. Three SSTables in L0.
+
+Trigger: L0 size = $3 \times 4 = 12$ entries. L1 target = 16 entries. Since $12 < 16$, compact all L0 SSTables into L1: merge `[1,3,5,7]`, `[2,4,6,8]`, `[9,10,11,12]` into one sorted run `[1,2,3,4,5,6,7,8,9,10,11,12]`. L0 empty, L1 has one SSTable with 12 entries.
+
+Insert keys: 13, 14, 15, 16 → memtable. Flush to L0: `[13,14,15,16]`.
+
+Insert keys: 17, 18, 19, 20 → memtable. Flush to L0: L0 = `[13,14,15,16]`, `[17,18,19,20]`.
+
+Trigger compaction: L0 size = $2 \times 4 = 8$ entries. L1 has 12 entries. L1 target = 16 entries, so L0 compaction fits within L1. Compact L0 into L1: merge L0's two SSTables + L1's `[1..12]` → `[1..20]`. L1 now has 20 entries, exceeding 16. Compact L1 to L2: merge L1 into L2. L2 target = 64 entries, so no further compaction needed.
+
+| Step | Memtable | L0 SSTables | L1 | L2 |
+|------|----------|-------------|----|----|
+| After 4 inserts | [1,3,5,7] | — | — | — |
+| Flush to L0 | empty | [1,3,5,7] | — | — |
+| After 4 more | [2,4,6,8] | [1,3,5,7] | — | — |
+| Flush to L0 | empty | [1,3,5,7], [2,4,6,8] | — | — |
+| After 4 more | [9,10,11,12] | 2 SSTables | — | — |
+| Flush to L0 | empty | 3 SSTables | — | — |
+| Compact L0→L1 | empty | — | [1..12] | — |
+| After 8 more inserts | empty | [13..16], [17..20] | [1..12] | — |
+| Compact L0→L1, then L1→L2 | empty | — | — | [1..20] |
+
+This trace demonstrates the core write-path mechanics: buffering in memtable amortizes per-insert I/O, flushing creates immutable sorted runs, and compaction merges runs to bound read amplification.
+
+## Worked example: read amplification with bloom filters
+
+Consider an LSM-tree with one memtable and $L$ levels. Each level has size ratio $R$. A point lookup must check:
+
+- The memtable (1 structure, in memory).
+- An optional immutable memtable (1 structure).
+- All SSTables in L0 that may overlap the key range (typically all, up to a configured limit, e.g., 4).
+- At most 1 SSTable per deeper level (non-overlapping key ranges, binary search locates the relevant SSTable).
+
+**Example**: memtable + 1 immutable + L0 (4 SSTables) + L1 (1) + L2 (1) + L3 (1) = $1 + 1 + 4 + 1 + 1 + 1 = 9$ structures to check.
+
+With bloom filters (false positive rate $p = 0.01$), the expected number of I/Os for a key that exists is:
+
+$$ E[\text{reads}] = 1 + \sum_{s \neq s^*} p $$
+
+where $s^*$ is the SSTable containing the key. The containing SSTable always requires exactly 1 I/O. Each irrelevant SSTable's bloom filter may falsely report the key as present with probability $p$, causing an unnecessary I/O.
+
+**Numerical example**: $n = 10^8$ key-value pairs, 4 KB pages. B+ tree with $B=100$: height $\lceil \log_{100} 10^8 \rceil = 4$ pages per point lookup. LSM with $R=4$, $L=4$ levels: 1 I/O for the containing SSTable + $8 \times 0.01 = 0.08$ expected false-positive I/Os = 1.08 expected I/Os for an existing key. For a nonexistent key, every bloom filter may false-positive: $9 \times 0.01 = 0.09$ expected I/Os. The B+ tree reads 4 pages unconditionally.
+
+<CodeRunner client:load
+  title="LSM read amplification simulation"
+  language="python"
+  code={`import random
+
+def lsm_read_amplification(n_levels, l0_sstables, false_positive_rate, key_exists):
+    # Structures to check: memtable + immutable + L0 + one per deeper level
+    structures = 1 + 1 + l0_sstables + (n_levels - 1)  # levels beyond L0
+    if key_exists:
+        # One I/O to the containing SSTable is guaranteed
+        expected_io = 1
+        # Each other structure may false-positive
+        expected_io += (structures - 1) * false_positive_rate
+    else:
+        # Every structure may false-positive
+        expected_io = structures * false_positive_rate
+    return expected_io
+
+p = 0.01
+print(f"Existing key, 4 levels, L0=4: {lsm_read_amplification(4, 4, p, True):.3f} I/Os")
+print(f"Missing key, 4 levels, L0=4: {lsm_read_amplification(4, 4, p, False):.3f} I/Os")
+print(f"Existing key, 6 levels, L0=8: {lsm_read_amplification(6, 8, p, True):.3f} I/Os")`}
+  output="Existing key, 4 levels, L0=4: 1.080 I/Os\nMissing key, 4 levels, L0=4: 0.090 I/Os\nExisting key, 6 levels, L0=8: 1.140 I/Os"
+/>
+
+## Cost contracts
+
+<CaseStudy client:load
+  title="Read/write tradeoff"
+  scenario="A workload is write-heavy and reads tolerate checking several sorted runs."
+  question="Which tradeoff may justify an LSM tree?"
+  options={["Sequential write batching for more read amplification", "Zero background work", "No recovery protocol", "Unbounded tombstones"]}
+  correctIndex={0}
+  explanation="LSM designs trade random write cost for batched writes, accepting read and compaction work that must be bounded."
+/>
+
+Write cost depends on the number of bytes rewritten by flush and compaction (write amplification). Read cost depends on the number of runs consulted and the effectiveness of bloom filters. Space amplification includes duplicate versions and temporary merge output. A useful evaluation reports all three metrics together; optimizing one in isolation can make the workload worse.
+
+## Counterexamples and failure modes
+
+**Read-heavy workload with no bloom filters.** An LSM-tree without bloom filters must check every SSTable in L0 (potentially 4–8) plus one per deeper level. For a workload that is 99% reads, worst-case read amplification of $8 + L$ I/Os per lookup may exceed the read cost of a B+ tree (3–5 I/Os). The LSM's write advantage becomes irrelevant when the read cost dominates the workload.
+
+**Range query over many overlapping SSTables.** A range scan in an LSM-tree must merge all SSTables whose key ranges overlap the query. With $k$ overlapping SSTables in L0, the merge requires $O(k \cdot \text{range\_size})$ comparisons. If L0 accumulates many small runs before compaction, a range scan can be orders of magnitude slower than a B+ tree's linked-leaf sequential scan.
+
+**Tombstone accumulation without compaction.** If deletes outpace compactions, tombstones accumulate in sorted runs. Each tombstone consumes space (space amplification) and must be checked on every lookup (read amplification). A workload that deletes 50% of keys and compacts infrequently can see storage grow unboundedly even though logical data volume is constant.
+
+**Write stall under sustained insert rate.** When the memtable fills faster than compaction can drain it, the LSM-tree must throttle writes — a **write stall**. This occurs when the peak write rate exceeds the sustainable compaction throughput. The write path is sequential, but the compaction path is also I/O-bound; a sustained burst can saturate the storage device's write bandwidth, causing backpressure to the application.
+
+<Quiz client:load
+  question="What happens when tombstones outpace compaction?"
+  options={["Space amplification grows unboundedly", "Reads become faster", "Writes become sequential", "Bloom filters eliminate all I/O"]}
+  correctIndex={0}
+  explanation="Tombstones consume space and must be checked on every lookup. Without sufficient compaction, they accumulate and amplify both storage and read cost."
+/>
+
+## Failure and recovery
+
+> **Warning.** A durable write path must persist a write-ahead log before acknowledging a mutation. Without it, memtable contents are lost on crash and the LSM-tree cannot guarantee durability.
+
+<StructureDiagram kind="timeline" title="Durable manifest publication" caption="A new run becomes visible only after its data and manifest update are durable." />
+
+A durable write path needs a write-ahead log (WAL) or equivalent recovery record before acknowledging a mutation. The memtable is rebuilt from the WAL after a crash. A manifest identifies complete runs and their levels. Compaction must publish its output atomically with respect to readers — the new run must be fully written and fsynced before the manifest update removes the old runs. This is a storage protocol layered on the data-structure invariants, not a consequence of sorting alone.
+
+## Exercises
+
+<StructureDiagram kind="hash" title="Tombstones in sorted runs" caption="A deletion marker must shadow older values until compaction safely removes them." variant="tombstone" />
+
+<StructureExercise client:load
+  title="Check a compaction"
+  prompt="What must compaction preserve while merging sorted runs?"
+  options={["Newest visible value or tombstone per key", "Every historical duplicate forever", "The order of writes instead of key order", "An unpublished manifest"]}
+  answer={0}
+  explanation="Compaction may discard shadowed history only when the newest visible state and recovery protocol remain correct."
+  kind="hash"
+/>
+
+1. Give a lookup sequence where a tombstone is necessary to return "absent."
+
+   <ExerciseSolution>
+   Insert key `x` with value `v1`. Insert key `x` with value `v2`. Delete key `x`. Without a tombstone, the lookup finds `v2` (the newest non-deleted value) in an older run and incorrectly returns `v1` or `v2` instead of "absent." The tombstone must shadow all older values across all runs.
+   </ExerciseSolution>
+
+2. Explain why compaction can increase write amplification while reducing read amplification.
+
+   <ExerciseSolution hint="Think about what happens to the number of structures a lookup must check.">
+   Compaction merges multiple sorted runs into one, reducing the number of runs a lookup must consult. Fewer runs means fewer bloom filter checks and fewer I/Os. However, the merge process reads and rewrites every entry in the participating runs, increasing the total bytes written to storage. This is the fundamental trade-off: write more during compaction to read less during queries.
+   </ExerciseSolution>
+
+3. Design a manifest invariant that prevents readers from observing a partially written run.
+
+   <ExerciseSolution hint="What must happen before the manifest is updated? What must happen after?">
+   The invariant: a run appears in the manifest only after its data and index are fully written and fsynced. Conversely, a run is removed from the manifest only after the new run that replaces it is durable. Readers always consult the manifest to determine which runs exist; they never discover runs via directory listing. This ensures that a reader never observes a run that is incomplete or a run that has been logically replaced.
+   </ExerciseSolution>
+
+4. Compare an LSM tree and a B+ tree for a write-heavy workload with range reads.
+
+   <ExerciseSolution hint="Consider write amplification, read amplification for range scans, and space amplification.">
+   LSM: writes are batched and sequential (low per-write cost), but range reads may merge multiple SSTables (high read amplification). B+ tree: writes are random (high per-write cost), but range reads are sequential leaf scans (low read amplification). The crossover depends on the write/read ratio, the range size, and the storage device's random vs sequential I/O throughput.
+   </ExerciseSolution>
+
+5. **Recall: write amplification calculation.** Given an LSM-tree with size ratio $R = 4$ between levels and flush size $F = 64$ MB, calculate the total bytes written to storage (write amplification) for inserting 1 GB of unique data. Assume each entry is inserted once at the memtable level and compacted through every level until it reaches its final level. Show the calculation step by step.
+
+   <ExerciseSolution>
+   With size ratio $R=4$, each level has target size $F \cdot R^i$. Data is compacted from level $i$ to $i+1$ when level $i$ fills, so each byte is written approximately $R/(R-1) = 4/3$ times per level. The number of levels $L$ satisfies $F \cdot R^{L-1} \ge 1$ GB: $64 \cdot 4^{L-1} \ge 1024$, so $4^{L-1} \ge 16$, $L-1 \ge 2$, $L = 3$. Write amplification factor $\approx L \cdot R/(R-1) = 3 \cdot 4/3 = 4$. Total bytes written $\approx 4$ GB for 1 GB of original data.
+   </ExerciseSolution>
+
+6. **Application: compaction strategy for read-heavy workload.** Design a compaction policy for an LSM-tree serving a read-heavy workload (95% reads, 5% writes) with strict latency SLOs on the 99th percentile read. Compare leveled compaction (size-tiered, non-overlapping levels) versus tiered compaction (multiple overlapping SSTables per level). For each, state: (a) worst-case read amplification, (b) write amplification, (c) space amplification, and (d) whether a bloom filter can mitigate the read cost. Recommend one strategy and justify with a tradeoff analysis.
+
+   <ExerciseSolution>
+   Leveled: (a) read amplification = $L$ levels (one SSTable per level). (b) write amplification = $L \cdot R/(R-1)$. (c) space amplification $\approx 1/R$ per level. (d) Bloom filters reduce expected I/O but not the number of filter checks. Tiered: (a) read amplification = total SSTables across all levels (potentially $R^L$). (b) Write amplification $\approx R/(R-1)$ total (less rewriting). (c) Space amplification higher (multiple overlapping runs). (d) Bloom filters help more because more SSTables are checked. Recommendation: leveled compaction. Read amplification is bounded by $L$ and predictable, meeting strict latency SLOs. The higher write amplification is acceptable because writes are only 5% of the workload.
+   </ExerciseSolution>
+
+7. **Transfer: LSM vs B-tree on SSD.** An SSD can perform approximately 100,000 random 4 KB I/Os per second and 500,000 sequential 4 KB I/Os per second. A B+ tree with 4 KB pages performs 4 random I/Os per point lookup. An LSM-tree with memtable flushed as a 4 KB SSTable, bloom filters ($p=0.01$), and level compaction ($R=4$) performs expected 0.1 random I/Os per point lookup (due to bloom filter false positives) but writes 4× the data due to compaction. For a workload of $10^6$ point lookups and $10^5$ inserts per second: (a) compute the random I/O demand for each structure, (b) compute the write I/O demand for each structure, (c) determine whether each structure can meet the workload on a single SSD, and (d) identify the bottleneck for each.
+
+   <ExerciseSolution>
+   B+ tree: (a) Read I/O = $10^6 \times 4 = 4\,000\,000$ random I/Os/s, exceeding 100K capacity. (b) Write I/O = $10^5 \times 4 = 400\,000$ random I/Os/s, exceeding capacity. (c) Cannot meet workload — read I/O is the bottleneck (40× oversubscribed). LSM: (a) Read I/O = $10^6 \times 0.1 = 100\,000$ random I/Os/s, exactly at capacity. (b) Write I/O = $10^5 \times 4\,\text{KB} \times 4 = 1.6\,\text{GB/s}$ of sequential writes = 400\,000 sequential 4KB I/Os/s, which is within the 500K sequential capacity. (c) LSM meets the workload at the margin, with read I/O as the bottleneck (at exactly capacity, any burst causes queuing). (d) B+ tree bottleneck is read I/O (40× oversubscribed); LSM bottleneck is read I/O (at capacity).
+   </ExerciseSolution>
+
+8. **Synthesis: bloom filter allocation across levels.** Derive the optimal allocation of bloom filter bits across LSM levels to minimize total expected I/O cost for point lookups. Assume level $i$ has $N_i$ entries, the total bit budget is $B$ bits, and a false-positive I/O costs $c$ units. Show that the optimal false-positive rate $p_i$ for level $i$ satisfies $p_i \propto 1/N_i$, and compute the total expected cost. How does this change if lookups are skewed toward recent data (most lookups hit the memtable or L0)?
+
+   <ExerciseSolution hint="Use the method of Lagrange multipliers on the expected cost function.">
+   The expected I/O cost is $C = c \sum_i N_i p_i$ subject to $\sum_i N_i \ln(1/p_i) \le B \ln 2$ (the bloom filter space constraint). Using Lagrange multipliers, the optimal satisfies $p_i \propto 1/N_i$, meaning larger levels get lower false-positive rates (more bits per key). For skewed lookups, weight each level's contribution by the lookup probability $q_i$: $C = c \sum_i q_i p_i$. If $q_i$ is concentrated in the memtable and L0, allocate more bits to deeper levels where lookups are rare but expensive when they occur.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+<details>
+<summary>Why these topics are deferred</summary>
+
+Each omitted topic builds on the core LSM model but requires additional systems concepts or constrained optimization techniques that are not prerequisites for this lesson's learning outcomes. They are catalogued here so that interested readers can locate them in the literature.
+
+</details>
+
+**LSM-tree with range-partitioned compaction (PebblesDB, WiscKey)**: key-value separation (storing values in a separate log and keys in the LSM) and guard-based partitioning. These are systems-level optimizations that change the compaction granularity but do not alter the fundamental trade-offs between read, write, and space amplification.
+
+**Monkey (optimal bloom filter allocation across LSM levels)**: the observation that different LSM levels need different false-positive rates to minimize total cost. The analysis builds on the cost model developed in this lesson but involves constrained optimization across levels. Exercise 8 sketches the derivation.
+
+**LSM-tree in distributed systems (Cassandra, Scylla)**: consistent hashing, hinted handoff, repair, and tombstone garbage collection across nodes. These are distributed-systems concerns layered on top of the core LSM structure.
+
+**Comparison with B-ϵ trees (write-optimized B-trees)**: B-trees with internal-node buffers that provide similar write optimization to LSM trees. The buffering mechanism and the space-amplification characteristics differ; a comparison belongs in a broader storage-index survey.
+
+## References & Further Reading
+
+- O'Neil, P., Cheng, E., Gawlick, D., and O'Neil, E. "The Log-Structured Merge-Tree (LSM-Tree)." *Acta Informatica* 33(4), 1996.  The original LSM-tree paper.
+- Chen, F., et al. "Essential Roles of the LSM-Tree in Modern Database Systems." *ACM Computing Surveys* 55(11), 2023.  A comprehensive modern survey.
+- Dayan, N., and Idreos, S. "Monkey: Optimal Navigable Key-Value Store." *SIGMOD*, 2017.  Bloom filter optimization across LSM levels.
+- Sears, R., and Ramakrishnan, R. "bLSM: A General Purpose Log Structured Merge Tree." *SIGMOD*, 2012.  LSM-tree with lazy leveled compaction.
+- Luo, C., and Carey, M. J. "LSM-based Storage Techniques: A Survey." *VLDB Journal*, 2020.
+- [MIT 6.830: B+ Trees and storage indexes](https://ocw.mit.edu/courses/6-830-database-systems-fall-2010/1343b2699f7d4c76a768b8f45b1674b1_MIT6_830F10_lec06.pdf)
+- [RocksDB wiki: Compaction](https://github.com/facebook/rocksdb/wiki/Compaction)

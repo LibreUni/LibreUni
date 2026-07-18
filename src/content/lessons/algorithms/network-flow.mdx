@@ -1,103 +1,415 @@
 ---
 title: "Network Flow and Cuts"
 course: "algorithms"
-description: "Residual networks, augmenting paths, max-flow min-cut, integrality, matching, and flow-model design."
+description: "Max-flow min-cut theorem, Ford-Fulkerson, Edmonds-Karp, Dinic, push-relabel, integrality, circulation, and min-cost flow with diagrams, counterexamples, and transfer exercises."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+
 # Network Flow and Cuts
 
-A flow network models divisible movement through directed edges with capacities. A source s supplies flow, a sink t receives it, and intermediate vertices conserve flow. The maximum-flow problem asks for the greatest value that can be sent from s to t. Its algorithms are a rich example of invariant-driven improvement: residual edges encode how an existing solution can be repaired, and cuts provide a matching optimality certificate.
+During the early 1950s, the United States Air Force faced a logistical problem. The Soviet railway network had limited capacity on each rail segment between cities. How many tanks could be moved from factories in the interior to the front lines, given that each section of track could carry at most a certain number of trains per day? This was the motivation for what became the **maximum flow problem** [Ford & Fulkerson 1956](#ford-fulkerson-1956).
 
-## Flow definition
+The first attempt to solve it is obvious: find *some* route from source (factory) to sink (front line), send as much flow as the weakest link allows, then find another route, and repeat. This greedy approach — send flow along any available path — can get stuck. You might send flow along a path that later turns out to block a better overall routing, leaving a suboptimal solution that cannot be directly improved.
 
-For capacity c(u,v) at least 0, a flow f satisfies capacity (0 at most  f(u,v) at most  c(u,v)) and conservation (sum_u f(u,v)=sum_w f(v,w)) for every intermediate v. The value is net flow leaving s, equal to net flow entering t under conservation. Parallel edges can be represented separately or aggregated; reverse arcs in a residual graph are algorithmic records, not necessarily original network edges.
+The breakthrough came in 1956 from L. R. Ford Jr. and D. R. Fulkerson (Ford & Fulkerson 1956). Their key insight: when you send flow along an edge, you must also record the *possibility of undoing* that flow later. This is the **residual graph**: it contains forward edges with remaining capacity and reverse edges representing flow that can be canceled. An augmenting path in the residual graph lets you reroute previously committed flow, escaping local optima.
 
-An s-t cut partitions vertices into S containing s and T containing t. Its capacity is the sum of capacities from S to T. Any flow value is at most every cut capacity: conservation cancels internal flows, and net source flow crosses the boundary, bounded edgewise by capacities. This weak duality is the upper-bound half of max-flow min-cut.
+> **Prerequisites.** Elementary graph theory (directed graphs, adjacency, paths), breadth-first and depth-first search, and basic familiarity with asymptotic notation ($O$, $\Omega$, $\Theta$). No prior exposure to network flow is assumed.
 
-## Residual networks
+## Flow Definitions
 
-Given flow f, the residual capacity from u to v is (c_f(u,v)=c(u,v)-f(u,v)) on a forward edge, plus f(u,v) on a reverse edge. A residual path from s to t permits increasing flow along forward edges and canceling flow along reverse edges by the bottleneck amount. Updating f preserves capacity and conservation at internal vertices because path increments enter and leave each internal vertex equally.
+<MathStatement id="flow-def" kind="definition" title="Flow network and flow" proofId="flow-def-example">
+A flow network is a directed graph $G = (V, E)$ with source $s$, sink $t$, and capacity $c: E \to \mathbb{R}^{\ge 0}$. A flow $f: E \to \mathbb{R}$ satisfies:
+1. **Capacity constraint:** $0 \le f(u,v) \le c(u,v)$ for all $(u,v) \in E$.
+2. **Flow conservation:** $\sum_{(u,v) \in E} f(u,v) = \sum_{(v,w) \in E} f(v,w)$ for all $v \in V \setminus \{s,t\}$.
 
-**Worked augmentation.** Suppose paths s→a capacity 3, a→t 2, s→b 2, b→t 3, and a→b 1. Augment s-a-t by 2, then s-b-t by 2. A residual path may use reverse a→s or b→a to reroute flow if a later path needs capacity. Greedy path choices affect iteration count, but residual reversals preserve the ability to correct earlier choices.
+The **value** of $f$ is $|f| = \sum_{(s,v) \in E} f(s,v) - \sum_{(v,s) \in E} f(v,s)$.
+</MathStatement>
 
-Ford-Fulkerson repeatedly finds an s-t residual path and augments by its bottleneck. If capacities are integers, each augmentation increases integral flow by at least one and terminates, though the number of augmentations can be large. With irrational capacities, arbitrary path choices can lead to nontermination; with rational capacities, scaling and precise arithmetic matter.
+<MathProof id="flow-def-example" for="flow-def" title="Small network example" collapsible open>
+Consider a network with $V = \{s, u, v, t\}$ and edges $s \to u$ (capacity 10), $s \to v$ (capacity 5), $u \to v$ (capacity 15), $u \to t$ (capacity 10), $v \to t$ (capacity 10). A feasible flow sends 5 on $s \to u$, 5 on $s \to v$, 5 on $u \to v$, 10 on $u \to t$, and 10 on $v \to t$. Check conservation at $u$: inflow 5 ($s \to u$), outflow 5 ($u \to v$) + 10 ($u \to t$) → violation. Find a valid assignment: send 10 on $s \to u$, 5 on $s \to v$, 5 on $u \to v$, 5 on $u \to t$, 10 on $v \to t$. At $u$: inflow 10, outflow 5+5 = 10 ✓. At $v$: inflow 5 ($s \to v$) + 5 ($u \to v$) = 10, outflow 10 ($v \to t$) ✓. Flow value: $10+5 = 15$.
+</MathProof>
 
-## Edmonds-Karp and complexity
+<MathStatement id="cut-def" kind="definition" title="s-t cut">
+An $s$-$t$ cut $(S, T)$ partitions $V$ with $s \in S$, $t \in T$. Its capacity is $c(S,T) = \sum_{u \in S, v \in T} c(u,v)$.
+</MathStatement>
 
-Edmonds-Karp chooses a shortest residual path in edge count using BFS. Each augmentation saturates an edge whose distance from s can increase only O(V) times before it leaves critical status; total augmentations are O(VE), each BFS O(E), yielding O(VE^2). The proof tracks distance labels and a critical-edge argument, not just the fact that BFS finds a path.
+**Weak duality:** For any flow $f$ and any $s$-$t$ cut $(S,T)$, $|f| \le c(S,T)$. *Proof.* Sum conservation equations over $S \setminus \{s\}$; internal edges cancel, leaving $|f| = f(S,T) - f(T,S) \le f(S,T) \le c(S,T)$. □
 
-Capacity scaling finds augmenting paths using residual capacity thresholds, reducing the number of relevant augmentations for large integer capacities. Dinic’s algorithm builds a level graph by BFS and sends a blocking flow; its general bound is O(V^2E), with stronger bounds for special networks. The right algorithm depends on V,E, capacities, and whether the network is unit, bipartite, or sparse.
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+node s as "s (source)"
+node u
+node v
+node t as "t (sink)"
+s --> u : "c = 10"
+s --> v : "c = 5"
+u --> v : "c = 15"
+u --> t : "c = 10"
+v --> t : "c = 10"
+note right of s : Factory
+note right of t : Front line
+@enduml`}
+/>
 
-## Max-flow min-cut theorem
+## Residual Network and Augmenting Paths
 
-If no s-t path exists in the residual graph, let S be vertices reachable from s. Every edge from S to T is saturated, or else its residual forward capacity would make T reachable. Every edge from T to S carries zero flow, or its residual reverse capacity would make S reachable. Thus flow value equals the capacity of the cut (S,T), proving optimality. Together with weak duality, this establishes max-flow=min-cut.
+<MathStatement id="residual" kind="definition" title="Residual network">
+Given flow $f$, the residual capacity of $(u,v)$ is:
+$$
+c_f(u,v) = \begin{cases}
+c(u,v) - f(u,v) & (u,v) \in E \\
+f(v,u) & (v,u) \in E \\
+0 & \text{otherwise}
+\end{cases}
+$$
+The residual graph $G_f = (V, E_f)$ where $E_f = \{(u,v) : c_f(u,v) > 0\}$.
+</MathStatement>
 
-The reachable set is an optimality certificate. A solver can return both flow and cut, and a validator checks capacities, conservation, flow value, and equality with cut capacity. This certificate catches implementation errors more effectively than checking only that no path was found by one particular search.
+An **augmenting path** is an $s$-$t$ path in $G_f$. Augmenting by $\Delta = \min_{(u,v) \in P} c_f(u,v)$ produces a new flow $f'$ with $|f'| = |f| + \Delta$.
 
-## Integrality and modeling
+<MathStatement id="augment-lemma" kind="lemma" title="Augmentation preserves feasibility" proofId="augment-lemma-proof">
+If $f$ is a feasible flow and $P$ is an $s$-$t$ path in $G_f$ with bottleneck $\Delta > 0$, then the flow $f'$ defined by adding $\Delta$ on forward edges of $P$ and subtracting $\Delta$ on reverse edges of $P$ is a feasible flow with value $|f| + \Delta$.
+</MathStatement>
 
-If capacities are integers, augmenting algorithms starting from zero produce integral flows because bottlenecks are integers. This supports assignment and matching reductions. In a bipartite graph, create source-to-left capacity 1, left-to-right edges capacity 1, and right-to-sink capacity 1. An integral max flow corresponds to a matching; max-flow min-cut yields Hall-style bottleneck conditions.
+<MathProof id="augment-lemma-proof" for="augment-lemma">
+Capacity constraints are preserved by the bottleneck choice. Conservation: every internal vertex on $P$ has one incoming and one outgoing edge on $P$ (oriented consistently), each changed by $\pm\Delta$, so net change is zero. Vertices off $P$ are unchanged. The source increases net outflow by $\Delta$, and the sink increases net inflow by $\Delta$.
+</MathProof>
 
-Many problems become flow through a careful network: edge-disjoint paths, project selection with closure constraints, circulation with demands, and scheduling under capacity. A modeling mistake—omitting conservation, allowing an invalid edge direction, or choosing the wrong capacity—can produce a mathematically optimal answer to the wrong problem. State the correspondence between feasible objects and flows in both directions.
+<PythonDiagram
+  code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import networkx as nx
 
-## Circulation and lower bounds
+edges = [('s','u',10), ('s','v',5), ('u','v',15), ('u','t',10), ('v','t',10)]
+flow = {('s','u'):10, ('s','v'):5, ('u','v'):5, ('u','t'):5, ('v','t'):10}
+resid = []
+for u,v,w in edges:
+    f = flow.get((u,v),0)
+    if w - f > 0: resid.append((u,v,w-f))
+    if f > 0: resid.append((v,u,f))
 
-A circulation has no distinguished source/sink and may have lower bounds ell(u,v) at most f(u,v) at most c(u,v). Convert lower bounds by assigning baseline ell, computing vertex demands, and adding a super-source/sink to satisfy imbalances; a feasible circulation exists iff all super-source demand can be sent. For demands and costs, min-cost flow adds an objective and requires different optimality arguments.
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12,5))
+pos = {'s':(0,0.5), 'u':(1,1), 'v':(1,0), 't':(2,0.5)}
 
-## Matching and vertex capacities
+for ax, title, edgelist in [(ax1, 'Original network (flow/capacity)', edges),
+                             (ax2, 'Residual network', resid)]:
+    dG = nx.DiGraph()
+    labels = {}
+    for u,v,w in edgelist:
+        dG.add_edge(u,v,weight=1)
+        if 'Original' in title:
+            f_val = flow.get((u,v),0)
+            labels[(u,v)] = f'{f_val}/{w}'
+        else:
+            labels[(u,v)] = str(w)
+    nx.draw(dG, pos, ax=ax, with_labels=True, node_color='lightblue',
+            node_size=2000, font_size=14, arrowsize=20)
+    nx.draw_networkx_edge_labels(dG, pos, edge_labels=labels, ax=ax, font_size=12)
+    ax.set_title(title, fontsize=14)
 
-Vertex capacities can be modeled by splitting vertex v into v_in→v_out with capacity b(v). Directed edge capacities then constrain flow through the vertex. A source/sink choice and edge orientation must reflect whether paths may reuse vertices. The split construction is a reusable reduction, but explain how paths map back and how artificial edges affect capacity.
+plt.tight_layout()
+plt.savefig('/tmp/residual.png', dpi=100)
+  `}
+  format="png"
+  title="Original flow network and its residual graph"
+/>
 
-## Implementation invariants
+## Max-Flow Min-Cut Theorem
 
-Represent each original directed edge with a residual forward arc and a reverse arc linked by indices. The invariant is that residual capacities are nonnegative, reverse updates are symmetric, and the original flow can be reconstructed from the paired capacities. When parallel original edges exist, do not identify them merely by endpoints unless aggregation is semantically valid; each edge may have a different identity or lower bound.
+<MathStatement id="maxflow-mincut" kind="theorem" title="Max-flow min-cut theorem" proofId="maxflow-mincut-proof">
+For any network, the maximum flow value equals the minimum $s$-$t$ cut capacity.
+</MathStatement>
 
-An augmentation routine must find a path whose every residual capacity is positive, compute the minimum along that path, update every arc and its reverse, and never update an edge twice under an inconsistent direction. A stale BFS parent array can create a non-path or reuse a previous route. Reset visited/parent state for every residual search and stop reconstruction at s; validate that t was reached before dereferencing parents.
+<MathProof id="maxflow-mincut-proof" for="maxflow-mincut">
+Let $f$ be a maximum flow. Let $S$ be the set of vertices reachable from $s$ in the residual graph $G_f$. Since $f$ is maximum, there is no $s$-$t$ path in $G_f$, so $t \notin S$. Thus $(S, V \setminus S)$ is an $s$-$t$ cut.
 
-## Numerical and capacity issues
+For every $u \in S, v \notin S$: if $(u,v) \in E$, then $c_f(u,v) = c(u,v) - f(u,v)$ must be $0$ (otherwise $v$ would be in $S$), so $f(u,v) = c(u,v)$. If $(v,u) \in E$, then $c_f(v,u) = f(u,v)$ must be $0$ (otherwise $u$ could reach $v$ via a reverse edge), so $f(u,v) = 0$.
 
-With integer capacities, use an integer type wide enough for the total possible flow; summing many capacities can overflow even if each edge fits. Floating capacities create equality and termination concerns; use tolerances only with a proof or policy for residual near-zero values, because an incorrect tolerance can invent or remove capacity. Rational scaling can restore integer arithmetic when denominators are bounded.
+Therefore flow on $S \to T$ edges equals their capacities, and flow on $T \to S$ edges is zero. The net flow across the cut is exactly $c(S,T)$. By weak duality, $|f| = c(S,T)$ is maximal and the cut is minimal.
+</MathProof>
 
-If an edge capacity is effectively infinite, choose a sentinel larger than any feasible source supply but still safe for arithmetic. Do not use the maximum machine integer and add to it. A capacity parser should reject negative values, malformed endpoints, and values outside the documented domain before constructing the network.
+<Quiz client:load
+  title="Max-flow min-cut check"
+  question="A flow network has a minimum $s$-$t$ cut capacity of 42. What is the maximum possible flow value?"
+  options={["At most 42", "Exactly 42", "At least 42", "Indeterminate from cut information alone"]}
+  correctIndex={1}
+  explanation="The max-flow min-cut theorem states equality: maximum flow value = minimum cut capacity."
+/>
 
-## Modeling checklist
+## Ford–Fulkerson Algorithm
 
-Draw one flow unit as a feasible object and trace it through the reduction. Check source/sink balance, intermediate conservation, every capacity meaning, and whether splitting or merging paths changes the original object. Then map an arbitrary feasible flow back to a solution, possibly decomposing it into paths and cycles. Cycles may carry flow without changing value; remove them when the target object does not include cycles.
+**Algorithm:** While an $s$-$t$ path exists in $G_f$, augment along it.
 
-## Testing and certificates
+**Correctness:** If the algorithm terminates, no augmenting path exists, and by the max-flow min-cut theorem, the flow is maximal. But termination is not guaranteed for irrational capacities — pathological examples with infinite augmentations exist [Zwick 1993, *IPL* 46: 211–214].
 
-For small integer networks, enumerate feasible integral flows or compare against a trusted linear-programming result. Include zero-capacity edges, disconnected source/sink, parallel arcs, antiparallel arcs, bottlenecks, multiple equal paths, and capacities near numeric limits. After solving, verify conservation at every intermediate vertex, capacity bounds, residual symmetry, and max-flow/min-cut equality using the residual-reachable set.
+**Complexity (integer capacities):** Each augmentation increases flow by at least 1, so at most $|f^*|$ iterations. Each iteration costs $O(E)$ (BFS or DFS). Total: $O(E|f^*|)$, which is pseudopolynomial.
 
-If the returned flow value is not equal to the cut capacity, either the flow is not maximal, the cut set was computed from the wrong residual state, or an update invariant is broken. Keep the final residual graph and certificate for debugging; a single scalar flow value is not enough evidence.
+<CodeRunner client:load
+  title="Ford–Fulkerson max flow"
+  language="python"
+  code={`def ford_fulkerson(graph, s, t):
+    n = len(graph)
+    flow = [[0]*n for _ in range(n)]
+    parent = [-1]*n
+    def dfs(u, bottleneck):
+        if u == t: return bottleneck
+        for v, cap, idx in graph[u]:
+            if parent[v] == -1 and cap - flow[u][v] > 0:
+                parent[v] = u
+                aug = dfs(v, min(bottleneck, cap - flow[u][v]))
+                if aug > 0:
+                    flow[u][v] += aug
+                    flow[v][u] -= aug
+                    return aug
+        return 0
+    total = 0
+    while True:
+        parent = [-1]*n
+        parent[s] = s
+        aug = dfs(s, float('inf'))
+        if aug == 0: break
+        total += aug
+    return total`}
+  output=""
+/>
+
+<CodeExercise client:load
+  title="Complete the residual graph check"
+  code={`def has_augmenting_path(flow, graph, s, t):
+    n = len(graph)
+    visited = [False] * n
+    stack = [s]
+    visited[s] = True
+    while stack:
+        u = stack.pop()
+        for v, cap, idx in graph[u]:
+            # residual capacity check:
+            if not visited[v] and cap [!blank!] flow[u][v] [!blank!] 0:
+                visited[v] = True
+                stack.append(v)
+    return visited[t]`}
+  answers={["-", ">"]}
+  explanation="A forward edge exists in the residual graph when remaining capacity cap - flow[u][v] > 0."
+/>
+
+## Edmonds–Karp Algorithm
+
+Use BFS to find the *shortest* (fewest edges) augmenting path each iteration. This refinement was published by Edmonds and Karp in 1972 [Edmonds & Karp 1972, *J. ACM* 19: 248–264].
+
+<MathStatement id="ek-lemma" kind="lemma" title="Edmonds–Karp monotonic distance" proofId="ek-lemma-proof">
+In Edmonds–Karp, the BFS distance $d_f(v) = \text{dist}_{G_f}(s, v)$ is nondecreasing for all $v$ across augmentations.
+</MathStatement>
+
+<MathProof id="ek-lemma-proof" for="ek-lemma" collapsible>
+Suppose an augmentation makes some $v$ closer to $s$ for the first time. Consider the first augmentation that causes any distance to decrease. Let $v$ be the vertex with minimum decreased distance. In $G_f$ after augmentation, there is a shortest path $s \to \cdots \to u \to v$ with $\text{dist}(v) = \text{dist}(u) + 1$. Before augmentation, either $(u,v)$ was not in $G_f$ or it was and $\text{dist}(v) \ge \text{dist}(u) + 1$ (since distances were nondecreasing for all vertices before $v$). The only way $(u,v)$ appears in $G_f$ is if the augmentation saturated $(v,u)$ (creating reverse capacity). But if $(v,u)$ was saturated, then in the previous BFS, $(v,u)$ was the *critical edge* — it was on a shortest augmenting path. When $(v,u)$ is saturated, the distance to $v$ in that BFS was $\text{dist}(v) = \text{dist}(u) - 1$ (since the path used $(v,u)$). Thus after saturation, $\text{dist}(v) + 1 = \text{dist}(u) \le \text{dist}(u)$ before, so $\text{dist}(v)$ did not decrease.
+</MathProof>
+
+<MathStatement id="ek-complexity" kind="theorem" title="Edmonds–Karp complexity" proofId="ek-complexity-proof">
+The Edmonds–Karp algorithm performs $O(VE)$ augmentations, each in $O(E)$ time, for total $O(VE^2)$.
+</MathStatement>
+
+<MathProof id="ek-complexity-proof" for="ek-complexity" collapsible>
+An edge $(u,v)$ becomes *critical* (bottleneck of an augmenting path). After it is saturated, it disappears from $G_f$ and reappears only when flow is sent on its reverse. Between two critical appearances of $(u,v)$, the distance to $v$ increases by at least 2 (by the monotonic lemma and the fact that the reverse path goes $u \leftarrow v$). Since distances are bounded by $V$, each edge can be critical $O(V)$ times, giving $O(VE)$ augmentations.
+</MathProof>
+
+## Dinic's Algorithm
+
+Dinic's algorithm, published in 1970 [Dinic 1970, *Soviet Mathematics Doklady* 11: 1277–1280], introduces **layered networks**. From BFS in $G_f$, keep only edges that go from layer $l$ to layer $l+1$ (the *level graph*). Find a *blocking flow* in the level graph via DFS with dead-end pruning.
+
+<MathStatement id="dinic-complexity" kind="theorem" title="Dinic's algorithm complexity" proofId="dinic-complexity-proof">
+Dinic's algorithm runs in $O(V^2 E)$ time on general networks and $O(\min(V^{2/3}, \sqrt{E}) E)$ on unit-capacity networks.
+</MathStatement>
+
+<MathProof id="dinic-complexity-proof" for="dinic-complexity" collapsible>
+Each BFS phase increases $d(t)$ by at least 1 (since a blocking flow saturates all level-$d(t)$ paths). There are at most $V$ phases. In each phase, finding the blocking flow via DFS spends $O(E)$ per path, and each DFS either reaches $t$ (saturating at least one edge) or backtracks (pruning a vertex). Each edge is saturated at most once per phase. Total per phase: $O(VE)$ (each vertex becomes dead end once). Multiply by $V$ phases: $O(V^2 E)$.
+
+For unit-capacity networks, $d(t)$ grows as $O(\sqrt{E})$ or $O(V^{2/3})$, giving better bounds.
+</MathProof>
+
+## Push-Relabel Algorithm
+
+Push-relabel, due to Goldberg and Tarjan [Goldberg & Tarjan 1988, *J. ACM* 35: 921–940], maintains a *preflow* (conservation can be violated — excess flow may accumulate at vertices) and a height labeling $h$. The operation is: while a vertex $u$ with excess exists, push flow to a neighbor $v$ with $h(u) = h(v) + 1$; if no such neighbor exists, relabel $h(u) = 1 + \min_{(u,v) \in E_f} h(v)$.
+
+<MathStatement id="push-relabel" kind="theorem" title="Push-relabel correctness" proofId="push-relabel-proof">
+The push-relabel algorithm maintains a preflow and terminates with a maximum flow in $O(V^3)$ time.
+</MathStatement>
+
+<MathProof id="push-relabel-proof" for="push-relabel" collapsible>
+Invariant: $h$ is a valid labeling — $h(s) = V$, $h(t) = 0$, and $h(u) \le h(v) + 1$ for all $(u,v) \in E_f$. Push maintains this; relabel preserves it. When no excess remains, the preflow is a flow, and the cut defined by $\{u : h(u) \ge V\}$ has capacity 0 in $G_f$, proving maximality. Each vertex is relabeled $O(V)$ times (height bounded by $2V-1$), and each edge is saturated $O(V)$ times, giving $O(V^3)$ total pushes.
+
+The **highest-label** variant (select the vertex with maximum height) and **gap heuristics** improve practical performance.
+</MathProof>
+
+<Quiz client:load
+  title="Preflow vs flow"
+  question="What distinguishes a preflow from a feasible flow?"
+  options={["Preflows allow excess at intermediate vertices", "Preflows ignore capacity constraints", "Preflows require integer capacities", "Preflows do not use a source"]}
+  correctIndex={0}
+  explanation="Push-relabel relaxes conservation: excess may accumulate at vertices during computation, then is resolved by pushes to the sink or back to the source."
+/>
+
+## Integrality Theorem
+
+<MathStatement id="integrality" kind="theorem" title="Integrality of max flow">
+If all capacities are integers, there exists a maximum flow $f$ such that $f(u,v)$ is an integer for every edge.
+</MathStatement>
+
+**Proof.** Ford–Fulkerson starting from the zero flow always augments by integer amounts (the bottleneck is integer). Thus every flow encountered is integral. The limit flow is integer. For non-integer capacities, the integrality theorem does not hold. □
+
+**Consequence for bipartite matching:** Unit-capacity edges on source/sink give integer flows that correspond to matchings.
+
+## Counterexamples and Failure Modes
+
+### Ford–Fulkerson can be exponential
+
+With integer capacities, Ford–Fulkerson can take $\Theta(2^{V/2})$ augmentations on a carefully constructed graph. Consider two long parallel paths sharing a single capacity-1 edge. Each augmentation sends 1 unit, forcing the algorithm to alternate between the two paths until the cut capacity is exhausted. This demonstrates why BFS-based shortest-path selection (Edmonds–Karp) is necessary for polynomial guarantees.
+
+### Non-termination with irrational capacities
+
+Ford–Fulkerson using DFS for path selection may never terminate if capacities are irrational. Zwick (1993) constructed a network with four vertices and three irrational capacities where the algorithm performs an infinite sequence of augmentations converging to a flow value strictly below the true maximum. The residual graph always contains an augmenting path, but each augmentation shrinks the bottleneck geometrically without ever reaching zero.
+
+### Greedy path selection can block optimal flow
+
+Without reverse edges (the residual graph), a naive greedy augmenting path algorithm can produce a suboptimal flow. The classic example: a graph with edges $s \to a$ (cap 1), $s \to b$ (cap 1), $a \to b$ (cap 1), $a \to t$ (cap 1), $b \to t$ (cap 1). A greedy first choice $s \to a \to b \to t$ sends 1 unit but saturates $a \to b$, blocking any further flow. The max flow is 2 ($s \to a \to t$ and $s \to b \to t$). Reverse edges in the residual graph allow undoing the mistake.
+
+## Circulation with Demands
+
+A *circulation* assigns flow values to edges with no source or sink. Each vertex has a demand $d(v)$: if $d(v) > 0$, the vertex requires $d(v)$ units of net inflow; if $d(v) < 0$, it supplies $-d(v)$ units. A circulation satisfies $\sum_{(u,v) \in E} f(u,v) - \sum_{(v,w) \in E} f(v,w) = d(v)$. Feasibility is equivalent to a max-flow problem with a super-source and super-sink [CLRS 2022, Ch. 26].
+
+## Minimum-Cost Flow
+
+Each edge has both capacity $c(u,v)$ and cost per unit $a(u,v)$. The min-cost max-flow problem seeks a flow of value $k$ minimizing total cost $\sum a(u,v) f(u,v)$.
+
+**Successive shortest augmenting path algorithm.** Maintain reduced costs $\tilde{a}(u,v) = a(u,v) + \phi(u) - \phi(v)$ via potentials $\phi$. Dijkstra in the residual graph with reduced costs finds the cheapest augmenting path. Potentials ensure nonnegative reduced costs after each augmentation (if no negative cycles exist initially). Complexity: $O(k E \log V)$ for $k$ units of flow.
+
+<MathStatement id="mincost-potential" kind="theorem" title="Optimality condition for min-cost flow">
+A flow $f$ is minimum-cost for its value iff the residual graph $G_f$ contains no negative-cost directed cycle.
+</MathStatement>
+
+**Proof.** If a negative cycle exists, augmenting flow around it reduces cost while preserving flow value. Conversely, if no negative cycle exists, any feasible augmentation decomposes into paths and cycles; negative cycles would allow improvement. □
+
+## Applications
+
+**Edge-disjoint paths.** Maximum number of edge-disjoint $s$-$t$ paths equals the max flow with unit capacities. Vertex-disjoint paths reduce to edge-disjoint via vertex splitting.
+
+**Project selection.** Projects have profit $p_i$ (positive or negative) and prerequisites $i \to j$ (if $i$ is selected, $j$ must be selected). Model as a min-cut problem: source connects to positive-profit projects, negative-profit projects connect to sink, prerequisite edges have infinite capacity. The selected set is the sink side of the minimum cut.
+
+**Baseball elimination.** Determine if a team can still finish first given remaining games. Formulate as a max-flow feasibility problem [Schwartz 1966, *Amer. Math. Monthly* 73: 308–309].
+
+<CaseStudy client:load
+  title="Baseball elimination"
+  scenario="Team A has 80 wins with 10 games remaining. Team B has 78 wins with 8 games remaining. Teams A and B play each other 4 more times. Team A can lose at most 2 more games to guarantee finishing ahead of Team B."
+  question="How do you model whether Team A is still in contention using network flow?"
+  options={["Construct a network where source capacity limits wins, intermediate nodes represent remaining games, and sink capacity represents max wins for the elimination target", "Compute the average of all win percentages", "Use shortest path on the win-difference graph", "Apply bipartite matching of games to teams"]}
+  correctIndex={0}
+  explanation="The baseball elimination problem models each remaining game as a node with capacity 2 (one win each), each team as a node capped at its max possible wins, and source-to-game edges with capacity 1. If the max flow saturates all game edges, team A is not yet eliminated."
+/>
 
 ## Exercises
 
-1. State flow feasibility and prove path augmentation preserves it.
-2. Prove every flow is bounded by every s-t cut.
-3. Trace residual reverse-edge rerouting.
-4. Explain Edmonds-Karp’s critical-edge complexity idea.
-5. Prove max-flow min-cut from a saturated reachable cut.
-6. Reduce bipartite matching to max flow and prove integrality correspondence.
-7. Model vertex capacities by splitting.
+1. **Ford–Fulkerson bound.** Show that Ford–Fulkerson can be exponential in the number of vertices if capacities are large integers. Construct a network with $O(V)$ vertices where the algorithm takes $\Theta(2^{V/2})$ augmentations.
 
-### Diagnostic solutions
+   <ExerciseSolution hint="Consider a graph where two long parallel paths share a single capacity-1 edge, forcing Ford–Fulkerson to alternate between them each iteration.">
 
+   Construct a graph where each augmentation sends 1 unit but the minimum cut capacity is $2^k$. Use long parallel paths with alternating bottlenecks that cause Ford–Fulkerson to alternate between two paths, each time sending only 1 unit. Example: $s \to a \to b \to t$ with capacities $C, 1, C$ and $s \to b \to a \to t$ with capacities $C, 1, C$, where $C$ is large. Augmentations switch between the two paths.
+   </ExerciseSolution>
 
-1. Forward augmentation increases flow on path edges and reverse augmentation cancels existing flow; capacities remain within bounds by bottleneck choice. Each internal path vertex receives and sends the same delta, preserving conservation.
+2. **Edmonds–Karp monotonicity.** Prove that the BFS distance $d_f(v)$ is strictly increasing for vertices on the shortest path after an edge is critical. Use this to show the $O(VE)$ bound.
 
-2. Sum conservation over vertices in S excluding s. Internal edges cancel, leaving flow value equal to net flow crossing the cut. Forward crossing flow is at most cut capacity and reverse contribution cannot increase it, so value at most capacity.
+   <ExerciseSolution hint="Track the BFS distance to the source for vertices on the path before and after an edge becomes critical, then again when it reappears via its reverse.">
 
-3. If a prior path sends flow a→b, residual b→a can cancel it. An augmentation using b→a reduces f(a,b) and changes adjacent conservation consistently; the new flow may route the same total value along a different original path.
+   When $(u,v)$ is critical, it is on a shortest path: $\text{dist}(v) = \text{dist}(u) + 1$. It disappears from $G_f$ after saturation. When it reappears, the path in the new BFS goes $v \to u$, so $\text{dist}(v) = \text{dist}(u) - 1$ in the new labeling. By monotonicity, $\text{dist}(u)$ in the new labeling is at least its old value, so $\text{dist}_\text{new}(v) = \text{dist}_\text{new}(u) - 1 \ge \text{dist}_\text{old}(u) - 1 = \text{dist}_\text{old}(v) + 1 - 1 = \text{dist}_\text{old}(v) + 0$. Actually, need a stronger bound: between critical appearances, $\text{dist}(v)$ increases by at least 2 because the path $v \to \cdots \to u$ after the reverse edge addition has length at least the old BFS distance to $u$ plus 1, which is at least $\text{dist}_\text{old}(v) + 2$ due to the reversal.
+   </ExerciseSolution>
 
-4. BFS distances never decrease after augmentation. When a shortest-path edge saturates, it cannot remain critical at the same distance; its distance must rise before it can be critical again. Summing O(E) possible critical events over O(V) rises gives O(VE) augmentations, each O(E).
+3. **Mincost flow reduction.** Reduce the min-cost flow problem to a sequence of shortest-path computations. Describe how potentials are maintained and how Dijkstra can be used despite negative costs.
 
-5. Let S be residual-reachable from s when no augmenting path exists. Every S→T edge is saturated and every T→S edge carries zero flow. Flow value therefore equals capacity(S,T), and weak duality makes both optimal.
+   <ExerciseSolution>
+   Set potentials $\phi(v) = \text{dist}(v)$ from $s$ in the residual graph using Bellman–Ford initially. After each augmentation, update $\phi(v) = \phi(v) + d(v)$ where $d$ is the shortest path distance from $s$ in the residual graph using reduced costs $\tilde{a} = a + \phi(u) - \phi(v)$. The reduced costs remain nonnegative, so Dijkstra works.
+   </ExerciseSolution>
 
-6. Unit source/left and right/sink capacities enforce each vertex used at most once; middle edges represent allowed pairs. Integral flows choose whole edges and correspond to matchings; a matching produces a flow of equal value. Thus maximum matching size equals max flow.
+4. **Circulation feasibility.** Given a circulation problem with demands $d(v)$ and capacities, construct a max-flow instance whose maximum flow equals a feasible circulation iff the total supply equals total demand.
 
-7. Replace v by v_in→v_out with capacity b(v), redirect incoming edges to v_in and outgoing from v_out. Any flow uses at most b(v) through the split edge; any vertex-capacitated path/flow maps back by contracting it.
+   <ExerciseSolution>
+   Add source $s$ and sink $t$. For each vertex $v$ with $d(v) > 0$ (demand), add edge $(v, t)$ with capacity $d(v)$. For each $v$ with $d(v) < 0$ (supply), add edge $(s, v)$ with capacity $-d(v)$. Add an edge $(t, s)$ with infinite capacity to balance. The max flow saturates all supply edges iff a feasible circulation exists.
+   </ExerciseSolution>
+
+5. **Vertex capacities.** Model vertex-capacitated flows by edge splitting and prove the transformation preserves feasibility and optimality.
+
+   <ExerciseSolution>
+   Replace vertex $v$ with $v_{\text{in}} \to v_{\text{out}}$ with capacity equal to the vertex capacity. Redirect all incoming edges to $v_{\text{in}}$ and all outgoing edges from $v_{\text{out}}$. Every flow respecting vertex capacities corresponds to a flow in the split network and vice versa.
+   </ExerciseSolution>
+
+6. **Project selection min-cut.** Prove that the minimum $s$-$t$ cut in the project selection network corresponds to a maximal-profit closed set.
+
+   <ExerciseSolution>
+   The cut separates selected projects (sink side) from unselected ones (source side). If a selected project has an unselected prerequisite, the infinite capacity edge crosses the cut, making the cut capacity infinite and thus not minimal. Therefore every project in the sink set has all its prerequisites also in the sink set, forming a closed set. The cut capacity equals total profit of source-side positive projects (forgone) + sink-side negative projects (incurred), which is total positive profit minus the selected set's net profit. Minimizing cut capacity maximizes net profit.
+   </ExerciseSolution>
+
+### Transfer and synthesis exercises
+
+7. **Maximum closure with interdependent profits.** A research lab has $n$ projects, each with profit $p_i$. Some projects require pairs of other projects (AND prerequisite: both must be selected). Show how to model AND-prerequisites using a network flow construction with auxiliary vertices, or prove that the problem becomes NP-hard.
+
+   <ExerciseSolution hint="AND-prerequisites can be modeled by introducing an auxiliary vertex for the prerequisite pair with infinite-capacity edges enforcing both must be selected.">
+
+   Introduce an auxiliary vertex $x$ for each AND-prerequisite $i \to (j \land k)$. Add edges $i \to x$ with infinite capacity, $x \to j$ and $x \to k$ with infinite capacity. If $i$ is selected but $j$ is not, the infinite edge $x \to j$ crosses the cut. This forces $j$ and $k$ into the selected set when $i$ is selected. The construction generalizes to any monotone Boolean prerequisite formula.
+   </ExerciseSolution>
+
+8. **Image segmentation as min cut.** An image is a grid of pixels. Each pixel $i$ has a foreground likelihood $f_i$ and background likelihood $b_i$. Adjacent pixels $i,j$ incur penalty $p_{ij}$ if assigned to different regions. Model the segmentation as a minimum $s$-$t$ cut problem. Show that the optimal segmentation minimizes $\sum_i (\text{cost of assignment}) + \sum_{(i,j)} p_{ij} \cdot [\text{boundary between } i \text{ and } j]$.
+
+   <ExerciseSolution hint="Create a source representing foreground and sink representing background. Pixel nodes connect to source with capacity $f_i$ and to sink with capacity $b_i$. Adjacent pixels connect bidirectionally with capacity $p_{ij}$.">
+
+   Construct a network with source $s$ (foreground), sink $t$ (background), and a node for each pixel $i$. Add edge $s \to i$ with capacity $f_i$ and edge $i \to t$ with capacity $b_i$. For each adjacent pair $(i,j)$, add undirected edges $i \to j$ and $j \to i$ each with capacity $p_{ij}$. A cut $(S,T)$ places pixels in $S$ in the foreground and pixels in $T$ in the background. The cut capacity equals $\sum_{i \in T} f_i + \sum_{i \in S} b_i + \sum_{\text{boundary edges crossing the cut}} p_{ij}$, which is exactly the energy function to minimize.
+   </ExerciseSolution>
+
+### Counterexample analysis exercise
+
+9. **Irrational capacity pathology.** Construct a network with three vertices and two edges where Ford–Fulkerson with a naive DFS path selection strategy performs an infinite number of augmentations. Explain why Edmonds–Karp (shortest path) fails to terminate here as well, and why Dinic's level-graph approach resolves the issue.
+
+   <ExerciseSolution hint="Use capacities that form a geometric series, e.g., $c(s,u) = 1$, $c(u,t) = \phi$ where $\phi = (1+\sqrt5)/2$, and $c(s,t) = 0$. Show that DFS can pick paths that shrink the remaining capacity geometrically.">
+
+   In the Zwick construction, three vertices $s, u, t$ with capacities $c(s,u) = 1$, $c(u,t) = \phi$, $c(s,t) = 0$. A naive DFS sending flow along $s \to u \to t$ produces residual capacities that follow a recurrence $c_{k+1} = 1 - (1 - c_k)/\phi$, converging to a fixed point without reaching zero. The algorithm performs infinitely many augmentations. Edmonds–Karp does not help here because the shortest path is always $s \to u \to t$ (the only available path). Dinic resolves this because its level graph explicitly limits each phase to a single blocking flow, which saturates the path in finitely many phases (one per unit of layered distance increase).
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+The following topics are essential to a complete understanding of network flow but are addressed in other lessons or advanced references:
+
+- **Capacity scaling and Dinic with scaling.** The scaling technique for improving max-flow complexity to $O(E \cdot \min(V^{2/3}, \sqrt{E}) \cdot \log U)$ for integer capacities. This optimization detail builds on Dinic and is best studied after mastering the basic algorithm. See [CLRS 2022, Ch. 26].
+
+- **Minimum-cost circulation and the network simplex algorithm.** Min-cost flow admits strongly polynomial algorithms (Tardos 1985) and specialized simplex variants. The successive shortest-augmenting-path method covered here provides the essential intuition. See [Ahuja, Magnanti & Orlin 1993, *Network Flows*].
+
+- **Global min-cut without source-sink (Stoer–Wagner).** Finding the minimum cut of an undirected graph without a designated source-sink pair uses a contraction technique unrelated to augmenting paths. This appears in the advanced graph algorithms module.
+
+- **Dynamic and parametric flow.** Flows that change under incremental capacity updates or parameterized edge capacities (e.g., GGT algorithm for parametric max flow) are an active research area beyond this lesson's scope.
+
+- **Planar flow equivalence.** Maximum flow in planar graphs admits $O(V \log V)$ algorithms via dual shortest-path reductions. This is a specialized geometric technique.
 
 ## References & Further Reading
 
-* [MIT 6.046 Network Flow lecture materials](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+1. <span id="ford-fulkerson-1956"></span>Ford, L. R. and Fulkerson, D. R. "Maximal Flow through a Communication Network." *Canadian Journal of Mathematics* 8 (1956): 399–404.
+
+2. Edmonds, J. and Karp, R. M. "Theoretical Improvements in Algorithmic Efficiency for Network Flow Problems." *J. ACM* 19, no. 2 (1972): 248–264.
+
+3. Dinic, E. A. "Algorithm for Solution of a Problem of Maximal Flow in a Network with Power Estimation." *Soviet Mathematics Doklady* 11 (1970): 1277–1280.
+
+4. Goldberg, A. V. and Tarjan, R. E. "A New Approach to the Maximum-Flow Problem." *J. ACM* 35, no. 4 (1988): 921–940.
+
+5. Zwick, U. "The Smallest Networks on Which the Ford–Fulkerson Maximum Flow Procedure May Fail to Terminate." *Information Processing Letters* 46, no. 5 (1993): 211–214.
+
+6. Schwartz, B. L. "Possible Winners in Partially Completed Tournaments." *American Mathematical Monthly* 73, no. 2 (1966): 308–309.
+
+7. Cormen, T. H., Leiserson, C. E., Rivest, R. L., and Stein, C. *Introduction to Algorithms*, 4th ed. MIT Press, 2022. Chapters 24–26.
+
+8. Ahuja, R. K., Magnanti, T. L., and Orlin, J. B. *Network Flows: Theory, Algorithms, and Applications*. Prentice Hall, 1993.

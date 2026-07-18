@@ -22,7 +22,7 @@ LESSONS_DIR = ROOT / "src" / "content" / "lessons"
 
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 ARTIFACT_RE = re.compile(
-    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|details)\b|^```|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Example|Warning|Remark|Proof)\.",
+    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|StructureDiagram|StructureExercise|details)\b|^```|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Example|Warning|Remark|Proof)\.",
     re.MULTILINE,
 )
 PLANTUML_RE = re.compile(r"<PlantUML\b.*?code=\{`(.*?)`\}\s*/>", re.DOTALL)

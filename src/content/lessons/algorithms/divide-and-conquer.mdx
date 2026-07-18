@@ -1,103 +1,491 @@
 ---
 title: "Divide and Conquer"
 course: "algorithms"
-description: "Recursive decomposition, combine invariants, merge sort, selection, geometric examples, and design limits."
+description: "Recursive decomposition, recurrence analysis, Akra–Bazzi, merge sort, selection, FFT, Strassen, Karatsuba, and the limits of divide-and-conquer."
 ---
+
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import Quiz from '../../../components/Quiz';
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import TikZ from '../../../components/TikZ.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Divide and Conquer
 
-Divide-and-conquer algorithms solve a problem by dividing it into smaller subproblems, solving those subproblems recursively, and combining their answers. The paradigm is powerful when subproblems are substantially smaller and their solutions contain enough information to build the original answer. The design work is in choosing the subproblem boundary and combine summary; a recurrence alone does not guarantee correctness or efficiency.
+Consider an array $A[1..n]$ of integers and the problem of finding a contiguous subarray with maximum sum — the **maximum subarray sum** problem. Brute force examines $\Theta(n^2)$ subarrays, computing each sum from scratch. For $n = 10^6$ this is $5 \times 10^{11}$ operations — prohibitive.
 
-## Three design questions
+Can we do better? Suppose we split $A$ at its midpoint $m = \lfloor n/2\rfloor$. Any maximum subarray either (1) lies wholly in $A[1..m]$, (2) lies wholly in $A[m+1..n]$, or (3) crosses the midpoint. Cases (1) and (2) are smaller instances of the same problem — solve them recursively. Case (3) requires the maximum suffix sum of the left half plus the maximum prefix sum of the right half, both computable in $O(n)$ time. The recurrence $T(n) = 2T(n/2) + O(n)$ solves to $O(n \log n)$, a decisive improvement over $\Theta(n^2)$.
 
-First, define the subproblem precisely. “Sort the left half” is clear for an array, but a graph or geometric set may require a boundary summary. Second, ensure progress: every recursive call must satisfy a smaller measure and eventually reach a base case. Third, specify the combine invariant: what facts about child answers are sufficient to prove the parent answer?
+This pattern — **divide** into independent subproblems, **conquer** recursively, **combine** the results — is the *divide-and-conquer* paradigm. The term was introduced by John von Neumann in his 1945 design of merge sort, but the strategy itself is ancient: Julius Caesar's *divide et impera* in the *Commentarii de Bello Gallico* (58–50 BCE) describes the same principle applied to military coalitions. In algorithms, the paradigm succeeds when subproblems are genuinely independent (otherwise dynamic programming is the correct tool) and when combination costs are subquadratic.
 
-If subproblems overlap heavily, divide and conquer may recompute work and dynamic programming may be preferable. If the combine step requires scanning the entire input at every level, the recurrence may be n log n or worse. If a subproblem can be empty, the base contract must cover it.
+## Recurrence Analysis for Uneven Splits
 
-## Merge sort
+Most divide-and-conquer recurrences take the form $T(n) = a T(n/b) + f(n)$ for balanced splits. But many algorithms produce unequal subproblems. The Akra–Bazzi theorem handles general recurrences:
 
-Merge sort divides an array into two halves, recursively sorts each, and merges them. The correctness proof uses induction on n. Base arrays of size zero or one are sorted. For n greater than 1, induction gives sorted left and right halves; merge returns their stable sorted union. Therefore the complete result is sorted and is a permutation of the input.
+<MathStatement id="akra-bazzi" kind="theorem" title="Akra–Bazzi theorem">
+Let $T(n) = \sum_{i=1}^k a_i T(b_i n + h_i(n)) + f(n)$ where $a_i > 0$, $b_i \in (0, 1)$, $|h_i(n)| = O(n / \log^2 n)$, and $f$ satisfies a polynomial growth condition. Then:
 
-The merge invariant is: after writing t output elements, the output prefix is the t smallest remaining elements of the two input runs, in sorted order; the unconsumed suffixes remain sorted. At each step choose the smaller front, choosing the left on equality for stability. When one run empties, append the other; the invariant and final permutation follow.
+$$
+T(n) = \Theta\left( n^p \left(1 + \int_1^n \frac{f(u)}{u^{p+1}} \, du \right) \right)
+$$
 
-The recurrence `T(n)=2T(n/2)+Theta(n)` gives `Theta(n log n)`. Auxiliary space is O(n) for a standard array merge, plus O(log n) recursion stack. Bottom-up mergesort avoids recursive stack and can exploit runs already present. Linked lists can merge by relinking nodes, while arrays favor contiguous scans.
+where $p$ satisfies $\sum_{i=1}^k a_i b_i^p = 1$.
+</MathStatement>
 
-## Divide-and-conquer selection
+**Example: Median-of-medians selection.** $T(n) \le T(n/5) + T(7n/10) + O(n)$. Here $k=2$, $a_1 = a_2 = 1$, $b_1 = 1/5$, $b_2 = 7/10$. Solve $(1/5)^p + (7/10)^p = 1$. For $p=1$: $0.2 + 0.7 = 0.9 < 1$. For $p=0$: $1 + 1 = 2 > 1$. The solution $p$ satisfies $0 < p < 1$. Numerically, $p \approx 0.839$. The integral:
 
-Finding the kth smallest can use partitioning. Choose a pivot, partition into less/equal/greater, and recurse only into the region containing rank k. Unlike quicksort, only one side is processed, giving expected O(n) with randomized pivots. Correctness follows from partition regions: discarded elements are provably all below or above the desired rank.
+$$
+\int_1^n \frac{u}{u^{p+1}} \, du = \int_1^n u^{-p} \, du = \frac{n^{1-p} - 1}{1-p}.
+$$
 
-Deterministic median-of-medians selection groups elements, finds group medians, recursively selects their median, and partitions. The pivot guarantees a constant fraction discarded, yielding `T(n)  at most  T(n/5)+T(7n/10)+O(n)=O(n)`. The proof counts groups whose medians lie on each side and accounts for groups near the boundaries.
+Since $1-p > 0$, the integral contributes $\Theta(n^{1-p})$, and $T(n) = \Theta(n^p \cdot n^{1-p}) = \Theta(n)$.
 
-## Counting inversions
+## Merge Sort: Complete Correctness and Cost
 
-An inversion is a pair with `i  less than  j` and `A[i]  greater than  A[j]`. Merge sort can count inversions while merging. If a right-run element is selected before remaining left elements, it forms one inversion with each remaining left element. The merge invariant remains sortedness; an additional counter maintains the number of cross inversions. Total time O(n log n), versus O(n^2) pair enumeration.
+<MathStatement id="mergesort-spec" kind="definition" title="Merge sort specification" proofId="mergesort-proof">
+**Precondition:** $A$ is an array of length $n$ with elements from a totally ordered set.
+**Postcondition:** $\text{merge\_sort}(A)$ returns a permutation $B$ of $A$ such that $B[i] \le B[i+1]$ for all $i$.
+**Cost:** $T(n) = 2T(n/2) + \Theta(n) = \Theta(n \log n)$ comparisons and $\Theta(n \log n)$ element moves. Auxiliary space: $O(n)$.
+</MathStatement>
 
-The algorithm demonstrates a general technique: enrich a combine step with a summary that composes. Child recursion counts inversions internal to each half; merge counts cross inversions. The sum is exactly the full count because every pair is either internal to one half or crosses the split, never both.
+<MathProof id="mergesort-proof" for="mergesort-spec" collapsible open>
 
-## Closest pair geometry
+**Correctness proof by strong induction on $n$.**
 
-For points in the plane, brute-force closest pair is O(n^2). Divide by median x-coordinate, recursively find the closest distance delta in each half, then inspect a vertical strip of width 2delta. Sort strip points by y; each point needs only a constant number of comparisons under a packing argument, giving O(n log n).
+*Base:* $n \le 1$. An array of zero or one elements is vacuously sorted and is its own permutation. ✓
 
-The combine proof depends on geometry, not simply on “merge the answers.” If two points across the split are closer than delta, both lie in the strip. Partition the strip into cells whose side is related to delta; a packing argument limits how many points can occupy neighboring cells without creating a closer pair within one half. State boundary/tie handling and duplicate coordinates.
+*Inductive step.* Let $n > 1$ and assume merge sort is correct for all $m < n$. Partition $A$ into $L = A[0..\lfloor n/2\rfloor)$ and $R = A[\lfloor n/2\rfloor..n)$. Both $|L|, |R| < n$, so by the induction hypothesis, recursive calls return sorted permutations $L'$ and $R'$.
 
-## Convex hull intuition
+Define the **merge invariant**: after $t$ elements have been written to output $B$, the prefix $B[0..t-1]$ contains the $t$ smallest elements of $L' \cup R'$ in sorted order, and the remaining suffixes of $L'$ and $R'$ are individually sorted.
 
-Divide points by x, recursively compute hulls, and merge by finding upper and lower tangents. A hull representation must be cyclically ordered and have no interior point incorrectly included. Tangent search uses orientation tests; a sign convention and collinearity policy are required. The combine step can be logarithmic for suitable hull representations, yielding O(n log n), but implementation is delicate.
+*Proof of merge invariant by induction on $t$.* For $t = 0$, the invariant is vacuously true. Assume it holds after $t$ writes. The merge step compares the front elements $a = L'[i]$ and $b = R'[j]$. If $a \le b$, then $a$ is no larger than $b$, and $b$ is the minimum of the remaining right suffix (since $R'$ is sorted). Thus $a$ is the minimum of all remaining elements in $L' \cup R'$. Appending $a$ to $B$ preserves sortedness and the prefix property. Symmetrically if $b < a$. Set $t' = t+1$; the invariant holds.
 
-## Parallelism and memory
+When one run empties, the other run's suffix is appended unchanged; it is sorted and all its elements are $\ge$ the last written element (by the invariant, they were never chosen earlier because they were larger). Thus $B$ is a sorted permutation of $L' \cup R'$.
 
-Independent recursive subproblems can run in parallel, but combine work and synchronization limit speedup. The span recurrence measures critical-path time; total work measures operations. A balanced merge sort has O(n log n) work and O(log^2 n) span under simple parallel merge, or better with advanced merge. Work-efficient parallelism requires avoiding duplicated copies and contention.
+</MathProof>
 
-Memory layout affects divide-and-conquer. Recursion may create temporary arrays at each level; allocate one shared buffer or alternate source/destination arrays to reduce allocation. In-place algorithms save space but make combine proofs and stability harder. A cache-oblivious recursive layout can improve locality across cache levels without knowing line size.
+**Cost analysis.** The recurrence $T(n) = 2T(\lfloor n/2\rfloor) + \Theta(n)$ with $T(1) = \Theta(1)$ solves to $\Theta(n \log n)$ by the master theorem (Case 2). The merge step uses $O(n)$ auxiliary storage for the result; the recursion uses $O(\log n)$ stack frames.
 
-## Boundary conditions and data movement
+The recursion tree below shows work per level: each node contributes its merge cost, the sum per level is $n$, and there are $\log_2 n$ levels.
 
-The mathematical split must match the memory partition. If an array length is odd, one half has one extra element; if a range is represented by inclusive endpoints, the midpoint and recursive calls must strictly shrink. Prefer half-open intervals [lo,hi) because length is hi-lo and adjacent subproblems do not overlap. Prove that every input position belongs to exactly one child or the combine boundary and that no position is skipped.
+<TikZ
+  code={String.raw`\node[draw,rectangle,rounded corners,inner sep=2pt,minimum size=5mm,font=\footnotesize] (r) {$n$}
+  child[level distance=1.2cm,sibling distance=36mm] {node[draw,rectangle,rounded corners,inner sep=2pt,minimum size=5mm,font=\footnotesize] (a) {$n/2$}
+    child[level distance=1.2cm,sibling distance=18mm] {node[draw,rectangle,rounded corners,inner sep=2pt,minimum size=5mm,font=\footnotesize] {$n/4$}
+      child[level distance=1.2cm,sibling distance=9mm] {node {$\vdots$}}
+      child[level distance=1.2cm,sibling distance=9mm] {node {$\vdots$}}
+    }
+    child[level distance=1.2cm,sibling distance=18mm] {node[draw,rectangle,rounded corners,inner sep=2pt,minimum size=5mm,font=\footnotesize] {$n/4$}
+      child[level distance=1.2cm,sibling distance=9mm] {node {$\vdots$}}
+      child[level distance=1.2cm,sibling distance=9mm] {node {$\vdots$}}
+    }
+  }
+  child[level distance=1.2cm,sibling distance=36mm] {node[draw,rectangle,rounded corners,inner sep=2pt,minimum size=5mm,font=\footnotesize] (b) {$n/2$}
+    child[level distance=1.2cm,sibling distance=18mm] {node[draw,rectangle,rounded corners,inner sep=2pt,minimum size=5mm,font=\footnotesize] {$n/4$}
+      child[level distance=1.2cm,sibling distance=9mm] {node {$\vdots$}}
+      child[level distance=1.2cm,sibling distance=9mm] {node {$\vdots$}}
+    }
+    child[level distance=1.2cm,sibling distance=18mm] {node[draw,rectangle,rounded corners,inner sep=2pt,minimum size=5mm,font=\footnotesize] {$n/4$}
+      child[level distance=1.2cm,sibling distance=9mm] {node {$\vdots$}}
+      child[level distance=1.2cm,sibling distance=9mm] {node {$\vdots$}}
+    }
+  };
+`}
+/>
 
-Copying is part of combine cost. A recursive procedure that creates a new array for every child may allocate O(n log n) total bytes even when the comparison work is O(n log n), while an in-place partition may use O(log n) stack space but write records many times. Include writes and allocations when the data type is large or the memory limit is tight.
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+rectangle "Input [3,1,4,1,5,9]" as input
+rectangle "Divide" as divide
+rectangle "[3,1,4]" as left
+rectangle "[1,5,9]" as right
+rectangle "Sort Left" as sl
+rectangle "Sort Right" as sr
+rectangle "[1,3,4]" as sleft
+rectangle "[1,5,9]" as sright
+rectangle "Merge" as merge
+rectangle "[1,1,3,4,5,9]" as output
+input --> divide
+divide --> left
+divide --> right
+left --> sl
+right --> sr
+sl --> sleft
+sr --> sright
+sleft --> merge
+sright --> merge
+merge --> output
+@enduml`}
+/>
 
-## Parallel scheduling
+<CodeRunner client:load
+  title="Merge sort implementation"
+  language="python"
+  code={`def merge_sort(A):
+    if len(A) <= 1:
+        return A
+    mid = len(A) // 2
+    left = merge_sort(A[:mid])
+    right = merge_sort(A[mid:])
+    return merge(left, right)
 
-Divide-and-conquer exposes a task tree. Running both children sequentially gives the ordinary recurrence; running them concurrently can reduce elapsed time only if enough processors and memory exist. A work-stealing scheduler may execute tasks in a different order, so shared output buffers need disjoint ranges or synchronization. The correctness proof should rely on disjoint ownership, not on an accidental sequential order.
+def merge(L, R):
+    result = []
+    i = j = 0
+    while i < len(L) and j < len(R):
+        if L[i] <= R[j]:
+            result.append(L[i]); i += 1
+        else:
+            result.append(R[j]); j += 1
+    return result + L[i:] + R[j:]
 
-The ideal parallel speedup is bounded by work/span. If total work is W and span is S, no execution on P processors can be faster than max(W/P,S). A recursive algorithm with cheap independent leaves but a serial combine may have large W and small-looking depth yet limited speedup at the root. Report parallelism separately from sequential asymptotic time.
+print(merge_sort([3, 1, 4, 1, 5, 9, 2, 6]))`}
+  output="[1, 1, 2, 3, 4, 5, 6, 9]"
+/>
 
-## When not to divide
+<Quiz client:load
+  title="Merge sort recurrence check"
+  question="What is the asymptotic solution of $T(n) = 2T(n/2) + O(n)$?"
+  options={["$O(n)$", "$O(n \\log n)$", "$O(n^2)$", "$O(\\log n)$"]}
+  correctIndex={1}
+  explanation="Master theorem Case 2: $f(n) = n = \\Theta(n^{\\log_2 2})$, so $T(n) = \\Theta(n \\log n)$. Each recursion level does $O(n)$ work across all subproblems, and there are $\\log_2 n$ levels."
+/>
 
-Use dynamic programming when subproblems overlap and a finite state summary can be reused. Use greedy or incremental methods when a local decision has a proof and recursion adds overhead. Use a scan when the input is small or the combine bookkeeping dominates. Paradigms are tools, not obligations; the correct design is the one whose subproblem structure matches the problem’s dependencies.
+<CodeExercise client:load
+  title="Complete the merge step"
+  code={`def merge(L, R):
+    result = []
+    i = j = 0
+    while i < len(L) and j < len(R):
+        if L[i] <= R[j]:
+            result.append(L[i]); i += 1
+        else:
+            result.append(R[j]); j += 1
+    return result + L[i:] + R[!blank!]`}
+  answers={["j:"]}
+  explanation="After one list is exhausted, append the remaining suffix of the other list. Since j already points past the consumed elements, `R[j:]` yields the correct suffix."
+/>
 
-## Proof and review checklist
+## Quickselect and the Selection Problem
 
-Before accepting a divide-and-conquer algorithm, check the exact subproblem domain, base cases, partition coverage, no-overlap condition, combine postcondition, termination measure, recurrence, auxiliary memory, and output ownership. Test odd sizes, empty ranges, duplicates, equal coordinates, already sorted inputs, and all-equal values. These cases expose assumptions that a balanced random input hides.
+Selection asks: given an array $A$ of length $n$ and an integer $k \in [0, n-1]$, find the element that would be at position $k$ if $A$ were sorted.
+
+### Randomized Quickselect
+
+Choose a random pivot $p$. Partition $A$ into three sets: $L = \{x < p\}$, $E = \{x = p\}$, $G = \{x > p\}$. If $k < |L|$, recurse on $L$; if $k < |L| + |E|$, return $p$; otherwise recurse on $G$ with rank $k - |L| - |E|$.
+
+**Expected time.** Let $T(n)$ be the expected number of comparisons. When $p$ is the $r$th order statistic with rank $r$, the larger partition has size $\max(r, n-1-r) \le 3n/4$ with probability at least $1/2$. Partition costs $n$ comparisons. Conditioning on the pivot rank:
+
+$$
+T(n) \le n + \frac{1}{n} \sum_{r=0}^{n-1} T(\max(r, n-1-r)).
+$$
+
+Splitting the sum at $r \le n/4$ and $r \ge 3n/4$, and noting symmetry:
+
+$$
+T(n) \le n + \frac{2}{n} \sum_{r=3n/4}^{n-1} T(r).
+$$
+
+By induction, assume $T(m) \le c m$ for all $m < n$. The crude bound $\max(r, n-1-r) \le r$ for $r > n/2$ is too weak. A finer observation: the expected size of the larger partition is at most $3n/4$, giving:
+
+$$
+T(n) \le n + T(3n/4).
+$$
+
+Using the master theorem: $T(n) = O(n)$ since $T(n) = T(3n/4) + O(n)$ with $a=1, b=4/3, f(n)=n$, Case 3 gives $T(n) = \Theta(n)$. The recurrence $T(n) \le n + T(3n/4)$ also solves by iteration: $T(n) \le n + 3n/4 + (3/4)^2 n + \cdots \le n / (1 - 3/4) = 4n$.
+
+### Deterministic Median-of-Medians (BFPRT)
+
+For deterministic $O(n)$ selection, we need a guaranteed linear-time pivot.
+
+**Algorithm:**
+1. Partition into $\lceil n/5\rceil$ groups of 5 elements each (the last group may be smaller).
+2. Find the median of each group (constant time per group).
+3. Recursively find the median $m$ of the $\lceil n/5\rceil$ group medians.
+4. Partition the original array around $m$, obtaining the rank of $m$.
+5. Recurse on the appropriate side.
+
+<MathStatement id="bfprt-lemma" kind="theorem" title="Median-of-medians guarantee">
+Let $m$ be the median of the group medians. Then $m$ is at least as large as at least $3n/10$ elements and at most as large as at least $3n/10$ elements.
+</MathStatement>
+
+**Proof.** At least half of the $\lceil n/5\rceil$ groups have at least 3 elements $\le m$ (the groups whose median $\le m$). Each such group contributes 3 elements $\le m$ (the median and the two smaller elements from that group). The number of groups is $\lceil n/5\rceil \ge n/5$. Thus at least $\lfloor n/5\rfloor /2 \ge n/10$ groups contribute 3 elements each, giving $3n/10$ elements $\le m$. The symmetric argument gives $3n/10$ elements $\ge m$. □
+
+Therefore the recursive call on the remaining side has size at most $n - 3n/10 = 7n/10$. The recurrence:
+
+$$
+T(n) \le T(n/5) + T(7n/10) + O(n).
+$$
+
+By Akra–Bazzi, $p$ satisfies $(1/5)^p + (7/10)^p = 1$, with $p < 1$, so $T(n) = O(n)$. More concretely, the substitution method: guess $T(n) \le c n$. Then:
+
+$$
+T(n) \le c(n/5) + c(7n/10) + dn = c(9n/10) + dn.
+$$
+
+We need $c(9n/10) + dn \le c n$, i.e., $d \le c/10$. Choose $c = 10d$ to satisfy all $n$.
+
+## Strassen's Matrix Multiplication
+
+Standard matrix multiplication $C = A \times B$ for $n \times n$ matrices uses $n^3$ scalar multiplications. Strassen's algorithm reduces this to $\Theta(n^{\log_2 7}) \approx \Theta(n^{2.807})$.
+
+**Divide.** Partition each matrix into four $(n/2) \times (n/2)$ blocks:
+
+$$
+A = \begin{pmatrix} A_{11} & A_{12} \\ A_{21} & A_{22} \end{pmatrix}, \quad
+B = \begin{pmatrix} B_{11} & B_{12} \\ B_{21} & B_{22} \end{pmatrix}.
+$$
+
+**Conquer.** Compute 7 products (not 8):
+
+$$
+\begin{aligned}
+M_1 &= (A_{11} + A_{22})(B_{11} + B_{22}) \\
+M_2 &= (A_{21} + A_{22}) B_{11} \\
+M_3 &= A_{11} (B_{12} - B_{22}) \\
+M_4 &= A_{22} (B_{21} - B_{11}) \\
+M_5 &= (A_{11} + A_{12}) B_{22} \\
+M_6 &= (A_{21} - A_{11})(B_{11} + B_{12}) \\
+M_7 &= (A_{12} - A_{22})(B_{21} + B_{22})
+\end{aligned}
+$$
+
+**Combine.** The result blocks are:
+
+$$
+\begin{aligned}
+C_{11} &= M_1 + M_4 - M_5 + M_7 \\
+C_{12} &= M_3 + M_5 \\
+C_{21} &= M_2 + M_4 \\
+C_{22} &= M_1 - M_2 + M_3 + M_6
+\end{aligned}
+$$
+
+<MathStatement id="strassen-correctness" kind="proof" title="Strassen's identity verification">
+Substituting the $M_i$ definitions into $C_{11}$:
+
+$$
+\begin{aligned}
+C_{11} &= (A_{11}+A_{22})(B_{11}+B_{22}) + A_{22}(B_{21}-B_{11}) \\
+&\quad - (A_{11}+A_{12})B_{22} + (A_{12}-A_{22})(B_{21}+B_{22}) \\
+&= A_{11}B_{11} + A_{11}B_{22} + A_{22}B_{11} + A_{22}B_{22} \\
+&\quad + A_{22}B_{21} - A_{22}B_{11} - A_{11}B_{22} - A_{12}B_{22} \\
+&\quad + A_{12}B_{21} + A_{12}B_{22} - A_{22}B_{21} - A_{22}B_{22} \\
+&= A_{11}B_{11} + A_{12}B_{21}.
+\end{aligned}
+$$
+
+This is exactly the standard $C_{11} = A_{11}B_{11} + A_{12}B_{21}$. The other blocks are verified symmetrically. □
+</MathStatement>
+
+**Recurrence:** $T(n) = 7T(n/2) + \Theta(n^2)$. The master theorem gives $\Theta(n^{\log_2 7})$. The algorithm is not numerically stable for floating-point matrices due to sign cancellations.
+
+## Karatsuba Multiplication
+
+For $n$-digit integers, Karatsuba reduces multiplication from $O(n^2)$ to $O(n^{\log_2 3}) \approx O(n^{1.585})$.
+
+Divide $x$ and $y$ into high and low halves: $x = a \cdot B^{m} + b$, $y = c \cdot B^{m} + d$, where $B$ is the base and $m = n/2$. Compute three products:
+
+$$
+z_0 = bd, \quad z_1 = (a+b)(c+d), \quad z_2 = ac.
+$$
+
+Then $xy = z_2 B^{2m} + (z_1 - z_2 - z_0) B^{m} + z_0$.
+
+**Proof.** Expand:
+
+$$
+(aB^m + b)(cB^m + d) = ac B^{2m} + (ad + bc) B^{m} + bd.
+$$
+
+Compute $ad + bc = (a+b)(c+d) - ac - bd$. This replaces two multiplications ($ad$ and $bc$) with one.
+
+**Recurrence:** $T(n) = 3T(n/2) + O(n) = \Theta(n^{\log_2 3})$.
+
+<Quiz client:load
+  title="Karatsuba's key insight"
+  question="How many scalar multiplications does Karatsuba use for two $n$-digit numbers?"
+  options={["2", "3", "4", "7"]}
+  correctIndex={1}
+  explanation="Karatsuba computes $ac$, $bd$, and $(a+b)(c+d)$, then derives $ad+bc$ by subtraction. This replaces the 4 multiplications of the grade-school method with 3, giving $T(n) = 3T(n/2) + O(n)$."
+/>
+
+## Fast Fourier Transform
+
+The DFT $X[k] = \sum_{j=0}^{n-1} x[j] \omega_n^{-jk}$ for $n$ a power of 2. The FFT divides into even and odd indices:
+
+$$
+X[k] = \sum_{j=0}^{n/2-1} x[2j] \omega_{n/2}^{-jk} + \omega_n^{-k} \sum_{j=0}^{n/2-1} x[2j+1] \omega_{n/2}^{-jk} = E[k] + \omega_n^{-k} O[k].
+$$
+
+For $k \ge n/2$, use $E[k+n/2] = E[k]$ and $O[k+n/2] = O[k]$, and $\omega_n^{-(k+n/2)} = -\omega_n^{-k}$.
+
+**Recurrence:** $T(n) = 2T(n/2) + O(n) = \Theta(n \log n)$. The conjugate transpose gives the inverse FFT.
+
+<CodeRunner client:load
+  title="Cooley–Tukey FFT"
+  language="python"
+  code={`import cmath
+
+def fft(x):
+    n = len(x)
+    if n <= 1:
+        return x
+    even = fft(x[0::2])
+    odd  = fft(x[1::2])
+    w = cmath.exp(-2j * cmath.pi / n)
+    wk = 1.0
+    result = [0] * n
+    for k in range(n // 2):
+        result[k] = even[k] + wk * odd[k]
+        result[k + n//2] = even[k] - wk * odd[k]
+        wk *= w
+    return result
+
+# Verify with small DFT
+x = [1.0, 2.0, 3.0, 4.0]
+X = fft(x)
+for i, v in enumerate(X):
+    print(f"X[{i}] = {v:.4f}")`}
+  output="X[0] = 10.0000+0.0000j\nX[1] = -2.0000+2.0000j\nX[2] = -2.0000-0.0000j\nX[3] = -2.0000-2.0000j"
+/>
+
+## Closest Pair of Points
+
+**Problem.** Given $n$ points in $\mathbb{R}^2$, find the pair with minimum Euclidean distance.
+
+**Algorithm.** 
+1. Sort points by $x$-coordinate (preprocess).
+2. Divide at median $x$, recursively find $\delta_L$ and $\delta_R$, set $\delta = \min(\delta_L, \delta_R)$.
+3. Construct strip $S$ of points with $|x - x_{\text{med}}| < \delta$.
+4. Sort $S$ by $y$-coordinate.
+5. For each point in $S$, compare to at most 7 subsequent points (packing argument).
+
+<MathStatement id="closest-pair-lemma" kind="theorem" title="Strip packing lemma">
+Let $\delta$ be the minimum distance within either half. For any point $p$ in the strip, at most 7 points in $S$ can lie in the $\delta \times 2\delta$ rectangle below $p$ without creating a distance $< \delta$ within a single half.
+</MathStatement>
+
+**Proof.** Partition the $\delta \times 2\delta$ rectangle into $8$ cells of size $\delta/2 \times \delta/2$. Each cell can contain at most one point; if two points shared a cell, their distance would be at most $\sqrt{2}(\delta/2) < \delta$, contradicting that no points in the same half are that close. Thus at most $8$ points (including the reference point itself, whose cell must be checked), giving at most $7$ comparisons per point.
+
+**Recurrence:** $T(n) = 2T(n/2) + O(n \log n) = O(n \log^2 n)$. With optimal $O(n)$ $y$-sorted merge at each level (like the inversion-counting enrichment), this improves to $T(n) = 2T(n/2) + O(n) = \Theta(n \log n)$.
+
+## Lower Bounds for Divide-and-Conquer
+
+Not every problem admits a subquadratic divide-and-conquer solution. Some problems have communication lower bounds: any algorithm that divides data into $p$ parts and then combines them must communicate at least a certain amount of information. For the **element distinctness problem** (are there duplicates?), any comparison-based algorithm requires $\Omega(n \log n)$ comparisons, matching the sorting bound via reduction: sorting reduces to distinctness (if there is a duplicate, the sorted array will have adjacent equal elements).
+
+This $\Omega(n \log n)$ barrier is an information-theoretic lower bound that applies regardless of D&C strategy; no faster comparison-based divide-and-conquer algorithm for element distinctness exists.
+
+<Quiz client:load
+  title="Lower bound reasoning"
+  question="Why does any comparison-based element distinctness algorithm require $\Omega(n \\log n)$ comparisons?"
+  options={["Because distinctness is harder than sorting", "Because sorting reduces to distinctness", "Because D&C always costs $\Omega(n \\log n)$", "Because the problem is NP-hard"]}
+  correctIndex={1}
+  explanation="If we could test distinctness in $o(n \\log n)$ time, we could sort by inserting a sentinel duplicate, testing distinctness, and then sorting would also be $o(n \\log n)$, contradicting the $\Omega(n \\log n)$ sorting lower bound."
+/>
+
+## When Divide-and-Conquer Fails
+
+Divide-and-conquer requires subproblems to be **independent**. When subproblems overlap — the same subproblem appears in multiple branches — a D&C approach recomputes it each time, wasting exponential effort. The correct tool is then dynamic programming, which memoizes overlapping subproblems.
+
+**Naive Fibonacci.** The direct recursive implementation $F(n) = F(n-1) + F(n-2)$ with $F(0)=0, F(1)=1$ yields the recurrence $T(n) = T(n-1) + T(n-2) + \Theta(1) = \Theta(\varphi^n)$, where $\varphi \approx 1.618$ is the golden ratio. Computing $F(50)$ requires over $2\times 10^{10}$ recursive calls. Memoization reduces this to $\Theta(n)$ — a quintillion-to-one improvement at $n=100$.
+
+**Why the paradigm fails here.** The divide step splits $n$ into $n-1$ and $n-2$, but those subproblems themselves share sub-subproblems: $F(n-2)$ appears in both the left and right branches of $F(n-1)$. The algorithm does not exploit this overlap and pays the full combinatorial penalty.
+
+**When combination dominates.** Even with independent subproblems, if combining solutions costs more than $O(n^2)$, D&C may be beaten by an iterative approach. For example, the naive D&C algorithm for all-pairs shortest paths in dense graphs gives $T(n) = 2T(n/2) + \Theta(n^3) = \Theta(n^3)$, no better than Floyd–Warshall, but with higher overhead.
+
+<details>
+<summary>Diagnostic: overlapping vs. non-overlapping subproblems</summary>
+
+| Property | D&C works | D&C fails → use DP |
+|---|---|---|
+| Subproblem overlap | None (disjoint) | Heavy overlap |
+| Typical structure | Tree of independent calls | DAG of shared subproblems |
+| Example | Merge sort, FFT | Fibonacci, edit distance |
+| Recurrence form | $aT(n/b) + f(n)$ | $T(n) = T(n-1) + T(n-2) + \cdots$ |
+
+</details>
 
 ## Exercises
 
-1. Prove merge sort correctness using a merge invariant.
-2. Derive merge sort time and space.
-3. Trace inversion counting on a small array.
-4. Prove randomized quickselect’s correctness independent of pivot choice.
-5. Explain the median-of-medians discard fraction.
-6. State the closest-pair strip argument.
-7. Compare total work and span for parallel divide-and-conquer.
+1. **Merge sort variant.** Suppose merge sort used $T(n) = 3T(n/3) + \Theta(n)$. Solve the recurrence. What is the impact on constant factors for large $n$?
 
-### Diagnostic solutions
+   <ExerciseSolution hint="Apply the master theorem with $a=3$, $b=3$.">
 
-1. Induct on n. Base size at most 1 is sorted. Child halves are sorted by induction; merge maintains a prefix of smallest remaining elements and appends the remainder, so output is sorted and contains exactly both inputs.
+   $T(n) = 3T(n/3) + \Theta(n)$. Master theorem, $a=3, b=3, \log_b a = 1$, $f(n) = n = \Theta(n)$, Case 2: $T(n) = \Theta(n \log n)$. Same asymptotic but $\log_3 n$ vs $\log_2 n$; the constant factor is $\log_2 3 \approx 1.585$ times larger for merge sort with split factor 2.
+   </ExerciseSolution>
+2. **Quickselect expected time derivation.** Formalize the expectation calculation: $E[T(n)] \le n + \frac{2}{n} \sum_{r=n/2}^{n-1} E[T(r)]$. Solve to show $E[T(n)] \le 4n$.
 
-2. `T(n)=2T(n/2)+Theta(n)=Theta(n log n)`. Standard arrays use O(n) auxiliary merge storage plus O(log n) stack; bottom-up versions use O(n) buffer and no recursion.
+   <ExerciseSolution hint="Prove by induction that $E[T(n)] \le 4n$.">
 
-3. During merge, whenever a right element precedes remaining left elements, add the number of remaining left entries. This counts exactly cross-half inversions; recursive counts handle within-half pairs.
+   By induction, assume $E[T(m)] \le 4m$ for $m < n$. Then $E[T(n)] \le n + \frac{2}{n} \sum_{r=n/2}^{n-1} 4r \le n + \frac{8}{n} \cdot \frac{(n/2 + n-1)(n/2)}{2} \le n + \frac{8}{n} \cdot \frac{3n}{4} \cdot \frac{n}{2} = n + 3n = 4n$.
+   </ExerciseSolution>
+3. **Median-of-medians group size.** Prove that if groups of 3 are used instead of 5, the median-of-medians algorithm is not linear (show the recurrence yields $T(n) = \Omega(n \log n)$). What group size is minimal for linearity?
 
-4. Every partition places items less than pivot before, equal in middle, greater after. If k lies in a side, recursively selecting that side preserves the kth rank; if in equal region, return. Pivot randomness affects cost, not the order invariant.
+   <ExerciseSolution>
+   With groups of 3, the median-of-medians guarantees at least $2 \cdot \lfloor n/3\rfloor/2 \approx n/3$ elements on each side, leaving $2n/3$ for the recursive call. The recurrence is $T(n) \le T(n/3) + T(2n/3) + O(n) = \Theta(n \log n)$ by Akra–Bazzi. Minimal linear group size: 5. Any odd group size $\ge 5$ works; even sizes require careful handling because there is no unique median.
+   </ExerciseSolution>
+4. **Closest pair for 1D.** Re-derive the closest pair algorithm for points on a line. Show that a simple $\Theta(n \log n)$ solution exists using sorting, and that $\Omega(n \log n)$ is a lower bound in the comparison model.
 
-5. At least half of group medians are at least the pivot; each such group contributes at least three elements at least as large, except a constant number of boundary groups. Symmetrically for smaller elements, leaving at most about 7n/10 for recursion.
+   <ExerciseSolution>
+   In 1D, sort points by coordinate; the closest pair is among adjacent points in sorted order. Scan adjacent differences: $O(n \log n)$. Lower bound: sorting reduces to closest pair (if we could answer closest pair faster, we could sort by performing closest pair repeatedly, though the reduction is less direct). The $\Omega(n \log n)$ bound holds in the comparison model.
+   </ExerciseSolution>
+5. **Karatsuba correctness proof.** Prove that $z_1 - z_2 - z_0$ equals $ad + bc$ using only the three products $z_0, z_1, z_2$.
 
-6. Any cross-half pair closer than delta lies in the 2delta strip. Sorting strip points by y and applying a packing argument limits candidate comparisons per point to a constant, so combine work is linear.
+   <ExerciseSolution>
+   $(a+b)(c+d) = ac + ad + bc + bd$. Subtract $z_2 = ac$ and $z_0 = bd$: $z_1 - z_2 - z_0 = ad + bc$. Then $xy = z_2 B^{2m} + (ad+bc)B^m + z_0$.
+   </ExerciseSolution>
+6. **Strassen block count.** Verify that the 7 products suffice by reconstructing all four blocks. Attempt to generalize: why cannot we reduce to 6 multiplications?
 
-7. Work sums all recursive operations and combine work; span follows the longest dependency path. Independent calls reduce span, but merge synchronization remains. A parallel algorithm can have the same work as sequential while reducing critical-path time.
+   <ExerciseSolution>
+   The block reconstruction: $C_{11} = M_1 + M_4 - M_5 + M_7$, $C_{12} = M_3 + M_5$, $C_{21} = M_2 + M_4$, $C_{22} = M_1 - M_2 + M_3 + M_6$. A proof that 6 multiplications are impossible for $2\times2$ matrix multiplication over a commutative ring was given by Winograd; the tensor rank of $2 \times 2$ matrix multiplication is 7.
+   </ExerciseSolution>
+7. **Least common ancestor.** Design a divide-and-conquer algorithm for a static array that supports range minimum queries in $O(1)$ time with $O(n)$ preprocessing. Describe the divide step and combine invariant.
+
+   <ExerciseSolution>
+   Divide the array at the midpoint. Preprocess each half recursively for RMQ. The combine: the minimum of a range that spans the midpoint is the min of (minimum in left part's suffix, minimum in right part's prefix). Precompute prefix minima and suffix minima at each recursion level. Queries: find the highest level where the range straddles the midpoint; the answer is min of precomputed prefix/suffix. This is essentially the Sparse Table or segment tree structure.
+   </ExerciseSolution>
+
+8. **Peak finding.** A *peak* in an array $A[0..n-1]$ is an element satisfying $A[i-1] \le A[i] \ge A[i+1]$, where out-of-bounds neighbors are treated as $-\infty$. Design a divide-and-conquer algorithm that finds a peak in $O(\log n)$ time. State the invariant that guarantees correctness.
+
+   <ExerciseSolution hint="Divide at the midpoint and compare neighbors to decide which half contains a peak.">
+
+   Examine $A[\text{mid}]$. If it is a peak, return it. If $A[\text{mid}-1] > A[\text{mid}]$, a peak must exist in the left half (by the extreme-value argument on the continuous "function" of array values). If $A[\text{mid}+1] > A[\text{mid}]$, recurse on the right half. The invariant: any sufficiently large element in the examined region guarantees a peak somewhere in that region. This is a D&C algorithm with $T(n) = T(n/2) + O(1) = O(\log n)$ — no combination step needed, just a single recursive branch.
+   
+   Why this is not a contradiction of the paradigm: this is a degenerate D&C where only one subproblem survives, making it a form of binary search. It shows that D&C subsumes binary search as a special case.
+   </ExerciseSolution>
+
+9. **Counting inversions with merge sort.** An *inversion* in $A[1..n]$ is a pair $(i,j)$ with $i<j$ and $A[i] > A[j]$. Modify the merge step of merge sort so that the algorithm counts inversions in $O(n \log n)$ time. State the invariant that makes the counting correct, and write the single line added to the merge step.
+
+   <ExerciseSolution>
+   During the merge of sorted lists $L$ and $R$, when an element from $R$ is copied to the result before all elements of $L$ have been copied, each remaining element in $L$ forms an inversion with that element from $R$. The invariant: at any point during the merge, $\text{count} + \text{inversions\_among\_remaining}$ is preserved. The added line is:
+   
+   ```python
+   count += len(L) - i  # when R[j] < L[i] is chosen
+   ```
+   
+   The recursion then sums the counts from left, right, and the merge step: $T(n) = 2T(n/2) + O(n) = \Theta(n \log n)$.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+> **Remark.** The topics below are intentionally excluded because they either belong to separate graduate-level courses, are covered in other lessons in this course, or their core insight is already captured by material included here. This keeps the lesson focused on the foundational D&C paradigm and its most canonical applications.
+
+- **Strassen–Winograd variant and tensor rank** — The practical improvement to Strassen (Winograd's variant reducing 7 multiplications to 6 for complex multiplication, or the $O(n^{2.376})$ exponent via Coppersmith–Winograd tensor methods) is a research-level algebra topic. The core D&C insight is already present in Strassen's 7-multiplication approach.
+- **Van Emde Boas layout for cache-oblivious divide-and-conquer** — Recursive layouts that minimize cache misses (recursive matrix transpose, cache-oblivious Strassen) appear in the algorithm engineering lesson.
+- **Geometric divide-and-conquer beyond closest pair (Delaunay triangulation, convex hull)** — The divide-and-conquer approach for Delaunay triangulation in $O(n \log n)$ time is covered in the computational geometry module.
+- **Master theorem proof** — The proof of the master theorem by recursion-tree expansion or substitution is a recurrence-analysis technique covered in the recurrences lesson.
+- **Parallel divide-and-conquer** — Work-span analysis of D&C on multi-core and distributed systems requires concurrent-algorithm concepts outside this lesson's scope.
 
 
 ## References & Further Reading
 
+* Blum, Floyd, Pratt, Rivest, and Tarjan. "Time Bounds for Selection." *J. Comput. Syst. Sci.* 7 (1973): 448–461.
+* Strassen, V. "Gaussian Elimination is Not Optimal." *Numer. Math.* 13 (1969): 354–356.
+* Karatsuba, A. and Ofman, Y. "Multiplication of Many-Digital Numbers by Automatic Computers." *Doklady Akad. Nauk SSSR* 145 (1962): 293–294.
+* Cooley, J. W. and Tukey, J. W. "An Algorithm for the Machine Calculation of Complex Fourier Series." *Math. Comput.* 19 (1965): 297–301.
+* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed., Chapters 4, 30.
 * [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.

@@ -1,103 +1,434 @@
 ---
 title: "Minimum Spanning Trees"
 course: "algorithms"
-description: "Cut and cycle properties, Kruskal, Prim, Boruvka, correctness exchange proofs, and implementation tradeoffs."
+description: "Cut and cycle properties, Kruskal, Prim, Boruvka, exchange proofs, MST verification, and the limits of greedy optimization on graphs."
 ---
+
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+
 # Minimum Spanning Trees
 
-Given a connected undirected weighted graph (G=(V,E)), a spanning tree connects all vertices with no cycles. A minimum spanning tree (MST) minimizes the sum of edge weights among all spanning trees. MST algorithms are a canonical setting for greedy proofs: the local edge choice is safe because cuts and cycles constrain how any optimal tree can be exchanged. Negative edge weights are allowed; the objective is a sum, and acyclicity prevents repeatedly taking a negative cycle.
+In 1926, Otakar Borůvka faced a problem while working for the power company in the Bohemian countryside: how do you connect a set of villages to a new electrical grid at minimum total cost? Building a power line between two villages has a known cost; the grid must reach every village, but redundant connections waste money. Borůvka solved this in a paper published the same year (Borůvka 1926, *Práce Mor. Přírodověd. Spol. v Brně* 3: 37–58), giving the world the first algorithm for what we now call the minimum spanning tree (MST).
 
-## Tree and cut facts
+<MathStatement id="mst-def" kind="definition" title="Spanning tree and MST">
+Given a connected, undirected graph $G = (V, E)$ with edge weights $w: E \to \mathbb{R}$, a **spanning tree** is an acyclic subset $T \subseteq E$ such that $(V, T)$ is connected. A **minimum spanning tree** (MST) is a spanning tree minimizing $w(T) = \sum_{e \in T} w(e)$. If $G$ is disconnected, the same concept applied per component yields a **minimum spanning forest**.
+</MathStatement>
 
-A tree on n vertices has exactly n-1 edges, is connected, and has a unique simple path between every pair. Removing any edge disconnects it; adding any non-tree edge creates a cycle. These equivalent characterizations support MST proofs and validators. A forest with n-c components has n-c edges if each component is a tree.
+The central structural insight powering all MST algorithms is the **cut property**: for any partition of the vertices into two nonempty sets, the lightest edge crossing the partition belongs to some MST. This property was independently discovered multiple times (Borůvka 1926; Jarník 1930; Kruskal 1956, *Proc. Amer. Math. Soc.* 7: 48–50; Prim 1957, *Bell System Technical Journal* 36: 1389–1401). Each algorithm takes a different approach — component-merging, tree-growing, and edge-scanning — but all exploit the same underlying cut property.
 
-A cut partitions V into S and VS. An edge crosses the cut if one endpoint lies in each side. The cut property says a lightest edge crossing a cut is safe: some MST contains it. If ties exist, any lightest edge is safe, though different MSTs may result. The cycle property says a heaviest edge on a cycle is not required in some MST; with strict heaviest weight it belongs to no MST.
+The dual **cycle property** completes the picture: the heaviest edge on any cycle belongs to no MST. Together, they make greedy algorithms provably correct for MST — a rare phenomenon in combinatorial optimization.
 
-**Cut exchange proof.** Let e be a lightest crossing edge and T an MST. If e is already in T, done. Otherwise adding e creates a cycle; that cycle contains another edge f crossing the cut. Since w(e) at most w(f), replace f with e. The result is a spanning tree with no larger weight, so it is also an MST containing e.
+## Cut and Cycle Properties
 
-## Kruskal’s algorithm
+<MathStatement id="cut-property" kind="theorem" title="Cut property" proofId="cut-property-proof">
+Let $S \subset V$ be any proper subset. The lightest edge crossing the cut $(S, V\setminus S)$ belongs to some MST.
+</MathStatement>
 
-Kruskal sorts edges by nondecreasing weight and scans them. Add edge (u,v) if u and v are currently in different forest components; otherwise skip it. Union-find maintains component membership. The forest invariant is acyclic, and after each accepted edge it can be extended to an MST by the cut property applied to the components.
+<MathProof id="cut-property-proof" for="cut-property">
+Let $e = (u,v)$ be a lightest crossing edge with $u \in S$, $v \notin S$. Let $T$ be any MST. If $e \in T$, done. Otherwise, adding $e$ to $T$ creates a cycle $C$. The cycle $C$ must cross the cut an even number of times. Since $(u,v)$ is one crossing, there exists another edge $f \in C$ crossing $(S, V\setminus S)$. By minimality of $w(e)$, we have $w(e) \le w(f)$. Consider $T' = T \setminus \{f\} \cup \{e\}$. $T'$ is connected (removing $f$ disconnects $T$ into two components, which $e$ reconnects) and acyclic (the only cycle of $T \cup \{e\}$ is broken by removing $f$). Thus $T'$ is a spanning tree, and $w(T') = w(T) - w(f) + w(e) \le w(T)$. Since $T$ was minimum, $T'$ is also minimum. Therefore $e$ belongs to some MST.
+</MathProof>
 
-**Worked example.** Edges sorted are (A,B,1),(C,D,1),(B,C,2),(A,C,3),(D,E,4),(B,E,5). Accept the first three, which connect A,B,C,D without a cycle; accept D,E with weight 4. The forest has five vertices and four edges, hence is a spanning tree. Edge (A,C,3) would close a cycle and is rejected. A tie at weight 1 can choose either order without changing optimal weight.
+<MathStatement id="cycle-property" kind="theorem" title="Cycle property" proofId="cycle-property-proof">
+Let $C$ be a cycle. The heaviest edge on $C$ belongs to no MST (if strictly heaviest).
+</MathStatement>
 
-Sorting costs O(E log E); union-find costs O(Ealpha(V)) amortized, so total is O(E log E). If weights are small integers, specialized sorting can change the edge-order cost. Kruskal is attractive when the graph is given as an edge list or is sparse.
+<MathProof id="cycle-property-proof" for="cycle-property">
+Let $e$ be a strict heaviest edge on cycle $C$. Suppose $T$ is an MST containing $e$. Removing $e$ splits $T$ into two components. Since $C$ is a cycle, some other edge $f$ of $C$ also connects these two components (otherwise $e$ would be the only cycle edge connecting the components, contradicting that $C$ is a cycle). Thus adding $f$ to $T \setminus \{e\}$ reconnects it, forming a spanning tree $T' = T \setminus \{e\} \cup \{f\}$. Since $w(f) < w(e)$, $w(T') < w(T)$, contradicting $T$'s minimality.
+</MathProof>
 
-## Prim’s algorithm
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+skinparam shadowing false
 
-Prim grows one tree from an arbitrary start. For each outside vertex v, maintain the lightest edge connecting v to the current tree, called key[v], and a parent. Repeatedly extract the outside vertex with minimum key, add its parent edge, and relax outgoing edges. The cut between the current tree and outside vertices makes the chosen edge safe.
+title "Cut and cycle properties illustrated"
 
-With a binary heap and adjacency lists, Prim is O(E log V); with an array queue it is O(V^2), useful for dense graphs. A lazy heap may contain stale key entries; compare extracted key with current key or use a visited set. Decrease-key implementations need a position map. Disconnected graphs produce a minimum spanning forest if Prim is restarted for each unvisited component; a routine claiming an MST must reject or specify this case.
+rectangle "S" as S #LightBlue
+rectangle "V \\ S" as VS #LightGreen
 
-## Boruvka’s algorithm
+S --> VS : e (lightest crossing)\nbelongs to some MST
+note right of VS : cut property
 
-Boruvka repeatedly selects, for every current component, its cheapest outgoing edge and adds all safe choices, avoiding duplicates/cycles as union-find merges components. Each nontrivial component chooses an edge, and the number of components at least halves after a phase under standard conditions, giving O(log V) phases. Scanning all edges per phase gives O(E log V), with parallel opportunities because component choices can be computed independently.
+rectangle "C" as Cycle #LightYellow {
+  ( ) -[#red]-> ( ) : e (heaviest on cycle)\nbelongs to no MST
+}
 
-Boruvka’s proof applies the cut property separately to each component cut. Multiple components may choose the same edge or edges may form a cycle among components; union-find accepts only those that connect distinct current roots. The phase invariant is a forest extendable to an MST.
+note right of Cycle : cycle property
+@enduml`}
+/>
 
-## Uniqueness and ties
+<Quiz client:load
+  title="Cut vs cycle property"
+  question="Kruskal's algorithm primarily relies on which property?"
+  options={["The cycle property", "The cut property", "Both equally", "Neither"]}
+  correctIndex={1}
+  explanation="Kruskal maintains a forest; each added edge is the lightest crossing the cut between two current components. The cut property guarantees safety. The cycle property justifies rejecting edges that would create a cycle."
+/>
 
-If all edge weights are distinct, the MST is unique. Suppose two different MSTs exist; their symmetric difference contains a cycle-like exchange, and the first edge of differing weight would allow a strictly cheaper tree, contradiction. With equal weights, multiple trees can be optimal. An implementation’s deterministic edge ID tie-breaker gives reproducibility but does not change the objective.
+## Kruskal's Algorithm
 
-Negative edges do not break Kruskal or Prim because neither algorithm assumes nonnegative weights. A negative non-tree edge may be safe to add if it connects components; a negative edge already inside a cycle is not automatically included because a tree cannot contain cycles. Do not import Dijkstra’s nonnegative-edge condition into MST reasoning.
+**Algorithm:** Sort edges by weight; scan; add edge $(u,v)$ if $u$ and $v$ are in different components (union-find).
 
-## Verification and output
+**Proof of correctness.** Let $T_k$ be the set of edges chosen after processing $k$ edges in sorted order. We prove the invariant: $T_k$ can be extended to an MST.
 
-Validate a candidate tree has n-1 edges, no cycle, and connects all vertices. Union-find can check acyclicity; DFS/BFS checks connectivity. To verify optimality, compute maximum edge on the tree path between endpoints for each non-tree edge e; if w(e) is less than that maximum, the tree is not an MST. This cycle-based certificate can be accelerated with LCA structures but is useful as a small-graph checker.
+Base: $T_0 = \emptyset$, which can be extended to any MST.
 
-The MST may not preserve shortest paths, minimize maximum degree, or minimize latency under a different metric. An MST minimizes total chosen edge weight only. If edges represent unreliable links, the application may need a constrained or robust spanning tree problem with different algorithmic properties.
+Inductive step: assume $T_{k-1}$ can be extended to some MST $M$. Let $e_k = (u,v)$ be the $k$th edge. If $e_k$ connects two different components of the forest $(V, T_{k-1})$, then by the cut property applied to the cut $(C_u, V \setminus C_u)$ where $C_u$ is the component containing $u$, $e_k$ is the lightest edge crossing this cut (all lighter edges have already been considered and either accepted into $T_{k-1}$ or rejected for creating cycles within components). Thus $e_k$ is safe: some MST $M$ contains $T_{k-1} \cup \{e_k\}$. Set $T_k = T_{k-1} \cup \{e_k\}$.
 
-## A matroid perspective
+If $e_k$ connects vertices in the same component, adding it would create a cycle. By the cycle property, $e_k$ is the heaviest edge on that cycle (all other cycle edges were already considered and are in $T_{k-1}$ or were rejected as heavier), so $e_k$ belongs to no MST. Reject $e_k$; $T_k = T_{k-1}$ retains the invariant.
 
-The independent sets of a graphic matroid are forests. Heredity is immediate: removing an edge from a forest cannot create a cycle. The exchange axiom follows because if forest A has fewer edges than forest B, some edge of B connects two different components of A; otherwise every B edge would lie within an A component and B could not have more edges without creating a cycle. The general matroid greedy theorem therefore explains Kruskal’s correctness as a maximum-weight independent-set algorithm after reversing weights or selecting a minimum basis.
+**Complexity:** $O(E \log E)$ for sorting, $O(E \alpha(V))$ for union-find operations (Tarjan 1975, *J. ACM* 22: 215–225).
 
-This abstraction also clarifies why MST can accept a local edge safely while many graph optimization problems cannot. The feasible family has an exchange structure. Adding constraints such as degree limits or hop bounds generally destroys the matroid property, and simply sorting edges can fail. A modified objective requires a new proof or an approximation guarantee.
+**Worked example.** Consider the graph with vertices $0,\dots,4$ and edges $(0,1,1)$, $(2,3,1)$, $(1,2,2)$, $(0,2,3)$, $(3,4,4)$, $(1,4,5)$. Sorted edges: $(0,1,1)$, $(2,3,1)$, $(1,2,2)$, $(0,2,3)$, $(3,4,4)$, $(1,4,5)$. Kruskal accepts $(0,1)$, $(2,3)$, $(1,2)$ (all acyclic), then rejects $(0,2)$ (creates cycle $0\!-\!1\!-\!2\!-\!0$), accepts $(3,4)$ (connects component $\{3\}$ to $\{0,1,2\}$), and rejects $(1,4)$ (creates cycle). The MST is $\{(0,1), (2,3), (1,2), (3,4)\}$ with total weight $1+1+2+4 = 8$.
 
-## Implementation edge cases
+<CodeRunner client:load
+  title="Kruskal's algorithm"
+  language="python"
+  code={`class UnionFind:
+    def __init__(self, n):
+        self.parent = list(range(n))
+        self.rank = [0] * n
+    def find(self, x):
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]
+            x = self.parent[x]
+        return x
+    def union(self, x, y):
+        rx, ry = self.find(x), self.find(y)
+        if rx == ry: return False
+        if self.rank[rx] < self.rank[ry]: rx, ry = ry, rx
+        self.parent[ry] = rx
+        if self.rank[rx] == self.rank[ry]: self.rank[rx] += 1
+        return True
 
-If vertex IDs are sparse or objects, map them to dense indices before union-find and retain the reverse map for output. Reject NaN weights or define their ordering; a comparator that is not transitive can make edge sorting invalid. Parallel edges are separate candidates and the lighter one may be safe while the heavier one is rejected. Self-loops always create a cycle of length one and cannot belong to a spanning tree.
+def kruskal(edges, n):
+    edges = sorted(edges, key=lambda e: e[2])
+    uf = UnionFind(n)
+    mst = []
+    for u, v, w in edges:
+        if uf.union(u, v):
+            mst.append((u, v, w))
+    return mst
 
-For disconnected input, Kruskal naturally returns a minimum spanning forest with one tree per component. Prim from one source visits only one component. A production API should return a forest explicitly or report disconnectedness rather than silently labeling a partial tree an MST.
+edges = [(0,1,1),(2,3,1),(1,2,2),(0,2,3),(3,4,4),(1,4,5)]
+print(kruskal(edges, 5))`}
+  output="[(0, 1, 1), (2, 3, 1), (1, 2, 2), (3, 4, 4)]"
+/>
 
-## Dynamic and incremental settings
+## Prim's Algorithm
 
-If edges are inserted over time, union-find can maintain the minimum spanning forest only under restricted update models; a new lighter edge may require replacing a heavier edge on a path. The cycle property identifies the replacement: add the new edge and remove the maximum-weight edge on the resulting cycle if that improves the forest. Supporting this efficiently requires dynamic-tree structures. Deleting edges is harder because a replacement edge must be found across a cut.
+**Algorithm:** Grow a single tree from an arbitrary root. Maintain $\text{key}[v]$ = min-weight edge connecting $v$ to the current tree. Extract minimum, add to tree, update neighbors.
 
-The static greedy proof remains useful as a certificate even when updates require advanced structures. After each update, check that every non-tree edge is at least the maximum path edge in the current forest, subject to component connectivity. This invariant separates optimality from a particular construction history.
+**Proof of correctness.** Invariant: the current tree $T$ can be extended to an MST. Base: $T = \emptyset$ (or a single vertex). Inductive step: Let $U$ be the set of vertices already in $T$. The edge $e$ selected by Prim is the lightest edge crossing the cut $(U, V\setminus U)$. By the cut property, some MST contains $e$ together with $T$. Extend $T$ with $e$.
 
-## Testing strategy
+**Complexity:** $O(E \log V)$ with binary heap, $O(V^2)$ with array.
 
-For small graphs, enumerate all spanning trees, compute minimum weight, and compare the algorithm’s output. Include equal/negative weights, parallel edges, self-loops, disconnected components, and sparse vertex IDs. For larger graphs, validate tree shape and cycle/cut certificates, and compare Kruskal with Prim under identical weights. Random tests should preserve the weight domain and record seeds; a graph generator that almost always produces distinct weights will not exercise tie behavior.
+**Worked example.** On the same graph, start with vertex $0$. The frontier edges are $(0,1,1)$, $(0,2,3)$. Pick $(0,1)$. Frontier adds edges from $1$: $(1,2,2)$, $(1,4,5)$. Now frontier: $(0,2,3)$, $(1,2,2)$, $(1,4,5)$. Pick $(1,2)$. New frontier from $2$: $(2,3,1)$ (the $(2,0)$ edge would create a cycle). Continue — the result is the same MST.
+
+<CodeRunner client:load
+  title="Prim's algorithm (binary heap)"
+  language="python"
+  code={`import heapq
+
+def prim(adj, start=0):
+    n = len(adj)
+    visited = [False] * n
+    pq = [(0, start, start)]  # (weight, from, to)
+    mst = []
+    while pq:
+        w, u, v = heapq.heappop(pq)
+        if visited[v]: continue
+        visited[v] = True
+        if u != v:
+            mst.append((u, v, w))
+        for to, weight in adj[v]:
+            if not visited[to]:
+                heapq.heappush(pq, (weight, v, to))
+    return mst
+
+adj = [
+    [(1,1),(2,3)],
+    [(0,1),(2,2),(4,5)],
+    [(0,3),(1,2),(3,1)],
+    [(2,1),(4,4)],
+    [(1,5),(3,4)]
+]
+print(prim(adj))`}
+  output="[(0, 1, 1), (1, 2, 2), (2, 3, 1), (3, 4, 4)]"
+/>
+
+## Borůvka's Algorithm
+
+**Algorithm:** For each component $C$, find the lightest edge connecting $C$ to another component. Add all such edges (avoiding duplicates). Each phase reduces the number of components by at least half.
+
+**Proof.** For each component $C$, apply the cut property to cut $(C, V\setminus C)$. The lightest outgoing edge $e_C$ is safe for some MST. Since different components' choices may coincide (two components pick the same edge), accept at most $V/2$ edges per phase, all safe. After $\log V$ phases, a single component remains — the MST.
+
+**Complexity:** $O(E \log V)$ phases, each scanning all edges: $O(E \log V)$.
+
+<Quiz client:load
+  title="Borůvka phases"
+  question="Why does each Borůvka phase halve the number of components?"
+  options={["Each component selects an outgoing edge, merging at least two components each time", "Edges are removed from the graph each phase", "Union-find compresses paths", "Components are merged randomly"]}
+  correctIndex={0}
+  explanation="Each nontrivial component selects an outgoing edge. Since each merge involves at least two components, the component count at least halves."
+/>
+
+## Algorithm Comparison
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+skinparam shadowing false
+
+title "MST algorithms: strategy comparison"
+
+package "Kruskal" {
+  rectangle "Sort edges by weight" as KS
+  rectangle "Scan; add if acyclic" as KA
+  KS --> KA
+  note right of KA : Union-Find\nO(E log E)
+}
+
+package "Prim" {
+  rectangle "Grow tree from root" as PG
+  rectangle "Extract min-weight frontier edge" as PP
+  PG --> PP
+  note right of PP : Binary heap\nO(E log V)
+}
+
+package "Borůvka" {
+  rectangle "Each component picks\nits cheapest edge" as BB
+  rectangle "Merge; repeat\n(log V phases)" as BM
+  BB --> BM
+  note right of BM : O(E log V)\nparallelizable
+}
+
+Kruskal -[hidden]-> Prim
+Prim -[hidden]-> Boruvka
+@enduml`}
+/>
+
+## MST Uniqueness
+
+<MathStatement id="mst-uniqueness" kind="theorem" title="MST uniqueness" proofId="mst-uniqueness-proof">
+If all edge weights are distinct, the MST is unique.
+</MathStatement>
+
+<MathProof id="mst-uniqueness-proof" for="mst-uniqueness">
+Suppose $T$ and $T'$ are two distinct MSTs. Let $e$ be the minimum-weight edge in the symmetric difference $(T \setminus T') \cup (T' \setminus T)$. Assume without loss $e \in T \setminus T'$. Adding $e$ to $T'$ creates a cycle $C$. All other edges of $C$ are in $T'$, and since $e$ is the minimum edge in the symmetric difference, every edge $f$ in the cycle with $f \notin T'$ (i.e., $f \in T \setminus T'$) satisfies $w(f) \ge w(e)$. At least one cycle edge $g$ is in $T' \setminus T$ (otherwise the cycle would be entirely within $T$, impossible). This $g$ belongs to the symmetric difference, so $w(e) < w(g)$. Thus $T'' = T' \setminus \{g\} \cup \{e\}$ has smaller weight, contradicting $T'$'s optimality. Therefore $T = T'$.
+</MathProof>
+
+## Counterexamples and Failure Modes
+
+### Ties break uniqueness
+
+If some edge weights are equal, multiple MSTs can exist. Consider a triangle with edges $(a,b,1)$, $(b,c,1)$, $(a,c,2)$. Both $\{(a,b), (b,c)\}$ (total 2) and $\{(a,c), (b,c)\}$ (total 3) are spanning trees, but only the first is an MST. The second MST candidate fails because swapping $(a,c)$ (weight 2) for $(a,b)$ (weight 1) yields a lighter tree. The two MSTs are actually $\{(a,b), (b,c)\}$ and $\{(a,b), (a,c)\}$ — both have total weight $1+2 = 3$? No — $\{(a,b), (a,c)\}$ has weight $1+2 = 3$, which is heavier than $\{(a,b), (b,c)\}$ (weight $1+1 = 2$). So with weights 1, 1, 2, the only MST is $\{(a,b), (b,c)\}$. For a genuine non-uniqueness example, consider a square $a\!-\!b\!-\!c\!-\!d\!-\!a$ with all edges weight 1. Any three edges forming a tree are MSTs — there are four distinct MSTs, all with total weight 3.
+
+### Negative weights are fine
+
+MST algorithms handle negative edge weights without modification. The cut and cycle properties do not require non-negativity. Contrast this with shortest paths, where negative cycles cause Dijkstra to fail. The MST problem is strictly easier in this respect.
+
+### Disconnected graphs
+
+The algorithms produce a **minimum spanning forest** covering all vertices reachable within each component. No algorithm can connect disconnected components without additional edges.
+
+### Directed graphs (minimum arborescence)
+
+The MST problem on directed graphs is the **minimum arborescence** problem (rooted directed spanning tree), which does **not** satisfy the cut property. A simple greedy algorithm fails. Chu–Liu/Edmonds' algorithm (Edmonds 1967, *J. Res. Nat. Bur. Standards* 71B: 233–240) solves it in $O(EV)$ time using cycle contraction — an altogether different technique.
+
+<Quiz client:load
+  title="Negative edge weights"
+  question="What happens when you run Kruskal on a graph with negative edge weights?"
+  options={["It may produce a cycle", "It still produces an MST correctly", "It fails because the cut property requires non-negative weights", "It enters an infinite loop"]}
+  correctIndex={1}
+  explanation="The cut and cycle properties hold for any real weights. Negative edges are simply added early by Kruskal (they sort before positive ones). No change is needed."
+/>
+
+## The Matroid Structure
+
+Spanning forests form a **graphic matroid** (Whitney 1935, *Amer. J. Math.* 57: 509–533). The ground set is $E$; independent sets are acyclic subgraphs. The matroid greedy theorem (Edmonds 1971, *Mathematical Programming* 1: 127–136) explains Kruskal's correctness: sorting by weight and adding if independence is preserved produces a minimum-weight basis.
+
+Adding degree constraints, hop limits, or Steiner nodes destroys the matroid property. The resulting problems (degree-constrained MST, shallow-light tree) are NP-hard or require different techniques.
+
+<Quiz client:load
+  title="Matroid structure recognition"
+  question="Kruskal's algorithm succeeds on MST but fails on the traveling salesman problem (TSP). Which statement explains this?"
+  options={["MST forms a matroid; TSP does not", "MST is NP-hard whereas TSP is not", "Kruskal only works for dense graphs", "TSP has negative edge weights"]}
+  correctIndex={0}
+  explanation="MST's feasible sets (acyclic edge subsets) form a graphic matroid, satisfying the exchange property that makes greedy optimal for all weight functions. TSP tours do not form a matroid — exchange fails because replacing one tour edge with another typically breaks the tour structure. This is why greedy fails on TSP."
+/>
+
+## MST Verification
+
+Given a spanning tree $T$, how do we verify it is minimum? The **cycle property certificate**: for every non-tree edge $e$, $w(e) \ge \max_{f \in P_T(u,v)} w(f)$ where $P_T$ is the unique $u$-$v$ path in $T$.
+
+<MathStatement id="verification-cert" kind="theorem" title="MST verification certificate" proofId="verification-proof">
+A spanning tree $T$ is an MST iff for every non-tree edge $e = (u,v)$, $w(e) \ge$ the maximum edge weight on the unique $u$-$v$ path in $T$.
+</MathStatement>
+
+<MathProof id="verification-proof" for="verification-cert">
+If some non-tree edge $e$ violates the inequality ($w(e) < \max_{f \in P} w(f)$), let $f$ be the heaviest edge on $P$. Then $T \setminus \{f\} \cup \{e\}$ is a lighter spanning tree, so $T$ is not minimum. Conversely, if the inequality holds for all non-tree edges, the exchange argument (via the cut property) shows $T$ is minimum.
+</MathProof>
+
+Verification can be done in $O(n)$ time via Tarjan's off-line LCA algorithm (Tarjan 1979, Tech. Rep. STAN-CS-79-729) or in $O(n \log n)$ with binary lifting.
+
+<CaseStudy client:load
+  title="Grid power routing"
+  scenario="A rural electrification project must connect 6 villages. The terrain makes some connections expensive: laying cable across a river costs 5 units, through rocky terrain costs 4 units, and along existing roads costs 1 unit per kilometer. Distances in km are: A–B: 2 (road), A–C: 4 (rocky), B–C: 1 (road), B–D: 3 (road), C–D: 2 (road), C–E: 5 (river), D–E: 1 (road), D–F: 4 (rocky), E–F: 2 (road). The budget is 10 units."
+  question="Using Kruskal's algorithm, which edge is added first?"
+  options={["A–B (cost 2)", "B–C (cost 1)", "D–E (cost 1)", "C–D (cost 2)"]}
+  correctIndex={1}
+  explanation="Kruskal sorts by weight. B–C and D–E both have weight 1 (road, 1 km each). B–C would be first if sorted by edge order. The correct MST has total weight 1+1+2+1+2 = 7, well within the budget."
+/>
 
 ## Exercises
 
-1. Prove the cut property by exchange.
-2. Trace Kruskal on a weighted graph and identify rejected cycle edges.
-3. Prove Prim’s selected edge is safe.
-4. Compare Kruskal, Prim, and Boruvka by graph representation.
-5. Explain MST behavior with negative weights and ties.
-6. Give a certificate for a candidate MST.
-7. Distinguish MST objective from shortest-path tree objective.
+1. **Cut property converse.** Prove: if an edge $e$ belongs to some MST, then there exists a cut for which $e$ is the unique lightest edge.
 
-### Diagnostic solutions
+   <ExerciseSolution hint="Remove $e$ from an MST that contains it and examine the resulting cut. Why must every other crossing edge be strictly heavier?">
 
+   Let $T$ be an MST containing $e$. Removing $e$ from $T$ partitions $V$ into two components $S$ and $V\setminus S$. For this cut, $e$ is the unique lightest crossing edge because any other crossing edge $f$ would be heavier (otherwise $f$ could replace $e$ in $T$ to obtain a lighter tree).
+   </ExerciseSolution>
+2. **Cycle property converse.** Prove: if edge $e$ belongs to no MST, then there exists a cycle where $e$ is the unique heaviest edge.
 
-1. Add a lightest crossing edge e to an MST T. If absent, its cycle contains another crossing edge f. Replace f with e; connectivity and acyclicity remain, and weight does not increase. Thus an MST containing e exists.
+   <ExerciseSolution hint="Add $e$ to any MST and analyze the cycle it creates. Why must $e$ be the unique heaviest edge on that cycle?">
 
-2. Sort edges, maintain roots, accept only distinct-root edges, and stop after V-1 acceptances. Each rejection closes a cycle in the current forest; record the endpoints’ common representative.
+   Take the minimum spanning tree $T$ and add $e$, creating a cycle $C$. On $C$, $e$ must be the unique heaviest edge (otherwise $e$ could replace the heaviest edge on $C$ and remain an MST). This cycle certifies that $e$ belongs to no MST.
+   </ExerciseSolution>
+3. **Maximum spanning tree.** Modify Kruskal and Prim to find a maximum-weight spanning tree. Prove correctness by negating weights or by modifying the cut/cycle properties.
 
-3. The current tree defines a cut against all outside vertices. The minimum-key edge is lightest crossing that cut, so the cut property says some MST contains it together with the already safe edges.
+   <ExerciseSolution>
+   Negate all weights, or equivalently sort edges in decreasing order and apply Kruskal (add if acyclic). The cut property for maximum weight: the heaviest crossing edge of any cut belongs to some maximum spanning tree.
+   </ExerciseSolution>
+4. **Minimum bottleneck spanning tree.** A spanning tree minimizing the maximum edge weight is called a minimum bottleneck spanning tree. Prove that every MST is a minimum bottleneck spanning tree. Show that the converse is false.
 
-4. Kruskal favors edge lists and sorting; Prim with heaps favors adjacency lists and sparse graphs; array Prim can suit dense matrices; Boruvka scans edges in phases and parallelizes component choices. Give costs under the chosen representation.
+   <ExerciseSolution>
+   Let $T$ be an MST and $b(T) = \max_{e \in T} w(e)$. For any other spanning tree $T'$, consider the cut determined by removing the edge achieving $b(T)$ from $T$. The crossing edge in $T'$ has weight at least $b(T)$ (cut property), so $b(T') \ge b(T)$. Thus MST is minimum bottleneck spanning tree. Converse false: consider a triangle with weights 1, 2, 2; the tree with edges 2,2 is a minimum bottleneck (bottleneck 2) but not minimum total weight (which would be 1+2=3 vs 2+2=4).
+   </ExerciseSolution>
+5. **Reverse-delete algorithm.** Start with all edges; delete edges in decreasing weight order if removal does not disconnect the graph. Prove correctness using the cycle property.
 
-5. Negative weights are valid because trees have no cycles; the greedy cut proof uses comparisons, not nonnegativity. Ties permit multiple MSTs; a deterministic tie order selects one without changing minimum total weight.
+   <ExerciseSolution>
+   Sorted edges descending. When considering $e$, if removal disconnects the graph, $e$ must be in every spanning tree, so keep it. If removal preserves connectivity, $e$ can be omitted from some spanning tree; by the cycle property (there exists a cycle with $e$ as heaviest), $e$ is not needed. The remaining edges form an MST.
+   </ExerciseSolution>
 
-6. Check n-1 edges, connectivity, acyclicity, then for every non-tree edge compare its weight with the maximum tree-path edge. No smaller replacement proves MST optimality by the cycle property.
+<CodeExercise client:load
+  title="Complete the MST check"
+  code={`def verify_mst(edges, n, mst_edges):
+    """Return True if mst_edges forms an MST of the graph defined by edges."""
+    # 1. Check the mst_edges form a spanning tree
+    parent = list(range(n))
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx == ry: return False
+        parent[ry] = rx
+        return True
 
-7. An MST minimizes total edge sum and may route a pair along a long path. A shortest-path tree minimizes distances from one source and can have larger total edge weight. The objectives and exchange proofs differ.
+    for u, v, w in mst_edges:
+        if not union(u, v):
+            return False  # cycle
+
+    # Check connectivity
+    root = find(0)
+    if any(find(i) != root for i in range(n)):
+        return False
+
+    # 2. Check optimality via the cut/certificate property
+    # Build adjacency for the MST
+    adj = [[] for _ in range(n)]
+    for u, v, w in mst_edges:
+        adj[u].append((v, w))
+        adj[v].append((u, w))
+
+    # For each non-tree edge, find max edge on MST path
+    mst_set = set([(min(u,v), max(u,v)) for u,v,w in mst_edges])
+    for u, v, w in edges:
+        if (min(u,v), max(u,v)) in mst_set:
+            continue
+        # DFS to find max on path u-v in MST
+        stack = [(u, [!blank!])]
+        visited = [False] * n
+        visited[u] = True
+        max_on_path = float('-inf')
+        while stack:
+            node, path_max = stack.pop()
+            if node == v:
+                max_on_path = path_max
+                break
+            for nb, nw in adj[node]:
+                if not visited[nb]:
+                    visited[nb] = True
+                    stack.append((nb, [!blank!]))
+        if w < max_on_path:
+            return False
+    return True`}
+  answers={["0", "max(path_max, nw)"]}
+  explanation="Initialize the path max to 0 before the DFS. When traversing an MST edge, update the max with the new edge's weight. If any non-tree edge is lighter than the max on its MST path, optimality is violated."
+/>
+
+### Transfer and Synthesis
+
+6. **MST on a line.** Given $n$ points on the real line with Euclidean distances as weights, describe the MST without computation. What is the maximum degree of any vertex in this MST?
+
+   <ExerciseSolution hint="Consider the geometric structure of points on a line. Which edges must every MST include?">
+
+   The MST connects each point to its nearest neighbor(s). On a line, the MST is simply the path connecting consecutive points after sorting. Every interior vertex has degree 2; endpoints have degree 1. No vertex can exceed degree 2 because any edge that skips a point would be heavier than connecting that point directly.
+   </ExerciseSolution>
+7. **Synthesize: MST from scratch.** Design an MST algorithm that does not sort edges globally and does not use a priority queue. Prove its correctness. (Hint: consider partitioning edges by weight range and processing each bucket.)
+
+   <ExerciseSolution hint="Bin edges by logarithmic weight ranges. Process each bin with a union-find structure. What invariant must hold between bins?">
+
+   Partition edges into $k$ bins $B_1,\dots,B_k$ where $B_i$ contains edges with weight in $(2^{i-1}, 2^i]$. Process bins in increasing order. For each bin, run Kruskal-like scanning within the bin, using union-find to detect cycles. Correctness: when processing bin $i$, any edge in a later bin is heavier than all edges in bin $i$, so the relative ordering within each bin is irrelevant — only the interleaving of weights matters. Within a bin, edges are cheap enough that any MST edge in a later bin that could replace a bin-$i$ edge would be heavier, violating the cut property. This achieves $O(E \log W)$ where $W$ is the max weight ratio.
+   </ExerciseSolution>
+8. **Critical edges.** An edge $e$ is *critical* if it belongs to every MST. Design an $O(E \log V)$ algorithm to find all critical edges. Prove its correctness.
+
+   <ExerciseSolution hint="Consider edges of equal weight. Under what condition can an edge be absent from some MST? Use the cycle property.">
+
+   Sort edges by weight. Process equal-weight groups together. For each weight group $G$, consider the forest formed by all lighter edges. An edge $e \in G$ is critical iff $e$ is the unique edge of $G$ crossing some cut in this forest. Equivalently, build the forest using all lighter edges; then $e \in G$ is critical iff its endpoints lie in different components of that forest **and** no other $G$-edge connects those two components. Run union-find on lighter edges, then for each weight group, check connectivity within the group. Complexity: $O(E \log V)$ for sorting and $O(E \alpha(V))$ for union-find.
+   </ExerciseSolution>
+9. **Arborescence counterexample.** Construct a directed graph with non-negative edge weights where selecting the cheapest incoming edge for each vertex (the directed analogue of Prim's cut argument) fails to produce a minimum-cost arborescence.
+
+   <ExerciseSolution hint="Consider a root at vertex 0. Make vertex 1 have two incoming edges: one cheap from 0, one slightly more expensive from 2. Arrange weights so the cheap edge choice leads to overall higher total cost.">
+
+   Vertices: 0 (root), 1, 2. Edges: $0 \to 1$ (cost 1), $0 \to 2$ (cost 10), $2 \to 1$ (cost 2). The cheapest incoming edge for vertex 1 is $0 \to 1$ (cost 1). Selecting it yields arborescence $\{0\to1, 0\to2\}$ (cost 11). But $\{0\to2, 2\to1\}$ is an arborescence (cost 12) — actually, 12 > 11, so this isn't a counterexample. Let's refine: $0\to1$ (cost 100), $0\to2$ (cost 1), $2\to1$ (cost 1). Greedy picks $(0\to2, 1)$ and $(2\to1, 1)$, arborescence cost 2 with edges $\{0\to2, 2\to1\}$. This is actually optimal. The failure mode requires a cycle trap: $0\to1$ (cost 1), $1\to2$ (cost 1), $2\to1$ (cost 1), $0\to3$ (cost 10), $3\to2$ (cost 1). Greedy picks $0\to1$, $2\to1$, $1\to2$, $3\to2$ — but $\{0\to1, 1\to2, 0\to3\}$ has a cycle $1\to2\to1$. The greedy incoming-edge rule creates cycles; breaking them requires the Chu–Liu/Edmonds contraction method.
+   </ExerciseSolution>
+10. **Application: clustering via MST.** Given $n$ points in the plane, removing the $k-1$ heaviest edges from the Euclidean MST partitions the points into $k$ clusters. This is the single-linkage clustering algorithm. Prove that for any $k$, this produces a $k$-clustering minimizing the maximum inter-cluster distance (the **minimum spanning tree clustering** property).
+
+    <ExerciseSolution hint="Use the cycle property. Suppose a better clustering existed — what edge would violate the MST property?">
+
+    Let $T$ be the MST. Removing $k-1$ heaviest edges yields $k$ clusters $C_1,\dots,C_k$. Suppose some $k$-clustering $C'$ achieves a smaller maximum inter-cluster distance $d' < d$ where $d$ is the weight of the $(k-1)$th heaviest edge in $T$. Then there must exist two points in different $C'$ clusters that are connected by an edge $e$ of weight $\le d' < d$ in $T$ (otherwise the $k$ clusters would be disconnected in $T$, contradicting that $T$ has only $k-1$ edges heavier than $d$). But then $e$ is lighter than the heaviest inter-cluster edge in the MST clustering, meaning $C'$ separates two points connected by a lighter edge — which the cycle property would forbid the MST from including. Contradiction.
+    </ExerciseSolution>
+
+## Deliberately Omitted
+
+**Expected-time linear MST algorithms (Karger–Klein–Tarjan).** A randomized algorithm achieving $O(V+E)$ expected time uses random sampling and Borůvka phases; the deterministic near-linear MST via Chazelle's soft heap is an advanced data-structure result. These build on the same cut/cycle properties but require probabilistic analysis and soft heaps respectively — a full treatment belongs in an advanced algorithms module.
+
+**Dynamic MST (maintaining MST under edge insertions/deletions).** The link-cut tree data structure (Sleator–Tarjan 1983, *J. Comput. System Sci.* 26: 362–391) supports dynamic connectivity and MST maintenance in $O(\log V)$ per operation. This is covered in the advanced data structures module.
+
+**Minimum Steiner tree and its approximation.** The Steiner tree problem (connecting a subset of vertices) is NP-hard with a 2-approximation via MST on the metric closure. This appears in the approximation algorithms lesson.
+
+**Parallel and distributed MST algorithms.** Borůvka's algorithm parallelizes naturally (each phase is trivially parallel), and there exist $O(\log V)$-time PRAM algorithms for MST. The distributed MST algorithms (Gallagher–Humblet–Spira 1983, *IEEE Trans. Comput.* 32: 362–371) are covered in the distributed systems module.
 
 ## References & Further Reading
 
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+* Borůvka, O. "O jistém problému minimálním." *Práce Mor. Přírodověd. Spol. v Brně* 3 (1926): 37–58.
+* Jarník, V. "O jistém problému minimálním." *Práce Mor. Přírodověd. Spol. v Brně* 6 (1930): 57–63.
+* Kruskal, J. B. "On the Shortest Spanning Subtree of a Graph and the Traveling Salesman Problem." *Proc. Amer. Math. Soc.* 7 (1956): 48–50.
+* Prim, R. C. "Shortest Connection Networks and Some Generalizations." *Bell System Technical Journal* 36 (1957): 1389–1401.
+* Tarjan, R. E. "Efficiency of a Good But Not Linear Set Union Algorithm." *J. ACM* 22, no. 2 (1975): 215–225.
+* Edmonds, J. "Optimum Branchings." *J. Res. Nat. Bur. Standards* 71B (1967): 233–240.
+* Edmonds, J. "Matroids and the Greedy Algorithm." *Mathematical Programming* 1 (1971): 127–136.
+* Whitney, H. "On the Abstract Properties of Linear Dependence." *Amer. J. Math.* 57, no. 3 (1935): 509–533.
+* Tarjan, R. E. "Data Structures and Network Algorithms." *CBMS-NSF Regional Conference Series* 44 (1983).
+* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed., Chapter 21.

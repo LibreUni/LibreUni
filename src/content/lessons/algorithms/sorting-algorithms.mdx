@@ -1,0 +1,309 @@
+---
+title: "Sorting Algorithms"
+course: "algorithms"
+description: "Merge sort, quicksort and randomized analysis, heapsort, comparison lower bounds, linear-time sorting, and optimality."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Sorting Algorithms
+
+**Prerequisites:** Asymptotic notation ($\Theta$, $O$, $\Omega$), recurrences and the Master theorem, indicator random variables and linearity of expectation.
+
+A logistics company must sort 10 million packages nightly by delivery district, route, and stop order. The current bubble sort takes 14 hours; the warehouse shift is 8 hours. Merge sort would take minutes but needs $O(n)$ extra memory. Quicksort is in-place but has worst-case $O(n^2)$ on nearly-sorted data. Heapsort guarantees $O(n \log n)$ and in-place, but its cache behavior degrades at scale. The optimal choice requires understanding these trade-offs.
+
+Sorting is the canonical problem for algorithm design because it makes these trade-offs precise. Each paradigm — divide-and-conquer (merge sort, quicksort), data-structure-driven (heapsort), representation-based (counting, radix sort) — yields a different optimum.
+
+## Comparison Lower Bound
+
+> **Definition (comparison-based sorting).** A sorting algorithm that accesses elements only through a binary comparison operator $\le$. The algorithm's decisions form a *decision tree* whose leaves correspond to output permutations.
+
+Every comparison-based sorting algorithm corresponds to a binary decision tree. For $n$ elements, there are $n!$ possible output permutations. A binary tree with $L$ leaves has depth at least $\lceil \log_2 L \rceil$, so any comparison-based sort requires at least $\lceil \log_2 (n!) \rceil$ comparisons in the worst case.
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+skinparam shadowing false
+skinparam RoundCorner 8
+start
+:compare(a, b);
+if (a <= b) then (yes)
+  :compare(a, c);
+  if (a <= c) then (yes)
+    :compare(b, c);
+    if (b <= c) then (yes)
+      :a <= b <= c;
+    else (no)
+      :a <= c < b;
+    endif
+  else (no)
+    :c < a <= b;
+  endif
+else (no)
+  :compare(b, c);
+  if (b <= c) then (yes)
+    :compare(a, c);
+    if (a <= c) then (yes)
+      :b <= a <= c;
+    else (no)
+      :b < c < a;
+    endif
+  else (no)
+    :c <= b < a;
+  endif
+endif
+stop
+@enduml`}
+/>
+
+The figure shows the decision tree for sorting three distinct elements. There are $3! = 6$ leaves, one per permutation. The longest root-to-leaf path is $3$ comparisons, matching $\lceil \log_2 6 \rceil = 3$.
+
+<MathStatement id="comparison-lower-bound" kind="theorem" title="Comparison-based sorting lower bound">
+Any comparison-based sorting algorithm requires $\Omega(n \log n)$ comparisons in the worst case.
+</MathStatement>
+
+**Proof.** Stirling's approximation gives $\log_2(n!) = n \log_2 n - n \log_2 e + O(\log n) = \Omega(n \log n)$. Since the decision tree must distinguish $n!$ permutations, at least $\lceil \log_2(n!) \rceil = \Omega(n \log n)$ comparisons are needed. ∎
+
+Linear-time sorting algorithms (below) do not violate this bound — they exploit key structure to bypass the comparison model entirely.
+
+## Merge Sort
+
+> **Definition (merge sort).** Divide the array into two halves, recursively sort each half, then merge the two sorted halves using a linear-time merge procedure.
+
+<MathStatement id="mergesort-spec" kind="definition" title="Merge sort specification">
+**Precondition:** $A$ is an array of length $n$ with elements from a totally ordered set.
+**Postcondition:** $\text{merge\_sort}(A)$ returns a sorted permutation of $A$.
+**Cost:** $T(n) = 2T(n/2) + \Theta(n) = \Theta(n \log n)$. Auxiliary space: $\Theta(n)$.
+**Stable:** Yes.
+</MathStatement>
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+skinparam shadowing false
+skinparam RoundCorner 8
+start
+:Input: A[0..n-1];
+if (n <= 1) then (yes)
+  :return A;
+  stop
+endif
+:mid = floor(n/2);
+partition L = A[0:mid]
+partition R = A[mid:n]
+:L_sorted = merge_sort(L);
+:R_sorted = merge_sort(R);
+:result = merge(L_sorted, R_sorted);
+:return result;
+stop
+@enduml`}
+/>
+
+The merge step compares front elements of the two sorted subarrays, selecting the smaller each time.
+
+<CodeRunner client:load
+  title="Merge sort implementation"
+  language="python"
+  code={`def merge_sort(A):
+    if len(A) <= 1:
+        return A
+    m = len(A) // 2
+    L = merge_sort(A[:m])
+    R = merge_sort(A[m:])
+    i = j = 0
+    B = []
+    while i < len(L) and j < len(R):
+        if L[i] <= R[j]:
+            B.append(L[i]); i += 1
+        else:
+            B.append(R[j]); j += 1
+    return B + L[i:] + R[j:]
+
+print(merge_sort([3, 7, 8, 5, 2, 1, 9, 5, 4]))`}
+  output="[1, 2, 3, 4, 5, 5, 7, 8, 9]"
+/>
+
+**Correctness by induction on $n$.** Base $n \le 1$: trivially sorted. Inductive step: recursive calls return sorted permutations of each half by induction hypothesis. The merge invariant — after $t$ output elements, $B[0..t-1]$ contains the $t$ smallest combined elements in sorted order — holds by induction on $t$, establishing the postcondition.
+
+## Quicksort
+
+> **Definition (quicksort).** Select a pivot, partition the array into elements $\le$ pivot and $>$ pivot, then recursively sort each partition. Partitioning is in-place and runs in $\Theta(n)$ time.
+
+In the worst case (sorted array, first-element pivot), $T(n) = T(n-1) + \Theta(n) = \Theta(n^2)$. Randomized pivot selection avoids this with high probability.
+
+<MathStatement id="quicksort-expected" kind="theorem" title="Expected running time of randomized quicksort" proofId="quicksort-expected-proof">
+Randomized quicksort, with the pivot chosen uniformly at random, runs in $O(n \log n)$ expected time.
+</MathStatement>
+
+<MathProof id="quicksort-expected-proof" for="quicksort-expected" collapsible open>
+Let $X$ be the total number of comparisons. For $i < j$, let $X_{ij} = 1$ if the $i$th and $j$th smallest elements are ever compared, $0$ otherwise. Then $X = \sum_{i=1}^{n-1} \sum_{j=i+1}^{n} X_{ij}$.
+
+Two elements $z_i, z_j$ are compared iff one is chosen as pivot before any element strictly between them. The probability that the first pivot chosen from $\{z_i, z_{i+1}, \ldots, z_j\}$ is $z_i$ or $z_j$ is $2/(j-i+1)$.
+
+$$
+E[X] = \sum_{i=1}^{n-1} \sum_{j=i+1}^{n} \frac{2}{j-i+1}
+     = \sum_{i=1}^{n-1} \sum_{k=2}^{n-i+1} \frac{2}{k}
+     < \sum_{i=1}^{n-1} 2 H_n
+     = O(n \log n)
+$$
+
+where $H_n = 1 + 1/2 + \cdots + 1/n$ is the $n$th harmonic number. Concentration bounds show the probability of deviation from this bound is polynomially small.
+</MathProof>
+
+> **Counterexample: nearly-sorted input.** Deterministic quicksort with first-element pivot on an already-sorted array produces partitions of size $0$ and $n-1$ at each step, giving $\Theta(n^2)$ comparisons. On delivery data that is nearly sorted by route order, this is exactly the failure mode in the warehouse problem. Randomized pivot selection reduces this probability exponentially, but worst-case $\Theta(n^2)$ is still possible.
+
+<CodeRunner client:load
+  title="Quicksort (randomized pivot)"
+  language="python"
+  code={`import random
+
+def quicksort(A, lo, hi):
+    if lo >= hi:
+        return
+    p = partition(A, lo, hi)
+    quicksort(A, lo, p-1)
+    quicksort(A, p+1, hi)
+
+def partition(A, lo, hi):
+    r = random.randint(lo, hi)
+    A[lo], A[r] = A[r], A[lo]
+    pivot = A[lo]
+    i = lo + 1
+    for j in range(lo+1, hi+1):
+        if A[j] <= pivot:
+            A[i], A[j] = A[j], A[i]
+            i += 1
+    A[lo], A[i-1] = A[i-1], A[lo]
+    return i - 1
+
+A = [3, 7, 8, 5, 2, 1, 9, 5, 4]
+quicksort(A, 0, len(A)-1)
+print(A)`}
+  output="[1, 2, 3, 4, 5, 5, 7, 8, 9]"
+/>
+
+<CodeExercise client:load
+  title="Complete the partition function"
+  code={`def partition(A, lo, hi):
+    pivot = A[lo]
+    i = lo [!blank!] 1
+    for j in range(lo+1, [!blank!]):
+        if A[j] <= pivot:
+            A[i], A[j] = A[j], A[i]
+            i [!blank!]= 1
+    A[lo], A[i-1] = A[i-1], A[lo]
+    return i-1`}
+  answers={["+", "hi+1", "+"]}
+  explanation="i starts at lo+1 because the pivot occupies lo. The loop runs to hi inclusive. When A[j] <= pivot, i increments to track the partition boundary before swapping."
+/>
+
+## Heapsort
+
+> **Definition (heapsort).** Build a max-heap in $O(n)$ time, then repeatedly extract the maximum ($O(\log n)$ per extraction), swapping it to the end of the array.
+
+Build-heap runs in $O(n)$ via Floyd's bottom-up sift-down procedure. Each extract-max swaps the root with the last element and sifts the new root down through $\le \log_2 n$ levels. Total: $O(n \log n)$ worst-case, $O(1)$ auxiliary space. The primary drawback is poor cache locality: heap accesses jump between distant indices, causing frequent cache misses on large arrays.
+
+<Quiz client:load
+  title="Sorting algorithm properties"
+  question="Which sorting algorithms guarantee $\Theta(n \log n)$ worst-case running time?"
+  options={["Quicksort only", "Heapsort only", "Merge sort and heapsort", "All three"]}
+  correctIndex={2}
+  explanation="Heapsort and merge sort guarantee $\Theta(n \log n)$ worst-case. Randomized quicksort is $O(n \log n)$ expected but $\Theta(n^2)$ worst-case (though exponentially unlikely under random pivots)."
+/>
+
+## Linear-Time Sorting
+
+Comparison-based sorting cannot beat $\Omega(n \log n)$. By exploiting properties of the keys, faster sorting is possible in restricted models.
+
+<MathStatement id="counting-sort" kind="definition" title="Counting sort">
+If keys are integers in $[0, k-1]$, counting sort runs in $\Theta(n + k)$ time and is stable. Count frequencies, compute prefix sums, then place each element in its output position by iterating the input in reverse order.
+</MathStatement>
+
+**Correctness.** The prefix sum $C[i]$ stores the number of elements $\le i$. Iterating the input in reverse and placing each element at position $C[\text{key}] - 1$ (decrementing after each placement) preserves stability. Total time: $\Theta(n + k)$. When $k = O(n)$, this is linear.
+
+> **Limitation.** Counting sort and radix sort require key structure that comparison-based algorithms do not. They are not general-purpose sorts.
+
+**Radix sort.** Sort by individual digits from least significant to most significant using a stable digit sort. For $d$ digits and base $b$: $\Theta(d(n + b))$. When $d = O(\log_b n)$, this is $O(n \log_b n)$ — matching the comparison lower bound via a non-comparison model.
+
+## Sorting in Practice
+
+| Algorithm | Worst-case | Expected | Stable | In-place | Notes |
+|-----------|-----------|----------|--------|----------|-------|
+| Merge sort | $\Theta(n \log n)$ | $\Theta(n \log n)$ | Yes | No | Python's Timsort (hybrid) |
+| Quicksort | $\Theta(n^2)$ | $\Theta(n \log n)$ | No | Yes | C++ std::sort (introsort) |
+| Heapsort | $\Theta(n \log n)$ | $\Theta(n \log n)$ | No | Yes | Embedded/real-time systems |
+| Counting sort | $\Theta(n + k)$ | $\Theta(n + k)$ | Yes | No | Small integer ranges |
+| Radix sort | $\Theta(d(n+b))$ | $\Theta(d(n+b))$ | Yes | No | String/fixed-width ints |
+
+<Quiz client:load
+  title="Lower bound interpretation"
+  question="Why does radix sort not violate the $\Omega(n \log n)$ comparison lower bound?"
+  options={["Radix sort is not always linear-time", "The bound applies only to comparison-based algorithms", "Radix sort uses $\Omega(n \log n)$ memory", "It violates the bound"]}
+  correctIndex={1}
+  explanation="The $\Omega(n \log n)$ bound holds only for comparison-based sorting. Radix sort uses digit decomposition, not pairwise comparisons, so it operates in a different model."
+/>
+
+## Deliberately Omitted
+
+> **Remark.** These topics constitute engineering optimizations, advanced data structures, or separate conceptual domains excluded to keep the focus on fundamental algorithmic ideas.
+
+- **In-place merge sort variants** (block merge sort, Grail): engineering optimizations, not fundamental theory.
+- **Integer sorting beyond radix** (van Emde Boas, fusion trees, word-level parallelism): belongs in advanced data structures.
+- **External sorting**: multiway merge for data exceeding memory; conceptually covered by B-tree structures.
+- **Adaptive sorting** (Timsort, natural merge sort): exploits existing order; belongs in library design.
+- **Shellsort**: covered by the general concept of inversion-count improvement; adds no new paradigm.
+
+## Exercises
+
+1. **Quicksort worst case.** Construct an input that forces deterministic quicksort (first-element pivot) to make $\Theta(n^2)$ comparisons. Prove the bound.
+
+   <ExerciseSolution hint="What partition sizes result when the array is already sorted and the pivot is always the first element? Write the recurrence.">
+
+   Already sorted array $[1,2,\ldots,n]$ with first-element pivot gives partitions of size $0$ and $n-1$ at each step. Recurrence $T(n) = T(n-1) + \Theta(n) = \Theta(n^2)$.
+   </ExerciseSolution>
+
+2. **Heapsort comparison count.** Prove that heapsort uses at most $2n \log_2 n$ comparisons in the worst case.
+
+   <ExerciseSolution hint="Each extract-max calls sift-down from the root. Sift-down makes two comparisons per level: one to find the larger child, one to compare with the parent.">
+
+   Build-heap uses $O(n)$ comparisons. Each of $n$ extract-max operations calls sift-down, traversing at most $\log_2 n$ levels with $2$ comparisons per level. Total: $\le 2n \log_2 n + O(n)$.
+   </ExerciseSolution>
+
+3. **Radix sort correctness.** Prove by induction on digits that radix sort with a stable digit sort produces correctly sorted output.
+
+   <ExerciseSolution>
+   Base (0 digits): all elements equal, trivially sorted. Inductive step: after sorting by the $i$ least significant digits, elements with equal prefixes in those $i$ digits are ordered by the remaining digits. Sorting by digit $i+1$ groups by that digit and, by stability, preserves the order from the first $i$ digits within each group.
+   </ExerciseSolution>
+
+4. **Counting sort on signed keys.** Given $n$ integers in $[-k, k]$, design a linear-time sorting algorithm and state its space usage.
+
+   <ExerciseSolution>
+   Shift each key by $k$: $k' = x + k$, mapping the range to $[0, 2k]$. Apply counting sort. Time $\Theta(n + k)$, space $\Theta(k)$.
+   </ExerciseSolution>
+
+5. **Min and max simultaneously.** Prove that any comparison-based algorithm finding both the minimum and maximum of $n$ elements requires at least $\lceil 3n/2 \rceil - 2$ comparisons. Design an algorithm achieving this bound.
+
+   <ExerciseSolution>
+   Pair elements: compare each pair (3 comparisons for the first pair, 2 thereafter — compare larger against current max, smaller against current min). Total: $3 + 2((n/2) - 1) = 3n/2 - 2$ for even $n$, with floor/ceil adjustments giving $\lceil 3n/2 \rceil - 2$.
+   </ExerciseSolution>
+
+6. **Synthesis: hybrid sort design.** Design a hybrid sorting strategy for a system with 64 KB of L1 cache and 16 MB of RAM sorting 32-bit integers. Propose a combination of algorithms that addresses cache behavior, worst-case guarantees, and stability requirements. Justify each choice and sketch a proof-of-concept in pseudocode or Python.
+
+   <ExerciseSolution hint="Read about introsort (C++ std::sort) and Timsort (Python). Why does each use a different hybrid?" hint="Consider what happens when partition sizes become very small — is a recursive sort still optimal for 12 elements?">
+
+   A reasonable hybrid uses quicksort (median-of-three pivot) for large partitions, switching to heapsort when recursion depth exceeds $2 \log_2 n$ (introsort). For partitions below a threshold (e.g., 16 elements), switch to insertion sort: its $O(n^2)$ cost on small $n$ is negligible, and its sequential access pattern exploits L1 cache. For stability, delegate to merge sort when required. This hybrid exploits quicksort's cache efficiency on large arrays, heapsort's worst-case guarantee, and insertion sort's low constant factors on small subproblems.
+   </ExerciseSolution>
+
+## References
+
+- Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed., Chapters 7–8.
+- Hoare, C. A. R. "Quicksort." *The Computer Journal* 5, no. 1 (1962): 10–16.
+- Williams, J. W. J. "Heapsort." *Communications of the ACM* 7, no. 6 (1964): 347–348.
+- Blum, M., Floyd, R. W., Pratt, V., Rivest, R. L., and Tarjan, R. E. "Time bounds for selection." *Journal of Computer and Systems Sciences* 7, no. 4 (1973): 448–461.
+- [MIT 6.006: Introduction to Algorithms — Sorting](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-fall-2011/)

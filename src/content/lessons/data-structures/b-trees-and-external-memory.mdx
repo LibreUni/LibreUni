@@ -1,0 +1,278 @@
+---
+title: "B-Trees, B+ Trees, and External Memory"
+course: "data-structures"
+description: "Page-oriented ordered indexes for storage systems: fanout, splits, range scans, and I/O-aware cost contracts."
+---
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+
+import BTreePlayground from '../../../components/playgrounds/BTreePlayground';
+
+# B-Trees, B+ Trees, and External Memory
+
+A single disk read takes ~10 ms — 10 million times slower than a RAM access (1 ns). If your search tree operates on disk, a single node traversal that takes 1 $\mu$s in RAM takes 10 ms on disk. A 1000-node traversal would take 10 seconds. This is not a constant-factor slowdown; it is a fundamental change in the cost model.
+
+The B-tree (Rudolf Bayer and Edward McCreight, 1970, at Boeing) solves this by packing 1000+ keys into a single node, so the tree height is 3–4 instead of 30. The key insight: disk reads are slow, so minimize the *number* of reads by maximizing the branching factor. A B-tree of order $m$ (each node holds up to $m-1$ keys) has height $O(\log_m n)$. For $n = 10^9$ and $m = 1000$, height is 3. For a binary tree, height is 30.
+
+What does the "B" stand for? Bayer never specified. Popular guesses include "Boeing" (where they worked), "balanced," "Bayer," "broad," or "Bush" (after Vannevar Bush's memex). The ambiguity is intentional — Bayer later said the B stands for nothing in particular. What matters is the design: a page-oriented tree where each node fits exactly one disk block, and all leaves sit at the same depth.
+
+## The block model
+
+<StructureDiagram kind="btree" title="A bounded page fan-out" caption="Many keys and child references share one page transfer, reducing pointer hops and misses." variant="wide" />
+
+| Structure | Main cost unit | Strength |
+| --- | --- | --- |
+| Binary search tree | pointer comparison | simple RAM updates |
+| B-tree | page transfer | high fan-out |
+| B+ tree | page transfer plus leaf scan | range queries |
+
+<Quiz client:load question="Why do external-memory trees store many keys per node?" options={["To reduce block transfers", "To make every key equal", "To remove ordering", "To force pointer chasing"]} correctIndex={0} explanation="Fan-out reduces the number of pages visited on a root-to-leaf search." />
+
+Assume a block holds $B$ keys and child references. A node with high fanout has height $O(\log_B n)$ rather than $O(\log_2 n)$. The CPU work inside a page can use binary search or a short linear scan; the dominant cost is the number of pages fetched. A cost contract must state whether the structure is in memory, backed by a block device, or accessed through a buffer pool.
+
+## B-tree invariants and updates
+
+<MathStatement id="btree-def" kind="definition" title="B-tree invariants">
+A B-tree of minimum degree $t \ge 2$ satisfies:
+- Every node stores between $t-1$ and $2t-1$ keys, except the root which may store as few as 1 key.
+- An internal node with $k$ keys has $k+1$ children whose key ranges are separated by those keys.
+- All leaves have the same depth.
+- Within each node, keys appear in sorted order.
+</MathStatement>
+
+The minimum degree $t$ controls the branching factor. A node with $2t-1$ keys is *full*; a node with $t-1$ keys is at minimum occupancy. **Split** before inserting into a full node: promote the median key to the parent, and divide the remaining keys into two sibling nodes. **Merge** when a deletion causes a node to fall below $t-1$ keys: combine it with an adjacent sibling and demote the separator from the parent.
+
+<BTreePlayground client:load />
+
+**Worked B-tree insertion trace.** Minimum degree $t=3$, so each node holds at most $2t-1 = 5$ keys and at least $t-1 = 2$ keys (except root: at least 1). Insert keys in order: $[2,4,7,10,17,21,28,31,35,40]$.
+
+Insert 2, 4, 7, 10, 17: all fit in root. Root: $[2,4,7,10,17]$.
+
+Insert 21: root full (5 keys). Split around median 7. Promote 7 to new root. Left child: $[2,4]$, right child: $[10,17,21]$. Tree height=2.
+
+Insert 28: traverse to right child $[10,17,21]$, space exists. Node becomes $[10,17,21,28]$.
+
+Insert 31: right child full. Split around median 21. Promote 21 to root. Root becomes $[7,21]$. Left child of 21: $[10,17]$, right child of 21: $[28,31]$.
+
+Insert 35: traverse to $[28,31]$, space exists. Node becomes $[28,31,35]$.
+
+Insert 40: traverse to $[28,31,35]$, full (5 keys). Split around median 31. Promote 31 to root. Root: $[7,21,31]$. Left child of 31: $[28]$, right child of 31: $[35,40]$. Root has 3 keys, within order-5 bounds.
+
+Final tree (level-order): root $[7,21,31]$ with children $[2,4]$, $[10,17]$, $[28]$, $[35,40]$. All leaves at depth 2.
+
+| Insertion | Action | Root | Nodes after split |
+|-----------|--------|------|-------------------|
+| 2,4,7,10,17 | fill root | [2,4,7,10,17] | — |
+| 21 | split root | [7] | [2,4], [10,17,21] |
+| 28 | no split | [7] | right→[10,17,21,28] |
+| 31 | split right | [7,21] | [10,17], [28,31] |
+| 35 | fill node | [7,21] | right→[28,31,35] |
+| 40 | split right child | [7,21,31] | [28], [35,40] |
+
+### Simulating a B-tree insertion in Python
+
+<CodeRunner client:load
+  title="B-tree insertion simulation"
+  language="python"
+  code={`class BTreeNode:
+    def __init__(self, leaf=False):
+        self.keys = []
+        self.children = []
+        self.leaf = leaf
+
+class BTree:
+    def __init__(self, t):
+        self.root = BTreeNode(leaf=True)
+        self.t = t
+
+    def insert(self, key):
+        root = self.root
+        if len(root.keys) == 2 * self.t - 1:
+            new_root = BTreeNode(leaf=False)
+            new_root.children.append(self.root)
+            self._split_child(new_root, 0)
+            self.root = new_root
+        self._insert_nonfull(self.root, key)
+
+    def _split_child(self, parent, i):
+        t = self.t
+        child = parent.children[i]
+        new_node = BTreeNode(leaf=child.leaf)
+        mid = t - 1
+        parent.keys.insert(i, child.keys[mid])
+        parent.children.insert(i + 1, new_node)
+        new_node.keys = child.keys[mid + 1:]
+        child.keys = child.keys[:mid]
+        if not child.leaf:
+            new_node.children = child.children[mid + 1:]
+            child.children = child.children[:mid + 1]
+
+    def _insert_nonfull(self, node, key):
+        if node.leaf:
+            i = 0
+            while i < len(node.keys) and node.keys[i] < key:
+                i += 1
+            node.keys.insert(i, key)
+        else:
+            i = 0
+            while i < len(node.keys) and node.keys[i] < key:
+                i += 1
+            if len(node.children[i].keys) == 2 * self.t - 1:
+                self._split_child(node, i)
+                if key > node.keys[i]:
+                    i += 1
+            self._insert_nonfull(node.children[i], key)
+
+    def inorder(self, node=None):
+        if node is None:
+            node = self.root
+        result = []
+        for i in range(len(node.keys)):
+            if not node.leaf:
+                result.extend(self.inorder(node.children[i]))
+            result.append(node.keys[i])
+        if not node.leaf:
+            result.extend(self.inorder(node.children[-1]))
+        return result
+
+tree = BTree(t=3)
+for k in [2, 4, 7, 10, 17, 21, 28, 31, 35, 40]:
+    tree.insert(k)
+print("Inorder:", tree.inorder())`}
+  output="Inorder: [2, 4, 7, 10, 17, 21, 28, 31, 35, 40]"
+/>
+
+### B+ tree range query
+
+Consider a B+ tree of order 4 storing (age, name) records keyed by age. Leaf nodes contain $[(17,\text{Alice}), (19,\text{Bob}), (21,\text{Carol}), (25,\text{David})]$, $[(28,\text{Eve}), (31,\text{Frank}), (35,\text{Grace})]$, linked in order. Root separator: $[25,28]$. Query range [20, 30]:
+
+1. Root-to-leaf: start at root, compare 20 → go left child (since 20 < 25). Reach leaf $L_1 = [17,\text{Alice} \ldots 25,\text{David}]$.
+2. Scan forward in $L_1$ from first key ≥ 20: $(21,\text{Carol})$, $(25,\text{David})$. Record both.
+3. Follow leaf-next pointer to $L_2 = [28,\text{Eve}, 31,\text{Frank}, 35,\text{Grace}]$.
+4. Scan $L_2$ while key ≤ 30: $(28,\text{Eve})$ qualifies; $(31,\text{Frank})$ exceeds range. Stop.
+5. Return $\{(21,\text{Carol}), (25,\text{David}), (28,\text{Eve})\}$.
+
+Block transfers: 1 (root) + 1 ($L_1$) + 1 ($L_2$) = 3 block transfers plus 2 within-leaf scans. Without linked leaves, a separate root-to-leaf search per key would cost $4 \times 2 = 8$ block transfers.
+
+The B+ tree's leaf-linked structure makes range queries cost $O(\log_B n + k/B)$ block transfers for $k$ sequential records, compared to $O(k \log_B n)$ without leaf linkage.
+
+## B-tree height and occupancy
+
+<MathStatement id="btree-height" kind="theorem" title="B-tree worst-case height" proofId="btree-height-proof">
+In a B-tree of minimum degree $t \ge 2$ storing $n$ keys, the height $h$ satisfies:
+$$ h \le 1 + \log_t \frac{n+1}{2}. $$
+</MathStatement>
+
+<MathProof id="btree-height-proof" for="btree-height" collapsible open>
+At height 0 (a single root node), the minimum number of keys is 1. For $h \ge 1$, the root has at least 1 key and 2 children; every other node has at least $t-1$ keys and at least $t$ children. The minimum number of nodes at depth $d$ is $2 t^{d-1}$ for $d \ge 1$. Summing minimum keys across all nodes:
+
+$$ n_{\min} \ge 1 + (t-1) \sum_{d=1}^h 2 t^{d-1} = 1 + 2(t-1) \frac{t^h - 1}{t - 1} = 2 t^h - 1. $$
+
+Solving $2 t^h - 1 \le n$ gives $h \le \log_t ((n+1)/2)$. Adding 1 for the root level: $h \le 1 + \log_t ((n+1)/2)$. ∎
+</MathProof>
+
+For $t = 100$ (a typical value for disk pages holding 4 KB keys), $n = 10^8$ gives $h \le 1 + \log_{100} 5 \times 10^7 \approx 1 + 3.85 \approx 5$ levels. Any root-to-leaf path traverses at most 5 page reads, compared to $\log_2 n \approx 27$ for a binary search tree. The height bound is a worst-case guarantee — actual occupancy is often higher, producing even shorter trees.
+
+## B+ trees and range queries
+
+B+ trees store records in linked leaves and separators only in internal pages. Exact lookup follows one root-to-leaf path. A range query pays for the first path, then scans adjacent leaves: $O(\log_B n + k/B)$ block transfers for $k$ sequential records, ignoring buffer effects. Leaf links are an optimization only when their mutation invariant is maintained during split and merge.
+
+<StructureDiagram kind="btree" title="B+ tree pages and linked leaves" caption="Internal separators select a page; linked leaves make a range scan sequential." />
+
+<CaseStudy client:load title="Range-query index" scenario="A B+ tree finds the first leaf for a range query, but after a leaf split the old leaf's next pointer was not changed. Exact lookups still pass their tests." question="What failure should a range-query test expose?" options={["The scan can skip records in the newly split leaf", "The root must become a binary node", "Hash collisions become unavoidable", "Point lookups must all return the wrong key"]} correctIndex={0} explanation="Range scans depend on the leaf-level linked-list invariant. A stale next pointer can bypass a newly created leaf even when each root-to-leaf point lookup remains correct." />
+
+## Failure modes
+
+A B-tree is robust, but several failure modes arise from incorrect implementation or workload mismatch:
+
+**Deletion underflow and premature merge.** When a key is deleted from a node that already has minimum occupancy, the node must either borrow a key from a sibling (rotation) or merge with a sibling through the parent. An incorrectly implemented deletion can leave a node below $t-1$ keys, violating the occupancy invariant. The tree may still function as a search tree, but the height bound degrades: a node with $t-2$ keys reduces the minimum branching factor, potentially increasing the worst-case height by a constant factor that compounds with each underflow.
+
+**Stale leaf-link pointers after split.** In a B+ tree, a leaf split must update the `next` pointer of the old leaf, the `next` pointer of the new leaf, and the parent's separator. If any of these updates is omitted or applied out of order, a concurrent or even a single-threaded range scan can skip the new leaf entirely. The failure is silent: point lookups remain correct because each traverses a root-to-leaf path, but range queries return an incomplete result set.
+
+**Suboptimal fill factor under random insertions.** When keys are inserted in random order rather than sequentially, the split operation leaves nodes approximately half-full on average. The actual occupancy can be as low as $t-1$ keys per node, which is the worst case for the height bound. A workload that inserts monotonically increasing keys tends to fill the rightmost leaf to capacity before splitting, producing higher average occupancy and shorter trees. A B-tree designed for a sequential workload may perform poorly under random insertions if the fill factor assumption is not verified.
+
+**Concurrent mutation without locking.** A B-tree structure updated concurrently by multiple threads without a proper locking or latching protocol can produce a split that a concurrent reader observes in an intermediate state: a node with more than $2t-1$ keys, or a child pointer that points to an uninitialized node. Database systems use specialized B-link tree variants or page-level latches to prevent this; the sequential invariant alone is insufficient.
+
+## Exercises
+
+<StructureDiagram kind="btree" title="Range scan through leaves" caption="After the first root-to-leaf search, linked leaf pages provide sequential range access." variant="range" />
+
+<StructureExercise client:load title="Check a page split" prompt="What must remain true after a B-tree page splits?" options={["Separators partition child key ranges", "The parent loses the promoted separator", "Leaf records become unsorted", "The root always keeps the same height"]} answer={0} explanation="A split redistributes keys and promotes a separator while preserving ordered ranges and occupancy rules." kind="tree" />
+
+1. State the occupancy and separator invariant for a B-tree of minimum degree $t$.
+
+   <ExerciseSolution hint="Every node except the root has a lower and upper bound on keys. Separators partition children by range.">
+
+   For minimum degree $t$, every non-root node contains between $t-1$ and $2t-1$ keys, and an internal node with $k$ keys has $k+1$ children whose ranges are separated by those keys. The root may have fewer keys, but if it is not a leaf it has at least two children. All leaves have equal depth.
+   </ExerciseSolution>
+
+2. Explain why a root split is the only operation that can increase height.
+
+   <ExerciseSolution hint="When the root is full, a new level must be created above it. Non-root splits redistribute within the existing level.">
+
+   A non-root split redistributes entries among nodes at the same depth and inserts a separator into the existing parent. A root split creates a new root above the old root, adding exactly one level; lower-level splits do not change leaf depth.
+   </ExerciseSolution>
+
+3. Compare a binary search tree and a B+ tree for a range query over one million adjacent records.
+
+   <ExerciseSolution>
+   A BST can support point lookup in memory, but a range scan may follow many unrelated pointers and incur poor locality. A B+ tree pays one root-to-leaf search, then scans linked leaf pages sequentially, giving approximately $O(\log_B n+k/B)$ block transfers for $k$ adjacent records. The comparison depends on the storage model and workload, not on a universal "best" structure.
+   </ExerciseSolution>
+
+4. Identify which leaf-link updates are required when a leaf splits.
+
+   <ExerciseSolution>
+   Let the new leaf take the appropriate suffix of the old leaf's records. Set the new leaf's `next` pointer to the old leaf's former successor, set the old leaf's `next` pointer to the new leaf, and update the parent separator and child pointer. If predecessor links are stored, update both corresponding `prev` pointers as well. The updates must be published atomically or through the tree's recovery protocol so readers cannot observe a broken chain.
+   </ExerciseSolution>
+
+5. **Recall: minimum occupancy.** In a B-tree of minimum degree $t=4$, what is the minimum number of keys in a non-root node? What is the maximum? How many children does a non-leaf node with $k$ keys have?
+
+   <ExerciseSolution>
+   Minimum: $t-1 = 3$ keys. Maximum: $2t-1 = 7$ keys. A non-leaf node with $k$ keys has $k+1$ children.
+   </ExerciseSolution>
+
+6. **Transfer: time-series indexing.** Compare a B+ tree and an LSM tree for storing a time-series workload where: (a) writes are append-only with monotonically increasing timestamps, (b) queries are predominantly range scans over the most recent hour, and (c) old data is never updated but is occasionally bulk-deleted. For each structure, state the write amplification, read amplification for a range scan of 10,000 records, and space amplification under daily bulk deletion. Which structure dominates and under what crossover point?
+
+   <ExerciseSolution hint="Model write amplification as page writes per insertion and read amplification as pages scanned.">
+
+   Model the B+ tree write amplification as the number of leaf and internal page writes per insertion (1 leaf write + occasional split-induced parent writes). Model the LSM write amplification as the product of size ratios across levels. The range-scan read amplification for the B+ tree is approximately $1 + k/B$ pages; for the LSM it involves checking all SSTables that overlap the time window — potentially all levels. The crossover occurs when the B+ tree's random-write cost exceeds the LSM's merge overhead.
+   </ExerciseSolution>
+
+7. **Transfer: variable-length keys.** Design a B-tree variant that supports variable-length keys (e.g., strings up to 256 bytes) without storing all keys twice. Describe how internal separator keys can be stored as minimal prefixes (prefix compression) and what changes to the split and merge invariants are required. Prove that prefix-truncated separators still partition child ranges correctly.
+
+   <ExerciseSolution hint="Use the shortest distinguishing prefix between adjacent child key ranges as the separator.">
+
+   Store a separator as the shortest string that distinguishes the rightmost key of the left child from the leftmost key of the right child. The insertion and split algorithms must recompute these minimal separators. Prove correctness by showing that for any query key $q$, comparing $q$ with the truncated separator is equivalent to comparing $q$ with any key in the right child's range.
+   </ExerciseSolution>
+
+8. **Synthesis: alternate occupancy bound.** Theorem 1 derives the worst-case height using minimum occupancy $t-1$. Prove an alternate bound when the minimum occupancy fraction is $f \le 1/2$ (i.e., each node holds at least $f \cdot M$ keys where $M = 2t-1$ is the maximum). Show that $h \le 1 + \log_{1/(1-f)} (n+1)$. Specialize to $f = 1/2$ and confirm it matches the theorem.
+
+   <ExerciseSolution hint="Follow the same recursive counting method but replace $t-1$ with $f \cdot (2t-1)$.">
+
+   Follow the same recursive counting method as Theorem 1, but replace the minimum occupancy $t-1$ with $f \cdot (2t-1)$. The branching factor at internal nodes (except root) becomes at least $1 + f \cdot (2t-1) \ge 1/(1-f)$ after algebraic simplification. For $f = 1/2$, we have $1/(1-f) = 2$ and $t \approx \frac{1}{2} \cdot (2t-1) + \frac{1}{2}$, which recovers the original bound.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+**B-link trees**: concurrency-optimized B-tree variants with link pointers for lock-free sibling traversal. B-link trees add a high-key and a link pointer to each node so that a concurrent split does not block readers. The synchronization reasoning is substantial and belongs in a concurrent-data-structures treatment.
+
+**Write-optimized B-trees (B-ϵ trees)**: B-tree variants that buffer updates in internal nodes to amortize writes. The B-ϵ tree buffering mechanism changes the split, merge, and flush invariants significantly; it is covered in the LSM-tree lesson from a different angle.
+
+**Cache-oblivious B-trees**: search trees with optimal block-transfer complexity without knowing block size. The van Emde Boas layout and recursive partitioning differ from the page-oriented B-tree model taught here.
+
+**B-tree recovery and ARIES logging**: write-ahead logging protocols for B-tree persistence with undo/redo. These are database-engine implementation techniques rather than fundamental B-tree invariants.
+
+## References & Further Reading
+
+- Bayer, R. and McCreight, E. "Organization and Maintenance of Large Ordered Indexes." Boeing Scientific Research Laboratories, 1970. The original B-tree paper.
+- Comer, D. "The Ubiquitous B-Tree." *ACM Computing Surveys* 11(2), 1979. A comprehensive survey of B-tree variants.
+- Cormen, T. H., Leiserson, C. E., Rivest, R. L., and Stein, C. *Introduction to Algorithms*, 4th ed. MIT Press, 2022. Chapter 18: B-Trees.
+- [Open Data Structures: B-Trees](https://opendatastructures.org/newhtml/ods/latex/index.html)
+- [MIT 6.830: B+ Trees](https://ocw.mit.edu/courses/6-830-database-systems-fall-2010/1343b2699f7d4c76a768b8f45b1674b1_MIT6_830F10_lec06.pdf)
+- Graefe, G. "Modern B-Tree Techniques." *Foundations and Trends in Databases* 3(4), 2011. A detailed monograph on B-tree implementation and optimization.

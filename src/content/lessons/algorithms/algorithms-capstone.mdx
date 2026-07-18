@@ -1,90 +1,295 @@
 ---
 title: "Algorithms Capstone: Design a Reliable Route Planner"
 course: "algorithms"
-description: "An end-to-end algorithm design project integrating modeling, optimization, graph algorithms, proofs, and experiments."
+description: "End-to-end algorithm design: modeling, shortest paths, MST, max flow, proofs, certificates, and experimental validation."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import TikZ from '../../../components/TikZ.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Algorithms Capstone: Design a Reliable Route Planner
 
-Design a route-planning engine for a transportation network with directed and undirected links, travel times, tolls, capacity constraints, temporary closures, and user preferences. The engine must answer shortest-time queries, identify unreachable destinations, produce a route certificate, and support a batch mode that builds a minimum-cost infrastructure plan. It must reject invalid input and state which query variants are exact, approximate, or unsupported.
+A transportation company needs a route-planning engine handling directed and undirected links, travel times, tolls, capacity constraints, temporary closures, and user preferences. The engine must answer shortest-time queries, identify unreachable destinations, produce a route certificate, and support batch mode for minimum-cost infrastructure planning.
 
-## Requirements and models
+<MathStatement
+  id="capstone-problem"
+  kind="definition"
+  title="Route-Planning Problem"
+  proofId="dijkstra-correctness"
+  dependsOn={[{ id: "shortest-path-subproblem", label: "Shortest-path subproblem" }]}
+>
+Given a directed graph $G = (V, E)$ with edge attributes $\text{time}(e)$, $\text{toll}(e)$, $\text{capacity}(e)$, and $\text{active}(e)$ (a time interval), a source $s$, and a query mode $m \in \{\text{time}, \text{toll}, \text{combined}\}$, find a path $P$ from $s$ to $t$ minimizing $f_m(P)$ subject to $P$ being feasible under $\text{active}(e)$ constraints. Return a certificate $(d, \text{pred})$ where $d[v]$ is the optimal cost and $\text{pred}[v]$ is the predecessor on the optimal path.
+</MathStatement>
 
-Define a graph model with vertex IDs, edge IDs, direction, travel time, toll, capacity, and active interval. Decide whether weights are nonnegative, whether time-dependent travel is FIFO, and whether a route may repeat vertices. A shortest route under time is not necessarily shortest under toll or a combined scalar; specify the objective and units. If multiple routes tie, define deterministic tie-breaking or return any optimum.
+## Algorithm Selection Framework
 
-The service supports static batch queries and online updates. Static queries may preprocess; online updates may invalidate distances. A batch mode selects links connecting all depots at minimum total infrastructure cost, which is an MST problem only if the graph is undirected and the objective is total edge weight. A directed or reliability-constrained variant needs a different model. Make this distinction explicit.
+The choice of shortest-path algorithm depends on edge-weight properties, graph structure, and query volume.
 
-## Algorithm selection
+<PlantUML
+  code={`@startuml
+activity "Route Query" as query
+if "Edge weights nonnegative?" then (yes)
+  :Run Dijkstra (binary heap);
+  note right: O((V+E) log V)
+else (no)
+  if "Graph is a DAG?" then (yes)
+    :Topological relaxation;
+    note right: O(V+E)
+  else (no)
+    if "Negative cycles present?" then (yes)
+      :Report "no shortest path";
+      note right: NP-complete to detect\nnegative cycles
+    else (no)
+      :Run Bellman-Ford;
+      note right: O(VE)
+    endif
+  endif
+endif
+if "Single source, all pairs?" then (yes)
+  :Johnson reweighting;
+  note right: O(VE + V^2 log V)
+endif
+:Return certificate (d, pred);
+@enduml`}
+/>
 
-Use BFS only for unit costs. Use Dijkstra for nonnegative static travel times; use Bellman-Ford if negative reduced costs are truly meaningful and negative cycles are handled; use DAG relaxation when the route graph is acyclic. For many sources on sparse graphs, consider Johnson reweighting; for dense small graphs, Floyd-Warshall may be appropriate. Use Kruskal or Prim for the undirected infrastructure plan and max flow for capacity feasibility if the project includes a throughput query.
+## Worked Example 1: Algorithm Selection for a Small Road Network
 
-For online edge updates, a correct baseline recomputes from the changed source. A sophisticated incremental algorithm may reduce work but requires a new proof and update contract. Do not reuse stale distances after a decrease/increase without a validity argument. If approximate routes are allowed, state an additive or multiplicative guarantee and how updates affect it.
+Consider a road network with 5 intersections $V = \{A, B, C, D, E\}$ and directed edges:
 
-## Correctness obligations
+<TikZ
+  code={`\tikzset{vertex/.style={draw,circle,minimum size=1.2cm,inner sep=2pt,font=\\small}}
+\node[vertex] (A) at (0,2) {A};
+\node[vertex] (B) at (3,3) {B};
+\node[vertex] (C) at (2,0) {C};
+\node[vertex] (D) at (5,1) {D};
+\node[vertex] (E) at (7,2.5) {E};
+\draw[->] (A) -- node[above] {10, \$2, 5} (B);
+\draw[->] (A) -- node[left] {3, \$5, 2} (C);
+\draw[->] (B) -- node[above] {7, \$1, 3} (D);
+\draw[->] (C) -- node[below] {2, \$0, 4} (B);
+\draw[->] (C) -- node[below] {8, \$3, 2} (D);
+\draw[->] (D) -- node[below] {5, \$2, 6} (E);
+\draw[->] (B) -- node[right] {15, \$1, 1} (E);
+`}
+/>
 
-For shortest paths, provide a label invariant and predecessor reconstruction proof. For Dijkstra, prove settlement finality under nonnegative weights. For Bellman-Ford, prove the bounded-edge-path induction and negative-cycle detection. For MST, prove the cut property and forest invariant. For max flow, prove residual updates and return a cut certificate. If the planner combines constraints, prove that the reduction preserves feasible routes in both directions.
+| Edge | Travel time (min) | Toll (\$) | Capacity (veh/min) |
+|------|--------------------|-----------|-------------------|
+| $A \to B$ | 10 | 2 | 5 |
+| $A \to C$ | 3 | 5 | 2 |
+| $B \to D$ | 7 | 1 | 3 |
+| $C \to B$ | 2 | 0 | 4 |
+| $C \to D$ | 8 | 3 | 2 |
+| $D \to E$ | 5 | 2 | 6 |
+| $B \to E$ | 15 | 1 | 1 |
 
-The route certificate should include the vertex/edge sequence, total cost, and enough evidence to validate it. A checker verifies consecutive endpoints, active-time and capacity constraints, no forbidden repeats, and arithmetic total. A shortest-path certificate may include final labels and edge inequalities; an MST certificate includes cycle inequalities; a flow certificate includes a cut.
+**Scenario 1: Shortest-time query from $A$ to $E$.** All weights nonnegative → Dijkstra. Execution: $d[A]=0$, relax $A\to B=10$, $A\to C=3$. Settle $C$ ($d=3$), relax $C\to B$: $d[B]=\min(10, 3+2=5)=5$, $C\to D$: $d[D]=3+8=11$. Settle $B$ ($d=5$), relax $B\to D$: $d[D]=\min(11,5+7=12)=11$, $B\to E$: $d[E]=5+15=20$. Settle $D$ ($d=11$), relax $D\to E$: $d[E]=\min(20,11+5=16)=16$. Shortest path: $A\to C\to D\to E$ with time 16 min. Certificate: $\text{pred}[C]=A$, $\text{pred}[D]=C$, $\text{pred}[E]=D$, $d=[0,5,3,11,16]$.
 
-## Data structures
+**Scenario 2: Minimum-toll path from $A$ to $E$ under budget 20 min.** Use toll as weight. Dijkstra on tolls: $A\to B$ (\$2), $A\to C$ (\$5). Settle $B$ (\$2), relax $B\to D$ (\$3), $B\to E$ (\$3). Settle $D$ (\$3), relax $D\to E$ (\$5). Minimum toll: \$3 via $A\to B\to E$. Time = 15 min ≤ 20 ✓.
 
-Use adjacency lists with stable edge IDs for sparse networks, a binary heap or specialized queue for frontier labels, predecessor arrays for reconstruction, and union-find for Kruskal. If edge updates are frequent, use an update log and versioned graph snapshots. A priority queue must handle stale entries or implement decrease-key correctly. A graph index must preserve endpoint validity when edges are removed or compacted.
+**Scenario 3: Batch infrastructure planning.** Connect all intersections minimizing total construction cost. Edge set undirected with weights: AB=10, AC=3, CB=2, BD=7, CD=8, DE=5, BE=15. Kruskal: sort (2,3,5,7,8,10,15), add AC (2), CB (2+3=5), DE (5+5=10), BD (10+7=17). MST weight 17. Certificate: each non-tree edge is not lighter than the max-weight edge on the tree path it connects.
 
-For multi-criteria routes, a single scalar label is insufficient unless a dominance property is proved. Maintain nondominated labels (time,toll), but the frontier can grow exponentially. Approximate discretization or a user-selected scalar objective can bound work; report the loss and memory tradeoff.
+<Quiz client:load
+  title="Algorithm Selection"
+  question="A graph contains negative edge weights but no negative cycles. Which algorithm guarantees a correct shortest-path tree?"
+  options={["Dijkstra", "Bellman-Ford", "BFS", "Kruskal"]}
+  correctIndex={1}
+  explanation="Bellman-Ford handles negative edges by relaxing all edges V-1 times, correctly propagating shortest paths. Dijkstra assumes nonnegative weights and may settle labels prematurely in the presence of negative edges."
+/>
 
-## Testing plan
+## Worked Example 2: Certificate Verification
 
-Build a brute-force oracle for tiny graphs by enumerating simple paths, spanning trees, and feasible flows. Generate disconnected graphs, parallel edges, self-loops, zero and negative weights, equal ties, cycles, and sparse IDs. Verify returned routes against certificates and compare algorithms where their assumptions overlap. For negative-cycle cases, test explicit undefined status rather than expecting a finite answer.
+Given distances $d=[0,5,3,11,16]$ and predecessors $\text{pred}=[\text{none}, C, A, C, D]$, verify the shortest-path certificate.
 
-For dynamic updates, compare the incremental result with recomputation after every update. Test edge insertion, deletion, weight changes, activation interval boundaries, and updates that disconnect the source. Retain old snapshots if the API promises versioned queries and verify they do not change after later updates.
+**Edge-inequality check:** $\forall (u,v)\in E$, $d[v] \le d[u] + w(u,v)$.
+- $A\to B$: $5 \le 0+10 = 10$ ✓
+- $A\to C$: $3 \le 0+3 = 3$ ✓
+- $B\to D$: $11 \le 5+7 = 12$ ✓
+- $B\to E$: $16 \le 5+15 = 20$ ✓
+- $C\to B$: $5 \le 3+2 = 5$ ✓
+- $C\to D$: $11 \le 3+8 = 11$ ✓
+- $D\to E$: $16 \le 11+5 = 16$ ✓
 
-## Performance study
+**Path-consistency check:** $\forall v\ne s$, $d[v] = d[\text{pred}[v]] + w(\text{pred}[v], v)$.
+- $C$: $3 = 0 + 3$ with $\text{pred}[C]=A$ ✓
+- $B$: $5 = 3 + 2$ with $\text{pred}[B]=C$ ✓
+- $D$: $11 = 3 + 8$ with $\text{pred}[D]=C$ ✓
+- $E$: $16 = 11 + 5$ with $\text{pred}[E]=D$ ✓
 
-Vary vertices, edges, density, degree skew, source count, update frequency, weight distribution, and query selectivity. Measure preprocessing, query latency, p50/p95/p99, heap operations, edge relaxations, memory, and certificate-checking cost. Compare adjacency list/heap with dense matrix/array approaches on regimes where each should be competitive. Keep graph instances identical across implementations.
+<MathStatement
+  id="certificate-soundness"
+  kind="theorem"
+  title="Certificate Soundness"
+  dependsOn={[{ id: "triangle-inequality", label: "Triangle inequality" }]}
+>
+If a certificate $(d, \text{pred})$ satisfies edge inequalities $d[v] \le d[u] + w(u,v)$ for all $(u,v) \in E$ and path consistency $d[v] = d[\text{pred}[v]] + w(\text{pred}[v], v)$ for all $v \ne s$, then $d[t]$ is the true shortest-path distance from $s$ to $t$.
+</MathStatement>
 
-An asymptotic claim must name its model: Dijkstra with binary heap is O((V+E)log V), array-based dense Dijkstra O(V²), Kruskal O(E log E), and BFS O(V+E). Measurements may differ because of locality and constants. Explain any crossover rather than presenting a single universal winner.
+<MathProof id="certificate-proof" for="certificate-soundness" collapsible>
+Let $P$ be any path $s = v_0, v_1, \dots, v_k = t$. By repeated application of the edge inequality:
 
-## Failure and operations
+$$d[t] = d[v_k] \le d[v_{k-1}] + w(v_{k-1}, v_k) \le \dots \le d[s] + \sum_{i=0}^{k-1} w(v_i, v_{i+1}) = \text{weight}(P).$$
 
-If a route uses an inactive edge, inspect snapshot/version mismatch or update propagation. If a returned path’s cost is lower than the sum of its edges, check overflow or unit conversion. If Dijkstra changes a settled label, find a negative edge or stale-queue bug. If MST has fewer than component-count-adjusted edges, inspect vertex mapping or disconnected status. If a max-flow certificate disagrees with value, inspect residual reverse updates and cut state.
+Thus $d[t] \le \text{weight}(P)$ for all $P$. The path traced by $\text{pred}$ achieves equality, so $d[t]$ is optimal.
+</MathProof>
 
-Deploy with a known-good fallback algorithm and bounded resource budgets. Reject graphs that exceed memory or numeric limits. Cache query results only with a graph-version key. A cache hit under a newer edge weight is not a correct route. Log algorithm choice, graph version, assumptions, and certificate status without logging sensitive user data.
+<CodeRunner client:load
+  title="Certificate Checker"
+  language="python"
+  code={`def verify_certificate(V, E, d, pred, s, t):
+    """Return (is_valid, path) or (False, error_msg)."""
+    # Edge inequalities
+    for u, v, w in E:
+        if d[v] > d[u] + w + 1e-9:  # tolerance for floating point
+            return False, f"Violation: {u}->{v}: d[{v}]={d[v]} > d[{u}]+w={d[u]}+{w}"
+    # Path consistency
+    path = []
+    v = t
+    while v != s:
+        p = pred[v]
+        if p is None:
+            return False, f"No predecessor for {v}"
+        expected = d[p] + next(w for u2,v2,w in E if u2==p and v2==v)
+        if abs(d[v] - expected) > 1e-9:
+            return False, f"Consistency fail: {p}->{v}: d[{v}]={d[v]} != {expected}"
+        path.append(v)
+        v = p
+    path.append(s)
+    path.reverse()
+    return True, path
 
-## Deliverables and rubric
+# Example from worked example 1
+V = ['A','B','C','D','E']
+E = [('A','B',10),('A','C',3),('B','D',7),('B','E',15),
+     ('C','B',2),('C','D',8),('D','E',5)]
+d = {'A':0,'B':5,'C':3,'D':11,'E':16}
+pred = {'A':None,'B':'C','C':'A','D':'C','E':'D'}
+valid, result = verify_certificate(V, E, d, pred, 'A', 'E')
+print(f"Certificate valid: {valid}")
+print(f"Path: {result}")
+`}
+  output="Certificate valid: True\nPath: ['A', 'C', 'D', 'E']"
+/>
 
-Submit problem specification (15%), algorithm selection and alternatives (15%), pseudocode/implementation (20%), correctness proofs/certificates (20%), tests and failure analysis (15%), complexity/performance study (10%), and reproducibility/clarity (5%). Include one deliberately invalid instance and show a safe rejection; include one instance where a tempting algorithm is invalid and explain why.
+## Counterexample: When Dijkstra Fails
 
-## Oral defense prompts
+<MathStatement
+  id="negative-edge-failure"
+  kind="example"
+  title="Dijkstra Failure on Negative Edges"
+>
+Consider $G$ with $V = \{s, a, t\}$, $s \to a$ weight 5, $s \to t$ weight 10, $a \to t$ weight $-3$. Dijkstra settles $a$ ($d=5$), then $t$ ($d=10$), never relaxing $a \to t$ because $t$ is already settled. Correct shortest path: $s \to a \to t$ with weight $5 + (-3) = 2$.
+</MathStatement>
 
-Explain why Dijkstra is or is not valid, how a predecessor path is guaranteed to be optimal, why an MST is not a shortest-path tree, how an update invalidates cached labels, what a certificate independently proves, and which workload would cause your chosen data structure to lose. A strong defense names assumptions before conclusions and distinguishes theorem, measurement, and heuristic.
+**Negative cycle detection:** Bellman-Ford detects cycles by running one extra relaxation after $V-1$ passes. If any edge still relaxes, a negative cycle is reachable from $s$.
 
-## Detailed project workflow
+<CodeExercise client:load
+  title="Negative Cycle Detection"
+  code={`def has_negative_cycle(graph, V, s):
+    dist = [float('inf')] * V
+    dist[s] = 0
+    for _ in range(V - 1):
+        for u, v, w in graph:
+            if dist[u] != float('inf') and dist[u] + w [!blank!] dist[v]:
+                dist[v] = dist[u] + w
+    for u, v, w in graph:
+        if dist[u] != float('inf') and dist[u] + w [!blank!] dist[v]:
+            return True
+    return False`}
+  answers={["<", "<"]}
+  explanation="The first blank checks if relaxation improves the distance. The second blank checks if a further relaxation is possible after V-1 passes, indicating a negative cycle."
+/>
 
-Begin with a small formal instance and solve it by exhaustive search. Use that instance to test the graph parser, objective calculation, path reconstruction, and certificate checker before implementing the optimized algorithm. Then add one feature at a time: negative or time-dependent weights, update versions, capacity constraints, and multiple criteria. At each step, update the specification and identify which prior proof no longer applies.
+## Capacity and Throughput
 
-Create a baseline implementation that is intentionally simple, even if slow. A brute-force simple-path solver on tiny graphs, Bellman-Ford for general signed weights, and a copied graph per update provide reference behavior. The optimized implementation should be compared against these baselines on random and hand-designed cases. If the results disagree, preserve the smallest graph and classify whether the bug is in parsing, arithmetic, algorithm assumptions, or the oracle.
+Model edge capacities as a flow network. Answer "Can $k$ units be sent from $s$ to $t$?" via max flow. The integrality theorem ensures integral flow corresponds to integral paths when capacities are integral.
 
-## Time-dependent extension
+<MathStatement
+  id="max-flow-min-cut"
+  kind="theorem"
+  title="Max-Flow Min-Cut Theorem"
+  proofId="max-flow-min-cut-proof"
+>
+For any flow network $(G, c)$ with source $s$ and sink $t$, the maximum flow value equals the minimum capacity of any $s$-$t$ cut.
+</MathStatement>
 
-If edge travel time depends on departure time, represent an edge by an arrival function (A_e(t)=t+tau_e(t)). FIFO means departing later cannot arrive earlier on the same edge: (A_e(t_1) at most  A_e(t_2)) whenever (t_1 at most  t_2). Under FIFO and suitable waiting rules, a label-setting generalization of Dijkstra can be valid because an earliest settled arrival cannot be improved by a later departure through an unsettled vertex. Without FIFO, waiting and later departures can create nontrivial improvements, and ordinary Dijkstra’s proof fails.
+<MathProof id="max-flow-min-cut-proof" for="max-flow-min-cut" collapsible open>
+Let $f$ be a maximum flow. In the residual network $G_f$, let $S$ be the set of vertices reachable from $s$. Since $f$ is maximum, $t \notin S$; otherwise an augmenting path exists. The cut $(S, V \setminus S)$ has capacity $c(S, V \setminus S) = |f|$ because every edge crossing from $S$ to $V \setminus S$ is saturated. Thus $|f|$ equals the cut capacity, and no cut can have smaller capacity than any flow value.
+</MathProof>
 
-State whether waiting at vertices is allowed, whether edge availability intervals are hard constraints, and whether a route’s feasibility depends on a reservation resource. A route with individually feasible edges may be globally infeasible if it arrives after a time window or exhausts capacity. The state must include the relevant time/resource context, and a single distance label may no longer summarize all futures.
+## Capacity Constraint: A Failure Mode
 
-## Robustness and uncertainty
+Consider a network where a single edge $e$ has capacity 1 and all other edges have capacity 100. The max flow from $s$ to $t$ is bounded by 1. Failure mode: a naive greedy algorithm that sends flow without considering bottleneck edges may route flow into a dead-end subgraph, requiring reverse-flow augmentation in the residual network to correct.
 
-If travel times are estimates, optimize expected time, worst-case time, or a risk measure explicitly. A route shortest under mean weights can be poor under variance or failure probability. Robust shortest paths may require intervals and a min-max objective; the resulting problem can be harder. Do not present a deterministic shortest path over point estimates as a reliability guarantee.
+<CaseStudy client:load
+  title="Multimodal Route Planning"
+  scenario="A city transit authority must plan a route that starts with a 10-minute walk, continues with a 20-minute bus ride (capacity 50 passengers), and ends with a 15-minute train ride (capacity 200 passengers). The walk has zero monetary cost, the bus costs \$2.50, and the train costs \$4.00. Travel time is the primary objective, but the total cost must not exceed \$5.00. Walking and transit networks connect at a single interchange vertex. Each transit edge has a frequency-based schedule (e.g., bus every 15 min, train every 6 min)."
+  question="How should the route planner model the combined walking+transit network to minimize expected travel time under the budget constraint?"
+  options={[
+    "Merge all edges into one graph with time as weight, ignore cost",
+    "State augmentation: vertex × remaining budget, with time as edge weight and cost as resource consumption",
+    "Run Dijkstra on walking graph, then Bellman-Ford on transit graph, concatenate paths",
+    "Use max flow to find the highest-capacity path"
+  ]}
+  correctIndex={1}
+  explanation="State augmentation (vertex × remaining budget) is the correct technique. The state space is V × B where B is the remaining budget. Edges consume time (weight) and cost (resource). The recurrence is d[v][b] = min_{(u,v)∈E} d[u][b + cost(u,v)] + time(u,v) for b ≥ cost(u,v). This is a constrained shortest-path problem solvable via DP in O(V · B · deg) time. Option 3 fails because optimal paths may mix modes at interchange vertices."
+/>
 
-Sensitivity experiments perturb weights and remove edges. Report whether the route remains feasible, how much cost changes, and which edges are critical. For the static shortest-path algorithm, a certificate verifies optimality for the supplied graph; it does not verify that the graph’s measurements are accurate or that future failures will not occur.
+## Exercises
 
-## Reproducibility package
+### Recall
 
-Include graph files, schemas, generator seeds, exact command lines, software versions, benchmark raw data, plots, and checker output. A result table should identify graph version, algorithm, data structure, preprocessing, query count, and units. Keep theorem assumptions next to each result. The project is assessed on the ability to make a defensible algorithmic claim, not on selecting a fashionable implementation.
+1. State the edge-inequality and path-consistency conditions for a shortest-path certificate.
+2. What is the defining property of a minimum spanning tree edge that belongs to every MST?
 
-## Final self-audit
+### Application
 
-Before submission, ask: Can another reader reconstruct the objective from the specification? Can they identify every precondition? Does every returned route pass an independent checker? Does the proof cover the actual code’s edge cases and update semantics? Are complexity claims parameterized and model-aware? Are measured results reproducible and interpreted with uncertainty? If any answer is no, the project is not ready for an advanced course final.
+3. Run Dijkstra on the graph from Worked Example 1 using toll as the sole weight. List the settled vertices in order and the resulting shortest-path tree.
+4. The graph below has a negative edge. Apply Bellman-Ford to find shortest paths from $s$: $s \to a$ (weight 4), $s \to b$ (weight 2), $a \to b$ (weight -3), $b \to t$ (weight 1), $a \to t$ (weight 6).
 
-## References & Further Reading
+### Transfer
 
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+5. **Multi-objective routing.** Extend the route planner to handle two objectives: minimize travel time subject to a toll budget, or minimize tolls subject to a time budget. Design a transformation to a single-weight shortest-path problem using state augmentation (vertex × remaining budget). State the recurrence and complexity.
+
+6. **Dynamic edge failures.** Suppose edges fail probabilistically. Given failure probabilities $p_e$, compute the most reliable path (maximizing $\prod (1-p_e)$). Transform to a shortest-path problem using logarithms. Prove correctness.
+
+### Synthesis
+
+7. **Time-dependent routing.** Suppose edge travel times are piecewise-linear functions of departure time $t$. Prove that if the FIFO property holds (earlier departure cannot produce later arrival), Dijkstra's algorithm remains correct with a modified relaxation: $d[v] = \min(d[v], \text{travel}(d[u], u, v))$, where $\text{travel}(t, u, v)$ is the arrival time at $v$ when departing $u$ at time $t$ via edge $(u,v)$.
+
+8. **Synthesis: multimodal route planner.** Design a system combining driving, transit, and walking. Each mode has its own graph, edge costs, and transfer penalties at interchange vertices. Formulate a unified graph model, state which algorithm(s) apply, and specify the certificates each query must return. Analyze the total complexity in terms of $V_{\text{drive}}, V_{\text{transit}}, V_{\text{walk}}$ and transfer edges.
+
+<ExerciseSolution hint="For exercise 5, define a state graph where each vertex is (original vertex, remaining budget). Edges consume both time and budget.">
+
+**Exercise 5 solution:** Construct $G' = (V', E')$ where $V' = V \times \{0, 1, \dots, B\}$ and $B$ is the maximum budget. For each $(u,v) \in E$ with toll $c_{uv}$ and time $t_{uv}$, add an edge from $(u, b)$ to $(v, b - c_{uv})$ with weight $t_{uv}$ for all $b \ge c_{uv}$. The shortest path from $(s, B)$ to any $(t, b)$ with $b \ge 0$ gives the minimum time for a given budget. Complexity: $O(V \cdot B \cdot \log(V \cdot B))$ with Dijkstra.
+
+**Exercise 6 solution:** Let $p_e$ be failure probability. Path reliability = $\prod_{e \in P} (1-p_e)$. Maximizing this is equivalent to minimizing $-\log(\prod (1-p_e)) = \sum -\log(1-p_e)$. Since $-\log(1-p_e) \ge 0$ for $p_e \in [0,1)$, the transformed weights are nonnegative, and Dijkstra applies. Correctness: log is monotonic, so minimizing sum of logs is equivalent to maximizing product of probabilities.
+
+</ExerciseSolution>
+
+## Deliberately Omitted
+
+- **Contraction hierarchies and ALT preprocessing** — Speedup techniques for real-time road networks (CH, landmark A*) are implementation-intensive and depend on specific preprocessing; the basic Dijkstra and Johnson machinery covers the algorithmic core.
+- **Stochastic shortest paths with dynamic programming** — Markov decision process formulations for travel time minimization under stochastic edge costs rely on value iteration, covered in the dynamic programming module.
+- **Multi-commodity flow for network design** — Simultaneously routing multiple commodities with coupling capacity constraints generalizes single-commodity max-flow to NP-hard territory; approximation schemes appear in the approximation algorithms lesson.
+- **Route planning with turn restrictions and penalties** — Modeling turn costs requires expanding each vertex into a set of directed edges representing incoming-outgoing pairs; this is a straightforward graph transformation but adds notational overhead without new algorithmic insight.
+- **Real-time traffic data integration** — Live data feeds, prediction models, and re-planning heuristics are engineering concerns orthogonal to the core algorithmic correctness proofs.
+
+## References
+
+1. Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. (2022). *Introduction to Algorithms* (4th ed.). MIT Press. Chapters 22–26 (shortest paths, MST, max flow).
+2. Ahuja, R. K., Magnanti, T. L., & Orlin, J. B. (1993). *Network Flows: Theory, Algorithms, and Applications*. Prentice Hall.
+3. Dijkstra, E. W. (1959). "A note on two problems in connexion with graphs." *Numerische Mathematik*, 1, 269–271.
+4. Bellman, R. (1958). "On a routing problem." *Quarterly of Applied Mathematics*, 16, 87–90.
+5. Ford, L. R. & Fulkerson, D. R. (1956). "Maximal flow through a communication network." *Canadian Journal of Mathematics*, 8, 399–404.
+6. Kruskal, J. B. (1956). "On the shortest spanning subtree of a graph and the traveling salesman problem." *Proceedings of the American Mathematical Society*, 7(1), 48–50.
+7. [MIT 6.006: Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/) — Lecture materials on shortest paths and dynamic programming.

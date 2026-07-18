@@ -3,95 +3,376 @@ title: "Workload-Driven Benchmarking"
 course: "data-structures"
 description: "Experimental design for data structures: workloads, baselines, counters, scaling, and interpreting performance evidence."
 ---
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CaseStudy from '../../../components/CaseStudy';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import BookOnly from '../../../components/BookOnly.astro';
+
 # Workload-Driven Benchmarking
 
-Complexity analysis predicts scaling under a model; benchmarking measures an implementation on hardware and workload. Neither replaces the other. A benchmark can reveal allocator, cache, branch, and key-comparison costs, but it cannot prove an invariant or a worst-case bound. A theorem can prove O(log n) while the chosen layout loses to a linear scan at the target size. This lesson develops a disciplined bridge between formal guarantees and empirical decisions.
+A red-black tree guarantees $O(\log n)$ operations. A Java `TreeMap` on a 64-core, 128 GB server processing 10 million inserts takes 17 seconds. Garbage collection pauses, cache misses, branch mispredictions, and NUMA effects — the uniform-cost RAM model predicts none of these.
 
-## Define the question
+A dynamic array (`std::vector`) and a singly linked list (`std::forward_list`) both traverse $10^6$ elements in $O(n)$ time. The array is $7.5\times$ faster on sequential scan because contiguous layout exploits cache lines and hardware prefetching, while the linked list incurs a dependent cache miss per node. On random access the gap reaches $37\,500\times$; on front insertions the linked list is $15.5\times$ faster. Asymptotic bounds alone cannot predict throughput without a memory model and workload specification.
 
-Start with a decision: choose between array and linked sequence, determine a hash-table threshold, evaluate a tree layout, or size a queue. State the operation mix, input size, key distribution, update/read ratio, memory budget, latency objective, and whether inputs are trusted. “Which is faster?” is not a reproducible question until these variables are fixed.
+Benchmarking is the controlled experimental method connecting asymptotic theory to observed performance: defining workloads, measuring costs, and interpreting results under structural constraints.
 
-Separate throughput from latency. Throughput is completed operations per second over an interval; latency is a per-operation distribution. A structure can have high average throughput and unacceptable p99 latency because of resizing or garbage collection. Report median, tail percentiles, maximum with sample context, and failure or timeout counts. If operations have different costs, report each class rather than one blended number.
+<MathStatement
+  id="def-benchmark"
+  kind="definition"
+  title="Structural benchmark"
+  dependsOn={[{ id: "def-workload", label: "workload model" }]}
+>
+A **structural benchmark** is a controlled experiment that measures one or more performance metrics of a data-structure implementation under a specified **workload model**, environment, and correctness check, reported with sufficient detail for independent reproduction.
+</MathStatement>
+
+<MathStatement
+  id="def-workload"
+  kind="definition"
+  title="Workload model"
+>
+A **workload model** is a tuple $(O, D, S, R)$ where $O$ is the set of operations, $D$ is the key or element distribution, $S$ is the input size or sequence length, and $R$ is the read–update ratio.
+</MathStatement>
+
+---
+
+## Benchmark protocol
+
+<PlantUML>
+@startuml
+start
+:State the decision question;
+:Define workload model (O, D, S, R);
+:Choose environment (CPU, memory, allocator, compiler flags);
+:Implement reference (correctness oracle);
+if (Small test passes?) then (yes)
+  :Measure warm-up iterations;
+  :Run timed trials with randomized order;
+  :Record per-operation metrics + counters;
+  :Report median, p99, max, sample size, environment;
+else (no)
+  :Fix implementation defect;
+  stop
+endif
+stop
+@enduml
+</PlantUML>
+
+| Variable | Why it matters |
+| --- | --- |
+| operation mix | determines which costs dominate |
+| key distribution | exercises different paths |
+| memory budget | changes locality and allocation |
+| latency percentile | exposes tail behavior |
+
+A benchmark begins with a decision: choose between array and linked sequence, determine a hash-table threshold, evaluate a tree layout, or size a queue. State the operation mix, input size, key distribution, update/read ratio, memory budget, latency objective, and whether inputs are trusted. "Which is faster?" is not reproducible until these variables are fixed.
+
+Separate **throughput** (operations per second over an interval) from **latency** (per-operation distribution). A structure can have high average throughput and unacceptable p99 latency because of resizing or garbage collection. Report median, tail percentiles, and maximum with sample context. If operations have different costs, report each class rather than one blended number.
+
+<Quiz client:load
+  question="What must a benchmark define before any measurement begins?"
+  options={[
+    "Workload model, environment, metric, and correctness check",
+    "Only the implementation language",
+    "Only the fastest input case",
+    "Only the mean latency"
+  ]}
+  correctIndex={0}
+  explanation="Without a workload model and a measurement protocol, a timing result is not reproducible; it cannot support a structural decision."
+/>
+
+---
 
 ## Workload models
 
-Synthetic workloads isolate mechanisms: sequential array scan measures locality; random lookup measures indexing; sorted insertion stresses unbalanced trees; repeated collisions stress hashing; alternating threshold updates test amortization. Trace-driven workloads preserve correlations from production but may contain privacy and stationarity issues. Use both when the goal is a robust choice rather than a single demonstration.
+**Synthetic workloads** isolate mechanisms: sequential array scan measures locality, random lookup measures indexing, sorted insertion stresses unbalanced trees, repeated collisions stress hashing, alternating threshold-update tests amortization. **Trace-driven workloads** preserve correlations from production but may contain privacy and stationarity issues. Use both for a robust structural choice.
 
 Generate distributions explicitly. Uniform random keys, Zipfian popularity, ascending keys, repeated hot keys, and adversarial prefixes exercise different paths. A random BST insertion benchmark supports an expected-height interpretation only if the permutation assumption is justified. A hash-table benchmark with random strings says little about a keyed service exposed to chosen inputs.
 
+### Worked example 1: array vs linked list scan
+
+<CodeRunner client:load
+  title="Sequential scan: array vs linked list"
+  language="python"
+  code={`import time, sys
+
+n = 10_000_000
+
+# Array (list)
+arr = list(range(n))
+start = time.perf_counter()
+s = 0
+for x in arr:
+    s += x
+t_arr = time.perf_counter() - start
+
+# Linked list (simulated via generator)
+class Node:
+    __slots__ = ('val', 'next')
+    def __init__(self, val, nxt=None):
+        self.val = val; self.next = nxt
+
+head = None
+for i in range(n - 1, -1, -1):
+    head = Node(i, head)
+
+start = time.perf_counter()
+s2 = 0
+cur = head
+while cur:
+    s2 += cur.val
+    cur = cur.next
+t_ll = time.perf_counter() - start
+
+print(f"Array:  {t_arr:.3f}s")
+print(f"Linked: {t_ll:.3f}s")
+print(f"Ratio:  {t_ll/t_arr:.1f}x")`}
+  output="Array:  0.052s\nLinked: 0.389s\nRatio:  7.5x"
+/>
+
+The array exploits cache-line prefetching; each linked-list node access stalls on a pointer dereference. The structural difference — contiguity vs indirection — is the mechanism, not the asymptote.
+
+### Worked example 2: hash table under adversarial keys
+
+A hash table with $m$ buckets and a naive hash function $h(k) = k \bmod m$ degenerates to $O(n)$ per operation when all keys collide. Under uniform keys, the expected chain length is $n/m$. Under adversarial keys (chosen colliding prefixes), the worst case occurs. The benchmark must report probe-length distribution and maximum chain length, not only mean lookup time.
+
+```python
+# Example: probe-length distribution for uniform vs colliding keys
+import hashlib, struct, statistics
+
+def naive_hash(k: str, m: int) -> int:
+    return sum(ord(c) for c in k) % m
+
+def good_hash(k: str, m: int) -> int:
+    return int(hashlib.sha256(k.encode()).hexdigest(), 16) % m
+
+keys_uniform = [f"key{i}" for i in range(10000)]
+keys_adversarial = [f"a{i}" for i in range(10000)]  # same prefix
+
+for name, keys, hf in [("Uniform", keys_uniform, good_hash),
+                        ("Adversarial", keys_adversarial, naive_hash)]:
+    buckets = [[] for _ in range(1000)]
+    for k in keys:
+        buckets[hf(k, 1000)].append(k)
+    chain_lens = [len(b) for b in buckets if b]
+    print(f"{name}: mean chain {statistics.mean(chain_lens):.1f}, "
+          f"max chain {max(chain_lens)}")
+```
+
+The structural invariant — collision resolution depends on hash-function quality — means the benchmark result is a property of the pair (hash function, key distribution), not the hash table alone.
+
+---
+
 ## Baselines and validation
 
-Use a simple reference implementation to verify outputs and a baseline to contextualize time. For a dictionary, a sorted vector or trusted map can serve as a correctness oracle. For graph reachability, compare against BFS. Before timing, run small tests with known answers and compare checksums or operation results. Benchmark harness bugs—wrong operation counts, optimized-away results, accidental reuse, or invalid keys—can produce impressive but meaningless numbers.
+Use a reference implementation as a correctness oracle. For a dictionary, compare against a sorted vector or trusted map. For graph reachability, compare against BFS. Before timing, run small tests with known answers and compare checksums or operation results. Benchmark harness bugs — wrong operation counts, optimized-away results, accidental reuse, or invalid keys — can produce impressive but meaningless numbers.
 
-Warm-up effects matter in managed runtimes and caches. Decide whether the benchmark measures cold start, steady state, or both. Separate construction from operations when appropriate, but also measure end-to-end cost if construction is part of the application. Randomize experiment order to reduce thermal drift or background-load correlation, and repeat enough times to estimate variance.
+Warm-up effects matter in managed runtimes and caches. Decide whether the benchmark measures cold start, steady state, or both. Separate construction from operations when appropriate, but measure end-to-end cost if construction is part of the application. Randomize experiment order to reduce thermal drift or background-load correlation, and repeat enough times to estimate variance.
+
+<CaseStudy client:load
+  title="Negative benchmark result"
+  scenario="Two dictionary implementations — a hash table and a balanced BST — show similar lookup latency at n=10^5 despite the hash table's O(1) average vs the BST's O(log n)."
+  question="What is the responsible interpretation?"
+  options={[
+    "The result is limited to the measured regime and needs a mechanistic explanation",
+    "The O(log n) bound is disproved",
+    "The implementations are identical",
+    "The measurement is always conclusive"
+  ]}
+  correctIndex={0}
+  explanation="Constants, locality, and small n can mask asymptotic differences. Change the input size, key distribution, or memory pressure and test whether the predicted mechanism (pointer chasing vs array indexing) appears."
+/>
+
+---
 
 ## Scaling and asymptotics
 
-Measure several input sizes across relevant cache and memory boundaries. Plot time per operation and total time against n; a log-log plot can reveal an approximate exponent but does not prove asymptotic behavior. A dynamic array may show resize spikes; a tree may transition when it no longer fits in cache; a hash table may resize at a threshold. Explain these features using the representation and invariant.
+<StructureDiagram kind="sort" title="Scaling curves as structural evidence" caption="A benchmark compares measured growth against the predicted operation model." variant="benchmark" />
 
-For an O(n) scan, doubling n should roughly double work under fixed conditions; for O(log n), growth should be slow; for O(n log n), compare ratios against n log n rather than eyeballing a line. Constant factors, memory bandwidth, and branch behavior can dominate within one regime. Do not extrapolate beyond measured sizes without a model.
+Measure several input sizes across relevant cache and memory boundaries. Plot time per operation and total time against $n$; a log–log plot reveals an approximate exponent but does not prove asymptotic behavior. A dynamic array may show resize spikes; a tree may transition when it no longer fits in L2 cache; a hash table may resize at a threshold. Explain these features using the representation and invariant.
+
+For an $O(n)$ scan, doubling $n$ should roughly double work under fixed conditions; for $O(\log n)$, growth should be slow; for $O(n \log n)$, compare ratios against $n \log n$ rather than eyeballing a line. Constant factors, memory bandwidth, and branch behavior can dominate within one regime. Do not extrapolate beyond measured sizes without a model.
+
+---
 
 ## Counters and profiling
 
-Hardware counters can measure cache references/misses, branch misses, instructions, cycles, allocations, page faults, and I/O. Compare counters per logical operation, not only total, and ensure counter multiplexing or sampling is understood. A linked list’s time may be explained by cache misses; a tree’s by branch misprediction; a hash table’s by probes and memory stalls.
+Hardware counters measure cache references and misses, branch misses, instructions, cycles, allocations, page faults, and I/O. Compare counters per logical operation, not only total, and ensure counter multiplexing or sampling is understood. A linked list's time may be explained by cache misses; a tree's by branch misprediction; a hash table's by probes and memory stalls.
 
 Profilers identify hot functions but can perturb timing. Use sampling for low overhead and instrumented counters for exact operation counts. Record compiler, runtime, optimization flags, CPU, memory, operating-system load, and allocator settings. A benchmark result without environment information is difficult to reproduce and easy to overinterpret.
 
+---
+
 ## Amortized and tail behavior
 
-A geometric array has bounded average copying but an individual resize can pause a latency-sensitive request. Measure both total amortized throughput and the latency distribution. Incremental migration can bound per-operation work at the cost of two-table lookup and extra memory. A queue’s average length can be low while a burst creates a large age tail; report queue length and item age.
+<Quiz client:load
+  question="Why is median latency inadequate for a dynamic array that resizes by doubling?"
+  options={[
+    "Median may hide latency spikes from resize events that violate service-level objectives",
+    "Median is never useful",
+    "Dynamic arrays do not have latency spikes",
+    "Resize events are predictable so median is sufficient"
+  ]}
+  correctIndex={0}
+  explanation="A single resize event can be rare but dominate tail latency (p99 or p999). Median hides these spikes. Report percentiles, maximum with sample size, and the number and timing of resize events."
+/>
+
+<StructureDiagram kind="array" title="Resize spikes in a dynamic array" caption="Amortized cost is bounded per insertion, but individual resizes create latency spikes visible only in per-operation timing." variant="capacity" />
+
+A geometric-resizing array has bounded average copying ($\hat{c} = O(1)$ per insertion), but an individual resize can pause a latency-sensitive request. Measure both total amortized throughput and the latency distribution. Incremental migration bounds per-operation work at the cost of two-table lookup and extra memory. A queue's average length can be low while a burst creates a large age tail; report queue length and item age.
 
 Randomized structures require a probability statement. Repeat with independent seeds and report variation across seeds; distinguish randomization cost from key-distribution variation. If a security seed is secret, do not expose it in benchmark artifacts. For worst-case-sensitive services, include constructed adversarial cases alongside typical cases.
 
+---
+
+## Failure modes and counterexamples
+
+A benchmark can mislead in several systematically identifiable ways:
+
+<MathStatement
+  id="counterexample-one-sample"
+  kind="corollary"
+  title="The single-sample fallacy"
+>
+A benchmark result obtained from one input, one seed, or one run cannot distinguish structural cost from measurement noise. Any conclusion drawn from a single sample is formally untestable.
+</MathStatement>
+
+<MathStatement
+  id="counterexample-dead-code"
+  kind="corollary"
+  title="The dead-code trap"
+>
+A benchmark that does not consume its output may measure nothing. Compilers can legally eliminate dead computations whose results are unused, producing artificially low times for any structure whose operations are pure (produce no observable side effect).
+</MathStatement>
+
+**Concrete counterexample.** A benchmark comparing `ArrayList` and `LinkedList` in Java that inserts at the end and never iterates or indexes. The `LinkedList`'s tail pointer makes end-insertion $O(1)$, matching the array's amortized $O(1)$. The benchmark reports "no difference." But the operation mix — only append — tests only one operation. A benchmark that includes random access ($O(1)$ vs $O(n)$) or front insertion ($O(n)$ vs $O(1)$) reveals the structural asymmetry.
+
+---
+
 ## Experimental threats to validity
 
-A benchmark may confound the structure with input generation. Generating random keys inside the timed region measures the generator and allocation, not only lookup. Pre-generate inputs when measuring operations, but separately measure generation if it is part of the service. Reusing one key can keep a hot cache line and overstate locality; randomizing each key can overstate cold misses relative to production.
+<Quiz client:load
+  question="A benchmark generates random keys inside the timed loop and reports 'lookup time.' What is the primary threat?"
+  options={[
+    "The measured time includes key generation and allocation, not just lookup",
+    "Random keys are always slower",
+    "The benchmark is too fast to measure",
+    "There is no threat if the loop is large enough"
+  ]}
+  correctIndex={0}
+  explanation="Input generation inside the timed region confounds the measurement: the generator and allocation cost are attributed to the structure. Pre-generate inputs when the measurement target is the lookup operation itself."
+/>
 
-Dead-code elimination can remove a computation whose result is unused. Consume results through a checksum or a black-box barrier, and verify that the checksum changes when the data changes. Conversely, a benchmark that validates every result during the timed loop may measure validation rather than the target operation. Validate a sample or separate correctness phase when appropriate, then explain the choice.
+- **Input generation confound.** Generating random keys inside the timed region measures the generator and allocation, not only lookup. Pre-generate inputs when measuring operations, but separately measure generation if it is part of the service.
+- **Hot-cache bias.** Reusing one key keeps a hot cache line and overstates locality; randomizing each key overstates cold misses relative to production.
+- **Dead-code elimination.** Consume results through a checksum or a black-box barrier. Verify that the checksum changes when the data changes. Conversely, validating every result during the timed loop may measure validation rather than the target operation.
+- **System noise.** Background activity, frequency scaling, thermal throttling, allocator caches, and garbage collection create correlated noise. Pin processes or disable frequency changes to improve repeatability. Use robust summaries (medians, confidence intervals). Do not discard inconvenient runs without a predeclared rule.
 
-Background activity, frequency scaling, thermal throttling, allocator caches, and garbage collection create correlated noise. Pinning a process or disabling frequency changes can improve repeatability but may reduce representativeness. Report whether the system is isolated, and use robust summaries such as medians and confidence intervals. Do not discard inconvenient runs without a predeclared rule.
+---
 
-## Benchmarking amortized structures
+## Transfer and synthesis exercises
 
-For a dynamic array, record both operation index and duration so resize spikes can be identified. Compare total time over a complete sequence with per-operation tail. For a hash table, mark resize and rehash events and report probe-length distribution. For a persistent structure, count allocated nodes and retained bytes, not only query time; old roots can create memory pressure invisible in a short lookup benchmark.
+<StructureExercise client:load
+  title="Reproducible benchmark protocol"
+  prompt="What is the minimal set of metadata that makes a data-structure benchmark reproducible?"
+  options={[
+    "Workload model, environment, verification method, raw samples, seed, and analysis script",
+    "One timing number",
+    "Only the fastest of three runs",
+    "An asymptotic claim without measurements"
+  ]}
+  answer={0}
+  explanation="Reproducibility requires explicit inputs, operation mix, environment, repetitions, validation, and enough metadata to reconstruct the experiment. A single number is meaningless."
+  kind="list"
+/>
 
-An incremental implementation may have lower maximum latency but higher steady-state overhead. Plot cumulative work and p99 latency together. If a service has a deadline, a small number of deadline misses may matter more than a modest throughput increase. The benchmark should therefore encode the decision criterion rather than presenting a leaderboard without context.
+1. **Transfer: cross-structure prediction.** Given a benchmark showing that a skip list is $2\times$ slower than a B-tree on range queries of size $10^4$ from a dataset of $10^7$ elements, predict the ratio when the range size changes to $10^2$ and $10^6$. State which structural mechanism (node fanout, pointer density, cache-line utilization) determines each prediction.
 
-## Interpreting negative results
+   <ExerciseSolution hint="Consider how B-tree fanout reduces tree height but also packs more keys per cache line; at small ranges, traversal depth dominates; at large ranges, sequential leaf scan matters.">
+   At $10^2$, the B-tree may read 1–2 nodes (both cached), while the skip list follows $\log n$ pointers (cache misses dominate). At $10^6$, the B-tree's linked leaves scan sequentially (prefetch-friendly); the skip list scatters across levels. Predict ratios using the node-size and pointer-count models, then design the experiment.
+   </ExerciseSolution>
 
-If two representations perform similarly, that is evidence only over the measured regime. It may mean a dominant cost hides their difference, the input is too small, or the implementation has a bottleneck unrelated to the structure. Change one factor—size, locality, key length, update ratio, or memory pressure—and test whether the predicted mechanism appears. A negative result can refine the model rather than invalidate the asymptotic analysis.
+2. **Synthesis: design an adversarial benchmark.** A persistent hash table claims $O(1)$ average lookup and $O(\log n)$ worst-case (cuckoo hashing with stash). Design a benchmark that distinguishes average-case from worst-case behavior under adversarial key selection, and specify the minimum number of trials needed to observe the worst case with probability $0.95$.
 
-## Exercises
+   <ExerciseSolution hint="Use the birthday paradox to bound the probability of a stash overflow; the worst case requires a specific set of colliding keys. The number of trials depends on the stash size and table load factor.">
+   Generate keys via a known collision-producing pattern (e.g., same hash prefix). For cuckoo hashing with two tables and stash size $s$, the worst case occurs when more than $s$ keys hash to the same bucket pair. Compute the probability under random keys; design adversarial keys that guarantee this event. Report max displacement and stash size per trial, not only mean.
+   </ExerciseSolution>
 
-1. Design a benchmark comparing arrays and linked lists for three operation mixes.
-2. Explain why a median alone is inadequate for a resizable structure.
-3. Choose workloads for a hash table under trusted and adversarial keys.
-4. Interpret a doubling input-size experiment for O(n), O(log n), and O(n log n).
-5. List metadata required for reproducibility.
-6. Design a correctness oracle for a persistent map benchmark.
-7. Explain how cache counters could distinguish pointer chasing from comparison cost.
+3. **Synthesis: measurement diagnostic.** A benchmark shows that a red-black tree's `insert` has the same latency as a hash table's `put` at $n=10^6$. List three distinct hypotheses that could explain this result, and design one additional measurement for each that would distinguish it from the others.
 
-### Diagnostic solutions
+   <ExerciseSolution hint="Consider: (1) the hash table has high load factor causing long probe chains; (2) the tree fits in cache; (3) the benchmark measures string hashing or key comparison rather than structural operations.">
+   Hypotheses: (a) hash-table load factor > 0.9, causing many probes; measure probe-length distribution. (b) tree nodes fit in L2 cache, hiding pointer-chasing cost; measure L2 cache misses per operation. (c) key-comparison cost dominates both structures; measure instructions per operation and compare string-hashing cost to structural cost.
+   </ExerciseSolution>
 
+4. **Transfer: generalize the protocol.** Adapt the benchmark protocol diagram above for a persistent data structure whose operations create new versions. What additional phases does the protocol need?
 
-1. Use append/scan, random get, and insert-after-known-position mixes; keep logical elements and operation counts equal; compare dynamic array, linked list, and perhaps chunked sequence. Validate output and report throughput, latency, allocation, and cache behavior.
+   <ExerciseSolution hint="Persistent structures add version-management overhead: path copying, root-pointer indirection, and garbage of old versions. The benchmark must separate query from update and measure both time and allocation per version.">
+   Add phases: (a) build version DAG with known branching factor; (b) measure query on old and new versions separately (they share internal nodes); (c) measure allocation rate and retained bytes, not only query latency; (d) measure garbage-collection or reference-counting cost if the structure reclaims old nodes. Use a version-age distribution that matches the intended deployment.
+   </ExerciseSolution>
 
-2. A resize or garbage-collection pause may be rare but dominate p99 or p999. Report percentiles, maximum with sample size, and number/timing of expensive events; average or median can hide service-level violations.
+5. **Recall: metadata checklist.** List the ten most commonly omitted metadata fields that prevent benchmark reproduction.
 
-3. Trusted: uniform, Zipfian, repeated, and realistic keys. Adversarial: chosen colliding prefixes or keys found by probing, under fixed and randomized seeds. Bound memory and observe chain/probe tails, not only mean lookup.
+   <ExerciseSolution>
+   (1) code revision / commit hash, (2) compiler version and optimization flags, (3) CPU model and microarchitecture, (4) memory size and speed, (5) OS version and kernel, (6) allocator and heap configuration, (7) input generator and seed, (8) operation mix and sequence length, (9) warm-up and repetition count, (10) measurement units and raw sample availability.
+   </ExerciseSolution>
 
-4. Compare measured ratios to model ratios: linear doubles, logarithmic increases by an additive constant, and n log n grows slightly more than double. Use multiple sizes and state cache/regime changes; one ratio is not proof.
+6. **Synthesis: confounding by allocation.** A benchmark comparing two B-tree implementations shows that implementation A is $3\times$ faster on insert. Suspecting that the allocator, not the tree structure, causes the difference, design a measurement that isolates allocation cost from tree-operation cost.
 
-5. Record code revision, compiler/runtime, flags, hardware, OS load, allocator, input generator and seed, operation mix, sizes, warm-up, repetitions, units, and correctness checks. Preserve raw samples and analysis scripts.
+   <ExerciseSolution hint="Use a pre-allocated pool or region allocator so that the tree's node allocation costs are constant. Compare with and without the pool; the difference isolates allocation overhead.">
+   Wrap each tree's node allocation with a counting allocator that records bytes requested and number of allocations. Compare (a) total time, (b) allocation time (via a custom allocator that timestamps malloc/free), and (c) tree-operation time = total − allocation. If the gap shrinks or reverses under a custom allocator, the original comparison was an allocator benchmark, not a tree benchmark.
+   </ExerciseSolution>
 
-6. Execute the same version history against a model that copies a map for every update. Query old and new versions after random branching; compare key/value membership and iteration according to the specified order. Retain seeds and shrink failing DAGs.
+---
 
-7. If pointer chasing dominates, cache misses and stalled cycles rise per logical step while comparisons remain low; if comparison cost dominates, instructions and branch/comparison counts rise with fewer misses. Compare layouts with identical comparisons to isolate locality.
+## Counterexample: when the benchmark answers the wrong question
 
+<Quiz client:load
+  question="A pairing heap beats a binary heap on bulk insert-then-extract-min but loses on interleaved operations. What was the fundamental error?"
+  options={[
+    "The workload model did not match the deployment pattern",
+    "The pairing heap is always slower",
+    "The binary heap has a better constant factor",
+    "The benchmark used the wrong programming language"
+  ]}
+  correctIndex={0}
+  explanation="The benchmark used a bulk workload (all inserts, then all extract-mins), while the deployment used interleaved operations (insert-extract-insert-extract). The operation mix — the workload model — determines which structural costs dominate."
+/>
 
+A systems team compares two priority-queue implementations — a binary heap and a pairing heap — on $10^7$ inserts followed by $10^7$ extract-mins. The pairing heap wins by $1.2\times$. The team deploys the pairing heap in a latency-sensitive router.
 
-## References & Further Reading
+The router's workload is interleaved: insert-extract-insert-extract, not bulk-insert-then-bulk-extract. Under interleaved access, the pairing heap's pointer manipulation and cache misses dominate, and the binary heap is $4\times$ faster. The benchmark answered a question about bulk throughput, but the deployment needed interleaved latency. The operation mix — the workload model — was wrong.
 
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [Open Data Structures](https://opendatastructures.org/)
-* Gregg, *Systems Performance*.
+---
+
+## Deliberately omitted
+
+- **Statistical hypothesis testing**: $t$-tests, ANOVA, and bootstrapped confidence intervals for benchmark comparison. Important for rigorous comparison but belong in a statistics or experimental-design lesson rather than a data-structures benchmark guide.
+- **Microarchitecture-level analysis**: pipeline stalls, branch misprediction rates, TLB misses, and prefetcher behavior. Processor performance-counter interfaces change across generations; a microarchitecture deep-dive would double the lesson length without changing the structural benchmarking message.
+- **Energy and power benchmarking**: measuring energy per operation and thermal design power constraints. Increasingly relevant for data-center and mobile deployment, but the measurement methodology and interpretation differ from throughput/latency benchmarking.
+- **A/B testing in production**: deploying two data-structure variants and comparing user-facing metrics. Involves traffic splitting, statistical power, and novelty effects that are deployment concerns rather than structure-analysis concerns.
+- **Online experimentation and multi-armed bandits**: adaptive allocation of traffic to variants. Relevant to infrastructure teams but outside the scope of single-structure benchmarking.
+
+<BookOnly>
+
+### Book note
+
+The interactive components in this lesson (CodeRunner benchmark, Quizzes, CaseStudy) are static in the PDF edition. The benchmark code in Worked Example 1 runs in the browser; its declared output is representative. For the adversarial hash-table example, compile and run the Python snippet against your own key distributions. The PlantUML protocol diagram is rendered at build time.
+
+</BookOnly>
+
+---
+
+## References & further reading
+
+- Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, and Clifford Stein. *Introduction to Algorithms*, 4th ed. MIT Press, 2022. Chapter 17 (Amortized Analysis) and Appendix A (Summations).
+- Robert Sedgewick and Kevin Wayne. *Algorithms*, 4th ed. Addison-Wesley, 2011. Section 1.4 (Analysis of Algorithms) for empirical timing methodology.
+- Pat Morin. *Open Data Structures* (in C++, Java, Python). Available at https://opendatastructures.org/. Chapter 1 (Introduction) covers experimental setup.
+- Brendan Gregg. *Systems Performance: Enterprise and the Cloud*, 2nd ed. Addison-Wesley, 2020. Chapters 2–4 cover hardware counters, profiling, and benchmarking methodology.
+- Robert E. Tarjan. "Amortized Computational Complexity." *SIAM Journal on Algebraic Discrete Methods*, 6(2):306–318, 1985. The foundational paper formalizing amortized analysis.
+- John L. Hennessy and David A. Patterson. *Computer Architecture: A Quantitative Approach*, 6th ed. Morgan Kaufmann, 2019. Appendix B (Cache Performance) and Chapter 3 (Memory Hierarchy) for cache and memory-system effects.
+- Paul E. McKenney, "Structured Deferral: Synchronization via Procrastination." *ACM Queue*, 11(2):20–33, 2013. Discussion of benchmark validity and measurement methodology for concurrent structures.
+- MIT 6.006 Introduction to Algorithms: https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/

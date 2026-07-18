@@ -3,88 +3,338 @@ title: "Stacks, Queues, and Deques"
 course: "data-structures"
 description: "Restricted sequence interfaces, implementation choices, invariants, and applications to traversal and scheduling."
 ---
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import PlantUML from '../../../components/PlantUML.astro';
+
 # Stacks, Queues, and Deques
 
-Stacks and queues are restricted sequence ADTs. A stack exposes last-in-first-out (LIFO) behavior; a queue exposes first-in-first-out (FIFO); a deque permits insertion and removal at both ends. Restricting operations removes irrelevant states and enables simpler proofs and efficient implementations. The structures appear in parsing, recursion, breadth-first search, buffering, scheduling, and undo systems.
+**Prerequisites:** Sequence ADT (ordered collection with positional access), dynamic arrays and linked lists, asymptotic notation ($O$), and amortized analysis.
+
+---
+
+A browser's "Back" button returns to the most recently visited page — last-in, first-out (LIFO). Visiting A, B, C then clicking Back reaches B, not A. A network printer processes jobs in submission order — first-in, first-out (FIFO). A text editor's undo stack pushes each edit; Ctrl+Z pops the most recent. These are not implementation details but **specifications**: the access restriction is the defining feature.
+
+Edsger Dijkstra, in his 1972 Turing Award lecture "The Humble Programmer," wrote: "The choice of representation is the choice of algorithm." A stack restricted to LIFO has exactly one natural implementation strategy — an array with a top pointer — and the restriction simplifies both proof and implementation.
+
+| ADT | Removal order | Typical use | Array cost | Linked cost |
+| --- | --- | --- | ---: | ---: |
+| Stack (LIFO) | newest first | undo, call stack | $O(1)$ push/pop | $O(1)$ push/pop |
+| Queue (FIFO) | oldest first | BFS, scheduling | $O(1)$ amortized | $O(1)$ enq/deq |
+| Deque | either end | sliding windows | $O(1)$ amortized both ends | $O(1)$ both ends |
+
+By committing to a specific access pattern, each ADT enables a simpler, faster, and more verifiable implementation than a general-purpose sequence.
 
 ## Stack specification
 
-A stack stores a finite sequence with operations push(x), pop(), peek(), and empty or size. Push places x at the top; pop removes and returns the most recently pushed element that has not been popped. If the stack is empty, pop and peek must have a specified result such as an option, exception, or blocking wait. The LIFO law can be stated algebraically: after pushing x, peek returns x and a subsequent pop restores the previous stack.
+<StructureDiagram kind="stack" title="Stack discipline" caption="Push and pop operate at the top, enforcing last-in-first-out order." />
 
-An array stack uses a logical size n and stores elements in positions 0 through n-1, with the top at n-1. Push writes at n and increments; pop decrements and returns the former last element. Both are O(1) amortized with a dynamic array. A linked stack pushes and pops at the head in O(1) worst case, but allocates nodes and has pointer locality costs. Neither implementation changes the abstract sequence.
+<Quiz client:load question="Which law defines a stack?" options={["The last pushed item is removed first", "The oldest item is removed first", "Items are always sorted", "Removal is only from the middle"]} correctIndex={0} explanation="LIFO is the stack's defining observable behavior." />
 
-**Invariant proof.** For an array stack, RI is (0le nle C) and the abstract stack equals the array prefix in bottom-to-top order. Push when n less than C writes x at position n; the new prefix is the old prefix followed by x. Pop when n greater than 0 returns position n-1 and decrements; the new prefix is the old prefix without its last element. Resize preserves the prefix by copying it unchanged.
+A stack stores a finite sequence with operations `push(x)`, `pop()`, `peek()`, and `empty()` or `size()`. Push places $x$ at the top; pop removes and returns the most recently pushed element that has not been popped. If the stack is empty, pop and peek must have a specified result — an option type, an exception, or a blocking wait.
 
-Stacks support nested structure. A delimiter checker scans characters, pushes opening delimiters, and on a closing delimiter checks that the top has the matching kind before popping. At end, the stack must be empty. The invariant is that the stack is exactly the sequence of unmatched opening delimiters in input order. This proves correctness for balanced delimiters with properly nested types.
+<MathStatement id="lifo-law" kind="theorem" title="LIFO algebraic law" proofId="lifo-proof">
+For any stack $S$ and value $x$: after $S.\text{push}(x)$, $S.\text{peek}() = x$ and a subsequent $S.\text{pop}()$ returns $x$ and restores the previous stack state.
+</MathStatement>
+
+<MathProof id="lifo-proof" for="lifo-law" collapsible open>
+Let the abstract stack be represented as a sequence $\langle e_0, e_1, \dots, e_{n-1} \rangle$ where $e_{n-1}$ is the top. For an array implementation with logical size $n$ and capacity $C$, the representation invariant (RI) is:
+
+$$
+0 \le n \le C \quad\land\quad \text{abstract stack} = \langle A[0], A[1], \dots, A[n-1] \rangle
+$$
+
+- **Push** when $n < C$ writes $x$ at position $n$ and increments $n$. The new abstract sequence is $\langle e_0, \dots, e_{n-1}, x \rangle$; $x$ is now at the top.
+- **Pop** when $n > 0$ decrements $n$ and returns $A[n]$. The new abstract sequence is $\langle e_0, \dots, e_{n-2} \rangle$, the original prefix without the last element.
+- **Resize** (when $n = C$) allocates a new array of size $2C$, copies the prefix, and updates $C$. The abstract sequence is unchanged.
+
+The RI is preserved by every operation, and the algebraic law follows directly from the RI transformation.
+</MathProof>
+
+An array stack writes at $n$ and increments; both operations are $O(1)$ amortized under geometric growth. A linked stack pushes and pops at the head in $O(1)$ worst case but allocates per-node overhead and has pointer-chasing access patterns.
+
+A delimiter checker scans characters, pushes opening delimiters, and on a closing delimiter checks that the top matches before popping. At end, the stack must be empty. The invariant: the stack contains exactly the sequence of unmatched opening delimiters in input order.
+
+<CodeRunner client:load
+  title="Array stack in Python"
+  language="python"
+  code={`class ArrayStack:
+    def __init__(self):
+        self._data = []
+
+    def push(self, x):
+        self._data.append(x)
+
+    def pop(self):
+        if not self._data:
+            raise IndexError("pop from empty stack")
+        return self._data.pop()
+
+    def peek(self):
+        if not self._data:
+            raise IndexError("peek from empty stack")
+        return self._data[-1]
+
+    def empty(self):
+        return len(self._data) == 0
+
+s = ArrayStack()
+s.push(10); s.push(20); s.push(30)
+print(s.pop())   # 30
+print(s.peek())  # 20
+print(s.empty()) # False`}
+  output="30\n20\nFalse"
+/>
 
 ## Queue specification
 
-A queue supports enqueue(x), dequeue(), front(), empty, and possibly size. Enqueue appends at the rear; dequeue removes the oldest element. The FIFO law says that after enqueuing x1,...,xk into an empty queue, repeated dequeue returns x1,...,xk. A queue may be bounded; then enqueue on full must reject or block, and the capacity is part of semantics.
+<StructureDiagram kind="queue" title="Queue discipline" caption="Enqueue and dequeue act at opposite ends, enforcing first-in-first-out order." />
 
-A naïve array queue that dequeues by shifting every element left has O(n) dequeue. A circular buffer stores head, tail, count, and capacity. The q logical elements occupy modular positions from head through q-1 positions; tail is the next write location. Enqueue and dequeue change indices modulo capacity, giving O(1) worst-case when full/empty behavior is handled.
+A queue supports `enqueue(x)`, `dequeue()`, `front()`, `empty()`, and optionally `size()`. Enqueue appends at the rear; dequeue removes the oldest element. The FIFO law: after enqueuing $x_1, \dots, x_k$ into an empty queue, repeated dequeue returns $x_1, \dots, x_k$ in order.
 
-The count field distinguishes full from empty when head equals tail. An alternative leaves one slot unused, making head=tail empty and the next position equal to head full. Both designs are correct; mixing their invariants causes off-by-one errors. Resizing a circular buffer must copy logical order into a fresh linear layout, set head=0, and set tail=q, not copy physical indices blindly.
+A naïve array queue that dequeues by shifting every element left has $O(n)$ dequeue. A **circular buffer** stores `head`, `tail`, `count`, and `capacity`. The $q$ logical elements occupy modular positions from `head` through $q-1$ positions; `tail` is the next write location. Enqueue and dequeue change indices modulo capacity, giving $O(1)$ worst-case operation.
+
+The `count` field distinguishes full from empty when `head == tail`. An alternative leaves one slot unused, making `head == tail` the empty condition and `(tail + 1) % capacity == head` the full condition. Both designs are correct; mixing their invariants causes off-by-one errors.
+
+<CodeExercise client:load
+  title="Circular buffer count invariant"
+  code={`class CircularBuffer:
+    def __init__(self, capacity):
+        self._data = [None] * capacity
+        self._head = 0
+        self._count = 0
+        self._cap = capacity
+
+    def enqueue(self, x):
+        if self._count == self._cap:
+            raise OverflowError("buffer full")
+        tail = (self._head + self._count) [!blank!] self._cap
+        self._data[tail] = x
+        self._count [!blank!]= 1
+
+    def dequeue(self):
+        if self._count == 0:
+            raise IndexError("buffer empty")
+        val = self._data[self._head]
+        self._head = (self._head + 1) [!blank!] self._cap
+        self._count [!blank!]= 1
+        return val`}
+  answers={["%", "+", "%", "-"]}
+  explanation="Modular arithmetic wraps indices; increments and decrements adjust the occupancy count."
+/>
 
 ## Two-stack queue
 
-A queue can be implemented with an input stack and an output stack. Enqueue pushes onto input. Dequeue pops output; if output is empty, move every element from input to output, reversing order. The oldest element then lies on top of output. A single operation can cost O(n), but each element moves from input to output at most once before being dequeued, so a sequence of m operations costs O(m) and dequeue is O(1) amortized.
+A queue can be implemented with an input stack and an output stack. Enqueue pushes onto `input`. Dequeue pops `output`; if `output` is empty, transfer every element from `input` to `output`, reversing order. The oldest element then lies on top of `output`.
 
-The potential (Phi=2|input|) pays for transfers. An enqueue costs one push and increases potential by 2; a transfer of k elements costs O(k) and drops potential by 2k, covering the movement. A dequeue from nonempty output has constant actual cost and no harmful potential increase. This is a concrete example of amortization through stored work rather than an average-case probability assumption.
+<MathStatement id="two-stack-amortized" kind="theorem" title="Two-stack queue amortized cost" proofId="tsq-proof">
+In a two-stack queue, any sequence of $m$ operations starting from an empty queue costs $O(m)$ time, and each dequeue is $O(1)$ amortized.
+</MathStatement>
+
+<MathProof id="tsq-proof" for="two-stack-amortized" collapsible open>
+Define the potential function $\Phi = 2 \cdot |\text{input}|$. Each element moves from input to output at most once before being dequeued.
+
+- **Enqueue:** one push (actual cost $1$) plus $\Delta\Phi = +2$; amortized cost $1 + 2 = 3$.
+- **Transfer** (dequeue finds output empty): $k$ pops from input and $k$ pushes to output, actual cost $2k$. The potential drops from $2k$ to $0$, so $\Delta\Phi = -2k$. Amortized cost $2k - 2k = 0$.
+- **Dequeue from non-empty output:** one pop (actual cost $1$), no transfer, $\Delta\Phi = 0$; amortized cost $1$.
+
+Every operation has $O(1)$ amortized cost. Total actual cost across $m$ operations is $O(m)$.
+</MathProof>
+
+<CodeRunner client:load
+  title="Two-stack queue"
+  language="python"
+  code={`class TwoStackQueue:
+    def __init__(self):
+        self._input = []
+        self._output = []
+
+    def enqueue(self, x):
+        self._input.append(x)
+
+    def dequeue(self):
+        if not self._output:
+            while self._input:
+                self._output.append(self._input.pop())
+        if not self._output:
+            raise IndexError("dequeue from empty queue")
+        return self._output.pop()
+
+q = TwoStackQueue()
+q.enqueue(1); q.enqueue(2); q.enqueue(3)
+print(q.dequeue())  # 1
+q.enqueue(4)
+print(q.dequeue())  # 2
+print(q.dequeue())  # 3
+print(q.dequeue())  # 4`}
+  output="1\n2\n3\n4"
+/>
 
 ## Deques
 
-A deque supports push-front, push-back, pop-front, and pop-back. A circular array supports all four in O(1) amortized or worst-case depending on resize policy. A doubly linked list with sentinels supports all four in O(1) worst case, given endpoint pointers. The tradeoff is locality and metadata: arrays compact elements, links avoid shifting and can splice nodes.
+A deque (double-ended queue) supports `push_front`, `push_back`, `pop_front`, and `pop_back`. A circular array supports all four in $O(1)$ amortized; a doubly linked list with sentinels supports all four in $O(1)$ worst case.
 
-Deque semantics are useful for work-stealing and sliding-window algorithms. A monotonic deque can maintain the maximum of a moving window: remove dominated values from the back, append the new value, and remove the front when it leaves the window. Each value enters and leaves at most once, so total time is linear even though one update may remove many values. The structure’s invariant is that values decrease from front to back and all retained indices lie in the current window.
+<PlantUML
+  code={`@startuml
+skinparam BackgroundColor transparent
+skinparam Shadowing false
+left to right direction
+
+rectangle "front" as front
+rectangle "A" as a
+rectangle "B" as b
+rectangle "C" as c
+rectangle "back" as back
+
+front -right-> a
+a -right-> b
+b -right-> c
+c -right-> back
+
+note right of back : push_back / pop_back
+note left of front : push_front / pop_front
+@enduml`}
+/>
+
+Deque semantics are useful for work-stealing and sliding-window algorithms. A **monotonic deque** maintains the maximum of a moving window: remove dominated values from the back, append the new value, and remove the front when it leaves the window. Each value enters and leaves at most once, so total time is linear.
+
+## Counterexample: when the wrong ADT breaks correctness
+
+Using a stack where a queue is needed — or vice versa — produces incorrect behavior, not just poor performance.
+
+**Scenario:** A breadth-first search replaces its queue with a stack. The BFS invariant requires exploring vertices in nondecreasing distance from the source. A stack (LIFO) produces depth-first order instead, violating the distance guarantee. Vertices discovered at distance $d$ are processed after vertices at distance $d+1$, and shortest-path distances are no longer correct.
+
+**Scenario:** A scheduler uses a stack for task dispatch. Later-submitted high-priority tasks run before earlier-submitted low-priority tasks — but if the intended policy is FIFO fairness, the stack silently reorders work. The bug is not in the implementation but in the ADT choice.
+
+**Scenario:** A circular buffer queue with the one-slot-unused invariant is mixed with a count-based invariant. Resize code copies physical indices blindly instead of logical order, producing a scrambled queue where elements appear in the wrong sequence and the head/tail relationship is corrupted.
+
+<Quiz client:load question="What happens if BFS uses a stack instead of a queue?" options={["Correct distances but O(n^2) time", "Shortest-path distances become incorrect", "No effect — both are equivalent", "Queue becomes empty immediately"]} correctIndex={1} explanation="The stack violates the BFS invariant that vertices are explored in nondecreasing distance order, so shortest-path distances are wrong." />
 
 ## Traversal and scheduling
 
-Depth-first search uses a stack, explicit or implicit through recursion. Breadth-first search uses a queue and explores vertices in nondecreasing edge distance in an unweighted graph. The BFS invariant is that dequeued vertices have finalized shortest distance, and enqueued but not dequeued vertices have distance at most one greater than the current frontier. Marking visited on enqueue prevents duplicate work and preserves O(V+E) traversal.
+<CaseStudy client:load title="Traversal frontier" scenario="A graph traversal must explore vertices by nondecreasing unweighted distance." question="Which restricted sequence structure fits?" options={["A queue for BFS", "A stack for FIFO distance", "A hash table alone", "A linked leaf scan"]} correctIndex={0} explanation="BFS uses a queue so the frontier is processed in distance order." />
 
-Schedulers can use a queue for fair arrival order, a stack for depth-first task exploration, or a deque for local work plus stealing. The ADT does not decide fairness; the policy and concurrency model do. A queue that allows arbitrary removal is no longer a simple FIFO abstraction, and proofs must account for the additional operation.
+Depth-first search uses a stack, explicit or implicit through recursion. Breadth-first search uses a queue and explores vertices in nondecreasing edge distance in an unweighted graph. The BFS invariant: dequeued vertices have finalized shortest distance, and enqueued vertices have distance at most one greater than the current frontier. Marking visited **on enqueue** prevents duplicate work and preserves $O(V+E)$ traversal.
 
 ## Bounded buffers and backpressure
 
-A bounded queue is a communication contract between a producer and consumer. When full, the producer can block, reject, drop the newest item, drop the oldest item, or apply a priority policy. These choices have different correctness consequences. A video stream may prefer dropping stale frames; a transaction log must not silently drop records. State the policy rather than treating “queue full” as an implementation accident.
+A bounded queue is a communication contract between a producer and consumer. When full, the producer can block, reject, drop the newest, drop the oldest, or apply a priority policy. These choices have different correctness consequences. A video stream may prefer dropping stale frames; a transaction log must not silently drop records.
 
-For a single producer and consumer, a circular buffer can use head and tail counters with a capacity invariant. In a concurrent implementation, visibility and atomicity matter: a producer must publish an element only after writing it, and a consumer must not read a slot before publication. Lock-free designs require memory-order arguments beyond the sequential RI; a sequentially correct ring buffer is not automatically thread-safe.
+If arrival rate $\lambda$ exceeds service rate $\mu$ for a sustained interval, any unbounded queue grows without limit. A bounded queue forces the system to expose overload through blocking or loss. Monitoring queue length and age helps distinguish a burst that will drain from a stable overload.
 
-Backpressure prevents unbounded memory growth. If arrival rate (lambda) exceeds service rate (mu) for a sustained interval, any unbounded queue grows without limit. A bounded queue forces the system to expose overload through blocking or loss. Monitoring queue length and age helps distinguish a burst that will drain from a stable overload that needs more service capacity or admission control.
-
-## Recursive depth and explicit stacks
-
-Replacing recursion with an explicit stack preserves a depth-first order only if frames store the same continuation information as the call stack. A frame may contain a vertex, the next neighbor index, local variables, and a parent reference. Pushing only the vertex and then restarting its neighbor scan can produce the same reachability result but worse time, because edges may be rescanned. Representation choices affect both proof and complexity.
+<Quiz client:load question="A transaction log queue is full. Which drop policy is safe?" options={["Drop the oldest record", "Drop the newest record", "Block the producer until space is available", "Drop a random record"]} correctIndex={2} explanation="A transaction log must not silently lose records. Blocking (or rejecting explicitly) preserves correctness; dropping silently corrupts the audit trail." />
 
 ## Exercises
 
-1. Prove the stack LIFO law from the array-stack invariant.
-2. Give the complete RI for a circular queue with head, tail, count, and capacity.
-3. Trace a two-stack queue through an alternating sequence of enqueue and dequeue.
-4. Prove two-stack queue operations are O(1) amortized.
-5. Explain why marking BFS vertices on dequeue can cause duplicate enqueues.
-6. Design a monotonic deque algorithm for sliding-window maximum and prove linear total time.
-7. Compare linked and circular-array deques under locality, allocation, and worst-case guarantees.
+### Recall
 
-### Diagnostic solutions
+1. State the LIFO law algebraically for a stack.
 
+    <ExerciseSolution>
+    For any stack $S$ and value $x$, after $S.\text{push}(x)$, $S.\text{peek}() = x$ and $S.\text{pop}()$ returns $x$ and restores the previous stack state.
+    </ExerciseSolution>
 
-1. Push appends x to the abstract bottom-to-top sequence, so the last position is x. Pop returns that position and removes it, restoring the prior prefix. The invariant ensures the concrete operations implement these abstract transformations.
-2. Require (0le countle capacity), all indices in range, logical elements at ((head+j)bmod capacity), tail=((head+count)bmod capacity), and no significance for unused cells. Empty iff count=0; full iff count=capacity.
+2. Give the complete RI for a circular queue with `head`, `tail`, `count`, and `capacity`.
 
-3. Enqueue a,b pushes both to input. Dequeue transfers b,a to output, then pops a. Enqueue c pushes input. Dequeue pops b from output. A later dequeue transfers c and pops c. The oldest unserved item always remains on output’s top.
+    <ExerciseSolution hint="The RI must define how head, tail, and count relate to the logical element positions. What distinguishes an empty buffer from a full buffer when head equals tail?">
+    Require $0 \le \text{count} \le \text{capacity}$, all indices in range, logical elements at $((\text{head} + j) \bmod \text{capacity})$ for $0 \le j < \text{count}$, $ \text{tail}=((\text{head}+\text{count}) \bmod \text{capacity})$, and no significance for unused cells. Empty iff $\text{count}=0$; full iff $\text{count}=\text{capacity}$.
+    </ExerciseSolution>
 
-4. Charge each enqueue enough for its push and a credit attached to the element. When moved, the credit pays for one input pop and one output push; when dequeued, use its remaining constant charge. Each element pays for O(1) work once, so m operations cost O(m).
+### Application
 
-5. Two neighboring vertices can both discover the same unmarked vertex before either is dequeued. Both enqueue it, and without a separate in-queue mark the queue contains duplicates. Marking on enqueue establishes ownership of the first discovery and bounds enqueues by V.
+3. Trace a two-stack queue through enqueue a, b, dequeue, enqueue c, dequeue, dequeue.
 
-6. Store candidate indices with decreasing values. Before appending i, pop from the back while value is no larger; remove front indices outside i-k+1. The front is the maximum. Each index is appended once and removed once, so total deque operations are O(n); the invariant preserves dominance and window membership.
+    <ExerciseSolution>
+    Enqueue a,b pushes both to input. Dequeue transfers b,a to output (reversing), then pops a. Enqueue c pushes input. Dequeue pops b from output. A later dequeue transfers c and pops c. The oldest unserved item always remains on output's top.
+    </ExerciseSolution>
 
-7. A circular array has compact storage and strong sequential locality but resizing can be expensive; a linked deque has O(1) endpoint updates without resizing but allocates nodes and follows pointers. Both can give O(1) endpoint operations; worst-case versus amortized behavior depends on array growth and whether a bounded capacity is used.
+4. Prove two-stack queue operations are $O(1)$ amortized using the potential method.
 
+    <ExerciseSolution>
+    Charge each enqueue enough for its push and a credit attached to the element. When moved, the credit pays for one input pop and one output push; when dequeued, use its remaining constant charge. Each element pays for $O(1)$ work once, so $m$ operations cost $O(m)$.
+    </ExerciseSolution>
 
+5. Explain why marking BFS vertices on dequeue (rather than enqueue) can cause duplicate work.
 
-## References & Further Reading
+    <ExerciseSolution>
+    Two neighboring vertices can both discover the same unmarked vertex before either is dequeued. Both enqueue it, and without a separate in-queue mark the queue contains duplicates. Marking on enqueue establishes ownership of the first discovery and bounds enqueues by $V$.
+    </ExerciseSolution>
 
-* [Open Data Structures](https://opendatastructures.org/)
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+### Transfer
+
+6. A browser tab uses a stack for history. The user visits A, B, C, clicks Back (reaching B), then visits D. What is the history stack now? Explain why this matches or differs from the standard undo behavior.
+
+    <ExerciseSolution>
+    After Back from C, the stack is [A, B]. Visiting D pushes D, giving [A, B, D]. The Forward stack (C) is discarded. This matches undo: making a new edit after undoing clears the redo stack. Both policies treat the branch as a fresh start.
+    </ExerciseSolution>
+
+7. A producer generates items at rate $\lambda = 10$/s; a consumer processes at rate $\mu = 8$/s. The bounded queue has capacity 100. After how many seconds does the queue fill, assuming it starts empty? What happens afterward?
+
+    <ExerciseSolution>
+    Net fill rate $\lambda - \mu = 2$/s. Capacity 100 fills in $100 / 2 = 50$ seconds. After that, the bounded queue rejects or blocks. An unbounded queue would grow indefinitely, consuming unbounded memory.
+    </ExerciseSolution>
+
+### Synthesis
+
+8. Design a data structure that supports `push(x)`, `pop()`, and `get_min()` in $O(1)$ amortized time. Prove the bound.
+
+    <ExerciseSolution>
+    Maintain a main stack and a min-stack that stores the current minimum alongside each element. On push, compare $x$ with the current min and push the smaller to min-stack. On pop, pop both stacks. `get_min()` reads the top of min-stack. Each element is pushed and popped once from each stack, so total $O(1)$ per operation.
+    </ExerciseSolution>
+
+9. Implement a queue using two stacks such that enqueue is $O(1)$ and dequeue is $O(1)$ **worst-case**, not just amortized. (Hint: use a third structure or periodic transfer.)
+
+    <ExerciseSolution>
+    A worst-case $O(1)$ queue can be built by transferring elements incrementally: after each enqueue, move one element from input to an intermediate buffer if the output is not yet populated. When a dequeue arrives, the output already has the element ready. This is the "real-time queue" of Hood and Melville (1981), which uses lazy rotation and a separate schedule to spread the transfer cost across operations.
+    </ExerciseSolution>
+
+## Deliberately Omitted
+
+<PlantUML
+  code={`@startuml
+skinparam BackgroundColor transparent
+skinparam Shadowing false
+left to right direction
+
+package "Covered in this lesson" {
+  rectangle "Stack LIFO"
+  rectangle "Queue FIFO"
+  rectangle "Circular buffer"
+  rectangle "Two-stack queue"
+  rectangle "Deque"
+  rectangle "Monotonic deque"
+  rectangle "Bounded buffer"
+}
+
+package "Deliberately omitted" {
+  rectangle "Concurrent stacks/queues" as conc
+  rectangle "Batched queues"
+  rectangle "Binary heap PQ" as heap
+  rectangle "Middle-insertion deques" as mid
+  rectangle "Real-time queues" as rt
+}
+
+note left of conc : Treiber, Michael-Scott\nCAS, ABA, hazard pointers
+note left of rt : Hood-Melville 1981\nincremental transfer
+@enduml`}
+/>
+
+- **Lock-free and wait-free concurrent stacks/queues:** Treiber stack (CAS-based), Michael–Scott queue, and elimination-backoff structures. These require understanding of memory ordering, ABA problems, and hazard pointers that belong in a concurrent-data-structures lesson.
+- **Batched queues and coalescing:** queues where multiple enqueues are batched into one operation (e.g., ring buffer with batch commit). Batched queues change the FIFO semantics and are typically used in networking and I/O subsystems.
+- **Priority queues from binary heaps:** fully covered in a separate lesson on heaps and priority queues.
+- **Double-ended queue with middle insertion/deletion:** deques that also support efficient access to interior positions require more complex structures such as segmented deques or balanced trees and are not standard for the core deque ADT.
+- **Real-time queues (Hood–Melville):** worst-case $O(1)$ queue via incremental transfer. Referenced in Exercise 9 but not implemented here; belongs in a dedicated amortization-and-scheduling module.
+
+## References
+
+- Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. (2022). *Introduction to Algorithms* (4th ed.). MIT Press. Chapter 10: Elementary Data Structures.
+- Morin, P. (2013). *Open Data Structures: An Introduction*. AU Press. Sections 2.1–2.4 (array-based stacks and queues), 5.1–5.2 (deques).
+- Knuth, D. E. (1997). *The Art of Computer Programming, Volume 1: Fundamental Algorithms* (3rd ed.). Addison-Wesley. Section 2.2.1: Stacks, Queues, and Deques.
+- Dijkstra, E. W. (1972). "The Humble Programmer." *Communications of the ACM*, 15(10), 859–866. Turing Award lecture.
+- Hood, R., & Melville, R. (1981). "Real-time queue operations in pure Lisp." *Information Processing Letters*, 13(2), 50–54.

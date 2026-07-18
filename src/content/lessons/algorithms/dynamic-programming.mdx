@@ -1,111 +1,547 @@
 ---
 title: "Dynamic Programming"
 course: "algorithms"
-description: "State design, overlapping subproblems, memoization, tabulation, reconstruction, and proof of optimality."
+description: "Bellman's principle of optimality, optimal substructure proofs, state DAG formulation, DP recurrences, reconstruction, the limits of DP, and approximation schemes."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import TikZ from '../../../components/TikZ.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Dynamic Programming
 
-Dynamic programming (DP) solves problems whose recursive descriptions contain overlapping subproblems and optimal substructure. Instead of recomputing the same state, it evaluates each state once and stores its value. The hard part is not writing a table; it is choosing a state that contains exactly the information needed for future decisions, proving the recurrence, ordering dependencies, and accounting for reconstruction and space.
+**Prerequisites.** Proof by induction, directed acyclic graphs (DAGs), big-O notation, and the definition of a recurrence relation.
 
-## From recursion to states
+Richard Bellman at the RAND Corporation (1950s) studied *sequential decision processes*: at each stage an action is chosen, incurring a cost or reward, and transitioning to a new state. The goal is a *policy* specifying the optimal action for every possible state. The naive approach enumerates all policy sequences. For $S$ states and $A$ actions per state over $T$ stages, that is $A^{S \cdot T}$ possibilities — the **curse of dimensionality** [Bellman, 1957].
 
-Start with a recursive formulation that exposes choices. Identify a state descriptor s, a value OPT(s), base cases, and transitions from s to smaller states. If two recursive calls have the same descriptor and always require the same answer, they are the same subproblem and can share a memo entry. If the descriptor omits relevant history, sharing states can combine incompatible contexts and produce a wrong answer.
+Bellman's insight: the future cost from a given state depends only on the state itself, not on the history of how you reached it — the *Principle of Optimality*. This transforms the exponential search into a polynomial-time recurrence: $V(s) = \min_a [\text{cost}(s,a) + V(\text{succ}(s,a))]$. Bellman coined the deliberately bland term "dynamic programming" — "programming" in the sense of planning (its military meaning), and "dynamic" because it sounded impressive while concealing the underlying mathematics from his Air Force reviewers [Bellman, 1957].
 
-**Worked Fibonacci.** The recurrence (F(n)=F(n-1)+F(n-2)) branches exponentially when implemented directly because the same arguments repeat. A memo table stores F(i) once, giving O(n) time and O(n) space. A bottom-up array computes i=0 through n; if only F(n) is needed, two rolling variables reduce space to O(1). The state is just i because future value depends only on the index.
+## Principle of Optimality
 
-Optimal substructure requires a theorem, not a visual recurrence. If an optimal solution to state s chooses a transition to t but the suffix solution for t is not optimal, replacing it with a better t-solution improves s, contradiction. This “cut and paste” proof is valid only when the replacement remains feasible under the state’s boundary conditions.
+<MathStatement id="optimality-principle" kind="definition" title="Principle of optimality">
+An optimal policy has the property that whatever the initial state and initial decision are, the remaining decisions must constitute an optimal policy with regard to the state resulting from the first decision.
+</MathStatement>
 
-## 0/1 knapsack
+Let $s$ be a state, $d(s)$ the set of feasible decisions, $\text{cost}(s, a)$ the immediate cost of taking action $a$ in state $s$, and $\text{succ}(s, a)$ the resulting state. Define $V(s)$ as the minimum total cost from $s$ to a terminal state. Then:
 
-Items have weights wi and values vi; choose a subset with total weight at most capacity W maximizing value. Define DP[i][w] as the maximum value using the first i items and capacity w. The recurrence is (max(DP[i-1][w],v_i+DP[i-1][w-w_i])) when wi at most w, otherwise DP[i-1][w]. Base row i=0 or capacity 0 is zero.
+$$
+V(s) = \min_{a \in d(s)} \left[ \text{cost}(s, a) + V(\text{succ}(s, a)) \right].
+$$
 
-The proof partitions optimal subsets by whether item i is absent or present. In the present case, the remaining items solve the first i-1 problem with capacity w-wi; otherwise they solve capacity w. The table has O(nW) time and space, pseudo-polynomial because W may be exponential in its binary encoding. A one-dimensional table must iterate capacity downward so item i is not reused in the same iteration.
+<MathProof id="optimality-principle-proof" for="optimality-principle" title="Justification of the recurrence" collapsible>
+Let $\pi$ be an optimal policy. For state $s$, let $a^* = \pi(s)$ be the optimal action and $s' = \text{succ}(s, a^*)$. The total cost is $\text{cost}(s, a^*) + V_{\pi}(s')$, where $V_{\pi}(s')$ is the cost of following $\pi$ from $s'$. If $V_{\pi}(s') > V(s')$ (the true minimum from $s'$), then there exists a policy $\pi'$ with cost $V(s')$ from $s'$. Replacing the suffix of $\pi$ with $\pi'$ yields a strictly lower total cost from $s$, contradicting the optimality of $\pi$. Therefore $V_{\pi}(s') = V(s')$, and the recurrence $V(s) = \min_{a \in d(s)} [\text{cost}(s,a) + V(\text{succ}(s,a))]$ holds.
+</MathProof>
 
-To reconstruct a subset, store choice bits or walk backward: if DP[i][w]=DP[i-1][w], omit item i; otherwise include it and set w-=wi. A rolling-value table saves space but loses direct reconstruction unless decisions are stored or recomputed.
+The recurrence is valid iff the cost-to-go $V$ depends only on the resulting state, not on how it was reached. This is the *Markov property* [Bellman, 1957, Ch. 1]. The principle fails when past decisions affect future feasibility beyond the state descriptor — a *non-Markovian* situation that demands state augmentation.
 
-## Longest common subsequence
+## Optimal Substructure
 
-For strings X[1..m] and Y[1..n], LCS[i][j] is the longest common subsequence length of prefixes X[1..i],Y[1..j]. If last characters match, one optimal solution can include them and LCS[i][j]=LCS[i-1][j-1]+1. If they differ, an optimal subsequence omits at least one of them, so take max(LCS[i-1][j],LCS[i][j-1]). The proof considers the last chosen symbols and uses prefix optimality.
+<MathStatement id="optimal-substructure" kind="theorem" title="Optimal substructure (cut-and-paste)">
+If an optimal solution to problem $P$ of size $n$ makes a decision that decomposes $P$ into subproblems $P_1, \ldots, P_k$, then the solutions to $P_1,\ldots,P_k$ used within the optimal solution must themselves be optimal.
+</MathStatement>
 
-Reconstruction follows equal-character diagonal steps and otherwise moves to a cell with the same value. Ties produce different valid LCSs. A two-row computation gives length in O(n) space, while recovering a sequence needs backpointers, divide-and-conquer reconstruction, or recomputation.
+<MathProof id="optimal-substructure-proof" for="optimal-substructure" title="Proof by cut-and-paste" collapsible open>
+Suppose an optimal solution to $P$ uses a suboptimal solution to $P_i$ with cost $C_i$. Let $C_i^* < C_i$ be the optimal cost for $P_i$. Replacing $P_i$'s solution with the optimal one reduces the total cost of $P$, contradicting optimality of the original solution, provided the replacement does not affect the feasibility of other subproblem solutions.
 
-## Interval and sequence states
+The "provided" clause is the critical constraint — it fails when subproblem solutions interact (e.g., scheduling with shared resources). DP therefore requires *independent subproblems* after the decision.
+</MathProof>
 
-Some problems require two endpoints, such as optimal parenthesization or weighted interval selection. Define DP[i][j] for a contiguous interval and consider a final split k; transitions may be O(n) per state, giving O(n^3). The state must include all boundaries that affect legal combinations. A state that stores only length can lose the symbols or constraints needed to evaluate a split.
+<TikZ
+  code={`
+\draw[thick,->] (0,0) -- (6,0);
+\draw[thick,->] (0,0) -- (0,4);
+\node[below] at (3,0) {Problem size $n$};
+\node[left] at (0,2) {Cost};
+\draw[blue,thick] (0,0) .. controls (1.5,3) and (3,3.5) .. (6,4);
+\node[blue,right] at (6,4) {Optimal $P$};
+\draw[red,dashed,thick] (2,2.5) circle (0.6);
+\node[red] at (2,2.5) {$P_i$};
+\draw[red,->,thick] (2,2.5) -- (4,1.5);
+\node[red,right] at (4,1.5) {$C_i$ (suboptimal)};
+\draw[green,dashed,thick] (1.5,1.8) circle (0.5);
+\node[green,right] at (1.5,1.8) {$C_i^*$};
+\draw[green,->,thick] (1.5,1.8) -- (4,0.8);
+\node[green,right] at (4,0.8) {Replace $\rightarrow$ lower total cost};
+  `}
+/>
 
-Weighted interval scheduling sorts jobs by finish time and defines p(j) as the last job compatible with j. (OPT(j)=max(OPT(j-1),v_j+OPT(p(j)))). The choice is not a greedy commitment: DP compares taking and skipping. Binary search computes p(j) efficiently, giving O(n log n) preprocessing plus O(n) DP.
+## The State DAG Formulation
 
-## DAG shortest paths
+Every DP defines a directed acyclic graph (DAG) over states. Vertices are state descriptors; edges correspond to transitions with costs. Solving the DP is equivalent to computing shortest (or longest) paths in this DAG.
 
-In a directed acyclic graph, topologically order vertices. Set distance(source)=0 and others infinity; process vertices in order and relax outgoing edges. Every path to v ends with an edge u→v where u appears earlier, so when v is processed all predecessor distances are final. Negative weights are allowed because no edge returns to an earlier dependency.
+<MathStatement id="dag-dp" kind="theorem" title="DP as DAG shortest path">
+Let $G = (V, E)$ be a DAG with edge weights $w(u,v)$. Define $\text{dist}(v)$ as the minimum-weight path from source to $v$. Then:
 
-The same structure is DP over paths. A predecessor array reconstructs a shortest path. Unreachable vertices remain infinity; arithmetic must avoid adding weights to infinity in fixed-width implementations. If equal distances need deterministic paths, specify tie-breaking and update rules.
+$$
+\text{dist}(v) = \min_{(u,v) \in E} \left[ \text{dist}(u) + w(u,v) \right],
+$$
 
-## Knapsack-like state design
+and $\text{dist}$ can be computed in $O(V+E)$ time by processing vertices in topological order.
+</MathStatement>
 
-State dimensions encode constraints: item index, capacity, last choice, remaining budget, or position. Adding a dimension increases time/space; omitting one can make the recurrence invalid. A useful test is “can two histories with the same proposed state have different legal futures or different accumulated objective?” If yes, refine the state; if no, the histories can be merged.
+<MathProof id="dag-dp-proof" for="dag-dp" title="Proof by induction on topological order" collapsible>
+Every path to $v$ ends with an edge $(u,v)$, where $u$ appears earlier in topological order (since the graph is acyclic). By induction on the topological order, $\text{dist}(u)$ is finalized when $u$ is processed. Considering all incoming edges yields the minimum over all paths.
+</MathProof>
 
-Dominance can reduce states. If one partial solution uses no more resource and has at least as much value as another, the dominated one need not be retained. Pareto frontiers are exact but can be large; approximation schemes discretize values or resources and trade precision for complexity.
+<PythonDiagram
+  code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import networkx as nx
 
-## Top-down versus bottom-up
+G = nx.DiGraph()
+states = ['s', 'a', 'b', 'c', 'd', 't']
+G.add_edges_from([
+    ('s', 'a', {'w': 2}), ('s', 'b', {'w': 5}),
+    ('a', 'c', {'w': 1}), ('a', 'd', {'w': 4}),
+    ('b', 'd', {'w': 2}), ('b', 'c', {'w': 3}),
+    ('c', 't', {'w': 3}), ('d', 't', {'w': 1}),
+])
+pos = {'s': (0, 1), 'a': (1, 2), 'b': (1, 0), 'c': (2, 2), 'd': (2, 0), 't': (3, 1)}
+labels = {'s': 'start', 't': 'goal'}
+edge_labels = {(u,v): f'w={d["w"]}' for u,v,d in G.edges(data=True)}
 
-Top-down memoization follows only states reached from the query and is often easiest to derive from a recursive proof. It needs recursion or an explicit stack and a memo status that distinguishes “not computed,” “currently computing,” and “computed,” especially if dependencies can cycle accidentally. Bottom-up tabulation evaluates a known acyclic dependency order and avoids recursion depth, but may fill states irrelevant to the requested answer.
+plt.figure(figsize=(8, 4))
+nx.draw_networkx_nodes(G, pos, node_color='#3b82f6', node_size=500)
+nx.draw_networkx_labels(G, pos, labels, font_size=10, font_color='white')
+nx.draw_networkx_labels(G, pos, {n: n for n in G.nodes if n not in labels}, font_size=10, font_color='white')
+nx.draw_networkx_edges(G, pos, edge_color='#94a3b8', arrows=True, arrowsize=20, width=2)
+nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8)
+plt.title('State DAG: DP = shortest path in a DAG', fontsize=11)
+plt.axis('off')
+plt.tight_layout()
+plt.savefig('/tmp/state_dag.png', dpi=100, bbox_inches='tight', transparent=True)
+  `}
+  format="png"
+  title="State DAG: shortest path formulation of DP"
+/>
 
-If dependencies form a DAG, any topological ordering of the state graph is valid. For a grid recurrence depending on left and upper cells, row-major order works; for an interval recurrence depending on shorter intervals, increasing length works. The order is a correctness condition, not just an optimization. Reading a cell before its dependencies have been computed silently substitutes an uninitialized or stale value.
+This perspective unifies all DP algorithms [Dasgupta, Papadimitriou, Vazirani, 2006, Ch. 6]: the choice of state determines the vertex set; the transition function determines edges; the base case is the source; the queries ask for distances to target vertices. If the state graph has cycles, the recurrence becomes a system of equations solvable by value iteration or Bellman–Ford.
 
-## Space compression
+## When Optimal Substructure Fails
 
-Space can be reduced when a state depends only on a bounded frontier. Fibonacci needs two previous values; LCS length needs two rows; 0/1 knapsack can use one row with descending capacity. Compression must preserve dependency direction. If reconstruction or later queries need discarded rows, store decisions, checkpoint rows, or use a divide-and-conquer reconstruction algorithm.
+Not every natural-looking recurrence satisfies the cut-and-paste condition. Three common failure modes:
 
-Do not compress away a dimension that is part of the proof. In 0/1 knapsack, ascending capacity reuses the current item and changes the problem. In a grid path problem, overwriting a cell before its right/down consumers read it can mix old and new layers. Write the dependency graph first, then derive the minimal safe storage.
+**Failure mode 1: Interacting subproblems.** The optimal solution to a subproblem may depend on which other subproblems were solved, violating the independence assumption.
 
-## DP as shortest path in a state graph
+> **Example: Shortest path with vertex colors.** Find the shortest path from $s$ to $t$ that visits at most 2 red vertices. A natural state is (vertex, reds_used). But two paths reaching the same vertex with equal reds_used may have visited *different* red vertices, leading to different future feasibility. The cut-and-paste fails because the suffix solution may need a specific red vertex that was already used. Fix: augment the state with the set of red vertices visited, increasing the state space exponentially.
 
-Many DP tables can be interpreted as shortest or longest paths in a directed acyclic state graph. Each state is a vertex; each legal transition is an edge with a cost or reward. A topological DP is then path relaxation. This perspective clarifies negative rewards, reconstruction via predecessor edges, and cycle detection. If the state graph has cycles, ordinary acyclic DP is invalid; use a fixed-point algorithm, a different state, or a proof that cycles cannot improve the objective.
+**Failure mode 2: Non-Markovian cost structure.** The cost of a transition depends on the entire history, not just the current state.
 
-The state-graph view also exposes exponential state spaces. A DP is efficient only when the number of distinct states and transitions is manageable. “Use DP” is not a complexity result; count states, transition cost, memory, and the numeric encoding of parameters. Pseudo-polynomial tables may be excellent for small capacities and infeasible for binary-large capacities.
+> **Example: Job scheduling with setup times.** Each job has a setup cost that depends on the *previous* job (traveling salesman-like). If the state is just the set of completed jobs, the optimal cost to reach a state depends on which job was last completed — the state is insufficient. Fix: augment state with the last completed job, yielding the Held–Karp-like DP.
 
-## Approximation and pruning
+**Failure mode 3: Non-local constraints.** The global constraint cannot be expressed as a per-transition cost bound.
 
-Exact DP can maintain a Pareto frontier of nondominated partial solutions. If a state has resource r and value v, another with r' at most r and v' at least v dominates it for monotone future choices. Removing dominated states preserves optimum because any extension feasible from the dominated state is no better than the corresponding extension from the dominator. In practice the frontier can still be large; approximation rounds values or resources to bound it.
+> **Example: Knapsack with conflicts.** Items belong to groups; at most one item per group may be selected. The standard DP state (item_index, remaining_capacity) is insufficient because the optimal solution must also track which groups have been used. The constraint couples the choices across items that are not adjacent in the ordering. Fix: reorder items so group members are contiguous, or augment state with a bitmask of used groups.
 
-Pruning needs a proof of dominance, not a heuristic threshold. If future value depends on identity, sequence, or remaining choices, two equal resource/value pairs may not be interchangeable. Include all future-relevant information in the state before applying dominance.
+<CaseStudy client:load
+  title="When DP fails: non-local constraint"
+  scenario="A delivery service has 6 packages to deliver using 2 trucks. Each package has a weight and destination zone. The constraint: no two packages going to the same zone can be on the same truck (security policy). A student proposes DP state (package_index, truck1_load, truck2_load) to minimize total distance."
+  question="Why does this DP state fail?"
+  options={[
+    "The state space is too large",
+    "The state does not track which zones have been assigned to each truck, so a later package to the same zone may violate the constraint",
+    "The recurrence is not a DAG",
+    "The DP is correct; the student's proposal works"
+  ]}
+  correctIndex={1}
+  explanation="The state (package_index, truck1_load, truck2_load) does not track zone assignments per truck. When processing packages in arbitrary order, two packages to the same zone might end up on the same truck, violating the security constraint. The state must be augmented with zone-to-truck assignments."
+/>
 
-## DP debugging checklist
+<Quiz client:load
+  title="Identifying state insufficiency"
+  question="A DP for the traveling salesman problem with state S = {visited cities} fails because:"
+  options={[
+    "The cut-and-paste argument fails due to interacting subproblems",
+    "The state does not record which city the tour ends at, so future costs depend on the current endpoint",
+    "TSP is NP-hard, so no DP exists",
+    "The recurrence has overlapping subproblems"
+  ]}
+  correctIndex={1}
+  explanation="The cost to extend a tour depends on the current endpoint, not just which cities have been visited. State must be augmented with the last city, yielding DP[S][v]."
+/>
 
-Test base cases, empty input, one-item input, ties, impossible states, negative values, and reconstruction. Compare against brute force on small instances. Check that every table entry has a witness or an explicit unreachable sentinel, that transitions never read an invalid state, and that the reconstructed solution’s objective equals the table optimum. A correct score with an incorrect reconstruction is an incomplete algorithm.
+## Canonical DP: Edit Distance
+
+<MathStatement id="edit-distance" kind="definition" title="Edit distance (Levenshtein)">
+Given strings $X[1..m]$, $Y[1..n]$, the minimum number of insertions, deletions, and substitutions to convert $X$ to $Y$ is:
+
+$$
+D[i][j] = \begin{cases}
+j & \text{if } i = 0 \\
+i & \text{if } j = 0 \\
+D[i-1][j-1] & \text{if } X[i] = Y[j] \\
+1 + \min\{D[i-1][j], D[i][j-1], D[i-1][j-1]\} & \text{otherwise}
+\end{cases}
+$$
+
+where $D[i][j]$ is the edit distance between prefixes $X[1..i]$ and $Y[1..j]$.
+</MathStatement>
+
+<MathProof id="edit-distance-proof" for="edit-distance" title="Proof of recurrence" collapsible open>
+Consider the last operation performed on $X[1..i]$. If it is a deletion of $X[i]$, the remaining cost is $D[i-1][j]$. If it is an insertion of $Y[j]$, the remaining cost is $D[i][j-1]$. If it is a substitution of $X[i]$ with $Y[j]$, the remaining cost is $D[i-1][j-1]$, plus 1 if the characters differ. If $X[i] = Y[j]$, no operation on the final character is needed.
+
+The three cases are exhaustive and mutually exclusive for an optimal sequence: any optimal edit sequence can be rearranged so that operations on the final characters occur last. **Complexity:** $O(mn)$ time, $O(mn)$ space, compressible to $O(\min(m,n))$ space [CLRS, 4th ed., Ch. 14].
+</MathProof>
+
+<CodeRunner client:load
+  title="Edit distance implementation"
+  language="python"
+  code={`def edit_distance(X, Y):
+    m, n = len(X), len(Y)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if X[i-1] == Y[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+            else:
+                dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+    return dp[m][n]
+
+print(edit_distance("kitten", "sitting"))`}
+  output="3"
+/>
+
+<CodeExercise client:load
+  title="Complete the edit distance recurrence"
+  code={`def edit_distance(X, Y):
+    m, n = len(X), len(Y)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if X[i-1] == Y[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+            else:
+                dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], [!blank!])
+    return dp[m][n]`}
+  answers={["dp[i-1][j-1]"]}
+  explanation="When characters differ, the third option is substitution: match the characters (cost 1) plus the edit distance of the remaining prefixes dp[i-1][j-1]."
+/>
+
+## Matrix Chain Multiplication
+
+**Problem.** Given matrices $A_1 \times A_2 \times \cdots \times A_n$ with dimensions $d_0 \times d_1, d_1 \times d_2, \ldots, d_{n-1} \times d_n$, find the parenthesization minimizing scalar multiplications.
+
+**State.** $C[i][j]$ = minimum cost to multiply $A_i \cdots A_j$.
+
+**Recurrence.** $C[i][i] = 0$. For $i < j$:
+
+$$
+C[i][j] = \min_{i \le k < j} \left[ C[i][k] + C[k+1][j] + d_{i-1} d_k d_j \right].
+$$
+
+**Proof of optimal substructure.** Any optimal parenthesization of $A_i \cdots A_j$ has a final multiplication at some split $k$, producing $B = A_i \cdots A_k$ and $C = A_{k+1} \cdots A_j$. The cost is $\text{cost}(B) + \text{cost}(C) + d_{i-1} d_k d_j$. By the cut-and-paste argument, $\text{cost}(B)$ must be optimal for the subproblem $A_i \cdots A_k$, and similarly for $C$. If either were suboptimal, replacing it with the optimal parenthesization would reduce the total cost.
+
+**Complexity.** $O(n^3)$ time, $O(n^2)$ space [CLRS, 4th ed., Ch. 14].
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+skinparam rectangle {
+  BackgroundColor lightyellow
+  BorderColor black
+}
+rectangle "A_i..A_j" as problem
+rectangle "A_i..A_k" as left
+rectangle "A_{k+1}..A_j" as right
+problem --> left
+problem --> right
+note right of problem : final split at k
+@enduml`}
+/>
+
+## 0/1 Knapsack: Proof and Pseudo-Polynomiality
+
+<MathStatement id="knapsack-dp" kind="theorem" title="0/1 knapsack optimal substructure">
+Let $DP[i][w]$ be the maximum value achievable from the first $i$ items with capacity $w$. Then:
+
+$$
+DP[i][w] = \begin{cases}
+DP[i-1][w] & \text{if } w_i > w \\
+\max(DP[i-1][w], v_i + DP[i-1][w-w_i]) & \text{otherwise}
+\end{cases}
+$$
+
+with base $DP[0][w] = 0$ and $DP[i][0] = 0$.
+</MathStatement>
+
+<MathProof id="knapsack-proof" for="knapsack-dp" title="Proof by case analysis" collapsible open>
+Let $S$ be an optimal subset from items $1..i$ with total weight $\le w$. Either $i \notin S$ or $i \in S$.
+
+- If $i \notin S$, then $S$ is an optimal subset from items $1..(i-1)$ with capacity $w$ (by cut-and-paste).
+- If $i \in S$, then $S \setminus \{i\}$ is a subset from items $1..(i-1)$ with capacity $w - w_i$, and must be optimal for that subproblem (otherwise $S$ could be improved).
+
+The recurrence takes the maximum of these two possibilities.
+</MathProof>
+
+**Pseudo-polynomiality.** The running time $O(nW)$ is polynomial in $n$ and the numeric value $W$, but exponential in $\log W$, the bit length of the input. Knapsack is NP-hard, so no truly polynomial algorithm exists unless P = NP. The DP is therefore a *pseudo-polynomial* algorithm [Garey and Johnson, 1979], useful when $W$ is moderate.
+
+<Quiz client:load
+  title="Pseudo-polynomiality"
+  question="Why is $O(nW)$ not a polynomial-time algorithm in the usual sense?"
+  options={[
+    "Because $W$ can be as large as $2^n$, making the bound exponential in the input size",
+    "Because $n$ is the number of items, not the input size",
+    "Because knapsack is NP-hard, so no DP can be polynomial",
+    "Because $O(nW)$ is always worse than $O(2^n)$"
+  ]}
+  correctIndex={0}
+  explanation="The input size for knapsack includes $\\log W$ bits for the capacity. $W$ itself can be exponentially large in $\\log W$, so $O(nW)$ is exponential in the bit length of the input."
+/>
+
+**FPTAS for knapsack.** Round each value $v_i$ to $\lfloor v_i / K \rfloor$ where $K = \epsilon V_{\max} / n$. Solve the scaled instance in $O(n^2 / \epsilon)$ time. The resulting value is at least $(1-\epsilon) \text{OPT}$. This is a fully polynomial-time approximation scheme (FPTAS) [Ibarra and Kim, 1975].
+
+<CodeRunner client:load
+  title="0/1 knapsack 1D DP"
+  language="python"
+  code={`def knapsack_1d(values, weights, W):
+    n = len(values)
+    dp = [0] * (W + 1)
+    for i in range(n):
+        for w in range(W, weights[i] - 1, -1):
+            dp[w] = max(dp[w], values[i] + dp[w - weights[i]])
+    return dp[W]
+
+values = [60, 100, 120]
+weights = [10, 20, 30]
+print(knapsack_1d(values, weights, 50))`}
+  output="220"
+/>
+
+<CaseStudy client:load
+  title="Production planning under capacity"
+  scenario="A factory has a weekly capacity of 15 machine-hours. It can produce three products in unlimited quantities: A (profit $100, 6 hours), B (profit $80, 5 hours), and C (profit $140, 12 hours). The production manager proposes a greedy heuristic: sort by profit-per-hour and pack the best-ratio product first, then the next, until no product fits."
+  question="Does the greedy heuristic produce the optimal profit? What is the optimal solution?"
+  options={[
+    "Greedy yields $180 (A + B), which is optimal",
+    "Greedy yields $180 (A + B), but optimal is $240 (three B's)",
+    "Greedy yields $180 (A + B), but optimal is $280 (two C's would exceed capacity)",
+    "Greedy yields $140 (C only), but optimal is $240 (three B's)"
+  ]}
+  correctIndex={1}
+  explanation="Profit-per-hour: A = 100/6 ≈ 16.67, B = 80/5 = 16.00, C = 140/12 ≈ 11.67. Greedy picks the best ratio first: A (6h, $100, 9h remaining), then B fits (5h, $180 total, 4h remaining). Nothing fits in 4h. Greedy total = $180. However, three units of B (3 × 5 = 15h) yield $240, which is the true optimum. The greedy heuristic fails because selecting the best-ratio product leaves unusable residual capacity. DP solves this by evaluating all capacity states systematically [Kleinberg and Tardos, 2005, Ch. 6]."
+/>
+## Weighted Interval Scheduling
+
+<MathStatement id="weighted-interval" kind="definition" title="Weighted interval scheduling recurrence">
+Given $n$ intervals $[s_i, f_i)$ with values $v_i$, let $OPT[j]$ be the maximum value using intervals from sorted finish times $[1..j]$. Then:
+
+$$
+OPT[j] = \max(OPT[j-1], v_j + OPT[p(j)])
+$$
+
+where $p(j)$ is the largest index $i < j$ with $f_i \le s_j$, and $OPT[0] = 0$.
+</MathStatement>
+
+**Proof.** For interval $j$, either it is excluded (giving $OPT[j-1]$) or included. If included, all intervals overlapping $j$ are excluded, and the remaining problem is $OPT[p(j)]$ by cut-and-paste [Kleinberg and Tardos, 2005, Ch. 6].
+
+**Complexity.** $O(n \log n)$ for sorting and binary searching $p(j)$, plus $O(n)$ DP.
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+actor "Interval j" as I
+rectangle "OPT[j-1]" as EXCLUDE
+rectangle "v_j + OPT[p(j)]" as INCLUDE
+I --> EXCLUDE : exclude j
+I --> INCLUDE : include j
+note right of INCLUDE : p(j) = last non-overlapping\ninterval before j
+@enduml`}
+/>
+
+<Quiz client:load
+  title="Weighted interval scheduling recurrence"
+  question="For weighted interval scheduling, what does $p(j)$ represent?"
+  options={[
+    "The profit of interval j",
+    "The largest index i < j with finish time less than or equal to start time of j",
+    "The number of intervals that overlap with j",
+    "The position of interval j in sorted order"
+  ]}
+  correctIndex={1}
+  explanation="p(j) is the last interval that finishes before interval j starts, ensuring non-overlap when j is included."
+/>
+
+## DP with Bitmasks: Held–Karp for TSP
+
+<MathStatement id="held-karp" kind="theorem" title="Held–Karp DP for TSP">
+Given complete graph $G = (V, E)$ with edge weights $w(i,j)$, let $DP[S][v]$ be the minimum cost of a path starting at vertex 0, visiting exactly the vertex set $S$, and ending at $v$, where $0 \in S$.
+
+$$
+DP[S][v] = \min_{u \in S \setminus \{v\}} \left[ DP[S \setminus \{v\}][u] + w(u,v) \right],
+$$
+
+with $DP[\{0\}][0] = 0$ and $|S| > 1$. The optimal tour cost is:
+
+$$
+\min_{v \neq 0} \left[ DP[V][v] + w(v, 0) \right].
+$$
+</MathStatement>
+
+**Complexity.** $O(n^2 2^n)$ time, $O(n 2^n)$ space. This is still exponential but far better than $(n-1)!$ brute force [Held and Karp, 1962].
+
+<Quiz client:load
+  title="Held–Karp state space"
+  question="How many states does Held–Karp use for an n-vertex TSP instance?"
+  options={["O(n * 2^n)", "O(n!)", "O(n^2)", "O(2^n)"]}
+  correctIndex={0}
+  explanation="The state DP[S][v] ranges over all 2^n subsets S with v in S, giving n*2^{n-1} states."
+/>
+
+## Convex Hull Trick (CHT)
+
+For DP recurrences of the form $DP[i] = \min_{j < i} \left( DP[j] + a_i \cdot b_j \right)$ where $a_i$ is monotone and $b_j$ determines the slope, the convex hull trick reduces transition computation from $O(n)$ to $O(\log n)$ by maintaining the lower envelope of lines $y = b_j x + DP[j]$ [CLRS, 4th ed., Ch. 15].
+
+**Example:** $DP[i] = \min_{j < i} \left[ DP[j] + (x_i - x_j)^2 \right] = x_i^2 + \min_{j < i} \left[ DP[j] + x_j^2 - 2 x_i x_j \right]$. The inner expression is a line with slope $-2x_j$ and intercept $DP[j] + x_j^2$ evaluated at $x_i$.
+
+<PythonDiagram
+  code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Lines: y = m*x + b for three hypothetical DP states
+xs = np.linspace(0, 10, 100)
+lines = [
+    (-2, 1, 'j=1'),   # slope -2, intercept 1
+    (-1, 3, 'j=2'),   # slope -1, intercept 3
+    (-3, 5, 'j=3'),   # slope -3, intercept 5
+]
+plt.figure(figsize=(7, 4))
+for m, b, label in lines:
+    plt.plot(xs, m*xs + b, label=f'line {label}: y={m}x+{b}')
+plt.fill_between(xs, np.min([m*xs+b for m,b,_ in lines], axis=0), alpha=0.15, color='#3b82f6')
+plt.xlabel('x_i')
+plt.ylabel('candidate cost')
+plt.title('Lower envelope of CHT lines')
+plt.legend()
+plt.tight_layout()
+plt.savefig('/tmp/cht_envelope.png', dpi=100, bbox_inches='tight', transparent=True)
+  `}
+  format="png"
+  title="Convex hull trick: lower envelope of lines"
+/>
+
+## DP Debugging and Proof Checklist
+
+<Quiz client:load
+  title="State completeness problem"
+  question="A DP for the shortest path with at most 2 red vertices fails because:"
+  options={[
+    "The recurrence is not in the right order",
+    "Two paths reaching the same vertex with equal reds_used may have visited different red vertices, so the state is insufficient",
+    "The base case is wrong",
+    "The DAG has cycles"
+  ]}
+  correctIndex={1}
+  explanation="The state (vertex, reds_used) does not track which red vertices were visited. Two histories with the same count may have visited different sets, leading to different future feasibility."
+/>
+
+1. **State completeness:** Do two histories with the same state always have the same optimal future? If not, the state needs augmentation.
+2. **Base cases:** Are all minimal states explicitly defined and correct?
+3. **Transition validity:** Does every transition map to a strictly smaller state (in a well-founded sense)?
+4. **Optimal substructure:** Can an optimal solution be decomposed into optimal solutions to subproblems? Prove by cut-and-paste.
+5. **Dependency order:** Is the evaluation order a topological sorting of the state DAG?
+6. **Reconstruction:** Can a witness be recovered from the table or stored decisions?
 
 ## Exercises
 
-1. Convert naive Fibonacci to memoized and bottom-up DP with proofs.
-2. Derive and prove 0/1 knapsack recurrence and one-dimensional loop direction.
-3. Reconstruct an LCS from a table.
-4. Design weighted interval scheduling DP.
-5. Explain DAG shortest paths with negative edges.
-6. Diagnose an incomplete state for a constrained sequence problem.
-7. Compare value-table, choice-table, and recomputation strategies.
+1. **Optimal BST.** Given frequencies $f_1, \ldots, f_n$ for keys $k_1 < \cdots < k_n$, find the BST minimizing expected search cost. Define $C[i][j] = \min_{i \le r \le j} \left[ C[i][r-1] + C[r+1][j] + \sum_{t=i}^j f_t \right]$. Prove optimal substructure and derive $O(n^3)$ time.
 
-### Diagnostic solutions
+   <ExerciseSolution hint="Try each possible root $r$ for the interval $[i,j]$.">
 
+   For a BST with root $k_r$, the left subtree is an optimal BST for keys $k_i..k_{r-1}$ and the right for $k_{r+1}..k_j$. The sum $\sum_{t=i}^j f_t$ accounts for the depth increase of every node when attached to the root. Cut-and-paste: if the left subtree were suboptimal, replacing it with the optimal left BST reduces total search cost.
+   </ExerciseSolution>
 
-1. State i, base F(0),F(1), transition from i-1/i-2. Memoization evaluates each i once; bottom-up satisfies dependencies. Induction on i proves each stored value equals the recurrence, hence the desired Fibonacci value.
+2. **Dominance pruning.** For the unbounded knapsack problem, prove that if item $a$ has $v_a \ge v_b$ and $w_a \le w_b$, then item $b$ can be discarded without affecting optimality. Construct a case where this dominance does not hold for 0/1 knapsack.
 
-2. Partition by item i absent/present; present leaves capacity w-wi. The 2D recurrence is correct by optimal substructure. In 1D iterate w downward so the previous row’s value is read; upward iteration would allow item i multiple times and solve unbounded knapsack instead.
+   <ExerciseSolution hint="Consider replacing item $b$ with item $a$ in an optimal solution.">
 
-3. At (i,j), if characters match, append the character and move diagonal; otherwise move to a neighboring cell with equal value. Stop at row or column zero. Reverse collected characters; ties yield alternate optimal subsequences.
+   For any feasible solution using item $b$, replace each copy of $b$ with a copy of $a$: value does not decrease, weight does not increase. Feasibility is preserved. For 0/1 knapsack, replacing $b$ with $a$ may exceed the capacity if $w_a < w_b$, but the replacement is valid only if $b$ was included and $a$ was not. Dominance holds in 0/1 only if $w_a \le w_b$ and both items can be swapped without exceeding capacity; a counterexample: $v_a=10, w_a=9$, $v_b=9, w_b=5$, with capacity 10. Item $b$ is part of the optimal solution (value 9 with item $b$ alone fits), while item $a$ alone also fits but swapping $b\to a$ changes the solution.
+   </ExerciseSolution>
 
-4. Sort by finish, compute p(j) by binary search, and set OPT(0)=0, OPT(j)=max(OPT(j-1),v_j+OPT(p(j))). The optimal set either omits j or includes it plus an optimal compatible prefix.
+3. **Held–Karp reconstruction.** Augment the TSP DP to reconstruct the optimal tour. Show that storing the optimal predecessor per state adds $O(n 2^n)$ space and does not change the asymptotic time.
 
-5. Topological order ensures every predecessor of v is processed before v. Relaxation considers every path’s final edge, so the minimum is final. Negative edges are safe because acyclicity prevents repeated improvement cycles; Dijkstra’s nonnegative assumption is unnecessary here.
+   <ExerciseSolution>
+   Maintain $next[S][v]$ = the vertex that precedes $v$ in the optimal path for state $(S,v)$. When computing $DP[S][v] = DP[S\setminus\{v\}][u] + w(u,v)$, record $next[S][v] = u$. After finding the optimal final edge, follow $next$ pointers in reverse to reconstruct the tour.
+   </ExerciseSolution>
 
-6. Find two histories with equal proposed state but different remaining legal choices or objective. Their difference proves the descriptor omits information; add the relevant boundary, last item, resource, or automaton state until future behavior is identical.
+4. **Longest increasing subsequence.** Derive the $O(n \log n)$ DP using patience sorting. Prove that the algorithm correctly computes LIS length by maintaining the smallest possible tail value for each subsequence length.
 
-7. A value table supports optimal score and often reconstruction via recomputation; choice table adds O(number of states) space but makes reconstruction direct; recomputation saves memory but may increase time. State which output is required.
+   <ExerciseSolution>
+   Maintain array $tails[k]$ = the minimum possible tail value of an increasing subsequence of length $k$. For each $x$ in the input, binary search for the largest $k$ such that $tails[k] < x$, and set $tails[k+1] = x$. The length of $tails$ after processing all elements is the LIS length. Proof invariant: after processing $i$ elements, $tails[k]$ is the minimum tail of any increasing subsequence of length $k$ that uses only the first $i$ elements.
+   </ExerciseSolution>
 
+5. **Coin change (minimum coins).** Given coin denominations $d_1, \ldots, d_k$, find the minimum number of coins to make amount $A$. State the recurrence. Prove it produces the minimum when coins are unlimited (unbounded knapsack). Show that a greedy strategy fails for non-canonical coin systems.
 
+   <ExerciseSolution>
+   $DP[a] = \min_{i: d_i \le a} (1 + DP[a - d_i])$ with $DP[0] = 0$. The recurrence is correct by cut-and-paste: in an optimal coin set for amount $a$, remove one coin to get an optimal set for $a - d_i$. Greedy fails for denominations 1, 3, 4: the optimal for 6 is (3,3) = 2 coins, but greedy picks 4 + 1 + 1 = 3 coins.
+   </ExerciseSolution>
+
+6. **Optimal substructure failure.** Give a concrete problem where a "natural" DP state seems correct but fails the cut-and-paste argument because subproblem solutions interact. Show the interaction explicitly.
+
+   <ExerciseSolution>
+   **Shortest path with vertex colors.** Find the shortest path from $s$ to $t$ that visits at most 2 red vertices. A natural state is (vertex, reds_used). But two paths reaching the same vertex with equal reds_used may have different sets of visited red vertices, leading to different future feasibility. The cut-and-paste fails because the suffix solution may need a specific red vertex that was already used. Fix: augment state with the set of red vertices visited.
+   </ExerciseSolution>
+
+7. **Transfer: Design a DP for a novel problem.** You are given a sequence of $n$ daily stock prices $p_1, \ldots, p_n$ and a transaction cost $c$ per trade. You may hold at most one share at a time. Design a DP that computes the maximum profit achievable, where each transaction (buy then sell) incurs the cost $c$. State the state, recurrence, base cases, and complexity. Prove optimal substructure.
+
+   <ExerciseSolution>
+   State: $DP[i][h]$ = maximum profit after processing prices $1..i$ where $h \in \{0, 1\}$ indicates whether you hold a share. Recurrence: $DP[i][0] = \max(DP[i-1][0], DP[i-1][1] + p_i)$ (sell), $DP[i][1] = \max(DP[i-1][1], DP[i-1][0] - p_i - c)$ (buy, paying transaction cost). Base: $DP[0][0] = 0$, $DP[0][1] = -\infty$. Answer: $DP[n][0]$. Optimal substructure: any optimal sequence of decisions for $i$ prices either does nothing on day $i$ (inheriting optimal from $i-1$) or executes a trade (the remaining problem reduces to $i-1$ with the opposite holding state). Cut-and-paste applies because the two cases are independent.
+   </ExerciseSolution>
+
+8. **Synthesis: Compare DP, greedy, and divide-and-conquer.** Identify a problem that can be solved by all three paradigms (e.g., computing the maximum subarray sum). For each paradigm, write the recurrence (or decision rule), analyze the complexity, and explain why the other paradigms would be suboptimal for a different problem that fits only one paradigm.
+
+   <ExerciseSolution>
+   **Maximum subarray sum.** DP: $DP[i] = \max(DP[i-1] + A[i], A[i])$ with $DP[0] = A[0]$, answer $\max_i DP[i]$, $O(n)$. Greedy: maintain running sum, reset to 0 when negative — same as Kadane's algorithm, produces the same result, but the "greedy choice" (keep or reset) is justified by the DP recurrence. Divide-and-conquer: split at midpoint, recursively compute max subarray in left, right, and crossing the midpoint — $O(n \log n)$.
+
+   **Why DP is needed for other problems:** For edit distance or knapsack, the greedy choice is not locally optimal (the exchange argument fails), and divide-and-conquer cannot efficiently handle overlapping subproblems. DP's systematic table-filling is essential when subproblems overlap and the optimal choice depends on multiple future outcomes.
+   </ExerciseSolution>
+
+9. **Transfer: DP on a novel graph structure.** You are given a rooted tree with $n$ nodes, each with a value $v_i \in \mathbb{Z}$. Select a subset of nodes such that no two selected nodes are adjacent (connected by an edge). Design a DP that computes the maximum total value of a valid subset. State the state, recurrence, and complexity. Prove optimal substructure.
+
+   <ExerciseSolution hint="For each node, the DP must consider two cases: selected or not selected.">
+   State: $DP[u][0]$ = max value in subtree of $u$ when $u$ is not selected; $DP[u][1]$ = max value when $u$ is selected. Recurrence: $DP[u][0] = \sum_{c \in \text{children}(u)} \max(DP[c][0], DP[c][1])$; $DP[u][1] = v_u + \sum_{c \in \text{children}(u)} DP[c][0]$. Base: leaf nodes have $DP[leaf][0] = 0$, $DP[leaf][1] = v_{leaf}$. Answer: $\max(DP[root][0], DP[root][1])$. Complexity: $O(n)$. Optimal substructure: If $u$ is selected, none of its children can be selected, so the optimal value from each child subtree is $DP[c][0]$. If $u$ is not selected, children may be selected or not, and the optimal choice per child is independent — the cut-and-paste argument applies to each child subtree independently.
+   </ExerciseSolution>
+
+10. **Synthesis: Decompose a problem into DP building blocks.** A company must schedule $n$ jobs on a single machine. Each job $j$ has a processing time $p_j$, a deadline $d_j$, and a profit $v_j$ (earned only if completed by its deadline). The machine can process at most one job at a time. (a) Prove that the problem of maximizing profit is NP-hard (hint: reduction from subset sum or knapsack). (b) Suppose all $p_j = 1$ (unit processing times). Design a DP that solves the problem in $O(n \max d_j)$ time. (c) Explain why the DP in (b) fails when $p_j$ are arbitrary, and identify the structural property that makes the unit-time case tractable.
+
+    <ExerciseSolution>
+    (a) Reduction from knapsack: each item $(w_i, v_i)$ maps to a job with $p_i = w_i$, $d_i = W$ (capacity), profit $v_i$. A feasible schedule with profit $\ge K$ corresponds to a knapsack solution with value $\ge K$. (b) Sort jobs by deadline. DP state: $DP[t]$ = max profit achievable by time $t$. Process jobs in deadline order: $DP[t] = \max(DP[t-1], \max_{j: d_j = t} (v_j + DP[t-1]))$. Since all $p_j = 1$, including a job at time $t$ uses the entire time slot. (c) With arbitrary $p_j$, the decision is not just which job to schedule at time $t$ but how to pack variable-length jobs into the timeline — this is a scheduling problem equivalent to knapsack. The unit-time case is tractable because the time dimension becomes a count of slots rather than a continuous resource.
+    </ExerciseSolution>
+
+## Deliberately Omitted
+
+- **DP on tree decompositions and bounded treewidth** — Dynamic programming on graphs with bounded treewidth is a powerful technique for NP-hard problems on almost-trees; it is covered in the parameterized algorithms module.
+- **Policy iteration for Markov decision processes** — This lesson presents value iteration for MDPs but omits policy iteration, which often converges in fewer iterations; both methods are covered in the reinforcement learning module.
+- **DP with monotone queue optimization (sliding window)** — Optimizing DP transitions that depend on a sliding window of previous states (e.g., $DP[i] = \min_{j \in [i-k, i-1]} DP[j] + f(i,j)$) via monotone queues is a competitive-programming technique rather than a core algorithmic concept.
+- **DP on trees** — Tree DP (e.g., maximum independent set on a tree) is a special case of DP on DAGs where the DAG is the tree itself; it warrants a dedicated treatment in the graph algorithms module.
 
 ## References & Further Reading
 
-* [MIT 6.006 Dynamic Programming lecture materials](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/pages/lecture-notes/)
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+* Bellman, R. *Dynamic Programming*. Princeton University Press, 1957. The original monograph establishing the principle of optimality and the curse of dimensionality.
+* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed., MIT Press, 2022. Chapters 14–15. Canonical treatment of DP recurrences, edit distance, and matrix chain multiplication. Referenced as [CLRS, 4th ed.].
+* Kleinberg and Tardos, *Algorithm Design*. Addison-Wesley, 2005. Chapter 6. Excellent exposition of DP design patterns, weighted interval scheduling, and the knapsack problem. Referenced as [Kleinberg and Tardos, 2005].
+* Dasgupta, S., Papadimitriou, C. H., and Vazirani, U. V. *Algorithms*. McGraw-Hill, 2006. Chapter 6. Clear treatment of the DAG perspective on DP. Referenced as [Dasgupta, Papadimitriou, Vazirani, 2006].
+* Garey, M. R. and Johnson, D. S. *Computers and Intractability: A Guide to the Theory of NP-Completeness*. W. H. Freeman, 1979. Referenced as [Garey and Johnson, 1979] for pseudo-polynomiality.
+* Dreyfus, S. E. and Wagner, R. A. "The Steiner Problem in Graphs." *Networks* 1 (1971): 195–207. Foundational paper on DP for Steiner trees.
+* Ibarra, O. H. and Kim, C. E. "Fast Approximation Algorithms for the Knapsack and Sum of Subset Problems." *Journal of the ACM* 22.4 (1975): 463–468. The original FPTAS for knapsack.
+* Held, M. and Karp, R. M. "A Dynamic Programming Approach to Sequencing Problems." *Journal of the Society for Industrial and Applied Mathematics* 10.1 (1962): 196–210. The Held–Karp algorithm for TSP. Referenced as [Held and Karp, 1962].
+* [MIT 6.006 Dynamic Programming lecture materials](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/pages/lecture-notes/) (CC BY-NC-SA 4.0)

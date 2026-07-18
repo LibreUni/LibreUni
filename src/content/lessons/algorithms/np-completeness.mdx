@@ -1,99 +1,570 @@
 ---
 title: "NP-Completeness and Algorithmic Limits"
 course: "algorithms"
-description: "P, NP, certificates, polynomial reductions, completeness proofs, and practical responses to hard problems."
+description: "P, NP, NP-completeness, Cook-Levin theorem, polynomial reductions, Karp's 21 problems, Ladner's theorem, and the polynomial hierarchy."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import TikZ from '../../../components/TikZ.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # NP-Completeness and Algorithmic Limits
 
-Algorithm design includes recognizing when an exact polynomial-time method is unlikely. NP-completeness provides a formal language for that recognition. It does not say a problem is impossible, that every instance is hard, or that no useful algorithm exists. It says that a polynomial algorithm for one complete problem would solve every problem in NP. The practical response is to exploit special cases, parameterize, approximate, search, or accept exponential behavior on small instances.
+A logistics company must route delivery vehicles through 500 cities. A chip designer must place a million transistors on a die. A cryptographer must prove a protocol secure against any adversary. All three face the same barrier: a class of problems for which no efficient algorithm is known, yet no one has proved that none exists.
 
-## Decision and optimization versions
+In 1971, Stephen Cook formalized this barrier. He asked: can theorem-proving be automated efficiently? He encoded this as Boolean satisfiability (SAT) — given a propositional formula, does there exist an assignment of true/false to its variables that makes the whole formula true? Cook proved that SAT is as hard as any problem in a class he called NP (nondeterministic polynomial time) [Cook 1971]. This was the Cook–Levin theorem, the first NP-completeness result.
 
-Complexity classes are usually defined for decision languages. An optimization problem asks for the best feasible object; its decision version asks whether a feasible object reaches threshold K. To use a reduction, define encodings and show how a decision solver could answer the source problem. For many problems, a polynomial decision algorithm can recover an optimization solution by binary search or self-reduction, but this conversion requires a proof and may need a polynomially bounded objective.
+Richard Karp (1972) recognized the broader implications. He constructed polynomial-time reductions from SAT to 21 fundamental combinatorial problems — including the traveling salesman problem, knapsack, clique, vertex cover, and Hamiltonian cycle — proving each is equally hard [Karp 1972]. If any one of them admits a polynomial-time algorithm, then all of them do; conversely, if any is provably exponential, then all are.
 
-SAT asks whether a Boolean formula has a satisfying assignment. A certificate is an assignment whose clauses can be evaluated in polynomial time, so SAT is in NP. The Cook-Levin theorem proves SAT is NP-complete by encoding a polynomial-time nondeterministic computation as a tableau of time and tape cells with local consistency constraints. The theorem is foundational: it shows every NP computation can be represented as a satisfiability instance.
+The question of whether P equals NP is one of the seven Clay Millennium Problems, carrying a $1M prize [Clay 2000]. A proof that P = NP would revolutionize optimization, cryptography, and artificial intelligence. A proof that P $\neq$ NP would confirm what most researchers suspect: that thousands of practically important problems are fundamentally intractable in the worst case.
 
-## Polynomial reductions
+## Decision Problems and Certificates
 
-A polynomial many-one reduction from A to B computes an instance f(x) in polynomial time with x yes iff f(x) yes. If B is in P, A is in P; if A is NP-hard and A reduces to B, B is NP-hard. Direction is the central discipline. To prove a new problem B hard, start from a known complete problem A and transform A instances into B instances.
+Complexity classes are defined for *decision problems* (languages) — sets of strings encoding yes-instances. Every algorithm question is reframed as: does string $x$ belong to language $L$?
 
-Completeness requires both membership and hardness. A proof that only gives a reduction establishes hardness, not that the target lies in NP. For membership, specify a polynomial-size certificate and a polynomial verifier, including encoding length. For hardness, prove construction size/time and both yes and no directions.
+<MathStatement id="p-def" kind="definition" title="P">
+A language $L \subseteq \{0,1\}^*$ is in P if there exists a deterministic Turing machine $M$ and polynomial $p$ such that for all $x$, $M$ accepts $x$ iff $x \in L$, and $M$ halts within $p(|x|)$ steps.
+</MathStatement>
 
-**Worked reduction pattern.** To reduce 3SAT to CLIQUE, create a vertex for each literal occurrence, connect vertices from different clauses when they are not complementary, and ask for a clique of size equal to the number of clauses. A satisfying assignment selects one true occurrence per clause and creates a clique; a clique selects compatible occurrences and yields a satisfying assignment. No edge within a clause is needed because a clique of target size cannot select two from one clause when there are only one-per-clause compatibility edges.
+<MathStatement id="np-def" kind="definition" title="NP">
+A language $L$ is in NP if there exists a polynomial-time verifier $V$ and polynomial $p$ such that for all $x$:
+- If $x \in L$, then $\exists y$ with $|y| \le p(|x|)$ and $V(x,y)$ accepts.
+- If $x \notin L$, then $\forall y$ with $|y| \le p(|x|)$, $V(x,y)$ rejects.
 
-## Classic complete problems
+The string $y$ is called a *certificate* or *witness*.
+</MathStatement>
 
-Common NP-complete problems include CLIQUE, INDEPENDENT SET, VERTEX COVER, HAMILTONIAN CYCLE, 3SAT, SUBSET SUM, PARTITION, and decision versions of scheduling and packing. Reductions exploit complement relationships: a set is independent iff it is a clique in the complement graph; a vertex cover of size k exists iff an independent set of size n-k exists.
+The key insight: NP is defined by **verification**, not generation. A problem is in NP if a proposed solution can be checked quickly, even if finding one requires exhaustive search.
 
-Use known reductions carefully. A reduction from CLIQUE to a target may require complementing or changing threshold; a reduction from a problem to its optimization version needs a decision encoding. The transformation must preserve the exact parameter and feasibility constraints, not just produce a related-looking graph.
+<PythonDiagram
+  title="Relationship of P, NP, NP-complete, and NP-hard"
+  code={`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch
 
-## Self-reducibility and search
+fig, ax = plt.subplots(figsize=(6, 5))
+ax.set_xlim(0, 10)
+ax.set_ylim(0, 10)
+ax.set_aspect('equal')
+ax.axis('off')
 
-SAT is self-reducible: if a polynomial SAT decision oracle exists, construct a satisfying assignment by asking whether the formula remains satisfiable after setting each variable to false; if not, set it true. Each query simplifies the formula and there are polynomially many variables. This demonstrates why efficient decision can imply efficient search for many NP problems.
+# NP-hard region (outermost)
+outer = FancyBboxPatch((1, 1), 8, 8, boxstyle="round,pad=0.3",
+                        facecolor='#fef3c7', edgecolor='#d97706', linewidth=2, zorder=1)
+ax.add_patch(outer)
+ax.text(5, 9.3, 'NP-hard', ha='center', va='center', fontsize=10, fontweight='bold', color='#92400e')
 
-When no exact polynomial algorithm is known, branch-and-bound uses upper/lower bounds to prune a search tree. A branch is safe to prune only when the bound proves no completion can beat the incumbent or satisfy the threshold. Memoization can merge repeated subproblems; parameterization can isolate a small parameter k and permit (f(k)n^()O(1)()) time.
+# NP region
+np_region = FancyBboxPatch((2, 2), 6, 6, boxstyle="round,pad=0.3",
+                            facecolor='#e0f2fe', edgecolor='#0284c7', linewidth=2, zorder=2)
+ax.add_patch(np_region)
+ax.text(5, 7.3, 'NP', ha='center', va='center', fontsize=10, fontweight='bold', color='#075985')
 
-## Weak and strong hardness
+# P region
+p_region = FancyBboxPatch((3, 3), 4, 4, boxstyle="round,pad=0.3",
+                           facecolor='#dcfce7', edgecolor='#16a34a', linewidth=2, zorder=3)
+ax.add_patch(p_region)
+ax.text(5, 5.5, 'P', ha='center', va='center', fontsize=12, fontweight='bold', color='#166534')
 
-A pseudo-polynomial algorithm may solve a problem efficiently when numeric values are small but be exponential in binary input length. Subset sum is weakly NP-complete in this sense and has an FPTAS. Problems with hardness independent of numeric magnitude are strongly NP-complete; pseudo-polynomial dynamic programming is unlikely to solve them generally unless P=NP.
+# NP-complete region (if P ≠ NP)
+npc_region = FancyBboxPatch((3.5, 3.5), 3, 2.5, boxstyle="round,pad=0.2",
+                             facecolor='#fce7f3', edgecolor='#db2777', linewidth=2, zorder=4)
+ax.add_patch(npc_region)
+ax.text(5, 4.7, 'NP-complete', ha='center', va='center', fontsize=8, fontweight='bold', color='#9d174d')
 
-The distinction affects modeling and practical algorithms. A capacity of one billion stored in binary has only about 30 bits, so O(nW) DP is not polynomial in input length. If W is small in the domain, the DP may still be excellent. State numeric encoding and parameter ranges before classifying an algorithm.
+ax.text(5, 0.5, 'If P ≠ NP, NP-complete problems are disjoint from P.\nIf P = NP, all regions collapse into one.',
+        ha='center', va='center', fontsize=7, style='italic', color='#6b7280')
 
-## Approximation and hardness
+fig.tight_layout()
+fig.savefig('/tmp/np-hierarchy.svg', bbox_inches='tight')
+print('/tmp/np-hierarchy.svg')`}
+/>
 
-NP-hardness does not forbid approximation. Vertex cover has a 2-approximation; metric TSP has 3/2 or 2 approximations depending on the algorithm; set cover has logarithmic approximation. Gap reductions can show that a ratio better than a threshold would imply P=NP. Distinguish optimization hardness from inapproximability and from practical difficulty on a distribution.
+**Example: SAT.** A certificate is a satisfying assignment. Given formula $\phi$ and assignment $y$, evaluate each clause: $O(|\phi|)$ steps. If all clauses are true, accept.
 
-## Reduction hygiene
+**Example: CLIQUE.** A certificate is a set of $k$ vertices. Verify all pairs are adjacent: $O(k^2)$ edge checks.
 
-A reduction must preserve malformed-instance behavior or restrict its domain to valid encodings with a polynomial-time validity check. It must not solve the source instance while constructing the target. “Create a target object that is yes exactly when the source is yes” is incomplete until the construction is explicit and finite. Test the mapping on a source yes-instance, a source no-instance, duplicate fields, empty structures, and parameter boundary cases.
+**Example: COMPOSITE.** A certificate is a nontrivial factor. Verify the factor divides the input: $O(n^2)$ division. COMPOSITE was proven to be in P by the AKS primality test (2002), showing that a problem can have short certificates even when it turns out to be in P [AKS 2004].
 
-Thresholds and complements are common polarity traps. If a source asks whether an optimum is at least K, a target construction that asks whether a cost is at most K may need a complement or a transformed objective. Write the iff statement before writing the gadget. For graph reductions, map vertices, edges, weights, and parameter values explicitly; an omitted edge can create an unintended solution.
+<CodeRunner client:load
+  title="Verify a SAT certificate"
+  language="python"
+  code={`def verify_sat(formula, assignment):
+    '''Check if assignment satisfies each clause.'''
+    for clause in formula:
+        satisfied = False
+        for lit in clause:
+            var, neg = abs(lit), lit < 0
+            val = assignment.get(var, False)
+            if neg:
+                val = not val
+            if val:
+                satisfied = True
+                break
+        if not satisfied:
+            return False
+    return True
 
-## Parameters and fixed-parameter algorithms
+phi = [(1, 2), (-1, 3), (-2, -3)]
+cert = {1: True, 2: False, 3: True}
+print(verify_sat(phi, cert))  # True
 
-A parameterized problem has input size n and parameter k. An FPT algorithm runs (f(k)n^c), where the exponent c is independent of k. A brute-force algorithm (n^k) is generally XP rather than FPT because k appears in the exponent. Kernelization preprocesses an instance to an equivalent one of size g(k) in polynomial time; then an exact exponential solver may be practical for small k.
+phi2 = [(1,), (-1,)]
+cert2 = {1: True}
+print(verify_sat(phi2, cert2))  # False`}
+  output="True\nFalse"
+/>
 
-Vertex cover has an FPT branching algorithm: choose an edge (u,v), and every cover contains u or v, so branch by including each endpoint and decrease k. The recurrence T(k) at most 2T(k-1)+poly(n) gives (2^k poly(n)). The branching proof is complete because the edge must be covered in every feasible solution. A kernel can also remove vertices or edges using safe reduction rules.
+## Polynomial Reductions
 
-## Practical responses to hardness
+<MathStatement id="reduction" kind="definition" title="Polynomial-time many-one reduction">
+$A \le_p B$ if there exists a polynomial-time computable function $f: \{0,1\}^* \to \{0,1\}^*$ such that $x \in A \iff f(x) \in B$.
+</MathStatement>
 
-When a problem is NP-hard, choose among exact search with pruning, pseudo-polynomial DP, approximation, parameterization, restricted instances, heuristics, or a solver. State the guarantee: exact but exponential worst-case, approximate ratio, fixed-parameter, or empirical only. A heuristic may be excellent on a workload and still have no worst-case bound; that is acceptable when labeled and monitored.
+If $A \le_p B$ and $B \in P$, then $A \in P$ (compose reduction with $B$'s algorithm). If $A \le_p B$ and $A$ is NP-hard, then $B$ is NP-hard.
 
-Decision and optimization outputs may have different operational needs. A feasibility checker can be fast even when optimization is hard; an approximate solution with a certificate may be preferable to an exact answer that misses a deadline. Time budgets, incumbent solutions, and lower/upper bounds can provide anytime behavior: return the best feasible result found with a bound on the remaining gap when available.
+**Direction is critical.** To prove $B$ is NP-hard, reduce FROM a known NP-hard problem $A$ TO $B$: $A \le_p B$. If $B$ were easy, $A$ would be easy, contradiction.
 
-## Hardness evidence versus proof
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+rectangle "A instance x" as A
+rectangle "Reduction f" as f
+rectangle "B instance f(x)" as B
+rectangle "B solver" as solver
+rectangle "Answer: yes/no" as ans
+A --> f
+f --> B
+B --> solver
+solver --> ans
+note right of f : x ∈ A ⇔ f(x) ∈ B
+@enduml`}
+/>
 
-Empirical exponential growth on small instances is not a proof of NP-hardness. A citation to a known-complete problem is not a reduction for a new variant unless the constraints match. Conversely, a polynomial algorithm for a restricted family does not refute hardness of the general problem. Keep theorem scope, implementation scope, and benchmark scope separate.
+## NP-Completeness
+
+<MathStatement id="np-complete" kind="definition" title="NP-completeness">
+A language $L$ is NP-complete if:
+1. $L \in NP$ (membership).
+2. $L$ is NP-hard: for every $A \in NP$, $A \le_p L$.
+</MathStatement>
+
+An NP-complete problem is the "hardest" in NP: if any NP-complete problem is in P, then P = NP.
+
+### Cook–Levin Theorem
+
+<MathStatement id="cook-levin" kind="theorem" title="Cook–Levin theorem (1971)" proofId="cook-levin-proof">
+SAT is NP-complete.
+</MathStatement>
+
+<MathProof id="cook-levin-proof" for="cook-levin" collapsible open>
+
+**Membership.** SAT $\in$ NP: certificate is a satisfying assignment; verifier evaluates the formula in polynomial time.
+
+**Hardness.** Let $L \in NP$ be decided by nondeterministic Turing machine $M$ in time $p(|x|)$. Construct a Boolean formula $\phi_{M,x}$ in polynomial time from $|x|$ such that $M$ accepts $x$ iff $\phi_{M,x}$ is satisfiable.
+
+The formula encodes the computation tableau of $M$ on $x$ for $p(|x|)$ steps, using $O(p(|x|)^2)$ Boolean variables $T[i,j,k]$ meaning "cell $i$ at time $j$ contains symbol $k$." Clauses enforce:
+
+1. **Initialization:** The first row of the tableau matches the input $x$ in state $q_0$.
+2. **Transition:** Each row follows from the previous via $M$'s transition relation.
+3. **Acceptance:** Some cell at the final time contains the accept state.
+4. **Consistency:** Each cell contains exactly one symbol per time step.
+
+Each constraint is a conjunction of local clauses (each involving $O(1)$ variables), so the total formula size is $O(p(|x|)^2)$. A satisfying assignment corresponds to an accepting computation of $M$ on $x$. □
+
+</MathProof>
+
+The tableau construction is itself a visual concept:
+
+<TikZ
+  code={`\matrix[matrix of nodes, nodes={draw, minimum width=1.2em, minimum height=1em, anchor=center}, row sep=-0.5pt, column sep=-0.5pt] (tableau) {
+  q_0 & x_1 & x_2 & \cdots & x_n & \sqcup & \cdots \\
+    & q_0 & x_2 & \cdots & x_n & \sqcup & \cdots \\
+    &     & q_0 & \cdots & x_n & \sqcup & \cdots \\
+  \vdots & \vdots & \vdots & \ddots & \vdots & \vdots & \ddots \\
+    &     &     & q_{accept} &     &       \\
+};
+\draw[decorate, decoration={brace, mirror, raise=0.3em}] (tableau-1-1.north west) -- (tableau-1-7.north east)
+  node[midway, above=1em] {time $t = 0$};
+\draw[decorate, decoration={brace, mirror, raise=0.3em}] (tableau-5-1.south west) -- (tableau-5-7.south east)
+  node[midway, below=1em] {time $t = p(|x|)$};
+\node[right=1.5em of tableau] {tape cells $\to$};`}
+  packages={["matrix"]}
+/>
+
+The key intellectual step: the reduction is not solving the problem — it is constructing a formula whose satisfiability *is equivalent* to the original computation. This is why NP-completeness is profound: it says that reasoning about propositional logic is as hard as any NP problem.
+
+<Quiz client:load
+  title="Tableau size"
+  question="For a nondeterministic Turing machine that runs in time O(n³), what is the size of the Boolean formula in the Cook-Levin reduction?"
+  options={["O(n³)", "O(n⁶)", "O(2ⁿ)", "O(n)"]}
+  correctIndex={1}
+  explanation="The tableau has O(p(n)) rows and O(p(n)) columns, so O(p(n)²) variables. For p(n) = n³, the formula size is O(n⁶)."
+/>
+
+### NP-Completeness of 3SAT
+
+**3SAT** is SAT restricted to clauses of exactly 3 literals. Reduce SAT to 3SAT by converting each clause: a clause $(l_1 \lor l_2 \lor \cdots \lor l_k)$ becomes a conjunction of 3-literal clauses using auxiliary variables $z_1, \ldots, z_{k-3}$:
+
+$$
+(l_1 \lor l_2 \lor z_1) \land (l_3 \lor \overline{z_1} \lor z_2) \land (l_4 \lor \overline{z_2} \lor z_3) \land \cdots
+$$
+
+The auxiliary variables ensure the original clause is satisfiable iff the 3CNF is satisfiable.
+
+### Karp's 21 NP-Complete Problems
+
+Karp (1972) extended Cook's result by giving polynomial reductions showing that 21 fundamental problems are NP-complete [Karp 1972], including:
+
+- **CLIQUE:** Does $G$ contain $K_k$?
+- **VERTEX COVER:** Does $G$ have a vertex cover of size $k$?
+- **HAMILTONIAN CYCLE:** Does $G$ have a cycle visiting every vertex exactly once?
+- **SUBSET SUM:** Does a subset of numbers sum to target $t$?
+- **KNAPSACK (decision):** Can a subset achieve value $\ge V$ within capacity $W$?
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+rectangle "SAT" as SAT
+rectangle "3SAT" as threeSAT
+rectangle "CLIQUE" as CLIQUE
+rectangle "VERTEX\nCOVER" as VC
+rectangle "HAMILTONIAN\nCYCLE" as HC
+rectangle "SUBSET\nSUM" as SS
+SAT -right-> threeSAT : add aux.\nvariables
+threeSAT -down-> CLIQUE : literal\ngadgets
+CLIQUE -right-> VC : complement\ngraph
+CLIQUE -down-> HC : component\ndesign
+threeSAT -down-> SS : digit\nencoding
+note top of SAT : Cook-Levin (1971)
+note bottom of SS : Karp (1972)
+@enduml`}
+/>
+
+<Quiz client:load
+  title="Reduction direction"
+  question="Which direction proves CLIQUE is NP-hard?"
+  options={["Reduce FROM SAT TO CLIQUE", "Reduce FROM CLIQUE TO SAT", "Reduce FROM CLIQUE TO 3SAT", "Show CLIQUE is in P"]}
+  correctIndex={0}
+  explanation="Reducing from SAT (or 3SAT) to CLIQUE proves CLIQUE is NP-hard. The direction is: known NP-hard → target. If CLIQUE were easy, SAT would be easy."
+/>
+
+<Quiz client:load
+  title="Reduction chain"
+  question="SAT → 3SAT → CLIQUE → VERTEX COVER. What does this chain prove?"
+  options={["VERTEX COVER is the hardest", "All problems in the chain are NP-complete", "Only SAT is NP-complete", "The chain is a polynomial-time algorithm for VERTEX COVER"]}
+  correctIndex={1}
+  explanation="Each reduction preserves NP-hardness backward. Since SAT is NP-complete, every problem reachable from SAT via polynomial reductions is also NP-complete."
+/>
+
+**SAT → 3SAT:** Add auxiliary variables, splitting long clauses into 3-literal clauses.
+
+**3SAT → CLIQUE:** For a 3CNF with $k$ clauses, create a vertex per literal occurrence. Connect vertices from different clauses unless they are complementary literals. A $k$-clique selects one compatible literal per clause, giving a satisfying assignment.
+
+**CLIQUE → VERTEX COVER:** $S$ is a $k$-clique in $G$ iff $V \setminus S$ is a $(|V|-k)$-vertex cover in $\overline{G}$.
+
+<CodeExercise client:load
+  title="Complete the reduction"
+  code={`def sat_to_3sat(clauses):
+    '''Convert arbitrary SAT clauses to 3SAT.'''
+    result = []
+    next_var = max(abs(l) for c in clauses for l in c) + 1
+    for clause in clauses:
+        if len(clause) == 1:
+            result.append([clause[0], clause[0], clause[0]])
+        elif len(clause) == 2:
+            result.append([clause[0], clause[1], clause[1]])
+        elif len(clause) == 3:
+            result.append(clause)
+        else:
+            z = [!blank!]
+            next_var += 1
+            result.append([clause[0], clause[1], z])
+            for i in range(2, len(clause) - 1):
+                result.append([-z, clause[i], [!blank!]])
+                z = z + 1
+                next_var += 1
+            result.append([-z, clause[-1], clause[-1]])
+    return result`}
+  answers={["next_var", "z + 1"]}
+  explanation="The first blank initializes z to next_var. The second blank advances the auxiliary variable chain with z + 1."
+/>
+
+## A Counterexample and a Failure Mode
+
+Not every problem with a short certificate turns out to be in NP, and not every NP-hard problem needs exact solution.
+
+**Counterexample: UNSAT.** Given a Boolean formula $\phi$, is $\phi$ unsatisfiable? This is the complement of SAT. A short certificate for unsatisfiability would require proving that no assignment works — which means checking all $2^n$ possibilities. Unless NP = coNP, there is no short certificate. UNSAT is coNP-complete, and believed to lack polynomial-size certificates.
+
+<MathStatement id="conp-def" kind="definition" title="coNP">
+A language $L$ is in coNP if its complement $\overline{L} = \{0,1\}^* \setminus L$ is in NP. Equivalently, $L \in$ coNP if there exists a polynomial-time verifier $V$ and polynomial $p$ such that for all $x$:
+- If $x \in L$, then $\forall y$ with $|y| \le p(|x|)$, $V(x,y)$ accepts.
+- If $x \notin L$, then $\exists y$ with $|y| \le p(|x|)$ and $V(x,y)$ rejects.
+</MathStatement>
+
+The relationship between NP and coNP is open: if NP $\neq$ coNP, then P $\neq$ NP (since P is closed under complement).
+
+<Quiz client:load
+  title="coNP vs NP"
+  question="If a problem and its complement are both in NP, what follows?"
+  options={["The problem is in P", "NP = coNP", "P = NP", "Nothing — both are in NP by definition"]}
+  correctIndex={1}
+  explanation="If L and its complement are both in NP, then L is in NP ∩ coNP. This implies NP = coNP, which is believed false but not proven. Factoring is in NP ∩ coNP."
+/>
+
+**Failure mode: assuming a pseudo-polynomial algorithm always works.** The Subset Sum problem admits an $O(nt)$ dynamic programming solution where $t$ is the target sum. This is *pseudo-polynomial*: polynomial in the numeric value but exponential in the bit-length of $t$. For $t = 2^{100}$, no DP will finish. Practitioners who apply the Subset Sum DP without checking the magnitude of $t$ will mistake feasibility for intractability.
+
+<CodeRunner client:load
+  title="Pseudo-polynomial trap"
+  language="python"
+  code={`def subset_sum_dp(nums, target):
+    '''Classic DP - O(n * target) time and space.'''
+    reachable = {0}
+    for x in nums:
+        reachable = reachable | {v + x for v in reachable if v + x <= target}
+    return target in reachable
+
+# Small target: works fine
+print(subset_sum_dp([3, 7, 12, 5], 19))  # True
+
+# Large target: 20 million entries -> memory blowup
+# subset_sum_dp([3, 7, 12, 5], 2**25) would need ~32 GB
+print("Exponential in bit-length: n=4, target bits=25")`}
+  output="True\nExponential in bit-length: n=4, target bits=25"
+/>
+
+**Misconception: "NP-complete means impossible."** NP-completeness describes worst-case complexity over all instances. Many NP-complete problems have instances that are routinely solved: SAT solvers handle formulas with millions of clauses for industrial verification, and TSP instances with tens of thousands of cities are solved exactly via branch-and-cut. The worst-case hardness does not forbid efficient solution of the instances that actually arise.
+
+## Ladner's Theorem
+
+<MathStatement id="ladner" kind="theorem" title="Ladner's theorem (1975)" proofId="ladner-proof">
+If $P \neq NP$, then there exist languages in $NP \setminus P$ that are not NP-complete.
+</MathStatement>
+
+<MathProof id="ladner-proof" for="ladner" collapsible>
+**Proof idea.** Construct a language $L$ by diagonalization that is not in P (via standard time-hierarchy argument) but is not NP-complete because any reduction from SAT to $L$ would also have to solve SAT. The construction interleaves SAT with a sparse language, ensuring that $L$ is neither too easy (in P) nor too hard (NP-complete) [Ladner 1975]. □
+</MathProof>
+
+These languages are called **NP-intermediate**. Candidates include GRAPH ISOMORPHISM (shown to be in quasipolynomial time by Babai [Babai 2016]), FACTORING (in BQP via Shor's algorithm [Shor 1997]), and certain lattice problems.
+
+## The Polynomial Hierarchy
+
+The polynomial hierarchy extends NP to allow alternating quantifiers:
+
+- $\Sigma^p_1 = NP$: $\exists y$ such that $V(x,y)$ accepts.
+- $\Pi^p_1 = coNP$: $\forall y$, $V(x,y)$ accepts.
+- $\Sigma^p_k$: $\exists y_1 \forall y_2 \exists y_3 \cdots Q_k y_k$ such that $V(x, y_1, \ldots, y_k)$ accepts where $V$ is polynomial-time.
+
+The hierarchy collapses if any level equals the next ($\Sigma^p_k = \Sigma^p_{k+1}$ implies $\Sigma^p_k = PH$). It is believed that the hierarchy is strict (each level properly contains the previous) [Stockmeyer 1976].
+
+<Quiz client:load
+  title="Hierarchy collapse"
+  question="If someone proved that Σ₂ᵖ = Π₂ᵖ, what would this imply?"
+  options={["The polynomial hierarchy collapses to the second level", "P = NP", "The hierarchy is strict", "Nothing — this is already known"]}
+  correctIndex={0}
+  explanation="If Σ₂ᵖ = Π₂ᵖ, then the hierarchy collapses to the second level (Σ₂ᵖ = PH). This does not necessarily imply P = NP, but it would be a major structural result."
+/>
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+rectangle "PH" as PH {
+  rectangle "Σ₂ᵖ" as S2 {
+    rectangle "NP = Σ₁ᵖ" as NP
+  }
+  rectangle "Π₂ᵖ" as P2 {
+    rectangle "coNP = Π₁ᵖ" as coNP
+  }
+}
+NP --> S2 : "∃∀"
+coNP --> P2 : "∀∃"
+S2 --> P2 : "?"
+note right of NP : ∃ verifier
+note right of coNP : ∀ verifier
+@enduml`}
+/>
+
+## Pseudo-Polynomial Algorithms and Weak NP-Hardness
+
+A problem is **weakly NP-hard** if it remains NP-hard when numeric parameters are encoded in unary; it is **strongly NP-hard** if it is NP-hard even when numbers are bounded by a polynomial in input length [Garey & Johnson 1979].
+
+Subset sum is weakly NP-hard (has a pseudo-polynomial DP $O(nt)$). 3-PARTITION is strongly NP-hard (no pseudo-polynomial algorithm unless P = NP).
+
+## Self-Reducibility
+
+A problem is self-reducible if a decision oracle can be used to find a solution in polynomial time [Schnorr 1976]. SAT is self-reducible: fix variables one by one, querying the oracle after each fixing to check if the remaining formula is still satisfiable.
+
+<CodeRunner client:load
+  title="Self-reduction: SAT decision → search"
+  language="python"
+  code={`def search_from_oracle(formula, oracle):
+    '''Use a SAT decision oracle to find a satisfying assignment.'''
+    if not oracle(formula):
+        return None
+    assignment = {}
+    for var in sorted(set(abs(l) for c in formula for l in c)):
+        test = [[l for l in c if abs(l) != var] for c in formula]
+        test = [c for c in test if c]
+        if oracle(test):
+            assignment[var] = False
+            formula = test
+        else:
+            assignment[var] = True
+            formula = [[l for l in c if abs(l) != var or l > 0] for c in formula]
+            formula = [c for c in formula if c]
+    return assignment
+
+# Trivial oracle: try all assignments (2^n)
+def trivial_oracle(f):
+    from itertools import product
+    vars = sorted(set(abs(l) for c in f for l in c))
+    for vals in product([False, True], repeat=len(vars)):
+        a = dict(zip(vars, vals))
+        if all(any((not a[abs(l)] if l < 0 else a[abs(l)]) for l in c) for c in f):
+            return True
+    return False
+
+phi = [(1, 2), (-1, 3), (-2, -3)]
+print(search_from_oracle(phi, trivial_oracle))`}
+  output="{1: False, 2: False, 3: False}"
+/>
+
+## Practical Responses to NP-Hardness
+
+| Technique | Guarantee | Example |
+|-----------|-----------|---------|
+| Exact search (branch-and-bound) | Optimal, worst-case exponential | Maximum clique |
+| Pseudo-polynomial DP | Optimal, exponential in bit-length | Knapsack for small $W$ |
+| Fixed-parameter tractable | $O(f(k) \cdot n^{O(1)})$ | Vertex cover $O(2^k n)$ |
+| Approximation | Provable ratio | Vertex cover 2-approx |
+| Heuristic | Empirical only | Simulated annealing |
+| Solver (SAT/ILP) | Optimal if timeout not hit | MiniSAT, CPLEX [Moskewicz 2001] |
+
+<CaseStudy client:load
+  title="Responding to NP-hardness"
+  scenario="A logistics startup must route delivery vehicles through 500 city locations each day. The problem is essentially TSP, which is NP-complete. The CEO wants an algorithm that guarantees the shortest possible route. The CTO argues that an approximation or heuristic is sufficient. The company has limited engineering resources and needs working software in 8 weeks."
+  question="Which response is most appropriate?"
+  options={[
+    "Implement branch-and-bound exact solver; optimality is non-negotiable",
+    "Use a heuristic (nearest-neighbor + 2-opt) with a provable lower bound; optimize only when customers complain",
+    "Reduce to SAT and wait for a solver; SAT solvers are fast enough",
+    "Tell the CEO it is impossible and refuse the project"
+  ]}
+  correctIndex={1}
+  explanation="A heuristic combined with a lower bound (e.g., via MST relaxation) provides practical solutions with quality guarantees. Branch-and-bound would likely not scale to 500 cities without days of computation. SAT reduction is feasible but adds unnecessary complexity. Refusing the project ignores the reality that NP-hard problems are routinely solved approximately in industry."
+/>
+
+## Prerequisites and Connections
+
+This lesson assumes familiarity with:
+- **Turing machines and time complexity** (big-O notation, deterministic vs. nondeterministic models)
+- **Graph theory basics** (cliques, vertex covers, Hamiltonian cycles, graph coloring)
+- **Propositional logic** (Boolean variables, clauses, satisfiability)
+- **Dynamic programming** (for understanding pseudo-polynomial algorithms)
+
+These concepts connect forward to:
+- **Approximation algorithms** — coping with NP-hardness via provable performance ratios
+- **Parameterized complexity** — isolating hardness in a small parameter rather than total input size
+- **Quantum computing** — Shor's algorithm shows FACTORING is in BQP, though it is believed NP-intermediate
+- **Interactive proofs** — IP = PSPACE shows that verification with interaction is more powerful than NP
 
 ## Exercises
 
-1. Define NP using certificates and verify SAT membership.
-2. Prove the direction rule for polynomial reductions.
-3. Complete 3SAT-to-CLIQUE proof.
-4. Derive CLIQUE/INDEPENDENT-SET complement relation.
-5. Explain self-reduction from SAT decision to search.
-6. Contrast pseudo-polynomial and polynomial time.
-7. Design a branch-and-bound pruning certificate.
+1. **Certificate size (recall).** For each problem, give a polynomial-size certificate and polynomial-time verifier: SUBSET SUM, HAMILTONIAN PATH, INDEPENDENT SET, INTEGER LINEAR PROGRAMMING.
 
-### Diagnostic solutions
+   <ExerciseSolution hint="For each problem, identify what information a certificate must contain and what the verifier must check in polynomial time.">
 
+   **SUBSET SUM:** certificate = subset indices, verifier = sum them and check = target. **HAMILTONIAN PATH:** certificate = permutation of vertices, verifier = check each consecutive pair is an edge. **INDEPENDENT SET:** certificate = set $S$, verifier = check $|S| \ge k$ and no edge has both ends in $S$. **ILP:** certificate = integer vector $x$, verifier = check $Ax \le b$ and $c^Tx \ge K$.
+   </ExerciseSolution>
 
-1. Certificate is a variable assignment of polynomial length; verifier evaluates every clause in polynomial time. Formula is satisfiable iff some certificate verifies.
+2. **Reduction construction (application).** Reduce 3SAT to SUBSET SUM by constructing numbers whose digits encode clause satisfaction. Specifically, create one number per literal occurrence and two numbers per clause such that a subset summing to a target corresponds to a satisfying assignment.
 
-2. If A at most pB and BinP, compute f(x) and run the B algorithm in polynomial time, so AinP. Therefore reducing known NP-hard A to B proves B hard.
+   <ExerciseSolution hint="Use base-10 digits: assign each variable and each clause its own digit position. Each variable has two numbers (one per truth value) and each clause has two slack numbers.">
 
-3. Construct literal-occurrence vertices and cross-clause noncontradiction edges. A satisfying assignment gives one true literal per clause and a k-clique; a k-clique has one compatible literal per clause and defines a satisfying assignment.
+   For a 3CNF with $n$ variables and $m$ clauses, create numbers in base 10 with $n+m$ digits. For each variable $x_i$, create two numbers $v_i$ (digit positions: $i$ in variable area = 1, clause digits for clauses where $x_i$ appears) and $\overline{v_i}$ (clause digits where $\overline{x_i}$ appears). For each clause $c_j$, create two slack numbers $s_j, s_j'$ with digit 1 at clause position $j$. Target: variable digits = 1, clause digits = 3. A subset sums to target iff each variable contributes exactly one of $v_i, \overline{v_i}$ (every variable area digit is 1) and each clause's digit sums to exactly 3 (at least one literal satisfies the clause, plus slacks fill to 3).
+   </ExerciseSolution>
 
-4. S is a clique in G iff S is an independent set in complement(G), so CLIQUE(G,k) maps to INDEPENDENT-SET(complement(G),k) in polynomial time.
+3. **Strong vs weak hardness (analysis).** Show that 3-PARTITION is strongly NP-hard by reducing 3SAT to 3-PARTITION while keeping all numbers bounded by a polynomial in input size. Contrast with SUBSET SUM.
 
-5. Query satisfiability after fixing each variable false; if satisfiable retain false, otherwise retain true. At each step maintain existence of an extension; after all variables the assignment satisfies the formula.
+   <ExerciseSolution>
+   3-PARTITION: given $3m$ integers and bound $B$, decide if they can be partitioned into $m$ triples each summing to $B$. This is strongly NP-hard because the numbers can be encoded as $O(m^2)$-bit values (polynomial in input size). SUBSET SUM's DP is pseudo-polynomial ($O(nt)$ where $t$ can be exponential in bits), while 3-PARTITION's DP would be exponential in both $n$ and $\log B$ because $B$ is polynomially related to $n$.
+   </ExerciseSolution>
 
-6. Polynomial time is polynomial in encoded length. Pseudo-polynomial O(nW) is polynomial in numeric W but exponential in log W. State whether the parameter is unary/binary and whether the numeric range is bounded.
+4. **Self-reduction (application).** Prove that VERTEX COVER is self-reducible: given a decision oracle for $\exists$ vertex cover of size $\le k$, construct a minimum vertex cover.
 
-7. Maintain incumbent value and an optimistic upper bound for each branch. Prune only when the bound cannot exceed incumbent (maximization) or cannot reach threshold. The bound computation must be polynomial or its cost included; correctness follows because no discarded completion could improve the answer.
+   <ExerciseSolution>
+   Initialize $S = \emptyset$. For each vertex $v$, query $\exists$ vertex cover of size $\le k$ in $G[V \setminus \{v\}]$ (the graph after removing $v$ and its incident edges). If yes, remove $v$ (it is not necessary); otherwise add $v$ to $S$ and reduce $k$ by 1. After processing all vertices, $S$ is a minimum vertex cover.
+   </ExerciseSolution>
+
+5. **coNP and certificates (recall).** Define coNP. Prove that TAUTOLOGY (given Boolean formula $\phi$, is $\phi$ true for all assignments?) is coNP-complete. Show that TAUTOLOGY is in coNP.
+
+   <ExerciseSolution>
+   coNP = $\{L : \overline{L} \in NP\}$. TAUTOLOGY is coNP-complete because its complement (SAT) is NP-complete. TAUTOLOGY $\in$ coNP: a certificate for a no-instance is a falsifying assignment; verifier evaluates the formula.
+   </ExerciseSolution>
+
+6. **Transfer: reducing an unfamiliar problem (synthesis).** Consider the problem CLIQUE COVER: given graph $G$ and integer $k$, can the vertices be partitioned into $k$ subsets, each inducing a clique? Prove this problem is NP-complete by reduction from a known NP-complete problem. Explain why a naive reduction from CLIQUE does not work (hint: partitioning vs. existence of a single clique).
+
+   <ExerciseSolution>Reduce from GRAPH COLORING (or K-COLORABILITY). A graph is $k$-colorable iff its complement is $k$-clique-coverable: a color class in $G$ has no edges between its vertices, so in $\overline{G}$ every pair of vertices in the same color class is adjacent — i.e., each color class becomes a clique in $\overline{G}$. Thus $G$ is $k$-colorable $\iff$ $\overline{G}$ has a $k$-clique cover. Since GRAPH COLORING is NP-complete, CLIQUE COVER is NP-complete. A direct reduction from CLIQUE would not work because CLIQUE asks whether a *single* $k$-clique exists, while CLIQUE COVER asks for a *partition* into $k$ cliques covering all vertices — a fundamentally different constraint.</ExerciseSolution>
+
+7. **Transfer: the P vs NP practical consequence (synthesis).** Suppose a researcher proves P = NP by discovering a polynomial-time algorithm for SAT that runs in $O(n^{100})$. Describe two concrete implications for: (a) cryptography, (b) automated theorem proving, and (c) operations research. Explain why an $O(n^{100})$ algorithm might not revolutionize industry overnight, despite being a theoretical breakthrough.
+
+<ExerciseSolution>(a) Most public-key cryptography (RSA, ECC) relies on the hardness of factoring or discrete log; if P = NP, these are solvable in polynomial time, breaking all current public-key infrastructure. (b) Every mathematical conjecture that has a polynomial-verifiable proof could be decided automatically — theorems in NP would be mechanically solvable. (c) Thousands of NP-complete optimization problems (TSP, scheduling, etc.) would become tractable, potentially revolutionizing logistics, manufacturing, and AI. However, $O(n^{100})$ is astronomically large for any practical input size. For $n=100$, $100^{100}$ operations exceeds the number of atoms in the observable universe. The theoretical breakthrough would not yield practical algorithms — but it would open the door to future improvements that bring the exponent down.</ExerciseSolution>
+
+8. **Transfer: decomposition of a reduction (synthesis).** The reduction 3SAT → CLIQUE creates a vertex per literal occurrence and connects vertices from different clauses unless they are complementary. Explain why this construction fails if we replace 3SAT with 2SAT (clauses of exactly 2 literals). What does this tell you about the complexity of 2SAT?
+
+    <ExerciseSolution>
+    2SAT is solvable in polynomial time (via strongly connected components in the implication graph). The reduction from 3SAT to CLIQUE relies on each clause having *three* literals to create a non-trivial graph structure. With 2SAT, the reduction would produce a graph where a $k$-clique can be found in polynomial time (since 2SAT ∈ P). The failure of the reduction mirrors the fact that 2SAT is not NP-complete unless P = NP.
+    </ExerciseSolution>
+
+9. **Synthesis: coNP and the polynomial hierarchy.** Prove that if NP = coNP, then the polynomial hierarchy collapses to the first level. Hint: show that $\Sigma^p_2 \subseteq NP$ using the assumption that coNP = NP.
+
+    <ExerciseSolution>
+    Assume NP = coNP. Take any language $L \in \Sigma^p_2$, so $L = \{x : \exists y \forall z \; V(x,y,z)\}$ with $V$ polynomial-time. The inner statement $\forall z \; V(x,y,z)$ is a coNP predicate. Under NP = coNP, this predicate is also in NP, so there exists a witness $w$ for it. Thus $L = \{x : \exists y \exists w \; V'(x,y,w)\} \in NP$. Therefore $\Sigma^p_2 = NP$ and the hierarchy collapses to the first level.
+    </ExerciseSolution>
+
+## Deliberately Omitted
+
+- **Circuit complexity and NC.** The classification of problems by circuit depth (NC, AC) addresses parallel feasibility; this is a separate branch of complexity theory covered in the advanced complexity module [Arora & Barak 2009].
+
+- **Interactive proofs and IP = PSPACE.** The IP class and the Shamir theorem (IP = PSPACE) extend the verification paradigm beyond NP; covered in the computational complexity course [Shamir 1992].
+
+- **Approximation-preserving reductions (AP-reductions).** Reductions that preserve approximability are used to prove inapproximability results beyond the PCP theorem; the approximation algorithms lesson treats hardness via gap reductions [Arora et al. 1998].
+
+- **The PCP theorem.** The Probabilistically Checkable Proof theorem (PCP) characterizes NP as languages verifiable with constant query complexity. This deep result underlies many inapproximability bounds but requires a full course on its own [Arora & Safra 1998].
+
+- **Parameterized complexity and W-hierarchy.** Fixed-parameter tractability (FPT) and the W-hierarchy classify NP-hard problems by their dependence on a parameter $k$, separate from input size $n$. Vertex cover is FPT; CLIQUE is W[1]-complete. This is covered in a dedicated parameterized algorithms lesson [Downey & Fellows 1999].
+
+- **The time hierarchy theorem and EXPTIME.** The time hierarchy theorem guarantees that there exist problems solvable in exponential time but not in polynomial time. EXPTIME-complete problems (e.g., generalized chess with $n \times n$ boards) are provably outside P, unlike NP-complete problems [Sipser 2013].
+
+- **Non-uniform complexity and advice.** The class P/poly captures problems solvable by polynomial-size circuits, which includes all of NP (Karp–Lipton theorem) if NP ⊆ P/poly, and relates to the polynomial hierarchy collapse [Karp & Lipton 1982].
 
 ## References & Further Reading
 
-* [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* [Stanford computational complexity notes](https://theory.stanford.edu/~trevisan/cs278-04/notes/lecture01.pdf)
-* Garey and Johnson, *Computers and Intractability*.
+- [AKS 2004] Agrawal, M., Kayal, N., Saxena, N. "PRIMES is in P." *Annals of Mathematics* 160, no. 2 (2004): 781–793.
+- [Arora & Barak 2009] Arora, S. and Barak, B. *Computational Complexity: A Modern Approach*. Cambridge, 2009.
+- [Arora et al. 1998] Arora, S., Lund, C., Motwani, R., Sudan, M., Szegedy, M. "Proof verification and the hardness of approximation problems." *J. ACM* 45, no. 3 (1998): 501–555.
+- [Arora & Safra 1998] Arora, S. and Safra, S. "Probabilistic checking of proofs: A new characterization of NP." *J. ACM* 45, no. 1 (1998): 70–122.
+- [Babai 2016] Babai, L. "Graph isomorphism in quasipolynomial time." *Proc. 48th ACM STOC* (2016): 684–697.
+- [CLRS 2009] Cormen, T. H., Leiserson, C. E., Rivest, R. L., Stein, C. *Introduction to Algorithms*. 3rd ed. MIT Press, 2009.
+- [Clay 2000] Clay Mathematics Institute. "Millennium Problems: P vs NP." https://www.claymath.org/millennium/p-vs-np/
+- [Cook 1971] Cook, S. A. "The Complexity of Theorem-Proving Procedures." *Proc. 3rd ACM STOC* (1971): 151–158.
+- [Downey & Fellows 1999] Downey, R. G. and Fellows, M. R. *Parameterized Complexity*. Springer, 1999.
+- [Garey & Johnson 1979] Garey, M. R. and Johnson, D. S. *Computers and Intractability: A Guide to the Theory of NP-Completeness*. Freeman, 1979.
+- [Karp 1972] Karp, R. M. "Reducibility Among Combinatorial Problems." *Complexity of Computer Computations* (1972): 85–103.
+- [Karp & Lipton 1982] Karp, R. M. and Lipton, R. J. "Turing machines that take advice." *L'Enseignement Mathématique* 28 (1982): 191–209.
+- [Ladner 1975] Ladner, R. E. "On the Structure of Polynomial Time Reducibility." *J. ACM* 22, no. 1 (1975): 155–171.
+- [Moskewicz 2001] Moskewicz, M. W., Madigan, C. F., Zhao, Y., Zhang, L., Malik, S. "Chaff: Engineering an Efficient SAT Solver." *Proc. 38th DAC* (2001): 530–535.
+- [Papadimitriou 1994] Papadimitriou, C. H. *Computational Complexity*. Addison-Wesley, 1994.
+- [Schnorr 1976] Schnorr, C. P. "Optimal algorithms for self-reducible problems." *Proc. 3rd ICALP* (1976): 322–337.
+- [Shamir 1992] Shamir, A. "IP = PSPACE." *J. ACM* 39, no. 4 (1992): 869–877.
+- [Shor 1997] Shor, P. W. "Polynomial-time algorithms for prime factorization and discrete logarithms on a quantum computer." *SIAM J. Comput.* 26, no. 5 (1997): 1484–1509.
+- [Sipser 2013] Sipser, M. *Introduction to the Theory of Computation*. 3rd ed. Cengage, 2013.
+- [Stockmeyer 1976] Stockmeyer, L. J. "The polynomial-time hierarchy." *Theoretical Computer Science* 3, no. 1 (1976): 1–22.

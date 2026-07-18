@@ -3,97 +3,397 @@ title: "Graph Representations"
 course: "data-structures"
 description: "Vertices, edges, adjacency structures, directed and weighted graphs, memory tradeoffs, and representation invariants."
 ---
+
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import BookOnly from '../../../components/BookOnly.astro';
+import ScreenOnly from '../../../components/ScreenOnly.astro';
+
 # Graph Representations
 
-A graph is a set of vertices together with edges relating pairs of vertices. Graph algorithms depend not only on abstract connectivity but on how neighbors are stored. An adjacency matrix offers constant-time edge existence and predictable dense storage; adjacency lists offer space proportional to vertices plus edges and efficient neighbor iteration for sparse graphs; edge lists are compact and useful for global edge scans. Choosing a representation is an algorithmic decision.
+A social network with 2 billion users must answer "are these two people connected?" and "who can introduce me to the shortest path to a target person?" Storing every possible pair would require $4 \times 10^{18}$ entries — physically impossible. Instead, each user stores roughly 200 friends on average, so a representation proportional to edges rather than vertex pairs makes feasibility possible. Graph algorithms depend not only on abstract connectivity but on how neighbors are stored. Choosing a representation *is* an algorithmic decision.
 
 ## Formal graph model
 
-A directed graph is (G=(V,E)) with (Esubseteq Vtimes V). An edge (u,v) goes from u to v. An undirected edge is an unordered pair, often represented by two directed adjacency entries. A weighted graph assigns a weight w(u,v); a multigraph permits parallel edges, and a graph may include self-loops. State which model an ADT supports because degree, traversal, and duplicate behavior differ.
+<MathStatement id="graph-def" kind="definition" title="Directed graph">
+A directed graph is $G = (V, E)$ where $E \subseteq V \times V$. An edge $(u, v)$ goes from $u$ to $v$. An undirected edge is an unordered pair $\{u, v\}$, conventionally represented by two directed adjacency entries. A weighted graph assigns a weight $w: E \to \mathbb{R}$; a multigraph permits parallel edges; self-loops $(v, v)$ may be allowed or forbidden.
+</MathStatement>
 
-A graph ADT may support add-vertex, add-edge, remove-edge, adjacent(u,v), neighbors(u), degree, and edge iteration. Vertex identifiers can be dense integers or arbitrary objects requiring an index map. If vertices are removed, decide whether identifiers are reused, whether edges disappear automatically, and whether external handles remain valid.
+A graph ADT may support `add-vertex`, `add-edge`, `remove-edge`, `adjacent(u, v)`, `neighbors(u)`, `degree`, and edge iteration. Vertex identifiers can be dense integers (allowing array indexing) or arbitrary objects requiring an index map. If vertices are removed, decide whether identifiers are reused, whether edges disappear automatically, and whether external handles remain valid.
+
+### Representation choice as an algorithmic primitive
+
+<StructureDiagram kind="graph" title="Toy graph: 5 vertices, 7 edges" caption="All three representations encode this same connectivity. Edge list: (A,B), (A,E), (B,C), (B,D), (B,E), (C,D), (D,E)." variant="default" />
+
+<MathStatement id="degree-hammer" kind="theorem" title="The degree hammer">
+If an algorithm performs $k$ neighbor iterations per vertex and the average degree is $d$, using an adjacency matrix costs $k \cdot |V|$ per iteration vs. $k \cdot d$ for adjacency lists. When $|V| = 10^6$ and $d = 10$, the ratio is $100\,000\! :\! 1$.
+</MathStatement>
+
+The key insight: the operation set of the *algorithm* determines which representation is asymptotically faster. A representation that makes neighbor iteration fast may make edge existence checks slow, and vice versa.
 
 ## Adjacency matrix
 
-An adjacency matrix A has one row and column per vertex. For an unweighted directed graph, A[u][v] is true exactly when edge (u,v) exists. For weighted graphs, use a sentinel for absence and define whether zero or infinity is a legal weight. Edge existence and weight lookup are O(1), and adding/removing an edge is O(1) for dense identifiers.
+An adjacency matrix $A$ has one row and column per vertex. For an unweighted directed graph, $A[u][v] = 1$ when edge $(u, v)$ exists, $0$ otherwise. For weighted graphs, use a sentinel for absence and define whether zero or infinity is a legal weight.
 
-The matrix uses (Theta(|V|^2)) space regardless of edge count. Iterating neighbors of u scans an entire row, O(|V|), even if degree is small. Matrix multiplication and Boolean algebra can support specialized dense-graph algorithms, and predictable contiguous storage can outperform pointers on moderate dense graphs. An undirected matrix should maintain symmetry; updating only one triangle violates the representation invariant.
+<MathStatement id="matrix-prop" kind="proposition" title="Adjacency matrix properties">
+- Edge existence and weight lookup: $O(1)$
+- Adding or removing an edge: $O(1)$ (dense identifiers)
+- Space: $\Theta(|V|^2)$ regardless of edge count
+- Neighbor iteration of $u$: scans entire row — $O(|V|)$ — even when outdegree is 1
+</MathStatement>
+
+The matrix uses $\Theta(|V|^2)$ space regardless of edge count. Iterating neighbors of $u$ scans an entire row, $O(|V|)$, even if degree is small. Matrix multiplication and Boolean algebra can support specialized dense-graph algorithms, and predictable contiguous storage can outperform pointers on moderate dense graphs. An undirected matrix should maintain symmetry; updating only one triangle violates the representation invariant.
+
+<CodeRunner client:load
+  title="Adjacency matrix in Python"
+  language="python"
+  code={`class AdjMatrix:
+    def __init__(self, n):
+        self.n = n
+        self.A = [[0]*n for _ in range(n)]
+
+    def add_edge(self, u, v, w=1):
+        self.A[u][v] = w
+
+    def adjacent(self, u, v):
+        return self.A[u][v] != 0
+
+    def neighbors(self, u):
+        return [v for v in range(self.n) if self.A[u][v] != 0]
+
+# Triangle: 0 → 1 → 2 → 0
+g = AdjMatrix(3)
+g.add_edge(0, 1)
+g.add_edge(1, 2)
+g.add_edge(2, 0)
+print("Edge 0→1:", g.adjacent(0, 1))
+print("Neighbors of 0:", g.neighbors(0))
+print("Panel rows × cols:", len(g.A), "×", len(g.A[0]))`}
+  output="Edge 0→1: True\nNeighbors of 0: [1]\nPanel rows × cols: 3 × 3"
+/>
 
 ## Adjacency lists
 
-An adjacency-list representation stores, for each vertex, a collection of outgoing edges. Total space is (Theta(|V|+|E|)). Iterating neighbors of u costs O(outdegree(u)) plus collection overhead. A complete traversal over all adjacency lists costs O(V+E), which is the natural input size for sparse graph algorithms.
+An adjacency-list representation stores, for each vertex, a collection of outgoing edges.
 
-For an undirected graph, inserting an edge usually adds u to v’s list and v to u’s list. The invariant is that each undirected edge has exactly two reciprocal entries, unless parallel edges are explicitly allowed. A directed graph has one entry per directed edge. Weighted entries store destination and weight, and equality for removing an edge must include endpoint and duplicate policy.
+<MathStatement id="list-prop" kind="proposition" title="Adjacency-list properties">
+- Space: $\Theta(|V| + |E|)$
+- Neighbor iteration of $u$: $O(\text{outdegree}(u))$
+- Complete traversal over all adjacency lists: $O(V + E)$
+- Edge membership in unsorted list: $O(\text{degree})$; sorted list: $O(\log \text{degree})$ with slower insertion
+</MathStatement>
 
-Neighbor membership in an unsorted list is O(degree); sorting each list enables binary search but makes insertion more expensive. A per-vertex hash set gives expected constant membership and insertion but loses order and requires hash assumptions. A balanced tree gives ordered neighbors and worst-case logarithmic membership. The best choice depends on the algorithm’s primitive operations.
+For an undirected graph, inserting an edge usually adds $u$ to $v$'s list and $v$ to $u$'s list. The invariant is that each undirected edge has exactly two reciprocal entries, unless parallel edges are explicitly allowed. A directed graph has one entry per directed edge. Weighted entries store destination and weight, and equality for removing an edge must include endpoint and duplicate policy.
+
+Neighbor membership in an unsorted list is $O(\text{degree})$; sorting each list enables binary search but makes insertion more expensive. A per-vertex hash set gives expected constant membership and insertion but loses order and requires hash assumptions. A balanced tree gives ordered neighbors and worst-case logarithmic membership. The best choice depends on the algorithm's primitive operations.
+
+<CodeRunner client:load
+  title="Adjacency list in Python"
+  language="python"
+  code={`class AdjList:
+    def __init__(self, n):
+        self.n = n
+        self.adj = [[] for _ in range(n)]
+
+    def add_edge(self, u, v, w=1):
+        self.adj[u].append((v, w))
+
+    def neighbors(self, u):
+        return self.adj[u]
+
+    def all_edges(self):
+        for u in range(self.n):
+            for v, w in self.adj[u]:
+                yield u, v, w
+
+g = AdjList(3)
+g.add_edge(0, 1)
+g.add_edge(1, 2)
+g.add_edge(2, 0)
+print("Neighbors of 0:", g.neighbors(0))
+print("All edges:", list(g.all_edges()))`}
+  output="Neighbors of 0: [(1, 1)]\nAll edges: [(0, 1, 1), (1, 2, 1), (2, 0, 1)]"
+/>
+
+### Internal collection trade-off
+
+<CaseStudy client:load
+  title="Choosing the per-vertex collection"
+  scenario="A graph ADT must support: (a) frequent edge existence checks (is v a neighbor of u?), (b) neighbor iteration sorted by vertex ID, and (c) occasional edge insertions. Memory is tight; |V| = 10^5 and |E| = 2 × 10^5."
+  question="Which per-vertex collection best balances these requirements?"
+  options={[
+    "Unsorted dynamic array per vertex",
+    "Sorted dynamic array per vertex",
+    "Hash set per vertex",
+    "Balanced BST per vertex"
+  ]}
+  correctIndex={1}
+  explanation="Sorted dynamic array gives O(log degree) membership via binary search, preserves sorted iteration order, and has low overhead. Insertion costs O(degree) amortized, but the graph is sparse with few insertions relative to queries. A hash set loses iteration order; a BST is heavier than needed for degree ~2; unsorted array requires O(degree) membership scan."
+/>
 
 ## Edge lists and incidence
 
-An edge list stores records (u,v,w). It uses O(E) space and supports scanning all edges in O(E), useful for Kruskal, Bellman-Ford, and input/output. Neighbor queries require scanning all edges unless an index is added. An incidence matrix stores vertex-edge relationships and uses O(VE), rarely ideal for general sparse graphs but useful for algebraic formulations or hypergraph-like constraints.
+An edge list stores records $(u, v, w)$. It uses $O(E)$ space and supports scanning all edges in $O(E)$, useful for Kruskal, Bellman-Ford, and input/output. Neighbor queries require scanning all edges unless an index is added.
+
+<CodeRunner client:load
+  title="Edge list in Python"
+  language="python"
+  code={`edges = [(0, 1, 4), (0, 2, 3), (1, 2, 1), (1, 3, 2), (2, 3, 5)]
+# Kruskal sorts edges by weight
+sorted_edges = sorted(edges, key=lambda e: e[2])
+print("Edges sorted by weight:", sorted_edges)
+# Neighbor lookup: O(E)
+neighbors_of_1 = [(v, w) for (u, v, w) in edges if u == 1]
+print("Neighbors of 1:", neighbors_of_1)`}
+  output="Edges sorted by weight: [(1, 2, 1), (1, 3, 2), (0, 2, 3), (0, 1, 4), (2, 3, 5)]\nNeighbors of 1: [(2, 1), (3, 2)]"
+/>
+
+An incidence matrix stores vertex-edge relationships and uses $O(VE)$, rarely ideal for general sparse graphs but useful for algebraic formulations or hypergraph-like constraints.
 
 ## Worked representation comparison
 
-Consider V=10,000 and E=20,000. A matrix has 100 million possible entries, while an adjacency list stores roughly 10,000 vertex headers plus 20,000 directed entries for a directed graph. BFS on lists examines O(V+E) records; on a matrix it scans 10,000 cells per dequeued vertex, O(V^2), even though the graph is sparse. Conversely, testing whether one of many possible edges exists may favor a matrix when the memory budget permits it.
+Consider $V = 10\,000$ and $E = 20\,000$. A matrix has $10^8$ possible entries, while an adjacency list stores roughly $10\,000$ vertex headers plus $20\,000$ directed entries for a directed graph. BFS on lists examines $O(V+E)$ records; on a matrix it scans $10\,000$ cells per dequeued vertex, $O(V^2)$, even though the graph is sparse. Conversely, testing whether one of many possible edges exists may favor a matrix when the memory budget permits it.
 
-For a dense graph with E=Theta(V^2), an adjacency list still stores O(E) entries and neighbor iteration is optimal up to constants, while a matrix offers compact fixed-size booleans and O(1) membership. “Sparse” and “dense” are relative to V and the workload; state the density threshold or compare actual primitive costs.
+<PythonDiagram
+  title="Space comparison: matrix vs. lists"
+  code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+
+V = np.array([100, 500, 1000, 2000, 5000])
+density = 0.001  # 0.1% dense
+E = (density * V * V).astype(int)
+
+matrix_bytes = V * V * 1  # 1 byte per boolean
+# list: 8 bytes pointer + 12 bytes edge record per entry
+list_bytes = V * 8 + E * 20
+
+ax1.plot(V, matrix_bytes / 1e6, 'o-', label='Matrix (MB)')
+ax1.plot(V, list_bytes / 1e6, 's-', label='List (MB)')
+ax1.set_xlabel('|V|'); ax1.set_ylabel('Memory (MB)')
+ax1.set_title('Sparse graph (density = 0.1%)')
+ax1.legend(); ax1.grid(alpha=0.3); ax1.set_yscale('log')
+
+V2 = np.array([50, 100, 200, 500, 1000])
+E2 = (0.5 * V2 * V2).astype(int)  # 50% dense
+
+matrix_bytes2 = V2 * V2 * 1
+list_bytes2 = V2 * 8 + E2 * 20
+
+ax2.plot(V2, matrix_bytes2 / 1e6, 'o-', label='Matrix (MB)')
+ax2.plot(V2, list_bytes2 / 1e6, 's-', label='List (MB)')
+ax2.set_xlabel('|V|'); ax2.set_ylabel('Memory (MB)')
+ax2.set_title('Dense graph (density = 50%)')
+ax2.legend(); ax2.grid(alpha=0.3)
+
+fig.tight_layout()
+fig.savefig('/tmp/graph-space-compare.png', dpi=100)
+print('/tmp/graph-space-compare.png')
+  `}
+/>
+
+<MathStatement id="bfs-cost" kind="theorem" title="BFS cost by representation">
+For BFS on a graph with $V$ vertices and $E$ edges:
+- **Adjacency list:** $O(V + E)$ — each vertex dequeued once, each edge examined once.
+- **Adjacency matrix:** $O(V^2)$ — each dequeued vertex scans all $V$ cells in its row, regardless of degree.
+</MathStatement>
+
+## Counterexample and failure mode
+
+<BookOnly>
+
+### Failure mode: stale visited metadata
+
+</BookOnly>
+
+A correct BFS marks vertices as visited. If a prior traversal leaves marks in a shared array, a later BFS silently declares the graph disconnected — it skips already-marked vertices and never discovers new paths.
+
+<CodeRunner client:load
+  title="Stale visited metadata corrupts BFS"
+  language="python"
+  code={`def bfs(adj, start, visited):
+    from collections import deque
+    visited[start] = True
+    q = deque([start])
+    while q:
+        u = q.popleft()
+        for v in adj[u]:
+            if not visited[v]:
+                visited[v] = True
+                q.append(v)
+
+# Two components: 0-1 and 2-3
+adj = [[1], [0], [3], [2]]
+visited = [False] * 4
+
+print("First BFS (component 0-1):")
+bfs(adj, 0, visited)
+print("  visited:", visited)  # marks [T, T, F, F]
+
+# Oops — visited is not reset
+print("Second BFS (from vertex 2) with stale array:")
+bfs(adj, 2, visited)
+print("  visited:", visited)
+print("  Vertex 0 reachable from 2?", visited[0])  # True! Wrong.
+print("  Actually 0 is NOT reachable from 2.")`}
+  output="First BFS (component 0-1):\n  visited: [True, True, False, False]\nSecond BFS (from vertex 2) with stale array:\n  visited: [True, True, True, True]\n  Vertex 0 reachable from 2? True\n  Actually 0 is NOT reachable from 2."
+/>
+
+The fix: reset the visited array before each traversal. Alternatively, use a traversal timestamp or generation field so marks are scoped to one run.
+
+### Failure mode: vertex identity mutation
+
+If vertex objects are mutable and their identity-determining fields change after insertion into the graph, the vertex may become unreachable from the internal map — exactly as a mutable dictionary key breaks a hash table.
+
+<ScreenOnly>
+
+<Quiz client:load
+  title="Representation failure"
+  question="A BFS on an adjacency matrix returns fewer vertices than expected. What is the most likely explanation?"
+  options={[
+    "The matrix uses too much memory",
+    "A previous traversal left visited marks in a shared array",
+    "The graph has self-loops",
+    "The edge count exceeds |V|"
+  ]}
+  correctIndex={1}
+  explanation="Stale visited metadata is a classic failure. If visited flags from a prior traversal are not cleared, unvisited (but reachable) vertices appear visited and are skipped. The matrix format itself does not cause incorrect results — it only affects performance."
+/>
+
+</ScreenOnly>
 
 ## Traversal state
 
-BFS and DFS add metadata to the graph: color or visited status, parent, distance, discovery and finish times, or component label. Keep traversal metadata separate from the graph representation unless the graph ADT owns algorithm state. A reused visited array must be reset or timestamped; stale marks can make a correct graph appear disconnected.
+BFS and DFS add metadata to the graph: color or visited status, parent, distance, discovery and finish times, or component label. Keep traversal metadata separate from the graph representation unless the graph ADT owns algorithm state. A reused visited array must be reset or timestamped.
 
-For a directed graph, transpose construction reverses every edge. With adjacency lists, scan each list and append the reversed entry; time O(V+E). For a matrix, transpose swaps entries or accesses columns; copying takes O(V^2). Representation affects the cost of a mathematically identical operation.
+For a directed graph, transpose construction reverses every edge. With adjacency lists, scan each list and append the reversed entry; time $O(V+E)$. For a matrix, transpose swaps entries or accesses columns; copying takes $O(V^2)$. Representation affects the cost of a mathematically identical operation.
 
 ## Dynamic and external graphs
 
 If edges arrive online, choose whether neighbor iteration sees a snapshot or concurrent updates. A graph with millions of vertices may store adjacency in compressed sparse row (CSR) form: one offset array and a contiguous destination array. CSR gives excellent iteration locality but expensive insertion; batch updates and rebuilds can amortize the cost. A mutable sparse graph often uses vectors, hash maps, or log-structured adjacency with periodic compaction.
 
-External-memory graphs must count block transfers rather than RAM operations. Grouping neighbors by vertex can reduce I/O for traversals; random adjacency queries may require indexes or caching. Distributed graphs add partition boundaries, ghost vertices, and communication cost. An O(V+E) sequential algorithm can be dominated by cross-partition messages.
+External-memory graphs must count block transfers rather than RAM operations. Grouping neighbors by vertex can reduce I/O for traversals; random adjacency queries may require indexes or caching. Distributed graphs add partition boundaries, ghost vertices, and communication cost. An $O(V+E)$ sequential algorithm can be dominated by cross-partition messages.
 
 ## Identity, ordering, and mutation
 
-If vertex objects are mutable, using their fields as hash keys can make them unreachable from a vertex map just as a mutable dictionary key breaks a hash table. Give each vertex a stable identity or prohibit identity-field mutation. If neighbor order is observable, use a deterministic collection and state whether insertion order, identifier order, or no order is promised. Algorithms that rely on a stable iteration order should not receive an unordered graph without an explicit tie policy.
+If vertex objects are mutable, using their fields as hash keys can make them unreachable from a vertex map. Give each vertex a stable identity or prohibit identity-field mutation. If neighbor order is observable, use a deterministic collection and state whether insertion order, identifier order, or no order is promised. Algorithms that rely on a stable iteration order should not receive an unordered graph without an explicit tie policy.
 
-Removing a vertex is a multi-structure mutation. Delete its outgoing edges, remove it from every incoming neighbor collection, update degree counts, and invalidate or remap its identifier. A lazy tombstone can make deletion cheap, but traversals must skip tombstones and memory usage can grow. Batch compaction is an amortized alternative; its cost belongs in the representation contract.
+Removing a vertex is a multi-structure mutation. Delete its outgoing edges, remove it from every incoming neighbor collection, update degree counts, and invalidate or remap its identifier. A lazy tombstone can make deletion cheap, but traversals must skip tombstones and memory usage can grow. Batch compaction is an amortized alternative.
 
 ## Validation and property tests
 
 Validate that every endpoint exists, weights satisfy the chosen domain, undirected entries are reciprocal, edge counts match, and no forbidden duplicates occur. Generate small random graphs and compare matrix and list implementations for adjacency, degree, traversal reachability, and transpose. For an undirected graph, the number of adjacency entries should equal twice the logical edge count when parallel/self-loop conventions are accounted for. These cross-representation tests are especially effective because each implementation can act as an oracle for the other.
 
+<CodeRunner client:load
+  title="Cross-representation oracle testing"
+  language="python"
+  code={`def test_representations(V, edges):
+    # Build matrix
+    mat = [[0]*V for _ in range(V)]
+    # Build list
+    adj = [[] for _ in range(V)]
+    for u, v in edges:
+        mat[u][v] = 1
+        adj[u].append(v)
+
+    # Compare adjacency
+    for u, v in edges:
+        assert mat[u][v] == 1, f"Matrix missing edge ({u},{v})"
+        assert v in adj[u], f"List missing edge ({u},{v})"
+
+    # Compare neighbor sets
+    for u in range(V):
+        mat_nbrs = {v for v in range(V) if mat[u][v]}
+        list_nbrs = set(adj[u])
+        assert mat_nbrs == list_nbrs, f"Mismatch at vertex {u}"
+
+    print("All tests passed for", len(edges), "edges")
+
+# Test: triangle with self-loop
+test_representations(3, [(0,1), (1,2), (2,0)])
+test_representations(4, [(0,1), (0,2), (1,2), (1,3), (3,3)])`}
+  output="All tests passed for 3 edges\nAll tests passed for 5 edges"
+/>
+
 ## Algorithm-facing design
 
 Before selecting a representation, list the operations the next algorithm performs. BFS needs neighbors and visited state; Kruskal needs a global edge ordering and union-find; dense shortest-path algorithms may repeatedly test all pairs; dynamic connectivity needs updates and component queries. A representation optimized for one operation can make another algorithm asymptotically or operationally unsuitable. Treat the graph ADT as a contract between storage and algorithm, not as a single universal class.
 
-## Exercises
+<StructureExercise
+  title="Representation selection"
+  kind="graph"
+  prompt="An algorithm repeatedly checks whether two arbitrary vertices are adjacent. The graph is dense ($E \\approx 0.8 \\cdot V^2$) and fits in memory. Which representation minimizes edge-existence cost?"
+  options={[
+    "Adjacency matrix: O(1) membership",
+    "Adjacency list: O(degree) membership",
+    "Edge list: O(E) to scan all edges",
+    "CSR: fast iteration but O(log V) membership"
+  ]}
+  answer={0}
+  explanation="When E is near V^2, the matrix's O(1) membership dominates. An adjacency list would require O(degree) search, and degree is near V in a dense graph."
+/>
 
-1. State adjacency-list invariants for directed and undirected graphs.
-2. Compare matrix and list costs for edge lookup and neighbor iteration.
-3. Represent a weighted multigraph with parallel edges and define remove-edge.
-4. Calculate storage and BFS work for a graph with V and E symbolic.
-5. Explain CSR’s iteration/insertion tradeoff.
-6. Design a safe transpose operation for an adjacency list.
-7. Identify how stale visited metadata corrupts a repeated traversal.
+## Transfer and synthesis exercises
 
-### Diagnostic solutions
+1. An algorithm on an undirected graph requires: (a) fast neighbor iteration and (b) checking whether any pair of vertices is adjacent, both operations interleaved. The graph has $V = 10^5$, $E = 10^6$. Design a hybrid representation. State its invariants, space usage, and operation costs.
 
+   <ExerciseSolution hint="Could one data structure serve both needs poorly but both well through composition?">
+   Store two representations: an adjacency list for iteration and a hash set of canonicalized edge keys $(\\min(u,v), \\max(u,v))$ for adjacency checks. Space: $O(V + E)$ for lists plus $O(E)$ for the hash set. Neighbor iteration is $O(\\text{degree})$; adjacency check is expected $O(1)$. The invariant: every edge appears in both the list and the hash set; removal must delete from both.
+   </ExerciseSolution>
 
-1. Directed: each edge appears exactly once in the source’s outgoing collection, with valid destination and weight. Undirected: each logical edge appears in two reciprocal collections, unless a canonical single-record design is explicitly used; duplicate rules must be stated.
+2. Reconstruct the space formula for CSR: derive the offset array size and the destination array size in terms of $V$ and $E$. Show that CSR uses exactly one integer per edge plus one integer per vertex.
 
-2. Matrix membership is O(1), list membership O(degree) unsorted or expected O(1) hash-based. Matrix neighbor iteration is O(V) per source; list iteration is O(degree), so total list scan is O(V+E).
+   <ExerciseSolution>
+   CSR stores: an offset array `row_ptr` of length $V+1$ (one per vertex plus sentinel $\\text{row_ptr}[V] = E$), and a destination array `col_ind` of length $E$. The offset entries are cumulative degree sums: $\\text{row_ptr}[i] = \\sum_{j < i} \\text{degree}(j)$. Space: $(V+1) + E$ integers.
+   </ExerciseSolution>
 
-3. Store a list of edge records per source, allowing equal destinations with distinct edge IDs or weights. remove-edge must specify remove one matching record, all, or a chosen ID; silently collapsing parallel edges changes graph semantics.
+3. Adapt adjacency lists to support a multigraph with weighted parallel edges. Define a `remove-edge` operation that deletes exactly one specified edge when duplicates exist. Does your design allow $O(1)$ removal?
 
-4. Matrix storage is u0398(V^2); list storage u0398(V+E). BFS with lists is O(V+E), while scanning a matrix row for each reached vertex is O(V^2) in the worst case. Add the cost of initializing visited and queue state.
+   <ExerciseSolution>
+   Store a list of edge records per source; each record has destination, weight, and a unique edge ID (monotonic counter). remove-edge(edge_id) uses the ID to locate and delete the record, requiring a mapping from edge ID to (source, list position). This mapping can be a hash table for expected $O(1)$ removal. Without IDs, removing one occurrence of a parallel edge requires linear scan or assumes FIFO/LIFO policy.
+   </ExerciseSolution>
 
-5. CSR stores offsets and neighbors contiguously, so scanning one vertex’s neighbors is cache- and I/O-friendly. Inserting an edge may shift a large suffix or require rebuilding; batch updates and periodic compaction trade update latency for scan performance.
+4. A BFS traverses a graph stored in CSR format. Write pseudocode for the BFS inner loop using only the offset and destination arrays. What is the cache behavior compared to a pointer-chasing adjacency list?
 
-6. Create an empty list for every destination, then for each u and each edge u→v append a reversed edge v→u. Preserve weights and edge IDs, and verify that the resulting edge count equals the original directed edge count and each original edge appears reversed.
+   <ExerciseSolution>
+   ```python
+   for u in queue:
+       start = row_ptr[u]
+       end = row_ptr[u + 1]
+       for i in range(start, end):
+           v = col_ind[i]
+           if not visited[v]:
+               visited[v] = True
+               queue.append(v)
+   ```
+   CSR reads neighbors of $u$ from a contiguous segment of `col_ind`, producing a predictable sequential access pattern. A pointer-chasing list follows scattered heap allocations, causing more cache misses. CSR's locality advantage grows with vertex degree.
+   </ExerciseSolution>
 
-7. If a prior BFS leaves vertices marked, a later BFS may skip them and fail to assign new parents or distances. Clear the array, use a traversal timestamp, or store a generation field so marks are scoped to one run.
+## Deliberately omitted
 
+- **Hypergraphs** (edges connect more than two vertices): incidence matrix techniques exist but are not required for the core graph algorithm curriculum.
+- **Graph databases** and query-language internals (Cypher, SPARQL) build on these primitives but belong in a databases or information systems course.
+- **Spectral graph theory** (Laplacian, eigenvalues, Cheeger's inequality): adjacency structures here are matrices, but the algebraic treatment and its applications are deferred to advanced algorithms or numerical linear algebra.
+- **Succinct graph representations** (e.g., $o(|E| \log |V|)$ bits): specialized encodings for web graphs and social networks use delta-encoding, gap compression, and variable-length codes. These are engineering extensions of the CSR concept.
+- **Streaming and semi-streaming graph models** where edges arrive in a single pass and sublinear memory is required.
 
+## References
 
-## References & Further Reading
-
-* [Open Data Structures](https://opendatastructures.org/)
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+- Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*, 4th ed., ch. 22 (Elementary Graph Algorithms) and ch. 20 (van Emde Boas Trees, for integer vertex identifiers). MIT Press, 2022.
+- [Open Data Structures](https://opendatastructures.org/) — AdjacencyList and AdjacencyMatrix implementations in multiple languages.
+- [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/) — Graph representations and BFS/DFS lecture.
+- Tarjan, R. E., "Depth-First Search and Linear Graph Algorithms," *SIAM Journal on Computing* 1(2), 1972 — the classic treatment of traversal state and graph representation.
+- Kumar, V., Grama, A., Gupta, A., and Karypis, G., *Introduction to Parallel Computing*, ch. 11 (Parallel Graph Algorithms) — distributed graph representation and partition strategies.

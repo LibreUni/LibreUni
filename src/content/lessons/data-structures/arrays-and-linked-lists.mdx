@@ -3,84 +3,581 @@ title: "Arrays, Dynamic Arrays, and Linked Lists"
 course: "data-structures"
 description: "Contiguous storage, resizing proofs, pointer structures, locality, and operation tradeoffs for sequence ADTs."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import PlantUML from '../../../components/PlantUML.astro';
+import TikZ from '../../../components/TikZ.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Arrays, Dynamic Arrays, and Linked Lists
 
-The sequence ADT can be implemented with contiguous arrays or linked nodes. Both can represent the same abstract order, yet their performance differs because memory layout changes the cost of indexing, insertion, traversal, resizing, and allocation. This lesson derives those costs from representation invariants instead of memorizing a table of asymptotic labels.
+Suppose you are building a text editor. The user can insert and delete characters anywhere in the document, navigate the cursor through the text, and perform undo and redo. The fundamental operation is manipulating a sequence of characters. Two classic representations compete: a contiguous array and a linked list.
+
+An array stores elements in adjacent memory cells. Accessing the $i$-th element is $O(1)$ — compute $\text{base} + i \cdot \text{word\_size}$ and read. Inserting at the front, however, requires shifting every subsequent element one position to the right: $O(n)$ for a document of $n$ characters. For a text editor where the user frequently types at the cursor (often near the end), the array's $O(1)$ append and $O(1)$ index access are attractive, but inserting at the beginning of a large document becomes prohibitively slow.
+
+A linked list stores elements as nodes, each pointing to the next. Inserting a new node at any known position is $O(1)$ — just adjust a few pointers. But accessing the $i$-th element requires traversing $i$ nodes: $O(n)$ worst case. If the user jumps to line 10,000, a linked list would have to walk 10,000 pointers to reach that position, while an array would compute the address directly.
+
+| Operation | Dynamic array | Linked list |
+| --- | ---: | ---: |
+| Index access ($A[i]$) | $O(1)$ | $O(n)$ |
+| Insert at beginning | $O(n)$ | $O(1)$ |
+| Insert at end | $O(1)$ amortized | $O(1)$ with tail pointer |
+| Insert at known position | $O(n)$ shift | $O(1)$ after node |
+| Sequential traversal | cache-friendly | pointer-dependent |
+| Memory overhead | low (no pointers) | high (extra pointer per element) |
+
+This fundamental tension between access speed and modification speed appears everywhere in data structures. The sequence ADT can be implemented with either strategy — both can represent the same abstract order of elements — but the choice determines performance. A text editor might use a hybrid structure: a "gap buffer" (an array with a gap at the cursor position) or a "rope" (a tree of string chunks) that combines the locality of arrays with the flexibility of linked structures. Understanding the basic tradeoff between contiguous and pointer-based storage is the first step in designing data structures that balance competing costs.
+
+## Sequence ADT interface
+
+<MathStatement id="sequence-adt" kind="definition" title="Sequence abstract data type">
+A sequence stores an ordered collection of elements and supports at minimum:
+$$
+\begin{aligned}
+\text{get}(i) &\mapsto \text{value at position } i \\
+\text{set}(i, x) &\mapsto \text{replace value at position } i \text{ with } x \\
+\text{insert}(i, x) &\mapsto \text{shift elements } i..n-1 \text{ right, place } x \text{ at } i \\
+\text{remove}(i) &\mapsto \text{remove and return element at } i, \text{ shift left} \\
+\text{size}() &\mapsto n
+\end{aligned}
+$$
+Indices are zero-based: $0 \le i < n$ for a valid sequence of length $n$.
+</MathStatement>
+
+Every implementation of a sequence must provide these operations. The cost of each operation depends on the underlying representation. Arrays and linked lists are the two canonical approaches, and their tradeoffs expose the central design tension in data structures: **what you gain in access speed you lose in modification speed, and vice versa**.
 
 ## Static arrays and logical length
 
-An array of capacity C provides O(1) address calculation for index i: base+i times element width. A sequence stored in its first n positions has logical length n and capacity C, with (0le nle C). The unused suffix is not part of the abstract value. get(i) and set(i,x) are constant time after checking (0le i less than n).
+<StructureDiagram kind="array" title="Contiguous sequence and indices" caption="Adjacent array cells support direct index arithmetic and a separate logical length." />
 
-Inserting at position i requires shifting elements at positions i through n-1 one place right, then writing x. The number of moves is n-i, so insertion is O(n) worst case and O(1) at the end if space exists. Removal shifts n-i-1 elements left. A sorted sequence may require finding a position by binary search but still pays linear movement for an array insertion.
+<MathStatement id="static-array" kind="definition" title="Static array">
+An array of capacity $C$ provides $O(1)$ address calculation for index $i$: $\text{address} = \text{base} + i \times \text{element\_size}$. A sequence stored in its first $n$ positions has logical length $n$ and capacity $C$, with $0 \le n \le C$. The unused suffix is not part of the abstract value.
+</MathStatement>
+
+`get(i)` and `set(i,x)` are constant time after checking $0 \le i < n$. Inserting at position $i$ requires shifting elements at positions $i$ through $n-1$ one place right, then writing $x$. The number of moves is $n-i$, so insertion is $O(n)$ worst case and $O(1)$ at the end if space exists. Removal shifts $n-i-1$ elements left. A sorted sequence may require finding a position by binary search but still pays linear movement for an array insertion.
 
 Contiguous layout improves spatial locality. Sequential traversal tends to fetch adjacent elements into cache lines, while a linked representation may follow pointers to unrelated addresses. Big-O ignores this constant-factor and memory-hierarchy effect, but real workload comparisons should measure it. Arrays also permit compact storage and vectorized operations when element representation is regular.
 
+### Shift cost visualization
+
+<PlantUML theme="none" code={`@startuml
+title Array insertion at position i
+skinparam backgroundColor transparent
+skinparam shadowing false
+
+rectangle "base" as base
+rectangle "A[0]" as a0
+rectangle "A[1]" as a1
+rectangle "..." as dots
+rectangle "A[i]" as ai
+rectangle "A[i+1]" as ai1
+rectangle "..." as dots2
+rectangle "A[n-1]" as an1
+rectangle " " as empty1
+rectangle " " as empty2
+
+base -down-> a0
+a0 -right-> a1
+a1 -right-> dots
+dots -right-> ai
+ai -right-> ai1
+ai1 -right-> dots2
+dots2 -right-> an1
+an1 -right-> empty1
+empty1 -right-> empty2
+
+note right of an1 : shift right
+note right of ai : insert x here
+
+ai -[#red]-> empty1 : shift
+ai1 -[#red]-> empty2 : shift
+@enduml`} />
+
+<Quiz client:load
+  question="Why is an array append not worst-case constant time?"
+  options={[
+    "A full array may require copying the entire prefix",
+    "Index arithmetic is linear in n",
+    "Arrays have no capacity field",
+    "The abstract sequence changes order on every append"
+  ]}
+  correctIndex={0}
+  explanation="When the array is full, append must allocate larger storage and copy all n elements. This single resize costs O(n), though amortized across many appends the cost is O(1)."
+/>
+
 ## Geometric dynamic arrays
 
-A dynamic array grows when an append encounters (n=C). Allocate a larger array, copy n elements, and continue. If capacity multiplies by a factor (alpha greater than 1), total copied elements over m appends are bounded by a geometric series (C+alpha C+cdots) up to the final capacity, which is O(m). Thus total append time is O(m), and amortized append is O(1), even though one resize costs O(n) worst case.
+<MathStatement id="dynamic-array" kind="definition" title="Dynamic array (geometric resizing)">
+A dynamic array wraps a static array and grows when an append encounters $n = C$. The resize strategy: allocate a new array of capacity $\alpha C$ for some growth factor $\alpha > 1$, copy all $n$ elements, and deallocate the old storage. The amortized cost of append is $O(1)$.
+</MathStatement>
 
-**Worked growth trace.** Start capacity 1 and double: capacities after full resizes are 1,2,4,8,16. Appending the 9th element copies 8 elements, but the preceding copies total 1+2+4=7. Across n appends, copied work is less than 2n for this policy. The constant depends on the growth factor; larger factors reduce resize frequency but increase unused capacity.
+<MathStatement id="amortized-append" kind="theorem" title="Amortized constant append" proofId="amortized-append-proof">
+For a dynamic array that doubles capacity ($\alpha = 2$) whenever $n = C$, the total cost of $m$ appends starting from $C = 1$ is $O(m)$. Hence the amortized cost per append is $O(1)$.
+</MathStatement>
 
-The accounting method charges each append a constant fee: one unit pays for its immediate write and one or more credits are stored on the element for future copying. When capacity doubles, the credits associated with the old block pay for moving it. Credits never become negative, proving the amortized bound. A potential function (Phi=2n-C) when the array is at least half full gives another proof; resize cost is covered by the potential drop plus actual cost.
+<MathProof id="amortized-append-proof" for="amortized-append" collapsible open>
+**Worked growth trace.** Start capacity 1 and double: capacities after full resizes are 1, 2, 4, 8, 16. Appending the 9th element copies 8 elements, but the preceding copies total $1 + 2 + 4 = 7$. Across $n$ appends, copied work is less than $2n$ for this policy.
 
-Shrinking needs hysteresis. Shrink whenever n is below a fraction such as C/4, and halve capacity. Shrinking at n less than C/2 can cause alternating append/remove around the threshold and repeated O(n) copies. With separate grow and shrink thresholds, each expensive resize requires a linear amount of intervening updates, preserving amortized constant time.
+**Potential-function proof.** Define $\Phi = 2n - C$ when $n \ge C/2$, and $\Phi = 0$ otherwise. For a non-resizing append: $\Delta\Phi = 2$, actual cost $= 1$, amortized cost $= 1 + 2 = 3$. For a resize (when $n = C$): before resize $\Phi = 2C - C = C$, after resize $\Phi = 2(C+1) - 2C = 2$. Actual cost $= C + 1$ (copy $C$ elements, write one). Amortized cost $= (C+1) + (2 - C) = 3$. The bound holds for every operation. ∎
+</MathProof>
+
+**Shrinking needs hysteresis.** Shrink whenever $n < C/4$, and halve capacity. Shrinking at $n < C/2$ can cause alternating append/remove around the threshold and repeated $O(n)$ copies. With separate grow and shrink thresholds, each expensive resize requires a linear amount of intervening updates, preserving amortized constant time.
+
+### Python implementation
+
+<CodeRunner client:load
+  title="Dynamic array with geometric resizing"
+  language="python"
+  code={`class DynamicArray:
+    def __init__(self):
+        self._capacity = 1
+        self._size = 0
+        self._data = [None] * self._capacity
+
+    def append(self, value):
+        if self._size == self._capacity:
+            self._resize(2 * self._capacity)
+        self._data[self._size] = value
+        self._size += 1
+
+    def _resize(self, new_cap):
+        new_data = [None] * new_cap
+        for i in range(self._size):
+            new_data[i] = self._data[i]
+        self._data = new_data
+        self._capacity = new_cap
+
+    def __getitem__(self, i):
+        if i < 0 or i >= self._size:
+            raise IndexError
+        return self._data[i]
+
+    def __len__(self):
+        return self._size
+
+    # Track copies for amortized analysis
+    copies = 0
+    def _resize(self, new_cap):
+        new_data = [None] * new_cap
+        for i in range(self._size):
+            new_data[i] = self._data[i]
+            DynamicArray.copies += 1
+        self._data = new_data
+        self._capacity = new_cap
+
+da = DynamicArray()
+for i in range(1, 17):
+    da.append(i)
+    print(f"n={len(da):2d}  cap={da._capacity:2d}  total_copies={DynamicArray.copies:2d}")
+`}
+  output="n= 1  cap= 1  total_copies= 0\nn= 2  cap= 2  total_copies= 1\nn= 3  cap= 4  total_copies= 3\nn= 4  cap= 4  total_copies= 3\nn= 5  cap= 8  total_copies= 7\nn= 6  cap= 8  total_copies= 7\nn= 7  cap= 8  total_copies= 7\nn= 8  cap= 8  total_copies= 7\nn= 9  cap=16  total_copies=15\nn=10  cap=16  total_copies=15\nn=11  cap=16  total_copies=15\nn=12  cap=16  total_copies=15\nn=13  cap=16  total_copies=15\nn=14  cap=16  total_copies=15\nn=15  cap=16  total_copies=15\nn=16  cap=16  total_copies=15"
+/>
 
 ## Linked lists
 
-A singly linked node stores value and next pointer. A list with head and cached size can insert at the front in O(1), remove the front in O(1), and traverse in O(n). Access at index i requires i pointer hops, O(i), and search is O(n) absent ordering or auxiliary indexing. A tail pointer makes append O(1), but only if the invariant updates tail when the list was empty or the last node is removed.
+<StructureDiagram kind="list" title="Pointer-based sequence" caption="A linked sequence reaches its next element through a pointer rather than an index." />
 
-A doubly linked node stores previous and next pointers. Given a node, insertion or deletion can be O(1) by reconnecting a constant number of pointers. The implementation must update all reciprocal relations and endpoints. A sentinel node can eliminate special cases: an empty list has sentinel.next=sentinel.prev=sentinel, and every real node lies between valid neighbors.
+<MathStatement id="linked-list" kind="definition" title="Singly linked list">
+A singly linked list represents a sequence as a chain of nodes. Each node stores a value and a pointer to the next node (or null for the last). A list with a head pointer and cached size supports:
+$$
+\begin{aligned}
+\text{insert\_front}(x) &: O(1) \\
+\text{remove\_front}() &: O(1) \\
+\text{get}(i) &: O(i) \text{ (i pointer hops from head)} \\
+\text{search}(v) &: O(n)
+\end{aligned}
+$$
+</MathStatement>
 
-**Deletion proof.** Given node x in a valid doubly linked list with sentinels, set x.prev.next=x.next and x.next.prev=x.prev, decrement size, and detach x’s pointers. The remaining traversal skips exactly x, preserves reciprocal links, and has one fewer node. Detaching prevents accidental reuse through stale references, though memory safety also depends on the language/runtime.
+A singly linked node stores value and next pointer. A list with head and cached size can insert at the front in $O(1)$, remove the front in $O(1)$, and traverse in $O(n)$. Access at index $i$ requires $i$ pointer hops, $O(i)$, and search is $O(n)$ absent ordering or auxiliary indexing. A tail pointer makes append $O(1)$, but only if the invariant updates tail when the list was empty or the last node is removed.
 
-## Arrays versus links
+A doubly linked node stores previous and next pointers. Given a node, insertion or deletion can be $O(1)$ by reconnecting a constant number of pointers. The implementation must update all reciprocal relations and endpoints. A sentinel node can eliminate special cases: an empty list has sentinel.next = sentinel.prev = sentinel, and every real node lies between valid neighbors.
 
-Array insertion has movement cost but excellent indexing and locality. Linked insertion avoids movement when a node or predecessor is already known but pays allocation, pointer storage, poor locality, and traversal cost. If insertion positions are specified only by integer index, finding the linked position is still O(n); “linked-list insertion is O(1)” is conditional on having the node reference.
+<MathStatement id="doubly-linked-deletion" kind="lemma" title="Doubly linked list deletion" proofId="doubly-linked-deletion-proof">
+Given node $x$ in a valid doubly linked list with sentinels, deletion is $O(1)$ and preserves the list invariant.
+</MathStatement>
+
+<MathProof id="doubly-linked-deletion-proof" for="doubly-linked-deletion">
+Let $p = x.\text{prev}$ and $q = x.\text{next}$. Set $p.\text{next} = q$, $q.\text{prev} = p$, decrement size, then detach $x$'s pointers ($x.\text{prev} = x.\text{next} = \text{null}$). The remaining traversal skips exactly $x$, preserves reciprocal links, and has one fewer node. Detaching prevents accidental reuse through stale references, though memory safety also depends on the language/runtime. The sentinel guarantees $p$ and $q$ are always valid nodes; without sentinels, endpoint branches must update head or tail.
+</MathProof>
+
+### Pointer-based insertion flow
+
+<PlantUML theme="none" code={`@startuml
+title Singly linked list: insert after node p
+skinparam backgroundColor transparent
+skinparam shadowing false
+
+rectangle "nodes" as nodes {
+  rectangle "p" as p
+  rectangle "p.next" as pn
+  rectangle "new" as new
+}
+
+rectangle "before" as before {
+  p -right-> pn : next
+}
+
+rectangle "after" as after {
+  p -right-> new : next
+  new -right-> pn : next
+}
+
+before -down-> after : "new.next = p.next\np.next = new"
+@enduml`} />
+
+### Linked list code
+
+<CodeRunner client:load
+  title="Singly linked list implementation"
+  language="python"
+  code={`class Node:
+    def __init__(self, value):
+        self.value = value
+        self.next = None
+
+class SinglyLinkedList:
+    def __init__(self):
+        self.head = None
+        self._size = 0
+
+    def push_front(self, value):
+        new = Node(value)
+        new.next = self.head
+        self.head = new
+        self._size += 1
+
+    def pop_front(self):
+        if self.head is None:
+            raise IndexError
+        value = self.head.value
+        self.head = self.head.next
+        self._size -= 1
+        return value
+
+    def get(self, i):
+        if i < 0 or i >= self._size:
+            raise IndexError
+        cur = self.head
+        for _ in range(i):
+            cur = cur.next
+        return cur.value
+
+    def __len__(self):
+        return self._size
+
+    def __str__(self):
+        vals = []
+        cur = self.head
+        while cur:
+            vals.append(str(cur.value))
+            cur = cur.next
+        return " -> ".join(vals) + " -> None"
+
+ll = SinglyLinkedList()
+for v in [3, 1, 4]:
+    ll.push_front(v)
+print(ll)
+print(f"get(1) = {ll.get(1)}")
+print(f"pop_front() = {ll.pop_front()}")
+print(ll)
+`}
+  output="4 -> 1 -> 3 -> None\nget(1) = 1\npop_front() = 4\n1 -> 3 -> None"
+/>
+
+## Counterexamples and failure modes
+
+### Array pitfalls
+
+**Thrashing at the shrink threshold.** A dynamic array that shrinks when $n < C/2$ and grows when $n = C$ will thrash under a workload that repeatedly appends and removes a single element around $C/2$. Each append triggers a resize, each remove triggers a shrink, and every resize costs $\Theta(n)$. This is not a theoretical curiosity — it appears in production systems that use a single threshold for both directions (Cormen et al. 2022, §17.4).
+
+**Unbounded capacity growth.** Without a maximum capacity check, geometric growth can overflow `size_t` or produce an allocation larger than the address space. Multiply before allocating: verify `new_cap <= MAX_SIZE / element_size`.
+
+**Shallow copy traps.** Resizing an array of pointers copies the pointers, not the objects. Two arrays may then share object references, and mutation through one affects the other. This is correct only when the sequence owns exclusive references.
+
+### Linked list pitfalls
+
+**The "constant-time insertion" myth.** Insertion at a known position is $O(1)$, but *finding* that position by index is $O(n)$. If the workload specifies insertion by position (insert at index 5000), the linked list pays $O(n)$ traversal before the $O(1)$ pointer work. The claim "$O(1)$ insertion" is only valid when the caller already holds a node reference (Cormen et al. 2022, §10.2).
+
+**Cache thrashing.** Linked list traversal on a large dataset can be 10--20$\times$ slower than array traversal in practice, even though both are $O(n)$. Each node access may be a cache miss, while array traversal prefetches contiguous cache lines. Big-O hides this constant factor, but real-world performance is dominated by the memory hierarchy (Drepper 2007, "What Every Programmer Should Know About Memory").
+
+**Use-after-free and dangling pointers.** After removing a node, any external reference to it becomes a dangling pointer. In manual-memory languages (C, C++), the hazard is use-after-free; in garbage-collected languages, the retained node prevents garbage collection of the entire chain reachable from it. Deciding whether iterators are invalidated on mutation is a critical API design choice.
+
+**Sentinel omission.** Without sentinel nodes, every insertion and deletion must check whether the target is head or tail. These branches add code complexity and are a frequent source of bugs. The sentinel eliminates them but requires careful initialization.
+
+<CaseStudy client:load
+  title="Choosing a sequence layout"
+  scenario="A workload performs millions of sequential reads and occasional middle insertions. The team proposing a linked list cites 'O(1) insertion'; the team proposing an array cites 'O(1) indexing'."
+  question="What evidence should decide the choice?"
+  options={[
+    "Measured operation mix plus the representation costs under realistic cache behavior",
+    "The word 'list' in the requirements document",
+    "Only the worst-case insertion cost",
+    "Only the number of allocations"
+  ]}
+  correctIndex={0}
+  explanation="The correct choice depends on the actual operation frequencies, element size, cache behavior, and allocation pattern. Neither asymptotic bound alone is sufficient — measure the specific workload."
+/>
+
+## Memory layout visualization
+
+<TikZ
+  code={String.raw`
+\tikzset{box/.style={draw,rectangle,minimum width=0.8cm,minimum height=0.6cm,outer sep=0pt,font=\small}}
+\matrix (A) [matrix of nodes,column sep=0pt,nodes={box,fill=blue!10}] at (0,0) {
+A[0] \& A[1] \& A[2] \& A[3] \& A[4] \& A[5] \& A[6] \& A[7] \\};
+\draw[decorate,decoration={brace,mirror,raise=6pt}] (A-1-1.south west) -- (A-1-4.south east) node[midway,below=8pt] {logical prefix (n=4)};
+\draw[decorate,decoration={brace,raise=6pt}] (A-1-5.north west) -- (A-1-8.north east) node[midway,above=8pt] {unused capacity};
+\node[below=1.2cm] at (0,-0.5) {Array: contiguous addresses, cache-friendly};
+
+\matrix (L) [matrix of nodes,column sep=0.3cm,nodes={box,fill=green!10}] at (0,-2.5) {
+|[label=above:0x100]|12 \& |[label=above:0x200]|7 \& |[label=above:0x180]|3 \& null \\};
+\draw[->,thick] (L-1-1) -- (L-1-2);
+\draw[->,thick] (L-1-2) -- (L-1-3);
+\draw[->,thick] (L-1-3) -- (L-1-4);
+\node[below=0.3cm] at (0,-3.5) {Linked list: scattered addresses, pointer-chase per access};
+`}
+  packages={["matrix"]}
+/>
+
+## Arrays versus links: operational comparison
+
+Array insertion has movement cost but excellent indexing and locality. Linked insertion avoids movement when a node or predecessor is already known but pays allocation, pointer storage, poor locality, and traversal cost. If insertion positions are specified only by integer index, finding the linked position is still $O(n)$; "linked-list insertion is $O(1)$" is conditional on having the node reference.
+
+<Quiz client:load
+  title="Representation decision"
+  question="A workload performs 10^6 random index reads and 10^3 insertions at known node references. Which representation dominates?"
+  options={[
+    "Dynamic array, because O(1) reads dominate O(n) insertion cost",
+    "Linked list, because O(1) insertion at a known node outweighs O(n) random reads",
+    "Neither — the two tradeoffs must be measured, not compared asymptotically",
+    "Linked list, because O(1) read is also possible with a hash map of nodes"
+  ]}
+  correctIndex={0}
+  explanation="1,000,000 O(1) reads vs 1,000 O(n) insertions (each shifting ~500K elements on average). The total array cost is ~10^6 + 10^3 * 5*10^5 = ~5*10^8 operations. The linked list pays 10^6 * O(n) pointer-chase reads = ~5*10^11 operations. Array dominates decisively despite O(n) insertion."
+/>
 
 A workload with repeated front operations favors a deque or linked head; repeated random indexing favors an array. A workload with batched middle edits may favor a chunked sequence or balanced tree of blocks, which combines logarithmic navigation with local shifts. The correct choice follows from operation frequencies and object size, not from a universal ranking.
 
 ## Locality and benchmarking
 
-A fair comparison must specify element size, allocator behavior, access distribution, cache state, and whether the benchmark includes construction. Sequential array traversal may be several times faster than pointer traversal despite identical O(n) bounds because a cache line fetches neighboring array elements while linked nodes may each miss. Conversely, repeatedly shifting a large array can dominate even if its individual accesses are cheap. Measure throughput and tail latency, and inspect allocation and cache-miss counters when the result matters.
+A fair comparison must specify element size, allocator behavior, access distribution, cache state, and whether the benchmark includes construction. Sequential array traversal may be several times faster than pointer traversal despite identical $O(n)$ bounds because a cache line fetches neighboring array elements while linked nodes may each miss. Conversely, repeatedly shifting a large array can dominate even if its individual accesses are cheap.
+
+<PythonDiagram
+  code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+n = np.arange(1, 21)
+array_cost = n
+# Simulate linked list: each access is ~cache miss factor
+cache_miss_penalty = 8
+linked_cost = n * cache_miss_penalty
+
+fig, ax = plt.subplots(figsize=(6, 3.5))
+ax.plot(n, array_cost, 'o-', label='Array traversal', color='#3b82f6')
+ax.plot(n, linked_cost, 's-', label='Linked list traversal', color='#10b981')
+ax.set_xlabel('Number of elements (thousands)')
+ax.set_ylabel('Relative time')
+ax.set_title('Array vs linked list sequential traversal')
+ax.legend()
+ax.grid(alpha=0.3)
+fig.tight_layout()
+fig.savefig('/tmp/array_vs_list.png', dpi=100)
+print('done')
+`}
+  format="png"
+  title="Array vs linked list traversal cost"
+/>
 
 Benchmarking should also test adversarial and representative workloads separately. A uniform random index distribution is different from append-heavy logs, sorted insertion, or bursty deletions. Warm-up and garbage collection can distort short runs. Use a reference model to validate outputs while collecting performance, and report variance rather than one favorable timing. Complexity predicts scaling; measurement explains constants and hardware interaction.
 
+## Code exercise: implement a dynamic array operation
+
+<CodeExercise client:load
+  title="Complete the dynamic array insert"
+  code={`class DynamicArray:
+    def __init__(self):
+        self._data = [None] * 1
+        self._size = 0
+        self._cap = 1
+
+    def insert(self, i, value):
+        if i < 0 or i > self._size:
+            raise IndexError
+        if self._size == self._cap:
+            self._resize(2 * self._cap)
+        # Shift elements right from end to i
+        for j in range([!blank!], [!blank!], -1):
+            self._data[j] = self._data[j - 1]
+        self._data[i] = value
+        self._size += 1
+
+    def _resize(self, new_cap):
+        new_data = [None] * new_cap
+        for j in range(self._size):
+            new_data[j] = self._data[j]
+        self._data = new_data
+        self._cap = new_cap
+`}
+  answers={["self._size", "i"]}
+  explanation="Iterate from the current last element (self._size) down to the insertion point (i), moving each element one position right to make room."
+/>
+
 ## Boundary-case proof checklist
 
-For sequence implementations, explicitly check empty state, one element, full capacity, capacity one, insertion at zero, insertion at n, deletion of the only element, and resize while an iterator exists. These cases exercise every endpoint branch. A proof that assumes a predecessor and successor exists is valid only for a strict interior node; sentinel designs can remove branches but still require a sentinel invariant.
+<Quiz client:load
+  title="Boundary case identification"
+  question="Which of the following is NOT a distinct boundary case for a dynamic array?"
+  options={[
+    "Insertion at index 0 when the array is empty",
+    "Insertion at index n when the array is full",
+    "Insertion at index n/2 when the array is half-full",
+    "Removal of the only element when n = 1"
+  ]}
+  correctIndex={2}
+  explanation="Insertion at n/2 when half-full is an interior case, not a boundary. The critical boundaries are empty, full, capacity-1, front, end, and single-element states."
+/>
+
+For sequence implementations, explicitly check:
+
+- empty state (n = 0)
+- one element (n = 1)
+- full capacity (n = C)
+- capacity one (C = 1)
+- insertion at index 0 (front)
+- insertion at index n (end)
+- deletion of the only element
+- resize while an iterator exists
+
+These cases exercise every endpoint branch. A proof that assumes a predecessor and successor exists is valid only for a strict interior node; sentinel designs can remove branches but still require a sentinel invariant.
 
 ## Memory safety and ownership
 
+<CaseStudy client:load
+  title="Iterator invalidation design"
+  scenario="A C++ library exposes an intrusive doubly linked list where nodes are allocated by the caller. An iterator points to a node that is then removed by another part of the program."
+  question="What is the safest design choice for the library's iterator contract?"
+  options={[
+    "Invalidate all iterators on any mutation; document that dereferencing after removal is undefined behavior",
+    "Make the iterator follow the node's next pointer after deletion",
+    "Copy the entire list on every mutation",
+    "Prevent removal while any iterator exists"
+  ]}
+  correctIndex={0}
+  explanation="Invalidating iterators on mutation and documenting UB is the standard C++ approach (cf. std::list). Following stale pointers (option 2) is unsafe. Copying (option 3) defeats the purpose of an intrusive list. Preventing removal (option 4) is impractical. The key is that the node's lifetime is the caller's responsibility."
+/>
+
 Pointer structures introduce aliasing and lifetime issues. After removing a node, external references may point to detached data. In a manual-memory language, freeing a node while an iterator retains it creates use-after-free; in a garbage-collected language, retaining it may keep unreachable values alive. Decide whether iterators are invalidated, whether nodes are public, and who owns payload objects.
 
-Arrays have their own hazards: copying references may create shallow copies, resizing may invalidate pointers or slices, and integer overflow in capacity calculations can allocate too little. Check (newCapacity) against maximum representable size before multiplication. A correct high-level asymptotic argument does not excuse unsafe arithmetic.
+Arrays have their own hazards: copying references may create shallow copies, resizing may invalidate pointers or slices, and integer overflow in capacity calculations can allocate too little. Check (`new_cap`) against maximum representable size before multiplication. A correct high-level asymptotic argument does not excuse unsafe arithmetic.
 
 ## Exercises
 
+<StructureDiagram kind="array" title="Resize boundary" caption="The logical length must never exceed capacity during growth or shrink operations." variant="capacity" />
+<StructureExercise client:load
+  title="Choose the safe append"
+  prompt="Which state change preserves a dynamic array's invariant when capacity is full?"
+  options={[
+    "Allocate larger storage, copy the prefix, then publish the new buffer",
+    "Increment length before allocating",
+    "Overwrite the final live element",
+    "Expose the old buffer after resize"
+  ]}
+  answer={0}
+  explanation="Construction and copying happen before publishing the new buffer, so the logical prefix remains valid even if allocation fails."
+  kind="list"
+/>
+
 1. Derive the move count for inserting and removing at every position in an array sequence.
-2. Prove geometric dynamic-array append is O(1) amortized using a potential function.
+
+   <ExerciseSolution hint="Count how many elements must be shifted for each position i, then identify the best, worst, and average cases.">
+   Inserting at i shifts n-i elements; removing at i shifts n-i-1. Thus front insertion/removal is linear, end append/removal is constant when capacity permits, and average position under uniform i has linear expected movement.
+   </ExerciseSolution>
+
+2. Prove geometric dynamic-array append is $O(1)$ amortized using a potential function.
+
+   <ExerciseSolution hint="Design a potential that grows as the array fills and drops sharply at a resize.">
+   With capacity C and size n, use $\Phi = 2n - C$ when $n \ge C/2$, adjusted with a nonnegative piecewise potential near empty. A non-resizing append changes $\Phi$ by 2 and costs 1. A doubling resize costs $n+1$ but drops the capacity term by $C$; since $n = C$ before resize, the amortized cost is bounded by a constant. State the potential convention at small sizes to avoid negative credit.
+   </ExerciseSolution>
+
 3. Give a linked-list invariant with head, tail, and size, then prove append preserves it in empty and nonempty cases.
+
+   <ExerciseSolution>
+   Empty: head=tail=null and size=0. Nonempty: head and tail are reachable, tail.next=null, traversal visits size nodes, and no node repeats. Append a new node; if empty set both endpoints, otherwise set old tail.next and new prev then tail=new. Increment size and verify each invariant clause.
+   </ExerciseSolution>
+
 4. Trace deletion of a middle node in a doubly linked list and list every pointer assignment.
+
+   <ExerciseSolution>
+   Let p=x.prev and q=x.next. Set p.next=q, q.prev=p, decrement size, then x.prev=x.next=null if detachment is specified. The sentinel cases make p and q always valid; without sentinels, endpoint branches must update head or tail.
+   </ExerciseSolution>
+
 5. Construct a workload where an array dominates a linked list and one where links can dominate.
+
+   <ExerciseSolution>
+   Repeated `get` of random indices and scans favor contiguous arrays. Repeated insertion after stored node references favors linked nodes because movement is constant; if locations are found by index, traversal can erase that advantage.
+   </ExerciseSolution>
+
 6. Explain why shrinking at half-full can thrash and propose thresholds.
+
+   <ExerciseSolution>
+   If capacity halves as soon as $n < C/2$, alternating remove and append around $n = C/2$ causes a shrink followed by a grow, each copying $\Theta(n)$. Shrink below $C/4$ and grow at full, or use a potential proof with hysteresis.
+   </ExerciseSolution>
+
 7. Identify an aliasing bug caused by returning an internal array slice.
 
-### Diagnostic solutions
+   <ExerciseSolution>
+   A client stores the returned slice and later writes element j, changing the data structure without calling set and possibly violating an invariant. Return a copy or an immutable view, or document shared ownership and enforce bounds/mutation rules.
+   </ExerciseSolution>
 
+### Transfer and synthesis
 
-1. Inserting at i shifts n-i elements; removing at i shifts n-i-1. Thus front insertion/removal is linear, end append/removal is constant when capacity permits, and average position under uniform i has linear expected movement.
-2. With capacity C and size n, use potential (Phi=2n-C) when n greater than C/2, adjusted with a nonnegative piecewise potential near empty. A non-resizing append changes potential by 2 and costs 1. A doubling resize costs n+1 but drops the capacity term by C; since n=C before resize, the amortized cost is bounded by a constant. State the potential convention at small sizes to avoid negative credit.
-3. Empty: head=tail=null and size=0. Nonempty: head and tail are reachable, tail.next=null, traversal visits size nodes, and no node repeats. Append a new node; if empty set both endpoints, otherwise set old tail.next and new prev then tail=new. Increment size and verify each invariant clause.
+8. **Design a hybrid.** A text editor needs $O(1)$ access to any character and $O(1)$ insertion at the cursor. Propose a data structure that combines an array and a linked list to achieve both. State the invariants your structure maintains and the cost of each operation.
 
-4. Let p=x.prev and q=x.next. Set p.next=q, q.prev=p, decrement size, then x.prev=x.next=null if detachment is specified. The sentinel cases make p and q always valid; without sentinels, endpoint branches must update head or tail.
-5. Repeated get of random indices and scans favor contiguous arrays. Repeated insertion after stored node references favors linked nodes because movement is constant; if locations are found by index, traversal can erase that advantage.
-6. If capacity halves as soon as n less than C/2, alternating remove and append around n=C/2 causes a shrink followed by a grow, each copying Θ(n). Shrink below C/4 and grow at full, or use a potential proof with hysteresis.
-7. A client stores the returned slice and later writes element j, changing the data structure without calling set and possibly violating an invariant. Return a copy or an immutable view, or document shared ownership and enforce bounds/mutation rules.
+   <ExerciseSolution>
+   A gap buffer: an array with a gap at the cursor. Characters before the cursor are stored contiguously before the gap; characters after the cursor are stored contiguously after the gap. Moving the cursor shifts characters across the gap. Access is O(1) with offset computation; insertion at the cursor writes into the gap (O(1) if gap is nonempty, O(n) worst case when gap must be resized). The invariants: (gap_start + gap_size) == capacity, logical sequence is A[0..gap_start-1] ++ A[gap_start+gap_size..capacity-1].
+   </ExerciseSolution>
 
+9. **Adversarial analysis.** A colleague claims "linked lists are always faster for insert-heavy workloads." Construct a concrete counterexample: describe a specific workload and data size where a dynamic array strictly outperforms a linked list despite more insertions than lookups, and explain why.
 
+   <ExerciseSolution>
+   Insert 5000 elements at the front of a sequence with 1,000,000 existing elements. The linked list must traverse to find the insertion point (O(n) = 1,000,000 steps), then insert in O(1). The array shifts 1,000,000 elements but does so in a tight cache-friendly loop. The array's memory bandwidth dominates the list's pointer chase. With 10,000 such insertions, the array's total moved elements is 10^10, but the list's traversals total 10^10 pointer hops across scattered addresses — the list loses due to cache misses.
+   </ExerciseSolution>
 
-## References & Further Reading
+10. **Prove the lower bound.** Show that any sequence implementation that stores $n$ elements in $O(n)$ memory cells and supports $O(1)$ worst-case index access cannot support $O(1)$ insertion at an arbitrary position without shifting. (Hint: consider the pigeonhole principle on the number of distinct sequences representable in $O(n)$ memory.)
 
-* [MIT 6.006 Lecture 2: Data Structures and Dynamic Arrays](https://live.ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf)
-* [Open Data Structures](https://opendatastructures.org/)
-* [MIT 6.006 syllabus](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/pages/syllabus/)
+    <ExerciseSolution>
+    Suppose $O(1)$ insertion and $O(1)$ index access were both possible. Inserting $n$ elements at the front would produce $n!$ distinct sequences. The memory state after $n$ insertions uses $O(n)$ memory cells, which can represent at most $c^n$ distinct states for some constant $c$ — far fewer than $n!$ for large $n$ by Stirling's approximation. This contradicts the pigeonhole principle, so at least one operation must be $\Omega(\log n)$ or worse. The array's choice: $O(1)$ index access, $O(n)$ insertion.
+    </ExerciseSolution>
+
+## DELIBERATELY OMITTED
+
+**Chunked sequences (rope, gap buffer, unrolled linked list).** These combine contiguous blocks with linked nodes for logarithmic indexing and linear-time local edits. They are essential for production text editors and databases but their analysis builds on the pure array and linked models taught here. The gap buffer is briefly mentioned in Exercise 8 as a transfer exercise; a full treatment belongs in a separate lesson on hybrid sequence structures.
+
+**Cache-aware linked-list layouts.** Linking nodes within a memory pool or arena can improve spatial locality of linked traversals. This lesson discusses locality qualitatively but does not detail specific layout strategies such as array-linked hybrids or pre-allocation patterns. See the "Locality and Layout" module for quantitative treatment.
+
+**Persistent arrays and functional updates.** Purely functional array-like structures (e.g., the bitmapped vector trie used in Clojure and Scala) copy paths through a tree. These build on the basic array reasoning but require an understanding of persistent-structure techniques from a separate lesson.
+
+**Memory allocator behavior for linked structures.** Slab allocators, freelist organization, and allocation order effects on linked-node placement are important for performance but belong in a systems or locality lesson.
+
+**Concurrent sequence structures.** Lock-free linked lists, RCU-protected arrays, and concurrent deques are the subject of an entire course on concurrent data structures and are not covered here.
+
+## References
+
+- Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. (2022). *Introduction to Algorithms* (4th ed.). MIT Press. §10.1–10.2 (linked lists), §17.4 (dynamic tables and amortized analysis).
+- Sedgewick, R. & Wayne, K. (2011). *Algorithms* (4th ed.). Addison-Wesley. §1.3 (bags, queues, and stacks).
+- Drepper, U. (2007). *What Every Programmer Should Know About Memory*. Red Hat, Inc. §3.2 (cache organization and the cost of pointer chasing).
+- Knuth, D. E. (1997). *The Art of Computer Programming, Volume 1: Fundamental Algorithms* (3rd ed.). Addison-Wesley. §2.2 (linear lists).
+- MIT 6.006 Lecture 2: Data Structures and Dynamic Arrays. [https://live.ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf](https://live.ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf)
+- Morin, P. (2013). *Open Data Structures*. [https://opendatastructures.org/](https://opendatastructures.org/) Chapter 2 (array-based lists), Chapter 3 (linked lists).

@@ -1,99 +1,369 @@
 ---
 title: "Randomized Algorithms"
 course: "algorithms"
-description: "Las Vegas and Monte Carlo methods, expectation, concentration, randomized selection, hashing, and failure probability."
+description: "Las Vegas and Monte Carlo methods, concentration inequalities, Chernoff bounds, random walks, Miller-Rabin, Karger's min-cut, and Freivalds' checker."
 ---
+
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import TikZ from '../../../components/TikZ.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Randomized Algorithms
 
-Randomized algorithms use random bits to influence execution. Randomness can simplify algorithms, avoid adversarial inputs, reduce expected work, or provide approximate answers. A rigorous analysis states the probability space, whether correctness is always guaranteed, what resource is expected, and how failure probability scales across repeated calls. “Random” is not a substitute for a proof; it changes the quantifiers in the proof.
+Given three $n \times n$ matrices $A$, $B$, $C$, is $AB = C$? The naive approach multiplies $A$ and $B$ in $O(n^3)$ time and compares entrywise — $\Theta(n^3)$ operations. For $n = 10^4$, that is $10^{12}$ multiplications. Rusins Freivalds (1979) observed that a single matrix-vector multiplication $A(Br)$ costs $O(n^2)$ and can detect a wrong product with probability at least $1/2$ [Freivalds, 1979]. One randomized trial is cheaper than a single pass of the deterministic product, and $k$ trials drive the error below $2^{-k}$. Deterministic verification costs a cubic factor more; randomization buys a quadratic speedup with controllable failure probability.
 
-## Las Vegas and Monte Carlo
+This is the central trade-off of randomized algorithms: trade bounded error or expected runtime for orders-of-magnitude efficiency gains. Randomness is not a hack — it is a provable computational resource.
 
-A Las Vegas algorithm always returns a correct answer but has random running time. Randomized quicksort is Las Vegas if partitioning is exact: every pivot choice produces a correct sort, while the number of comparisons varies. A Monte Carlo algorithm has a bounded or controlled running time but may return an incorrect answer with probability at most epsilon, or may return an approximate answer with a proved guarantee.
+## Classification
 
-For a fixed input x, expected time averages over the algorithm’s random bits. A stronger statement may hold for every x, while an average-over-inputs statement additionally assumes a distribution on x. Keep these separate. An adversary that chooses x before seeing the random seed is different from an adaptive adversary that observes outputs and learns the seed.
+Randomized algorithms fall into two categories based on what they randomize.
 
-## Expected quicksort
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+left to right direction
+rectangle "Randomized Algorithm" {
+  rectangle "Las Vegas" as lv
+  rectangle "Monte Carlo" as mc
+}
+note right of lv
+  Always correct
+  Random runtime
+end note
+note right of mc
+  Bounded runtime
+  Bounded error
+end note
+lv --> "Randomized\nQuicksort"
+mc --> "Miller–Rabin"
+mc --> "Freivalds' Checker"
+@enduml`}
+/>
 
-Randomized quicksort chooses a uniformly random pivot, partitions, and recurses. Every input permutation is equally likely to occupy each pivot rank under the random-choice model. Let X indicate whether elements i and j are compared. They are compared at most once, and the probability of comparison is 2 divided by (j-i+1): among the elements between them, the first chosen pivot determines whether they meet, and it must be i or j.
+**Las Vegas:** Always returns the correct answer; only the runtime is random. Example: randomized quicksort runs in $O(n \log n)$ expected time on every input.
 
-Thus expected comparisons are the sum over all ordered pairs of 2 divided by (j-i+1), which is O(n log n). The correctness proof is deterministic; the expectation proof sums indicator variables using linearity of expectation, which does not require independence. Worst-case comparisons remain O(n squared), but the probability of a highly unbalanced sequence is small under independent random pivots.
+**Monte Carlo:** Runs in bounded time but may err with controllable probability. Example: Miller–Rabin primality testing declares "prime" or "composite"; a composite slips through with probability $\le 4^{-k}$ after $k$ trials.
 
-## Randomized selection
+<Quiz client:load
+  title="Las Vegas vs Monte Carlo"
+  question="Which statement correctly distinguishes Las Vegas from Monte Carlo algorithms?"
+  options={[
+    "Las Vegas may err; Monte Carlo may run forever",
+    "Las Vegas is always correct but may run long; Monte Carlo runs in bounded time with bounded error",
+    "Las Vegas uses randomness; Monte Carlo does not",
+    "Monte Carlo algorithms always outperform Las Vegas algorithms"
+  ]}
+  correctIndex={1}
+  explanation="Las Vegas algorithms guarantee correctness (runtime varies), while Monte Carlo algorithms guarantee bounded runtime (correctness probabilistically bounded). Both use randomness meaningfully."
+/>
 
-Randomized quickselect partitions around a random pivot and recurses into only the side containing rank k. Conditional on pivot rank, the cost is linear partition plus the selected subproblem. The expected recurrence or a rank-indicator analysis gives O(n). Unlike quicksort, the algorithm does not sort discarded regions.
+## Probability Toolkit
 
-Tail bounds can be obtained by proving that with constant probability the pivot lies in a central fraction, then grouping iterations into phases. If each good phase reduces the problem by a constant factor, the number of bad phases before enough good ones has a geometric tail. Cap the work and restart if a rare sequence of bad pivots occurs; this converts expected behavior into a high-probability bound with a small failure/restart probability.
+The analysis of randomized algorithms rests on a small set of concentration inequalities.
 
-## Randomized incremental algorithms
+<MathStatement id="markov" kind="theorem" title="Markov's inequality">
+For a nonnegative random variable $X$ and $a > 0$, $\Pr[X \ge a] \le E[X]/a$.
+</MathStatement>
 
-Random insertion order often keeps expected structures shallow. A randomized treap assigns independent priorities; BST key order and heap priority order determine shape. The expected depth of a key is O(log n), because the first minimum-priority key in each relevant interval becomes an ancestor with probability tied to interval size. The proof uses random priorities, not random input order.
+<MathStatement id="chebyshev" kind="theorem" title="Chebyshev's inequality">
+For $X$ with finite mean $\mu$ and variance $\sigma^2$, $\Pr[|X - \mu| \ge t] \le \sigma^2 / t^2$.
+</MathStatement>
 
-Randomized incremental geometry inserts objects in random order and maintains a solution, repairing only a local conflict region. Backward analysis asks which object was last responsible for the final feature; symmetry can show low expected update cost. The method requires a well-defined conflict graph and a bound on the expected number of features.
+<MathStatement id="chernoff" kind="theorem" title="Chernoff bound (multiplicative)" proofId="chernoff-proof">
+Let $X = \sum_{i=1}^n X_i$ where $X_i \in \{0,1\}$ are independent, $\mu = E[X]$. For $0 < \delta < 1$:
 
-## Hashing and universal families
+$$
+\Pr[X \le (1-\delta)\mu] \le e^{-\mu\delta^2/2}, \quad
+\Pr[X \ge (1+\delta)\mu] \le e^{-\mu\delta^2/3}.
+$$
+</MathStatement>
 
-Universal hashing chooses a seed from a family such that any two distinct keys collide with probability at most 1/m. For a fixed set of keys, expected collisions are bounded even if keys are adversarially chosen before the seed. A keyed seed prevents an attacker from predicting the collision pattern, but the seed must be secret and changed safely.
+<MathProof id="chernoff-proof" for="chernoff" collapsible open>
+Apply the moment-generating function $\Pr[X \ge (1+\delta)\mu] = \Pr[e^{tX} \ge e^{t(1+\delta)\mu}]$. By Markov, $\Pr[e^{tX} \ge e^{t(1+\delta)\mu}] \le E[e^{tX}] / e^{t(1+\delta)\mu}$. For independent Bernoulli variables, $E[e^{tX_i}] = 1 - p_i + p_i e^t \le e^{p_i(e^t - 1)}$. Combining: $E[e^{tX}] \le e^{(e^t-1)\mu}$. Choose $t = \ln(1+\delta)$ and simplify to $e^{-\mu\delta^2/3}$. The lower-tail bound follows symmetrically with $t = \ln(1-\delta)$. □
+</MathProof>
 
-Two-choice hashing computes two candidate buckets and inserts into the less-loaded one. Under suitable independence assumptions, the maximum load drops dramatically compared with one-choice hashing. The implementation and analysis must state whether relocation is allowed, how ties are handled, and what happens when both choices are full.
+<MathStatement id="union-bound" kind="theorem" title="Union bound (Boole's inequality)">
+$\Pr[\bigcup_i A_i] \le \sum_i \Pr[A_i]$.
+</MathStatement>
 
-## Probability tools
+**Linearity of expectation:** $E[\sum X_i] = \sum E[X_i]$ — no independence required. This is the most frequently used tool in randomized algorithm analysis [Motwani & Raghavan, 1995].
 
-Linearity of expectation says (E[sum X_i]=sum E[X_i]) regardless of independence. Markov’s inequality gives (Pr[X at least  a] at most  E[X]/a) for nonnegative X. Chebyshev uses variance; Chernoff bounds give exponentially small tails for sums of independent or suitably related indicator variables. Use the weakest tool that proves the required guarantee, and do not invoke a concentration bound without checking hypotheses.
+<Quiz client:load
+  title="Concentration inequalities"
+  question="For a sum of independent Bernoulli variables, which bound gives exponential decay in the deviation?"
+  options={["Markov", "Chebyshev", "Chernoff", "Union bound"]}
+  correctIndex={2}
+  explanation="Chernoff bounds give exponentially decreasing tail probabilities $\exp(-\Theta(\mu\delta^2))$ for sums of independent variables. Markov and Chebyshev give only polynomial ($1/a$, $1/t^2$) decay."
+/>
 
-If one randomized call fails with probability epsilon and calls are union-bounded over k events, total failure is at most kepsilon. To achieve total delta, choose per-event error delta/k or amplify each call. Independent repetition plus majority reduces error exponentially when each trial is correct with probability greater than one half. Correlation can invalidate the amplification.
+## Randomized Quicksort: Indicator Analysis
 
-## Randomness quality and reproducibility
+**Theorem.** Randomized quicksort makes $2n \ln n + O(n)$ expected comparisons [Motwani & Raghavan, 1995].
 
-A pseudorandom generator is deterministic from its seed. For algorithmic robustness, record a seed for debugging but do not expose a security seed to an adversary. Low-quality or biased random bits can break expected guarantees. Cryptographic randomness is unnecessary for ordinary randomized quicksort but essential when unpredictability protects against chosen-input attacks.
+**Proof.** Sort the elements to $z_1 < z_2 < \cdots < z_n$. For $i < j$, let $X_{ij} = 1$ if $z_i$ and $z_j$ are compared. They are compared iff the first pivot chosen from the set $\{z_i, \ldots, z_j\}$ is $z_i$ or $z_j$. Since the pivot is uniformly random among these $j-i+1$ elements:
 
-Reproducible tests should run fixed seeds and also many independent seeds. A single seed is not evidence for an expected bound. Instrument pivot ranks, hash collisions, retries, and failure events so an anomalous run can be explained.
+$$
+\Pr[X_{ij} = 1] = \frac{2}{j-i+1}.
+$$
 
-## Amplification and restart
+Expected comparisons: $E[\sum_{i<j} X_{ij}] = \sum_{i<j} \frac{2}{j-i+1} = 2 \sum_{k=1}^{n-1} \frac{n-k}{k+1} = 2n H_n - 4n + O(1) = 2n \ln n + O(n)$. □
 
-Suppose a Monte Carlo decision procedure returns the correct answer with probability at least 2/3 independently on each run. Repeat r times and take the majority. The expected number of correct trials is above r/2, and Chernoff bounds show the probability that the majority is wrong decreases exponentially in r. For a one-sided algorithm, repeat until a positive witness is found or use a bounded number of trials; the error direction determines whether union or intersection of answers is safe.
+**Tail bound.** The probability that quicksort exceeds $c \cdot n \log n$ comparisons is polynomially small for large $c$, provable via Chernoff bounds on bad pivot intervals.
 
-A Las Vegas restart strategy runs a randomized algorithm with a budget. If it fails to find a good pivot or certificate within the budget, discard state and restart with fresh randomness. If each attempt succeeds with probability p and costs at most B, expected attempts are 1/p and expected work B/p. To claim a high-probability total bound, bound the tail of the geometric number of attempts and include the cost of detecting failure and resetting memory.
+<CodeRunner client:load
+  title="Randomized quicksort"
+  language="python"
+  code={`import random
 
-## Adversaries
+def quicksort(A):
+    if len(A) <= 1:
+        return A
+    pivot = random.choice(A)
+    left = [x for x in A if x < pivot]
+    mid  = [x for x in A if x == pivot]
+    right = [x for x in A if x > pivot]
+    return quicksort(left) + mid + quicksort(right)
 
-For a nonadaptive adversary, the input is fixed before the random seed. A randomized algorithm can then average over seeds even when the input is worst-case. An adaptive adversary can observe choices or timing and choose future operations; fresh secret randomness, obliviousness assumptions, or a stronger martingale analysis may be needed. Randomized quicksort with a public deterministic seed is vulnerable to an input generator that learns its pivots.
+for seed in range(3):
+    random.seed(seed)
+    data = list(range(1000))
+    random.shuffle(data)
+    result = quicksort(data)
+    print(f"seed {seed}: correct={result == list(range(1000))}")`}
+  output="seed 0: correct=True\nseed 1: correct=True\nseed 2: correct=True"
+/>
 
-In online algorithms, randomization may improve competitive ratio against an oblivious adversary but not necessarily an adaptive one. State whether the adversary sees random choices, outputs, memory accesses, or only final answers. Security-sensitive data structures often use keyed hashing because distributional guarantees alone do not protect a public interface from collision attacks.
+## Miller–Rabin Primality Test
 
-## Randomized algorithm checklist
+**Problem.** Determine if $n$ is prime [Rabin, 1980].
 
-Write the deterministic invariant first, identify the random event that yields progress, compute expectation or tail probability with explicit quantifiers, and specify behavior on rare bad sequences. Verify independence or conditional probability assumptions. Then test fixed and fresh seeds, adversarial inputs, and reproducible failure traces. A randomized algorithm is complete only when correctness, resource bound, and failure policy are all stated.
+Write $n-1 = 2^s \cdot d$ with $d$ odd. Pick random $a \in [1, n-1]$. Compute $x_0 = a^d \bmod n$. For $i = 1, \ldots, s-1$, compute $x_i = x_{i-1}^2 \bmod n$. If $x_0 \equiv 1 \pmod n$ or some $x_i \equiv -1 \pmod n$, declare "prime"; otherwise declare "composite."
+
+<PlantUML
+  code={`@startuml
+skinparam backgroundColor transparent
+start
+:Pick random $a \\in [1, n-1]$;
+:Compute $x_0 = a^d \\bmod n$;
+repeat
+  :Square: $x_i = x_{i-1}^2 \\bmod n$;
+  if ($x_i \\equiv -1$) then (yes)
+    :Declare "prime";
+    stop
+  endif
+repeat while ($i < s$) as more
+->no;
+if ($x_0 \\equiv 1$) then (yes)
+  :Declare "prime";
+else (no)
+  :Declare "composite";
+endif
+stop
+@enduml`}
+/>
+
+<MathStatement id="miller-rabin" kind="theorem" title="Miller–Rabin correctness">
+If $n$ is composite, at most $1/4$ of bases $a$ cause the algorithm to declare "prime" incorrectly. Thus $k$ independent trials give error probability $\le 4^{-k}$.
+</MathStatement>
+
+<MathProof id="miller-rabin-proof" for="miller-rabin" collapsible>
+For odd composite $n$, the set of *strong liars* (bases that incorrectly pass the test) forms a proper subgroup of $\mathbb{Z}_n^*$. By Lagrange's theorem, $|\text{liars}| \le |\mathbb{Z}_n^*| / 2$. A more refined algebraic analysis shows the bound improves to $1/4$ for all odd composites [Rabin, 1980; Mitzenmacher & Upfal, 2017]. □
+</MathProof>
+
+The test runs in $O(k \log^3 n)$ time, polynomial and practical for thousand-digit numbers.
+
+<Quiz client:load
+  title="Miller–Rabin error bound"
+  question="How many trials are needed for error probability below $10^{-6}$?"
+  options={["5", "10", "20", "50"]}
+  correctIndex={1}
+  explanation="$4^{-k} < 10^{-6}$ implies $k > \\log_4 10^6 = 6\\log_4 10 \\approx 9.97$, so $k=10$ trials suffice."
+/>
+
+## Karger's Min-Cut Algorithm
+
+**Problem.** Find the minimum cut (set of edges whose removal disconnects the graph) in an undirected unweighted graph [Karger, 1993].
+
+While $> 2$ vertices remain, pick a random edge and contract it (merge its endpoints, keep parallel edges). The two remaining vertices define a cut. Repeat independently many times and return the smallest cut found.
+
+<MathStatement id="karger-mincut" kind="theorem" title="Karger's min-cut success probability" proofId="karger-proof">
+Each trial finds a specific minimum cut with probability at least $\binom{n}{2}^{-1}$.
+</MathStatement>
+
+<MathProof id="karger-proof" for="karger-mincut" collapsible>
+Fix a particular minimum cut $C$ of size $k$. The graph has minimum degree $\ge k$ (otherwise the min-degree vertex's incident edges would form a smaller cut).
+
+In the first step, $|E| \ge nk/2$ (since $\min \text{deg} \ge k$), so $\Pr[\text{contract } e \in C] = k / |E| \le 2/n$. Thus $\Pr[\text{not contract } e \in C] \ge 1 - 2/n$.
+
+Conditional on no $C$-edge contracted in step $j$ (with $n-j+1$ vertices remaining), $\Pr[\text{contract } e \in C \mid \text{success so far}] = k / |E_j| \le 2/(n-j+1)$. Product over $j=1$ to $n-2$:
+
+$$
+\Pr[\text{success}] \ge \prod_{j=0}^{n-3} \left(1 - \frac{2}{n-j}\right) = \prod_{i=3}^{n} \frac{i-2}{i} = \frac{2}{n(n-1)} = \binom{n}{2}^{-1}.
+$$
+
+Repeating $O(n^2 \log n)$ trials gives high probability of finding the min cut. □
+</MathProof>
+
+<CaseStudy client:load
+  title="Karger's on a 4-cycle"
+  scenario="Consider a 4-cycle graph $a-b-c-d-a$. Each edge has unit weight. The minimum cut size is 2; there are two min cuts: $\\{a,b\\}$ vs $\\{c,d\\}$ and $\\{b,c\\}$ vs $\\{d,a\\}$."
+  question="Karger's theorem guarantees success probability $\\binom{4}{2}^{-1} = 1/6$ per trial. Why is the per-trial probability exactly $1/6$, not higher on a 4-cycle? Which step in the analysis is tight?"
+  options={[
+    "The bound $2/(n-j+1)$ is tight for each step on a 4-cycle",
+    "The $|E| \\ge nk/2$ bound is loose for 4-cycles",
+    "The product telescopes exactly because $k$ can be smaller than the min degree",
+    "The bound is loose because parallel edges after contraction reduce the probability"
+  ]}
+  correctIndex={0}
+  explanation="On a 4-cycle with $n=4, k=2$: first step $\\Pr[\\text{avoid }C] \\ge 1 - 2/4 = 1/2$ and second step $\\ge 1 - 2/3 = 1/3$, product $1/6$. Both bounds are tight: $|E| = 4 = nk/2$, so $2/n$ is exact for the first step, and $2/(n-1)=2/3$ is exact for the second. The $1/6$ is the exact success probability, not just a lower bound, for this graph."
+/>
+
+## Freivalds' Matrix Product Checker
+
+**Problem.** Given $n \times n$ matrices $A$, $B$, $C$, verify $AB = C$ [Freivalds, 1983].
+
+Pick random $r \in \{0,1\}^n$. Compute $x = Br$, $y = Ax = ABr$, $z = Cr$. If $y = z$, accept; else reject.
+
+<MathStatement id="freivalds" kind="theorem" title="Freivalds' algorithm" proofId="freivalds-proof">
+If $AB \neq C$, $\Pr[\text{accept}] \le 1/2$. Running $k$ independent trials reduces error to $\le 2^{-k}$.
+</MathStatement>
+
+<MathProof id="freivalds-proof" for="freivalds" collapsible>
+Let $D = AB - C \neq 0$. Some row $d$ of $D$ is nonzero: $\exists j$ with $d_j \neq 0$. Compute $Dr = ABr - Cr = y - z$. If $y = z$, then $Dr = 0$.
+
+Consider the $j$th entry: $(Dr)_j = \sum_{k=1}^n D_{jk} r_k$. Since $D_{j\ell} \neq 0$ for some $\ell$, treat $r_\ell$ as variable: $(Dr)_j = D_{j\ell} r_\ell + \sum_{k \neq \ell} D_{jk} r_k$. By the principle of deferred decisions, fix all $r_k$ for $k \neq \ell$. Then $(Dr)_j = 0$ iff $r_\ell = -\frac{1}{D_{j\ell}} \sum_{k \neq \ell} D_{jk} r_k$, which holds for at most one of the two values of $r_\ell$. Hence $\Pr[(Dr)_j = 0] \le 1/2$. □
+</MathProof>
+
+Time: $O(n^2)$ per trial, much faster than $O(n^{\log_2 7})$ for Strassen or $O(n^3)$ for naive multiplication.
+
+<CodeExercise client:load
+  title="Complete the Freivalds checker"
+  code={`import random
+
+def freivalds(A, B, C):
+    n = len(A)
+    r = [random.randint(0, 1) for _ in range(n)]
+    # Compute Br
+    Br = [sum(B[i][k] * r[k] for k in [!blank!]) for i in range(n)]
+    # Compute A(Br)
+    ABr = [sum(A[i][k] * Br[k] for k in [!blank!]) for i in range(n)]
+    # Compute Cr
+    Cr = [sum(C[i][k] * r[k] for k in [!blank!]) for i in range(n)]
+    return ABr == Cr`}
+  answers={["range(n)", "range(n)", "range(n)"]}
+  explanation="All three loops iterate over the full dimension $n$. The vector $r$ has $n$ entries, and each matrix multiplication $\\times$ vector sums over $n$ terms."
+/>
+
+<Quiz client:load
+  title="Freivalds error amplification"
+  question="After 20 independent trials where $AB \\neq C$, what is the probability that Freivalds accepts at least once?"
+  options={["$1/2$", "$2^{-20}$", "$1 - 2^{-20}$", "$20 \\cdot 2^{-20}$"]
+  }
+  correctIndex={1}
+  explanation="Each trial independently errs with probability $\\le 1/2$. For 20 trials, all must err simultaneously for a false acceptance: $\\le (1/2)^{20} = 2^{-20}$."
+/>
+
+## Random Walks and 2-SAT
+
+Random 2-SAT can be solved in polynomial time by a random walk [Motwani & Raghavan, 1995]. Start with a random assignment. While unsatisfied, pick an unsatisfied clause, flip a random variable in it. For $n$ variables, the expected number of flips is $O(n^2)$. Let $T$ be the number of variables assigned correctly in a fixed satisfying assignment. Each step changes $T$ by $\pm 1$ with probability at least $1/2$. Expected hitting time to $T=n$ is $O(n^2)$.
+
+## Randomized Rounding for Approximation
+
+Given an LP relaxation with fractional solution $x^*$, round each variable $x_i^*$ to 1 with probability $x_i^*$ and 0 otherwise. For set cover, this yields expected cost $= \text{OPT}_\text{LP}$ and covers each element with probability $\ge 1 - 1/e$. Repeating $O(\log n)$ rounds covers all elements with high probability, giving an $O(\log n)$-approximation [Motwani & Raghavan, 1995; Mitzenmacher & Upfal, 2017].
+
+## Counterexample and Failure Modes
+
+Randomized algorithms are not a universal remedy. Several failure modes arise in practice:
+
+**Adversarial randomness.** If the random number generator is predictable (e.g., `rand()` in early C libraries with period $2^{31}$), an adversary can reconstruct the internal state and force worst-case behavior. Miller–Rabin with deterministic witness sets (e.g., the first $k$ primes) stops being randomized and becomes a deterministic test that fails for specific composites.
+
+**High-probability vs. expectation.** An algorithm with $O(n^2)$ expected runtime can, in pathological cases, run forever. For Las Vegas algorithms, this matters in real-time systems where a hard deadline must be met. The expected-case analysis does not guarantee any per-instance bound.
+
+**Chernoff bound failure for dependent variables.** The multiplicative Chernoff bound requires independence. When variables are weakly dependent (e.g., in Karger's algorithm, the events "contract a $C$-edge at step $j$" are conditionally independent only after conditioning on success), a different martingale-based analysis is needed.
+
+**The birthday paradox in Monte Carlo algorithms.** When the error probability of a Monte Carlo algorithm is $2^{-k}$, running $2^{k}$ instances of the algorithm against the same input makes it likely that one instance observes the rare error event — a fact exploited by the Blum–Micali theorem on pseudorandom generators. More concretely, if $10^6$ users each run Miller–Rabin with $k=10$ on a specific composite $n$, the expected number of false primes declared is $10^6 \cdot 4^{-10} \approx 0.95$ — nearly certain that someone sees a mistake.
+
+<Quiz client:load
+  title="Randomized algorithm failure modes"
+  question="Why is the Chernoff bound inapplicable to Karger's contraction events without conditioning?"
+  options={[
+    "Because contraction produces parallel edges",
+    "Because the events are dependent across steps",
+    "Because the graph may be disconnected",
+    "Because min cuts are not unique"
+  ]}
+  correctIndex={1}
+  explanation="The probability that edge $e \\in C$ is contracted at step $j$ depends on which edges were contracted earlier. Conditional independence only holds after conditioning on successful avoidance of $C$ up to step $j-1$. The full proof uses a martingale or product of conditional probabilities."
+/>
 
 ## Exercises
 
-1. Distinguish Las Vegas and Monte Carlo with examples.
-2. Prove expected quicksort comparisons using indicators.
-3. Analyze randomized quickselect phases.
-4. State a universal-hashing guarantee and its quantifiers.
-5. Apply a union bound to repeated randomized tests.
-6. Explain why linearity of expectation needs no independence.
-7. Design reproducible randomized testing.
+1. (Recall) **Coupon collector.** Show that the expected number of random draws with replacement to collect all $n$ coupons is $n H_n = n \ln n + \Theta(n)$. Prove the tail bound $\Pr[T > n \ln n + cn] \le e^{-c}$.
 
-### Diagnostic solutions
+   <ExerciseSolution hint="Model the process as a sum of geometric random variables. The expected time to collect the $i$th new coupon is $n/(n-i+1)$. For the tail bound, use a Chernoff bound on the geometric sum.">
 
+   Let $T_i$ be the number of draws to get the $i$th new coupon after $i-1$ distinct coupons. $T_i$ is geometric with success prob $(n-i+1)/n$, so $E[T_i] = n/(n-i+1)$. Summing: $E[T] = n \sum_{i=1}^n 1/i = n H_n$. Tail bound via Chernoff on geometric sum: $\Pr[T > n(\ln n + c)] \le e^{-c}$.
+   </ExerciseSolution>
 
-1. Las Vegas algorithms are always correct with random cost, such as randomized quicksort; Monte Carlo algorithms have bounded or controlled cost but small error, such as a sampled primality test under its stated guarantee. State the exact error and runtime claims.
+2. (Application) **Karger's algorithm.** Run one trial of Karger's contraction algorithm on a 4-cycle. What is the probability of finding each specific min cut? Verify the $\binom{4}{2}^{-1} = 1/6$ bound.
 
-2. Let X indicate comparison of ordered elements i and j. They meet if and only if the first pivot chosen from their interval is an endpoint, with probability 2 divided by (j-i+1). Sum these indicators over pairs; harmonic sums give O(n log n).
+   <ExerciseSolution hint="On a 4-cycle, the minimum cut size is 2. Apply Karger's analysis: the first contraction preserves any specific min cut with probability $1 - 2/4$, the second with $1 - 2/3$.">
 
-3. A central pivot event has constant probability and shrinks the active set by a constant factor. The number of failures before a good event has geometric tail; summing linear partition work over phases gives expected O(n), and repetition or capping gives high-probability variants.
+   On a 4-cycle $a-b-c-d-a$, any min cut has size 2 (e.g., $\{a,b\}$ vs $\{c,d\}$). Following Karger, contracting in any order: first contraction preserves min cut edge pair with probability $1 - 2/4 = 1/2$; second with $1 - 2/3 = 1/3$. Product $= 1/6$.
+   </ExerciseSolution>
 
-4. For every distinct fixed x and y, a uniformly selected hash from the family collides with probability at most 1/m. The keys may be adversarial but must be fixed independently of the secret seed for this statement.
+3. (Application) **Freivalds' error amplification.** Run Freivalds' checker $k$ times on an instance where $AB \neq C$. What is the error probability? Show that a single trial runs in $O(n^2)$ time.
 
-5. If k tests each fail with probability at most epsilon, the union bound makes the probability of any failure at most k times epsilon. Set epsilon to delta divided by k to bound all failures by delta; independence is not needed.
+   <ExerciseSolution>
+   Each trial errs with probability $\le 1/2$, so $k$ independent trials err with probability $\le 2^{-k}$.
+   </ExerciseSolution>
 
-6. Expectation is linear by algebra: the expectation of a sum is the sum of expectations. Dependence changes joint probabilities and variance, but not this sum identity.
+4. (Transfer) **Randomized quicksort tail bound.** Prove that the probability that randomized quicksort makes more than $10 n \log n$ comparisons is at most $1/n^2$ for sufficiently large $n$. *Hint: use the Chernoff bound on good-pivot indicators during each phase.*
 
-7. Use fixed seeds for regression, independent seeds for distribution, pre-generate inputs, record environment and random source, measure output correctness, and report seed-wise variation. Do not infer an expected bound from one favorable run.
+   <ExerciseSolution>
+   Use Chernoff bound on pivot quality indicators. The probability that fewer than $n/2$ pivots are "good" (giving $3/4$-balanced splits) in any phase decays exponentially. Union bound over phases gives $O(1/n^2)$ for sufficiently large $n$.
+   </ExerciseSolution>
+
+5. (Transfer) **Miller–Rabin.** For $n = 15$, list the strong liars and compute the probability a random base falsely declares 15 prime. Verify the $1/4$ bound.
+
+   <ExerciseSolution>
+   For $n=15$, $n-1 = 14 = 2 \cdot 7$, so $s=1, d=7$. Bases $a$ with $a^7 \equiv \pm 1 \pmod{15}$ are liars. Computing: $2^7=128 \equiv 8$, not liar. $4^7 \equiv 4$, $7^7 \equiv 13$, $11^7 \equiv 11$, $13^7 \equiv 7$. The liars are $a$ where $a^7 \equiv 1$ or $14$: $1^{14}\equiv 1$, $4^{14} \equiv 1$, $11^{14} \equiv 1$, $14^{14}\equiv 1$. Wait check $4^7$: $4^2=16\equiv 1$, so $4^7 = 4\cdot (4^2)^3 = 4\cdot 1^3 = 4 \not\equiv \pm 1$. Actually none except $1, 14$ are liars. So $2/14 = 1/7 < 1/4$, confirmed.
+   </ExerciseSolution>
+
+6. (Synthesis) **Freivalds with arbitrary vector entries.** Show that Freivalds' algorithm works with $r$ drawn uniformly from $\{0,1,\ldots,m-1\}^n$ for any integer $m \ge 2$. What is the error probability? How does it change with $m$? *Hint: generalize the deferred-decision argument to $m$ values.*
+
+   <ExerciseSolution>
+   Generalizing the proof: $(Dr)_j = D_{j\ell} r_\ell + \sum_{k\neq\ell} D_{jk} r_k$. Fixing all $r_k$ for $k\neq\ell$, $(Dr)_j = 0$ iff $r_\ell = -D_{j\ell}^{-1} \sum_{k\neq\ell} D_{jk} r_k$, which holds for at most $1$ of $m$ values. Thus $\Pr[(Dr)_j=0] \le 1/m$. Error probability per trial improves to $1/m$, giving $\le m^{-k}$ after $k$ trials.
+   </ExerciseSolution>
+
+7. (Synthesis) **Derandomizing Freivalds via pairwise independence.** Prove that Freivalds' algorithm still works if the $n$ entries of $r$ are only pairwise independent (not fully independent). Construct a sample space of size $O(n^2)$ supporting pairwise independent $\{0,1\}$-valued random variables, and show how this gives a deterministic verification algorithm with $O(n^2)$ time per test. *Hint: use the fact that Chebyshev's inequality and pairwise independence suffice for the $1/2$ bound. For the sample space, use arithmetic progressions modulo a prime.*
+
+   <ExerciseSolution>
+   For pairwise independent $r_i$ with $E[r_i] = 1/2$, $\text{Var}((Dr)_j) = \sum_k D_{jk}^2 \text{Var}(r_k)$ since covariance terms vanish. A Chebyshev bound gives $\Pr[(Dr)_j = 0] \le \text{Var}((Dr)_j) / (E[(Dr)_j])^2$. With $E[(Dr)_j] = \frac{1}{2} \sum_k D_{jk}$ and $\text{Var}((Dr)_j) = \frac{1}{4} \sum_k D_{jk}^2$, and assuming $D$ has no zero rows, one can bound $\Pr[(Dr)_j = 0] \le 1/2$.
+
+   A construction: let $\mathbb{F}_p$ be a prime field with $p > n$. For each $a \in \mathbb{F}_p$, define $r_i = ((a \cdot i) \bmod p) \bmod 2$. These $p$ vectors are pairwise independent. Checking all $p = O(n)$ vectors yields a deterministic $O(n^3)$ verifier — no faster than naive multiplication, but the same idea with higher-order independence can yield a deterministic subcubic verifier.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+> The topics below are intentionally excluded because they belong to separate areas, are covered in other lessons, or their core insight is already captured by material included here.
+
+- **Yao's minimax principle** — Proving lower bounds for randomized algorithms via distributional complexity appears in the advanced complexity module. The principle states that the worst-case expected cost of a randomized algorithm equals the cost of the optimal deterministic algorithm on a worst-case distribution.
+- **Pseudorandom generators and derandomization** — The method of conditional expectations and the construction of pseudorandom generators from one-way functions belong to the complexity theory module.
+- **Randomized rounding for MAX-SAT and facility location** — These specific applications of the randomized-rounding technique appear in the approximation algorithms lesson. The general technique is noted here.
+- **Detailed proof of the Miller–Rabin $1/4$ bound** — The full algebraic number theory (structure of strong liars as a subgroup, Carmichael numbers, the improved bound from quadratic nonresidues) is a graduate number-theory topic. The core algorithmic insight — existence of a randomized polynomial-time test — is presented with a proof sketch.
 
 ## References & Further Reading
 
+* Freivalds, R. "Fast Probabilistic Algorithms for Verification of Matrix Products." *SIAM J. Comput.* 12, no. 1 (1983): 1–10. — The original $O(n^2)$ matrix product checker.
+* Karger, D. R. "Global Min-cuts in RNC, and Other Ramifications of a Simple Min-Cut Algorithm." *Proc. 4th ACM-SIAM SODA* (1993): 21–30. — Karger's contraction algorithm and its analysis.
+* Mitzenmacher, M. and Upfal, E. *Probability and Computing*, 2nd ed. Cambridge, 2017. — Comprehensive treatment of randomized algorithms and concentration inequalities.
+* Motwani, R. and Raghavan, P. *Randomized Algorithms*. Cambridge, 1995. — The canonical textbook on the subject.
+* Rabin, M. O. "Probabilistic Algorithm for Testing Primality." *J. Number Theory* 12, no. 1 (1980): 128–138. — Miller–Rabin primality test.
 * [MIT 6.046 Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* Motwani and Raghavan, *Randomized Algorithms*.

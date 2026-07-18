@@ -3,55 +3,206 @@ title: "Heaps and Priority Queues"
 course: "data-structures"
 description: "Heap invariants, array layouts, sift operations, construction, heapsort, and priority-queue design."
 ---
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CaseStudy from '../../../components/CaseStudy';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+
+import HeapPlayground from '../../../components/playgrounds/HeapPlayground';
+
 # Heaps and Priority Queues
 
-A priority queue stores items with priorities and repeatedly returns an extremal item. It is not a sorted sequence: arbitrary search may be expensive, while finding and deleting the minimum or maximum is efficient. A binary heap implements this ADT with a complete-tree shape and a local heap-order invariant, producing logarithmic insertion and deletion and constant-time access to the extremum.
+An operating system scheduler maintains a list of ready processes, each with a priority. At every scheduling tick, it must select and run the highest-priority ready process. New processes arrive at arbitrary times with arbitrary priorities. How should the OS store ready processes?
+
+A sorted list keeps the highest-priority process at the front: extract-max is $O(1)$. But inserting a new process requires scanning to find its correct position: $O(n)$ in the worst case. An unsorted list makes insertion cheap ($O(1)$ appending to the end or front), but extracting the maximum requires scanning the entire list: $O(n)$. Neither extreme is acceptable for a system handling thousands of processes per second.
+
+What we need is a data structure that supports both insertion and extract-max in better than linear time — ideally $O(\log n)$. This is the priority queue ADT. Its defining contract: insert an item with a priority, return the item with the maximum (or minimum) priority, and remove that extremal item. The binary heap, invented by J. W. J. Williams in 1964 as the data structure underlying heapsort, resolves this tension. If items are stored in a complete binary tree where each parent has priority at least as great as its children (the heap property), then the maximum is always at the root. Inserting a new item adds it at the next available position and lets it "float up" by swapping with parents until heap order is restored. Removing the maximum replaces the root with the last leaf and lets it "sink down" by swapping with the larger child. Both operations take $O(\log n)$ time because the height of a complete binary tree with $n$ nodes is $\lfloor \log_2 n \rfloor$.
+
+The heap sacrifices optimal performance on individual operations for balanced performance across all operations — a recurring theme in data structure design.
 
 ## Priority-queue abstraction
 
-For a min-priority queue, insert(x,p) adds an item, minimum returns an item with least priority, and delete-min removes and returns one least-priority item. Ties need a policy: any minimum, stable insertion order, or a secondary key. Decrease-key changes a priority in a direction compatible with the queue; arbitrary priority changes may require movement in both directions. If priorities are mutable through client aliases, the structure can silently violate its RI.
+<MathStatement id="pq-adts" kind="definition" title="Priority queue ADT">
+A priority queue is a collection of items, each associated with a key called its *priority* (or *rank*). The ADT supports the following operations:
 
-Applications include event simulation, Dijkstra’s algorithm, scheduling, k-way merging, and best-first search. The correct ADT contract distinguishes priority comparison from payload identity. Deleting a minimum should not imply that all other items are sorted or that equal priorities have a particular order unless specified.
+- $\text{insert}(x, p)$ — add item $x$ with priority $p$.
+- $\text{minimum}()$ — return an item with the smallest priority (or largest, depending on the order convention).
+- $\text{delete-min}()$ — remove and return an item with the smallest priority.
+- $\text{decrease-key}(x, p')$ — reduce the priority of item $x$ to $p'$, where $p'$ is strictly less than the current priority.
+
+Ties require a policy: any minimum, stable insertion order, or a secondary key. The contract distinguishes priority comparison from payload identity.
+</MathStatement>
+
+<MathStatement id="heap-property" kind="definition" title="Binary heap invariant">
+A binary heap is a complete binary tree stored in an array $A[0 \ldots n-1]$ satisfying two invariants:
+
+1. **Shape invariant (completeness):** All levels of the tree are filled except possibly the last, which is filled left to right.
+2. **Order invariant (heap property):** For every node at index $i$, $A[i] \leq A[\text{parent}(i)]$ in a max-heap, or $A[i] \geq A[\text{parent}(i)]$ in a min-heap. Equivalently, every parent is no greater (max-heap) or no smaller (min-heap) than its children.
+
+Indexing (zero-based): $\text{parent}(i) = \lfloor (i-1)/2 \rfloor$, $\text{left}(i) = 2i+1$, $\text{right}(i) = 2i+2$.
+</MathStatement>
+
+<Quiz client:load
+  question="What does heap order guarantee directly?"
+  options={["The root is an extremal item", "Arbitrary search is logarithmic", "The array is fully sorted", "Equal priorities are stable"]}
+  correctIndex={0}
+  explanation="Parent-child order propagates to descendants, so the root is minimum in a min-heap, but siblings remain unordered. The heap property does not sort the entire array."
+/>
+
+The root is a global minimum because every parent is no greater than its descendants by transitivity. The height is $\lfloor\log n\rfloor$, so a root-to-leaf repair takes $O(\log n)$. The array's contiguous layout is cache-friendly and compact compared with pointer nodes.
+
+Applications include event simulation, Dijkstra's algorithm, scheduling, k-way merging, and best-first search. If priorities are mutable through client aliases, the structure can silently violate its RI.
 
 ## Binary heap representation
 
-A binary heap is a complete binary tree satisfying heap order: each node’s priority is no greater than its children in a min-heap. Store it in an array with zero-based indices: parent(i)=floor((i-1)/2), left(i)=2i+1, right(i)=2i+2. Completeness means the array has no gaps, so no pointers are required and traversal follows arithmetic.
+<StructureDiagram kind="heap" title="Heap order on a complete tree" caption="The root is the minimum because every parent priority is no greater than its children." />
 
-The heap invariant is shape plus order. The root is a global minimum because every parent is no greater than its descendants by transitivity. The height is floor(log n), so a root-to-leaf repair takes O(log n). The array’s contiguous layout is cache-friendly and compact compared with pointer nodes.
+The array layout eliminates pointers. For a node at index $i$, its children are at indices $2i+1$ and $2i+2$; its parent is at $\lfloor (i-1)/2 \rfloor$. Completeness guarantees no gaps, so the array length equals the number of nodes.
+
+<StructureDiagram kind="array" title="Complete-tree array layout" caption="Heap children and parents are found by arithmetic indices without pointer fields." variant="capacity" />
 
 ## Sift-up insertion
 
-Insert appends the new item at index n, preserving completeness. It may violate heap order only with its parent because all existing relationships remain valid. While the new priority is smaller than its parent, swap upward. Each swap moves one level toward the root, so time is O(log n), and the loop terminates at the root or a parent no larger than the item.
+Insert appends the new item at index $n$, preserving completeness. It may violate heap order only with its parent because all existing relationships remain valid. While the new priority is smaller than its parent, swap upward. Each swap moves one level toward the root, so time is $O(\log n)$, and the loop terminates at the root or a parent no larger than the item.
 
-**Worked insertion.** Insert priorities 9, 4, 7, 1, 6 into a min-heap. After 9: [9]. Insert 4: [4,9]. Insert 7: [4,9,7]. Insert 1 appends [4,9,7,1], swaps with 9 to [4,1,7,9], then with 4 to [1,4,7,9]. Insert 6 appends [1,4,7,9,6] and stops because 4≤6. At each step completeness is automatic and only the ancestor path can be repaired.
+**Worked insertion.** Insert priorities 9, 4, 7, 1, 6 into a min-heap.
+
+- After 9: `[9]`.
+- Insert 4: `[4, 9]` — 4 swaps with 9.
+- Insert 7: `[4, 9, 7]` — 7 > 4, stops.
+- Insert 1: `[4, 9, 7, 1]` — 1 < 9, swap → `[4, 1, 7, 9]` — 1 < 4, swap → `[1, 4, 7, 9]`.
+- Insert 6: `[1, 4, 7, 9, 6]` — 6 > 4, stops.
+
+At each step completeness is automatic and only the ancestor path can be repaired.
+
+<CodeRunner client:load
+  title="Min-heap sift-up simulation"
+  language="python"
+  code={`def sift_up(heap, i):
+    while i > 0:
+        parent = (i - 1) // 2
+        if heap[i] >= heap[parent]:
+            break
+        heap[i], heap[parent] = heap[parent], heap[i]
+        i = parent
+
+def heap_insert(heap, value):
+    heap.append(value)
+    sift_up(heap, len(heap) - 1)
+    return heap
+
+h = []
+for v in [9, 4, 7, 1, 6]:
+    heap_insert(h, v)
+    print(f"After insert {v}: {h}")`}
+  output="After insert 9: [9]\nAfter insert 4: [4, 9]\nAfter insert 7: [4, 9, 7]\nAfter insert 1: [1, 4, 7, 9]\nAfter insert 6: [1, 4, 7, 9, 6]"
+/>
 
 ## Delete-min and sift-down
 
+<HeapPlayground client:load />
+
 The minimum is at index 0. To delete it, move the last array item to the root, reduce logical size, and sift it downward: compare its children, choose the smaller child, and swap if that child is smaller. Choosing the smaller child is essential; swapping with an arbitrary violating child can leave the other child smaller than the moved item.
 
-After moving the last item, only the root-to-leaf path can violate order. Each swap moves the item down one level, so time is O(log n). If the heap has one item, removal leaves an empty valid heap. If the last item is equal to both children, any consistent tie policy preserves order; stability requires extra metadata.
+<StructureExercise client:load
+  title="Choose the sift-down swap"
+  prompt="Which child should a min-heap choose when both children are smaller than the moved root?"
+  options={["The smaller child", "The larger child", "The left child regardless of value", "An unrelated leaf"]}
+  answer={0}
+  explanation="Swapping with the smaller violating child preserves the heap order that will be checked at the next level."
+  kind="heap"
+/>
+
+After moving the last item, only the root-to-leaf path can violate order. Each swap moves the item down one level, so time is $O(\log n)$. If the heap has one item, removal leaves an empty valid heap. If the last item is equal to both children, any consistent tie policy preserves order; stability requires extra metadata.
 
 ## Bottom-up heap construction
 
-Inserting n items one at a time costs O(n log n) worst case. Bottom-up build-heap places all items in the complete-tree array and sifts down internal nodes from the last parent to the root. It runs in O(n), not O(n log n), because most nodes are near leaves and can move only a small distance.
+Inserting $n$ items one at a time costs $O(n \log n)$ worst case. Bottom-up build-heap places all items in the complete-tree array and sifts down internal nodes from the last parent to the root. It runs in $O(n)$ because most nodes are near leaves and can move only a small distance.
 
-Let a node at height h have at most h sift-down work, and at most n/2^()h+1() nodes have height h. Total work is bounded by (sum_()hge0() (n/2^()h+1())O(h)=O(n)), since (sum h/2^h) converges. Correctness follows by processing nodes bottom-up: when a node is repaired, both child subtrees are already heaps, so local sift-down establishes the heap rooted there.
+<MathStatement id="build-heap-complexity" kind="theorem" title="Build-heap runs in linear time" proofId="build-heap-proof">
+Bottom-up construction of a binary heap from $n$ arbitrary items takes $O(n)$ comparisons and swaps.
+</MathStatement>
 
-**Worked construction.** For array [6,3,8,1,5,2], leaves need no repair. Sift down 8 with children 2, yielding [6,3,2,1,5,8]. Sift down 3 with children 1,5, yielding [6,1,2,3,5,8]. Sift down 6 with children 1,2, yielding [1,3,2,6,5,8], then 6 with children 3,5 yields [1,3,2,6,5,8] after choosing 3 and stopping when order holds. Verify every parent before stopping; a trace alone is not a proof.
+<MathProof id="build-heap-proof" for="build-heap-complexity" collapsible>
+Let a node at height $h$ have at most $h$ sift-down work. At most $n/2^{h+1}$ nodes have height $h$. Total work is bounded by
+
+$$ \sum_{h\ge 0} \frac{n}{2^{h+1}} \cdot h = O\left(n \sum_{h\ge 0} \frac{h}{2^h}\right) = O(n) $$
+
+since $\sum_{h\ge 0} h/2^h = 2$ converges. Correctness follows by processing nodes bottom-up: when a node is repaired, both child subtrees are already heaps, so local sift-down establishes the heap rooted there. Leaves have height zero and dominate in count but require no work.
+</MathProof>
+
+**Worked construction.** For array `[6, 3, 8, 1, 5, 2]`, leaves need no repair.
+
+- Sift down 8 (index 2) with children 2: yields `[6, 3, 2, 1, 5, 8]`.
+- Sift down 3 (index 1) with children 1, 5: yields `[6, 1, 2, 3, 5, 8]`.
+- Sift down 6 (index 0) with children 1, 2: swap with 1 → `[1, 6, 2, 3, 5, 8]`, then 6 with children 3, 5 swaps with 3 → `[1, 3, 2, 6, 5, 8]`. Order holds.
+
+Verify every parent before stopping; a trace alone is not a proof.
 
 ## Heapsort
 
-Build a max-heap in O(n), then swap the root with the final unsorted position and sift down within the reduced heap. After each iteration, the suffix is sorted and every suffix element is at least every remaining heap element. The heap shrinks by one, and total sorting work is O(n log n). In-place heapsort uses O(1) auxiliary array space but is not stable under ordinary swaps.
+<CaseStudy client:load
+  title="Priority queue versus sorted sequence"
+  scenario="A scheduler repeatedly needs the next smallest deadline but rarely searches for arbitrary items."
+  question="Which property makes a heap appropriate?"
+  options={["Fast extremal access with path-based updates", "Full sorted iteration after every insert", "Stable arbitrary lookup", "Prefix matching"]}
+  correctIndex={0}
+  explanation="A heap optimizes the priority-queue contract without paying to maintain a fully sorted sequence."
+/>
 
-For a min-heap, the analogous process yields descending order unless the comparison direction or output placement is changed. Heapsort’s worst-case bound is robust, unlike quicksort’s basic worst-case bound, but its memory-access pattern may be less cache-friendly and its constants can be larger.
+Build a max-heap in $O(n)$, then swap the root with the final unsorted position and sift down within the reduced heap. After each iteration, the suffix is sorted and every suffix element is at least every remaining heap element. The heap shrinks by one, and total sorting work is $O(n \log n)$. In-place heapsort uses $O(1)$ auxiliary array space but is not stable under ordinary swaps.
+
+For a min-heap, the analogous process yields descending order unless the comparison direction or output placement is changed. Heapsort's worst-case bound is robust, unlike quicksort's basic worst-case bound, but its memory-access pattern may be less cache-friendly and its constants can be larger.
 
 ## Decrease-key and indexed queues
+
+<Quiz client:load
+  question="What invariant must an indexed heap preserve on every swap?"
+  options={["The item-to-position map is updated for both swapped items", "The array remains sorted", "Only the root item's position is tracked", "The map is rebuilt after each operation"]}
+  correctIndex={0}
+  explanation="Every swap changes the positions of two items. If the map is not updated for both, future decrease-key operations on stale handles will modify the wrong item."
+/>
 
 Decrease-key lowers a priority and may violate order only with ancestors, so sift up. Increase-key may violate only with children, so sift down. To locate an arbitrary item, a heap alone does not support fast search; Dijkstra implementations often store a handle or an index map from item identity to heap position. Every swap must update the map, adding a representation invariant and constant bookkeeping cost.
 
 Lazy deletion can avoid arbitrary removal: mark an item stale and discard it whenever it reaches the root. This can increase heap size and repeated stale cleanup, but is often simpler. Complexity must count stale entries; an unbounded stream of canceled events can cause memory growth unless periodically rebuilt.
 
+## Failure modes and counterexamples
+
+A heap that silently violates its invariants produces incorrect extremal access. The most common failure modes are:
+
+**1. Corrupted heap property by arbitrary mutation.** If a client modifies a priority through an external reference, the heap cannot detect the change. The root may no longer be extremal, and the structure is silently broken.
+
+*Example:* Insert 5, 3, 8 into a min-heap → `[3, 5, 8]`. A client mutates the item at index 1 to priority 1. The heap is now `[3, 1, 8]` — the root is 3, but the true minimum is 1 at index 1. The next delete-min returns 3 instead of 1.
+
+**2. Choosing the wrong child in sift-down.** In a min-heap, if the sift-down procedure swaps with the larger child instead of the smaller, the heap property can be violated after the swap.
+
+*Example:* Heap `[1, 5, 2]` with children 5 and 2. Delete-min moves 2 to the root: `[2, 5]`. Sift-down swaps 2 with 5 (the larger child) → `[5, 2]`. The heap property is violated: 2 is a child of 5 but 2 < 5. The correct swap would be with the smaller child (none here, since 5 is the only child), but the algorithm must not swap with a larger child when a smaller child exists.
+
+**3. Completeness violation by incorrect deletion.** Removing an arbitrary internal node without replacing it with the last array element breaks the complete-tree shape. The array then has gaps, and the parent/child index arithmetic no longer corresponds to the tree structure.
+
+**4. Index bookkeeping failure in indexed heaps.** When a handle map is not updated on every swap, the map points to a stale index. A decrease-key operation on the stale handle modifies a different item, corrupting the heap.
+
+<Quiz client:load
+  title="Heap failure detection"
+  question="What is the symptom of a heap property violation?"
+  options={["The root is not the minimum", "The array is not sorted", "Insertion raises an error", "The height exceeds log n"]}
+  correctIndex={0}
+  explanation="The only guarantee of the heap property is that the root is extremal. All other violations are secondary."
+/>
+
 ## Stability, ties, and handles
+
+<Quiz client:load
+  question="How can a binary heap be made stable for equal-priority items?"
+  options={["Compare pairs (priority, insertion-counter)", "Use a max-heap instead of a min-heap", "Store items in a linked list within each node", "Periodically sort the heap array"]}
+  correctIndex={0}
+  explanation="A monotonically increasing counter breaks ties by insertion order. The heap compares (priority, counter) lexicographically, preserving FIFO order for equal priorities."
+/>
 
 A binary heap is not stable by default. If two items have equal priority, swaps can change their relative order. To obtain stable priority-queue behavior, compare pairs (priority, insertion-counter), where the counter increases monotonically. The counter must not overflow into an earlier order; use a sufficiently wide representation or specify wraparound behavior.
 
@@ -59,39 +210,103 @@ Handles introduce another identity question. If a client keeps a pointer to an i
 
 ## External and concurrent priorities
 
+<CaseStudy client:load
+  title="Concurrent priority queue design"
+  scenario="A distributed task scheduler runs on 8 machines. Each machine maintains a local priority queue of tasks. Tasks are submitted to any machine, and the scheduler must route the highest-priority task globally to the next available worker."
+  question="What is the simplest correct approach?"
+  options={["A single global lock around the heap", "Shard by priority range, merging minima", "Use a sorted list on one machine", "Broadcast every task to all machines"]}
+  correctIndex={0}
+  explanation="A single lock around a global heap is correct (linearizable) but limits throughput. Sharding improves throughput but changes priority semantics: the global minimum may be in any shard, requiring either a coordinator or a second shared structure. Broadcast is neither correct nor efficient."
+/>
+
 For data larger than memory, a binary heap causes many random accesses. A d-ary heap reduces height and can reduce I/O or improve cache behavior, but each sift-down step compares more children. A B-tree-like priority structure can batch work into blocks. The same abstraction supports different arities; analysis should count comparisons, memory transfers, and writes separately when external storage matters.
 
 In concurrent systems, a shared priority queue needs a synchronization contract. A lock can make each operation linearizable but creates contention. Sharding queues improves throughput but changes global minimum semantics: selecting the smallest of shard minima may require inspecting every shard or a second coordination structure. Do not claim a concurrent queue implements a sequential priority ADT unless the linearization and tie behavior are defined.
 
 ## Exercises
 
+<StructureDiagram kind="heap" title="Bottom-up heap construction" caption="Sift-down processes internal nodes after their child subtrees are already heaps." variant="build" />
+
 1. Prove the binary-heap root is a global minimum.
+
+   <ExerciseSolution hint="Use induction on tree height: if every parent dominates its children, what does transitivity imply about the root?">
+
+   Every parent is no greater than its children. By induction down a path, the root is no greater than every descendant, so no item has smaller priority than the root. Ties may produce multiple valid minima.
+   </ExerciseSolution>
+
 2. Trace insertions into a min-heap and identify the repaired path.
+
+   <ExerciseSolution hint="The parent index at step $i$ is $(i-1)/2$ (integer division). Only nodes on the ancestor path can be affected by an insertion.">
+
+   Append each item and compare only with its parent; swap while violating. Existing subtrees remain heaps, so the only possible violations are on the ancestor path of the inserted item. Record indices, not only values, to catch duplicate-key ambiguity.
+   </ExerciseSolution>
+
 3. Prove delete-min preserves completeness and heap order.
-4. Prove bottom-up build-heap is O(n) using a height sum.
+
+   <ExerciseSolution>
+   Removing the root and moving the last array entry into it preserves the complete-tree shape. Child subtrees remain heaps; only the moved root can violate order. Sift-down swaps it with the smaller child until no child is smaller, restoring the invariant.
+   </ExerciseSolution>
+
+4. Prove bottom-up build-heap is $O(n)$ using a height sum.
+
+   <ExerciseSolution>
+   At most $n/2^{h+1}$ nodes have height $h$, and each costs $O(h)$, so total is $O\left(n\sum_{h\ge 0}\frac{h}{2^h}\right)=O(n)$. Leaves have height zero and dominate in count but require no work.
+   </ExerciseSolution>
+
 5. State the heapsort loop invariant.
-6. Explain why arbitrary heap search is not O(log n).
+
+   <ExerciseSolution>
+   After each pass, the suffix from position $i+1$ through $n-1$ is sorted and contains the $i$ removed largest elements; the prefix is a valid max-heap containing the remaining elements. Swapping the root with position $i$ and repairing the prefix preserves both clauses.
+   </ExerciseSolution>
+
+6. Explain why arbitrary heap search is not $O(\log n)$.
+
+   <ExerciseSolution>
+   Heap order constrains ancestors and descendants but does not sort siblings or unrelated subtrees. A target can be in many branches, requiring $\Theta(n)$ inspection in the worst case. Only extremal access and path-based priority changes are logarithmic.
+   </ExerciseSolution>
+
 7. Design indexed decrease-key and list the invariant after a swap.
 
-### Diagnostic solutions
+   <ExerciseSolution>
+   Store item→index in a map and maintain that every live heap item maps to its exact position. On every swap, update both entries before continuing. Decrease-key finds the position, changes priority, and sifts up; the map invariant is preserved by each swap.
+   </ExerciseSolution>
 
+### Transfer and synthesis
 
-1. Every parent is no greater than its children. By induction down a path, the root is no greater than every descendant, so no item has smaller priority than the root. Ties may produce multiple valid minima.
+8. **Transfer.** You are given a stream of integers. Design an algorithm that maintains the median of all numbers seen so far using two heaps. State the invariants, the per-element cost, and the worst-case memory usage.
 
-2. Append each item and compare only with its parent; swap while violating. Existing subtrees remain heaps, so the only possible violations are on the ancestor path of the inserted item. Record indices, not only values, to catch duplicate-key ambiguity.
+   <ExerciseSolution hint="Maintain a max-heap for the lower half and a min-heap for the upper half. Rebalance when sizes differ by more than one.">
 
-3. Removing the root and moving the last array entry into it preserves the complete-tree shape. Child subtrees remain heaps; only the moved root can violate order. Sift-down swaps it with the smaller child until no child is smaller, restoring the invariant.
+   Maintain two heaps: a max-heap for the lower half and a min-heap for the upper half. Invariant: after each insertion, the max-heap size is either equal to or one greater than the min-heap size. Every element in the max-heap is $\leq$ every element in the min-heap. Insert into the appropriate heap, rebalance if sizes differ by more than one, and the median is the root of the larger heap (or the average of both roots if equal). Each step is $O(\log n)$ with $O(n)$ total memory.
+   </ExerciseSolution>
 
-4. At most n/2^()h+1() nodes have height h, and each costs O(h), so total is (O(nsum h/2^h)=O(n)). Leaves have height zero and dominate in count but require no work.
+9. **Synthesis.** A binary heap's array layout is cache-friendly for traversal but not for random access. Compare the memory-access pattern of heapsort with mergesort for an array that does not fit in L2 cache. Which operations cause the most cache misses, and why?
 
-5. After each pass, the suffix from position i+1 through n-1 is sorted and contains the i removed largest elements; the prefix is a valid max-heap containing the remaining elements. Swapping the root with position i and repairing the prefix preserves both clauses.
-6. Heap order constrains ancestors and descendants but does not sort siblings or unrelated subtrees. A target can be in many branches, requiring u0398(n) inspection in the worst case. Only extremal access and path-based priority changes are logarithmic.
-7. Store item→index in a map and maintain that every live heap item maps to its exact position. On every swap, update both entries before continuing. Decrease-key finds the position, changes priority, and sifts up; the map invariant is preserved by each swap.
+   <ExerciseSolution hint="Consider the spatial locality of each algorithm's memory access pattern.">
 
+   Heapsort repeatedly sifts elements down through the heap, jumping between parent and child indices. The child index of a node at position $i$ is $2i+1$ or $2i+2$, which for large $i$ can be far from the parent in memory. This causes random access across the array, especially for nodes near the root. Mergesort, by contrast, processes contiguous blocks of memory during each merge phase, exhibiting better spatial locality. Heapsort's cache miss rate is higher for large arrays because the sift-down path jumps across the array in a non-contiguous pattern, while mergesort scans sequentially through cache lines. The overhead is most pronounced when the array size exceeds the L2 cache.
+   </ExerciseSolution>
 
+10. **Synthesis.** A lazy deletion priority queue marks entries as stale and discards them when they reach the root. Derive the worst-case memory blowup factor relative to the number of live entries. Under what workload pattern does this approach become unacceptable?
+
+   <ExerciseSolution hint="Consider the ratio of stale to live entries when insertions are frequent and deletions are rare.">
+
+   In the worst case, if the client inserts $n$ items and then deletes 1, the heap contains $n-1$ stale entries and 1 live entry — a blowup factor of $n$. This is unacceptable for workloads where insertions are frequent and deletions are rare (or where items are deleted only after they have been buried deep in the heap by many subsequent insertions). Periodic rebuilding compacts the heap but costs $O(n)$. The amortized cost depends on the rebuild frequency.
+   </ExerciseSolution>
+
+## Deliberately Omitted
+
+- **Fibonacci heaps and amortized $O(1)$ decrease-key**: a heap structure that supports decrease-key in $O(1)$ amortized time using lazy consolidation. Fibonacci heaps are primarily of theoretical interest for improving Dijkstra's and Prim's algorithm bounds; their constants and implementation complexity make them rare in practice.
+- **Pairing heaps and alternative meldable heaps**: self-adjusting heap structures that support meld (merge two heaps) efficiently. The binary heap does not support efficient meld; pairing heaps fill this gap with amortized logarithmic analysis that differs from binary-heap reasoning.
+- **Soft heaps and approximate priority queues**: a heap that trades correctness for speed by allowing a controlled number of "corrupted" keys with inflated priority. Soft heaps have applications in approximate selection and geometric algorithms but are not standard priority queues.
+- **Real-time and concurrent priority queues**: priority queues with worst-case timing guarantees or lock-free concurrent operations. These change the specification from the sequential ADT to include timing or linearization points.
+- **Leftist heaps and binomial heaps**: alternative heap structures with merge operations. Leftist heaps use a null-path-length heuristic for meld; binomial heaps support meld in $O(\log n)$ with a forest of heap-ordered trees. Both are covered in the context of meldable priority queues elsewhere.
 
 ## References & Further Reading
 
-* [Open Data Structures: heaps](https://opendatastructures.org/)
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+- Williams, J. W. J. (1964). "Algorithm 232: Heapsort." *Communications of the ACM*, 7(6), 347–348. — The original publication introducing the binary heap and heapsort.
+- Floyd, R. W. (1964). "Algorithm 245: Treesort 3." *Communications of the ACM*, 7(12), 701. — Floyd's improvement to bottom-up heap construction, establishing the $O(n)$ bound.
+- Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. (2022). *Introduction to Algorithms* (4th ed.). MIT Press. Chapter 6: Heapsort, Chapter 19: Fibonacci Heaps. — Reference for heap operations, build-heap analysis, and advanced heap variants.
+- Sedgewick, R. & Wayne, K. (2011). *Algorithms* (4th ed.). Addison-Wesley. Section 2.4: Priority Queues. — Practical treatment of heap implementations and applications.
+- [Open Data Structures: Heaps](https://opendatastructures.org/ods-java/10_Heaps.html) — Open-source reference with Java, C++, and Python implementations.
+- [MIT 6.006 Introduction to Algorithms, Spring 2020](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/) — Lecture coverage of heaps and priority queues.

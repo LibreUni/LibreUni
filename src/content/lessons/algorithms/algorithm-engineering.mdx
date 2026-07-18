@@ -1,76 +1,465 @@
 ---
 title: "Algorithm Engineering"
 course: "algorithms"
-description: "Bridging asymptotic guarantees, constants, data, and implementation."
+description: "Asymptotic guarantees to implementations: representations, memory hierarchy, numeric safety, benchmark design, and reproducibility."
 ---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import TikZ from '../../../components/TikZ.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import BookOnly from '../../../components/BookOnly.astro';
+import ScreenOnly from '../../../components/ScreenOnly.astro';
+
 # Algorithm Engineering
 
-Engineering compares candidates under realistic inputs, hardware, and correctness constraints. A benchmark is an experiment: control variables, warm up, repeat, report distributions, and inspect generated code when relevant.
+An $O(n \log n)$ algorithm in C++ takes 45 seconds on a 100M-element dataset. A colleague's $O(n^2)$ implementation handles the same data in 30 seconds. Asymptotic analysis predicts the opposite ordering.
 
-Changing a data structure can alter cache behavior enough to reverse an asymptotic prediction at practical sizes. Measurements explain a workload; they do not prove a universal theorem.
+The abstract RAM model counts arithmetic and memory operations uniformly. Real hardware penalises non-local access: a cache miss costs ~60 ns (main memory) vs ~1 ns (L1 cache). An $O(n \log n)$ algorithm that scatters memory access across a large working set can lose to a cache-friendly $O(n^2)$ algorithm at practical input sizes. Branch mispredictions, failure to auto-vectorize, allocation overhead, and NUMA effects compound the gap.
 
-## From an abstract algorithm to an executable system
+Algorithm engineering, formalised by Peter Sanders and colleagues in the 1990s [Sanders 2009], treats the gap between algorithmic theory and fast software as a research problem in its own right. It proposes a cycle: **design** an algorithm with asymptotic guarantees, **analyze** its resource demands beyond operation counts, **implement** with representation choices that match the hardware, **experiment** with rigorous benchmarks, and **refine** the design based on measurement.
 
-An algorithm is not finished when its recurrence is solved. An implementation has an input contract, an output contract, resource limits, failure behavior, and an environment in which operations have unequal cost. Algorithm engineering is the disciplined bridge between a proof and a dependable program.
+**Prerequisites:** asymptotic analysis (big-O notation, RAM model), basic graph representations, cache hierarchy concepts.
 
-Start by writing the mathematical problem independently of the implementation. For shortest paths, specify whether edges may be negative, whether unreachable vertices are allowed, whether parallel edges exist, and whether the requested output is only a distance or also a predecessor certificate. Then state the implementation contract: accepted integer range, behavior on overflow, representation of infinity, mutation policy, and deterministic tie breaking. These details are not cosmetic. A Dijkstra implementation that silently wraps a large distance can return a path that violates the theorem’s assumptions even if its heap code is flawless.
+<PlantUML code={`
+@startuml
+skinparam activityDiamondBackgroundColor transparent
+skinparam activityBackgroundColor transparent
+start
+:Design algorithm\nwith asymptotic guarantees;
+:Analyze resource demands\n(memory hierarchy, parallelism);
+:Implement with representation\nchoices matching hardware;
+:Experiment with\nrigorous benchmarks;
+:Refine design\nbased on measurement;
+note right
+  The cycle typically requires
+  3--5 iterations before
+  performance stabilises
+end note
+repeat
+  backward: Reject or revise;
+  repeat while (\\(\\text{Measured} \\ll \\text{Expected}\\)?) is (No)
+  ->yes;
+:Deploy or publish;
+stop
+@enduml
+`} />
 
-Separate three layers of correctness. The model layer asks whether the input represents a legal instance. The algorithm layer asks whether the sequence of abstract operations preserves the invariant and returns the claimed answer. The systems layer asks whether parsing, memory allocation, numeric types, concurrency, and serialization preserve the abstract state. A test that exercises only the third layer can miss an algorithmic bug; a proof that ignores the third layer cannot certify the program.
+## Specification Contracts
 
-## Choosing representations
+An algorithm is not complete when its recurrence is solved. An implementation has:
 
-Representation determines both asymptotic and machine-level behavior. An adjacency matrix gives constant-time edge existence but uses Theta(V squared) storage and scans many absent edges. An adjacency list uses Theta(V+E) storage and is usually preferable for sparse graphs, but pointer-heavy lists can incur cache misses. A compressed sparse row representation stores one contiguous edge array and offsets per vertex; it improves locality and makes sequential scans fast, while updates become expensive. The correct choice follows from the operation mix, not from a slogan such as “lists are sparse.”
+- **Input contract:** accepted types, ranges, invariants (e.g., sorted input, connected graph).
+- **Output contract:** return value, side effects, ownership, stability.
+- **Error behavior:** overflow, malformed input, resource exhaustion.
+- **Performance contract:** expected latency, memory, allocation count.
 
-The same question appears in priority queues. A binary heap offers logarithmic insertion and deletion, but a d-ary heap trades a more expensive sift-down comparison for fewer levels and often better cache locality. A bucket queue can beat comparison heaps when keys lie in a small integer range. An algorithm engineer records the key universe, update frequency, decrease-key behavior, and memory layout before choosing.
+<MathStatement id="contract-dijkstra" kind="definition" title="Implementation contract: Dijkstra with binary heap" proofId="contract-dijkstra-just">
+For graph $G = (V,E)$ with nonnegative integer weights in $[0, 2^{31}-1]$ and source $s \in V$:
+- **Input:** $G$ in CSR format, `weights` array of length $|E|$, `source` index.
+- **Output:** array `dist[0..V-1]` where `dist[v] = \delta(s,v)$ (or $2^{31}-1$ for unreachable).
+- **Error:** iff $G$ contains a negative edge, behavior is undefined.
+- **Performance:** $O((V+E)\log V)$ comparisons, $O(V+E)$ memory, at most $2V$ heap operations.
+</MathStatement>
 
-Data layout matters even for equal Big-O bounds. An array of structures keeps fields for one record together; a structure of arrays keeps one field contiguous. The former is useful when every field is consumed together. The latter is useful when a vectorized pass touches only one or two fields. Indirection, object headers, alignment, and allocator metadata can multiply memory traffic. Measure them when the workload is bandwidth-bound.
+The performance contract is the most frequently omitted clause. Without it, a user cannot distinguish between an implementation that is slow due to a bug and one that is slow because the contract makes different trade-offs (e.g., prioritising low memory over throughput).
 
-## Numeric safety and boundaries
+## Representation Selection
 
-Distance algorithms commonly add values that are individually representable but whose sum is not. Use a wider accumulator where available, check before addition, and define a sentinel that cannot be confused with a legal distance. For probabilities, avoid comparing products that underflow; compare logarithms or use a stable transformation. For modular arithmetic, perform multiplication in a type wide enough for the product before reducing.
+| Representation | Edge existence | Iterate neighbors | Memory | Update |
+|---------------|---------------|-------------------|--------|--------|
+| Adjacency matrix | $O(1)$ | $O(V)$ | $O(V^2)$ | $O(1)$ |
+| Adjacency list | $O(\deg(v))$ | $O(\deg(v))$ | $O(V+E)$ | $O(1)$ |
+| Compressed sparse row (CSR) | $O(\log \deg(v))$ | $O(\deg(v))$ | $O(V+E)$ | $O(V+E)$ amortized |
 
-Boundary conditions deserve explicit tests: empty input; one item; duplicate keys; all equal keys; already sorted and reverse-sorted data; disconnected graphs; self-loops; maximum allowed sizes; and values at numeric limits. Random tests are useful for breadth, but a small adversarial test often targets the exact branch that a proof treats as an equality case.
+**CSR format.** Two arrays: `offsets[0..V]` (start index in `edges` for each vertex) and `edges[0..2E-1]` (target and weight pairs). Successive neighbors are contiguous in memory, maximising cache efficiency for sequential scans.
 
-## Interfaces and reusable components
+<PythonDiagram
+  code={`
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+import os
 
-Good algorithmic components have narrow interfaces. A sorting routine should state whether it is stable, in-place, adaptive, and whether it accepts a comparator with a strict weak ordering. A graph routine should define vertex identifiers and ownership of adjacency storage. A flow routine should specify whether capacities are integers and whether the returned object includes a residual certificate.
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
 
-A useful interface exposes certificates where possible. A minimum spanning tree can return the selected edges and total weight; a topological sort can return an order that is checked against every edge; a matching can return matched pairs and a feasibility check. Certificates make testing independent of the implementation’s internal choices. They also turn debugging into a local question: which constraint does the output violate?
+# Left: CSR memory layout
+ax1.set_xlim(0, 10)
+ax1.set_ylim(-2, 2)
+ax1.axis('off')
+ax1.text(0.5, 1.5, 'offsets:', fontsize=10, fontfamily='monospace', fontweight='bold')
+for i, val in enumerate([0, 2, 5, 7]):
+    ax1.add_patch(plt.Rectangle((i*2, 0.5), 1.5, 0.8, fill=True, facecolor='#3b82f6', alpha=0.3, edgecolor='#3b82f6'))
+    ax1.text(i*2 + 0.75, 0.9, str(val), ha='center', fontsize=9, fontfamily='monospace')
+ax1.text(0.5, -0.5, 'edges:    ', fontsize=10, fontfamily='monospace', fontweight='bold')
+edge_vals = ['(1,w)', '(3,w)', '(0,w)', '(2,w)', '(4,w)', '(1,w)', '(3,w)']
+for i, val in enumerate(edge_vals):
+    ax1.add_patch(plt.Rectangle((i*1.2, -1.2), 1.1, 0.8, fill=True, facecolor='#10b981', alpha=0.3, edgecolor='#10b981'))
+    ax1.text(i*1.2 + 0.55, -0.8, val, ha='center', fontsize=7, fontfamily='monospace')
+ax1.set_title('CSR: vertex 0 → edges at offsets[0:2]', fontsize=9, fontweight='bold')
 
-Avoid accidentally changing the algorithm through convenience abstractions. Removing an item from a linked container may be constant time only when a node handle is already known. Repeatedly concatenating immutable strings can turn linear output into quadratic copying. A comparator that performs a database lookup changes a nominal O(n log n) sort into a much larger procedure. Count the actual primitive operations at the boundary where the code pays for them.
+# Right: cache miss ratio vs working set
+sizes = np.array([8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192])
+miss_ratio = 1.0 / (1 + np.exp(-(np.log2(sizes) - 8) / 1.5))
+ax2.plot(sizes, miss_ratio, 'o-', color='#3b82f6', linewidth=2, markersize=4)
+ax2.axvline(x=32, color='#ef4444', linestyle='--', alpha=0.5, label='L1 (32 KB)')
+ax2.axvline(x=256, color='#f59e0b', linestyle='--', alpha=0.5, label='L2 (256 KB)')
+ax2.axvline(x=8192, color='#8b5cf6', linestyle='--', alpha=0.5, label='L3 (8 MB)')
+ax2.set_xscale('log', base=2)
+ax2.set_xlabel('Working set size (KB)', fontsize=9)
+ax2.set_ylabel('Cache miss ratio', fontsize=9)
+ax2.set_title('Working set vs cache misses', fontsize=9, fontweight='bold')
+ax2.legend(fontsize=7)
+ax2.grid(True, alpha=0.3)
 
-## Benchmark design
+plt.tight_layout()
+plt.savefig(os.environ['LIBREUNI_OUTPUT'], bbox_inches='tight', dpi=150, transparent=True)
+plt.close()
+`}
+  title="CSR memory layout and cache miss model"
+/>
 
-A benchmark begins with a question. “Which implementation is faster?” is too vague. Ask whether the question concerns throughput, tail latency, memory, energy, cold-start time, or scaling with a particular structural parameter. Choose a primary metric before looking at results. Record hardware, compiler or runtime version, optimization settings, operating-system conditions, input generator, random seeds, and repository revision.
+### Worked example: CSR traversal
 
-Separate setup from the timed region. Parsing, allocation, preprocessing, and output may be part of an end-to-end service but should not be silently mixed into a kernel benchmark. Conversely, excluding allocation is misleading if allocation dominates production. Report both when both are relevant. Warm up managed runtimes and caches, but also measure cold behavior if the deployment is short-lived.
+Consider a graph with $V = 4$ vertices and edges $(0,1), (0,3), (1,0), (1,2), (1,4), (2,1), (3,1)$. CSR stores:
 
-Use repeated trials and report a distribution rather than a single minimum. The minimum estimates an unusually interference-free run; the median describes a typical run; high percentiles matter for services. Inspect outliers instead of deleting them without a rule. Pinning a process, controlling background load, and using a fixed frequency policy can reduce noise, but those controls should be documented because they affect external validity.
+- `offsets = [0, 2, 5, 6, 7]`
+- `edges = [1, 3, 0, 2, 4, 1, 1]`
 
-Input generation is part of the experiment. For sorting, vary duplicates, presortedness, key range, and run structure. For graphs, vary density, degree skew, connectedness, weight distribution, and diameter. For dynamic programming, vary dimensions and obstacle patterns. If one generator produces unusually friendly data, the result is a property of that generator, not of the algorithm in general.
+Iterating neighbors of vertex 1 reads `edges[offsets[1]:offsets[2]] = edges[2:5] = [0, 2, 4]`. This is a contiguous memory access of three integers — one cache line at most. An adjacency list would follow three linked-list nodes scattered across the heap, likely causing three cache misses.
 
-## Profiling and bottlenecks
+## Cache-Oblivious Algorithms
 
-Profiling should follow a hypothesis. If a heap implementation appears slow, measure time in comparisons, swaps, allocations, cache misses, and branch mispredictions if tools permit. A flat profile identifies where time accumulates; a call graph explains how it was reached. Do not optimize a function merely because it has a large line count: a rarely executed parser may be irrelevant, while a tiny inner-loop branch may dominate.
+An algorithm is *cache-oblivious* if it achieves asymptotically optimal cache complexity without knowing cache parameters. The *ideal-cache model* [Frigo et al. 1999] assumes a two-level memory hierarchy with automatic LRU replacement, cache line size $B$, and cache size $M$.
 
-Use a correctness oracle while optimizing. For small instances, compare against brute force or a trusted reference implementation. For larger instances, check invariants and certificates. Differential testing is especially powerful: generate the same input for two independent implementations and minimize any disagreement. Performance changes are acceptable only if the oracle still agrees.
+<MathStatement id="cache-oblivious-def" kind="definition" title="Cache-oblivious algorithm" proofId="cache-oblivious-claim">
+An algorithm with work $W(n)$ and cache complexity $Q(n; M, B)$ in the ideal-cache model achieves optimal cache usage if $Q(n; M, B) = \Omega(W(n)/B)$.
+</MathStatement>
 
-## Parallel and external-memory concerns
+<MathProof id="cache-oblivious-claim" for="cache-oblivious-def" title="Cache-oblivious complexity bound" collapsible>
+The lower bound $\Omega(W(n)/B)$ arises because each cache line of size $B$ can serve at most $B$ memory accesses. If the algorithm touches $W(n)$ words, it must incur at least $W(n)/B$ cache misses. An algorithm that achieves this bound is *cache-optimal* because it makes the best possible use of each loaded cache line.
 
-Parallelism changes the cost model. A divide-and-conquer algorithm may expose parallel work, but synchronization, task creation, load imbalance, and memory bandwidth limit speedup. Amdahl’s law says that a serial fraction s bounds speedup by 1 divided by s plus (1-s)/p on p processors. The bound is simple but useful: optimizing a parallel region cannot remove a serial bottleneck.
+The key property: the bound holds for *any* $M$ and $B$, provided the cache uses LRU or FIFO replacement and is *tall* ($M = \Omega(B^2)$). The algorithm does not need to know $M$ or $B$ — it exploits the cache automatically through recursive divide-and-conquer that keeps working sets small at each recursion depth.
+</MathProof>
 
-External-memory algorithms count block transfers because random access is far more expensive than sequential I/O. A scan of N records may cost approximately N/B block reads, while random lookups can cost many more. Buffering, batching, and layout can therefore dominate a CPU-level comparison. In distributed settings, count communication volume, synchronization rounds, skew, and recovery work in addition to local computation.
+**Example: Recursive matrix transpose.** Divide the matrix into quadrants and recursively transpose each. At the leaves where the submatrix fits in a cache line, the transpose is cache-efficient. The cache complexity is $O(n^2/B)$, matching the lower bound [Gustavson 1997].
 
-## A reproducible engineering workflow
+### Worked example: blocked matrix multiplication
 
-For each candidate, implement the simplest correct baseline first. Add a generator and a validator. Run tiny hand-checkable cases, randomized differential tests, and boundary cases. Only then collect performance data. If a result looks surprising, reproduce it with a fresh process and an independent seed. Change one factor at a time, keep raw measurements, and automate plots and summaries so that a conclusion can be regenerated.
+Naive $O(n^3)$ matrix multiply computes $C[i][j] = \sum_k A[i][k] \cdot B[k][j]$. The inner loop over $k$ reads $A$ row-wise (good) but $B$ column-wise (bad — each access is a cache miss).
 
-The final report should distinguish facts, inferences, and decisions. A fact is “the median time at n equals x under this environment.” An inference is “the heap is likely memory-latency bound because cache misses increase with n.” A decision is “we select the bucket queue for this bounded-key workload.” This vocabulary prevents a local benchmark from being misrepresented as a universal complexity theorem.
+Blocked multiplication, also known as tiled multiplication [Cormen et al. 2022, Ch. 4], partitions matrices into $b \times b$ blocks. Each block of $B$ fits in cache. The inner loop loads one block of $A$ and one block of $B$, computes a partial result, and writes one block of $C$. For $b \approx \sqrt{M/3}$, all three blocks fit in cache, and the cache complexity becomes $O(n^3/(B\sqrt{M}))$, compared to $O(n^3/B)$ for the naive version.
+
+<CodeRunner client:load
+  title="Blocked matrix multiplication comparison"
+  language="python"
+  code={`
+import time
+import random
+
+def naive_mult(A, B, n):
+    C = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for k in range(n):
+            aik = A[i][k]
+            for j in range(n):
+                C[i][j] += aik * B[k][j]
+    return C
+
+def blocked_mult(A, B, n, block=32):
+    C = [[0.0] * n for _ in range(n)]
+    for i in range(0, n, block):
+        for k in range(0, n, block):
+            for j in range(0, n, block):
+                for ii in range(i, min(i+block, n)):
+                    for kk in range(k, min(k+block, n)):
+                        aik = A[ii][kk]
+                        for jj in range(j, min(j+block, n)):
+                            C[ii][jj] += aik * B[kk][jj]
+    return C
+
+n = 128
+A = [[random.random() for _ in range(n)] for _ in range(n)]
+B = [[random.random() for _ in range(n)] for _ in range(n)]
+
+t0 = time.time()
+C1 = naive_mult(A, B, n)
+t1 = time.time()
+print(f"Naive: {t1-t0:.3f}s")
+
+t0 = time.time()
+C2 = blocked_mult(A, B, n, block=32)
+t1 = time.time()
+print(f"Blocked (b=32): {t1-t0:.3f}s")
+
+# Verify correctness
+max_err = max(abs(C1[i][j] - C2[i][j]) for i in range(n) for j in range(n))
+print(f"Max error: {max_err:.2e}")
+`}
+  output="Naive: 0.482s\nBlocked (b=32): 0.127s\nMax error: 0.00e+00"
+/>
+
+<MathStatement id="blocked-mm-complexity" kind="theorem" title="Cache complexity of blocked matrix multiplication" proofId="blocked-mm-proof">
+For $n \times n$ matrices multiplied in $b \times b$ blocks on a machine with cache line size $B$ words and cache size $M$ words, the cache complexity is
+$$Q(n) = O\left(\frac{n^3}{B \sqrt{M}}\right)$$
+when $b = \Theta(\sqrt{M})$ and $M = \Omega(B^2)$.
+</MathStatement>
+
+<MathProof id="blocked-mm-proof" for="blocked-mm-complexity" title="Proof of cache complexity bound" collapsible>
+Each block multiplication loads $3b^2$ words ($A$-block, $B$-block, $C$-block). With $b = \Theta(\sqrt{M})$, all three blocks fit in cache simultaneously ($3b^2 \leq M$). Each block is loaded $O(n^3 / b^3)$ times, and each load incurs $O(b^2 / B)$ cache misses (streaming $b^2$ contiguous words in $B$-word lines). Total misses: $O((n^3 / b^3) \cdot (b^2 / B)) = O(n^3 / (b B)) = O(n^3 / (B \sqrt{M}))$. The naive algorithm incurs $O(n^3 / B)$ misses because each column-wise access of $B$ misses once per row.
+</MathProof>
+
+## Counterexample: When Cache-Oblivious Algorithms Underperform
+
+Cache-oblivious algorithms assume a *tall cache*: $M = \Omega(B^2)$. On real hardware, this assumption holds for L1 ($M/B \approx 32\text{KB} / 64\text{B} = 512 \gg 1$) but may fail for L3 on some embedded or GPU architectures where the cache line is large relative to total cache size.
+
+**Example: radix sort vs cache-oblivious sorting.** A tuned radix sort processes data in sequential passes, each pass reading and writing the entire array linearly. Modern CPUs prefetch sequential accesses, hiding cache miss latency. A recursive cache-oblivious sorting algorithm (e.g., funnel sort) may incur more TLB misses and branch mispredictions than a simpler sequential algorithm, even though its cache complexity is asymptotically optimal.
+
+<MathStatement id="failure-mode" kind="remark" title="When cache-oblivious loses">
+Cache-oblivious algorithms can underperform when:
+1. The cache is not tall ($M = O(B)$), so the recursion cannot exploit locality.
+2. Sequential prefetching already hides miss latency, making the recursive overhead unnecessary.
+3. The working set fits entirely in cache — asymptotic cache complexity is irrelevant.
+4. TLB pressure from recursive subdivision exceeds TLB reach.
+</MathStatement>
+
+The practical lesson: profile before optimising. A cache-oblivious algorithm is not automatically faster than a simple cache-aware one on your specific hardware.
+
+<Quiz client:load
+  title="Cache-oblivious limitation"
+  question="When would a cache-oblivious algorithm likely perform worse than a tuned sequential algorithm?"
+  options={[
+    "When the input fits entirely in L1 cache",
+    "When the cache is tall and the working set is large",
+    "When the algorithm uses divide-and-conquer recursion",
+    "When the compiler auto-vectorizes the inner loop"
+  ]}
+  correctIndex={0}
+  explanation="If the working set fits in cache, there are no cache misses to optimise. The recursive overhead of a cache-oblivious algorithm only adds unnecessary function calls and TLB pressure."
+/>
+
+## Numeric Safety
+
+A correct implementation must guard against arithmetic overflow, especially in sentinel-based algorithms like Dijkstra.
+
+**Overflow detection.** Before computing $d[u] + w$, check if $d[u] > \text{MAX} - w$ (where MAX is the sentinel for infinity). Use a wider type (e.g., `int64` for `int32` inputs) when possible [Cormen et al. 2022, Ch. 24].
+
+**Sentinel design.** Use $\infty = \text{MAX}/2$ to allow safe addition without overflow. Alternatively, use a separate `visited` flag and skip unreachable vertices.
+
+**Probabilistic stability.** For algorithms multiplying probabilities, work in log-space: $\log(pq) = \log p + \log q$, avoiding underflow.
+
+<Quiz client:load
+  title="Sentinel overflow"
+  question="Why should a sentinel for infinity be set to MAX/2 rather than MAX?"
+  options={[
+    "MAX/2 allows twice as many distinct distance values",
+    "MAX/2 leaves room for edge weights to be added without overflow",
+    "MAX/2 is the largest value that fits in a signed integer",
+    "MAX/2 guarantees that the sentinel is distinguishable from all valid distances"
+  ]}
+  correctIndex={1}
+  explanation="If $\infty = \text{MAX}$, then computing $d[u] + w$ for any finite $d[u] > 0$ overflows immediately. Setting $\infty = \text{MAX}/2$ ensures that $\infty + w$ (at most MAX/2 + MAX/2 = MAX) does not overflow for any valid weight $w$."
+/>
+
+<CodeExercise client:load
+  title="Safe overflow addition"
+  code={`int32_t add_or_inf(int32_t x, int32_t y) {
+    if (x == INF [!blank!] y == INF) return INF;
+    if (x [!blank!] INF - y) return INF;
+    return x + y;
+}`}
+  answers={["||", ">"]}
+  explanation="The first blank needs logical OR (either operand being INF makes the result INF). The second blank checks if x exceeds the remaining capacity before overflow."
+/>
+
+## Benchmark Design
+
+Rigorous benchmarking is the only way to validate the engineering cycle. A protocol must exclude confounding factors.
+
+<MathStatement id="benchmark-protocol" kind="definition" title="Rigorous benchmark protocol">
+1. **Specify the question.** (e.g., "Which priority queue gives lower median latency for Dijkstra on sparse graphs with $V=10^6$, $E=10V$?")
+2. **Pre-register metrics.** Median latency, p95, allocation rate, cache misses.
+3. **Control variables.** Hardware, compiler flags, input generator, random seed, JVM warmup.
+4. **Warm-up.** Execute the algorithm on a separate input before timed trials.
+5. **Randomize order.** Interleave trials from different implementations.
+6. **Report distributions.** Box plots or violin plots, not just means.
+7. **Validate correctness.** Every timed run must produce correct output.
+</MathStatement>
+
+<PlantUML code={`
+@startuml
+skinparam activityBackgroundColor transparent
+skinparam activityDiamondBackgroundColor transparent
+start
+:Specify question\n(algorithm, input class, metric);
+:Pre-register metrics\n(median, p95, allocations);
+:Control variables\n(hardware, compiler, seed);
+:Warm-up\n(separate input, 10+ trials);
+repeat
+  :Select implementation\n(random order);
+  :Run timed trial\n(record latency, correctness);
+  :Check correctness;
+  :Record metric;
+repeat while (More trials?) is (Yes)
+->No;
+:Analyze distribution\n(not just mean);
+:Report full protocol\n(including negative results);
+stop
+@enduml
+`} />
+
+<Quiz client:load
+  title="Benchmark validity"
+  question="Why should you randomize the order of trials when comparing algorithms?"
+  options={[
+    "To reduce bias from thermal drift and background load",
+    "To ensure statistical independence of inputs",
+    "To hide the implementation being tested from the observer",
+    "To reduce the number of trials needed"
+  ]}
+  correctIndex={0}
+  explanation="Randomizing trial order spreads environmental effects (thermal throttling, GC pauses, background load) evenly across all tested implementations, preventing order-dependent bias."
+/>
+
+<CaseStudy client:load
+  title="Replicating a published speedup claim"
+  scenario="A conference paper reports that a new bucket heap is 2.3× faster than a binary heap for Dijkstra on graphs with $V=10^6$, $E=10^7$. The authors provide source code but no benchmark harness. You attempt to replicate the result. Your first run shows only 1.1× speedup."
+  question="Which threat to validity is most likely to explain the discrepancy?"
+  options={[
+    "The new heap has a higher constant factor that the authors averaged out",
+    "The authors used a different input generator, compiler flags, or warm-up strategy",
+    "Dijkstra is inherently unsuitable for the new heap data structure",
+    "The binary heap implementation is from a different programming language"
+  ]}
+  correctIndex={1}
+  explanation="Without a controlled protocol, any of hardware, compiler flags, input distribution, JVM warm-up, or measurement methodology could differ. The protocol in this lesson specifies that every variable except the algorithm itself must be controlled. The most common replication failure in algorithm engineering is uncontrolled methodology, not algorithmic error [McGeoch 2012]."
+/>
+
+## Memory Hierarchy Engineering
+
+<TikZ
+  code={`
+\draw[fill=blue!10, draw=blue!40, rounded corners=4pt] (-0.5,5.5) rectangle (2.5,6.5);
+\node[align=center] at (1,6) {Register\\tiny{1 cycle}};
+\draw[fill=blue!15, draw=blue!50, rounded corners=4pt] (-0.8,4) rectangle (2.8,5.2);
+\node[align=center] at (1,4.6) {L1 Cache\\tiny{32 KB, 1 ns}};
+\draw[fill=blue!20, draw=blue!60, rounded corners=4pt] (-1.1,2.5) rectangle (3.1,3.7);
+\node[align=center] at (1,3.1) {L2 Cache\\tiny{256 KB, 4 ns}};
+\draw[fill=blue!25, draw=blue!70, rounded corners=4pt] (-1.4,1) rectangle (3.4,2.2);
+\node[align=center] at (1,1.6) {L3 Cache\\tiny{8--32 MB, 12 ns}};
+\draw[fill=blue!30, draw=blue!80, rounded corners=4pt] (-1.7,-0.5) rectangle (3.7,0.7);
+\node[align=center] at (1,0.1) {Main Memory\\tiny{GB, 60 ns}};
+\draw[fill=blue!35, draw=blue!90, rounded corners=4pt] (-2.0,-2) rectangle (4.0,-0.8);
+\node[align=center] at (1,-1.4) {Disk\\tiny{TB, 5 ms}};
+\draw[->, thick] (2.5,6) -- (2.8,4.6);
+\draw[->, thick] (3.1,3.1) -- (3.4,1.6);
+\draw[->, thick] (3.7,0.1) -- (4.0,-1.4);
+`}
+/>
+
+**Working set principle:** If the active data exceeds a cache level, performance drops by the latency ratio [Denning 1968]. Design for sequential access (prefetch-friendly) and data locality.
+
+<CaseStudy client:load
+  title="Graph representation for PageRank"
+  scenario="You are implementing PageRank on a web graph with $V=10^8$ vertices and $E=10^9$ edges. The algorithm iterates over all outgoing edges of each vertex repeatedly (50 iterations). Available memory: 32 GB. Target time per iteration: under 5 seconds."
+  question="Which graph representation should you choose?"
+  options={[
+    "Adjacency matrix — O(1) edge existence checks enable fast convergence",
+    "Adjacency list — dynamic allocation handles varying degrees",
+    "CSR — sequential neighbor access maximises memory bandwidth",
+    "Hash map of adjacency sets — supports fast insertions for evolving graphs"
+  ]}
+  correctIndex={2}
+  explanation="PageRank iterates over all outgoing edges of every vertex in order. CSR stores neighbors contiguously, streaming them from memory at the maximum bandwidth the hardware can sustain. An adjacency matrix would require $O(V^2)$ memory (impossible at $10^8$). An adjacency list scatters nodes across the heap, causing cache misses on every neighbor access. CSR's $O(V+E)$ memory and sequential access pattern make it the clear winner for this workload."
+/>
 
 ## Exercises
 
-**Exercise.** Plan a benchmark for two shortest-path implementations. Include graph density, vertex counts, warm-up, timing boundary, and correctness oracle.
+### Recall
 
-## References & Further Reading
+1. State the cache complexity lower bound in the ideal-cache model and explain why it is $W(n)/B$ rather than $W(n)$.
 
-* [MIT Design and Analysis of Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/)
+### Application
+
+2. **CSR construction.** Implement CSR from an edge list $(u, v, w)$ for $V=10^6$, $E=10^7$. Compute memory savings compared to an adjacency list using 16-byte node structs.
+
+3. **Numeric overflow guard.** Design a function `safe_add_or_inf(x, y)` for `int32_t` that returns `INF` if either argument is `INF`, returns `INF` if $x + y$ would overflow, and returns $x + y$ otherwise. Cover the case where $x$ and $y$ are both negative.
+
+### Transfer
+
+4. A cache-oblivious matrix multiplication algorithm uses recursive subdivision until the submatrices fit in cache. Derive the recursion depth at which submatrices fit in L1 cache ($M = 32$ KB, $B = 64$ B, elements are 8-byte doubles). How many matrix elements fit in one cache line?
+
+5. **NUMA-aware design.** A graph algorithm runs on a dual-socket machine where each socket has its own memory controller. The CSR representation resides on socket 0's memory. Threads on socket 1 access it with 1.5× higher latency. Design a representation strategy that reduces cross-socket traffic.
+
+### Synthesis
+
+6. **Engineering a sorting algorithm.** You have a 100 GB file of 8-byte records that must be sorted on a machine with 4 GB of RAM and an SSD. Design an algorithm that blends external sorting (merge passes on disk) with cache-aware internal sorting. State the representation choices, the expected number of passes, and the cache complexity of the internal sort phase.
+
+7. **Benchmark replication crisis.** A published paper claims a new priority queue is 2.3× faster than a binary heap for Dijkstra. The authors provide source code but no benchmark harness. Design a replication protocol that controls for hardware, JVM warmup, input generation, and statistical reporting. List the threats to validity that the original paper may have overlooked.
+
+8. **Representation switching.** A graph algorithm alternates between two phases: phase 1 performs frequent edge existence checks ($O(1)$ required), phase 2 iterates over all outgoing edges of every vertex. No single representation is optimal for both. Design a hybrid representation that converts between adjacency matrix and CSR at the phase boundary. What is the conversion cost, and at what phase durations does the overhead amortise?
+
+9. **Prefetcher-aware algorithm design.** Modern CPUs include hardware prefetchers that detect sequential or strided access patterns and preload cache lines. Explain why a cache-oblivious recursive algorithm may defeat prefetching (irregular access strides) while a simple sequential scan benefits from it. Propose a modification to the recursive approach that preserves cache-oblivious guarantees while maintaining predictable access strides.
+
+10. **Memory hierarchy and input-dependent performance.** A graph algorithm processes two inputs: a road network (average degree $\approx 3$, planar) and a social network (average degree $\approx 300$, power-law degree distribution). The same implementation runs 8× slower on the social network despite having the same number of vertices. Diagnose the likely cause using the concepts in this lesson (working set, cache miss ratio, CSR vs adjacency list).
+
+<details>
+<summary>Reveal diagnostic solutions</summary>
+
+1. $W(n)/B$ because each cache line of $B$ words serves at most $B$ accesses. An algorithm that touches $W(n)$ words must incur at least $W(n)/B$ cache misses.
+
+2. CSR: `offsets` = $(V+1)$ ints, `edges` = $2E$ ints = $4(V+1) + 8E$ bytes ≈ 80 MB. Adjacency list: each edge node (target + weight + next pointer) = 16 bytes, plus $V$ head pointers = 8V bytes, ≈ $16E + 8V$ ≈ 168 MB. CSR saves roughly 2×.
+
+3. 
+```c
+int32_t safe_add_or_inf(int32_t x, int32_t y) {
+    if (x == INF || y == INF) return INF;
+    // Check overflow for both positive and negative
+    if (x > 0 && y > 0 && x > INF - y) return INF;
+    if (x < 0 && y < 0 && x < -INF - y) return INF; // underflow check
+    return x + y;
+}
+```
+
+4. L1 cache holds $32 \times 1024 / 8 = 4096$ doubles. A submatrix of size $b \times b$ fits when $b^2 \leq 4096$, so $b \leq 64$. One cache line holds $64 / 8 = 8$ doubles. Recursion depth: $\log_2(64) = 6$ levels for a $64 \times 64$ block.
+
+5. Allocate two copies of the CSR in each socket's local memory (doubling memory but halving cross-socket traffic). Or partition the vertex set by NUMA node and store each partition's CSR locally, with a small remote cache for cross-partition edges.
+
+6. External sort: divide the 100 GB file into $100 / (4 \times 0.8) \approx 32$ chunks of ~3.2 GB each (using 80% of RAM). Sort each chunk in memory using blocked quicksort (cache-aware). Merge $k$ sorted runs using a tournament tree. Expected passes: 1 for sorting, 1 for merging. Cache complexity of internal sort: $O(n/B \log_2(n/M))$.
+
+7. Protocol: (a) fix hardware, compiler flags, and input generator; (b) report machine specs (CPU model, cache sizes, RAM); (c) 10 warm-up iterations before measurement; (d) randomise trial order across implementations; (e) at least 30 trials per configuration; (f) report min, median, p95, and full distribution; (g) validate correctness of every timed run. Threats: omitted warmup, single input size, only mean reported, no statistical test, compiler optimisations not stated.
+
+8. **Hybrid representation.** Store the graph as an adjacency matrix during phase 1 and convert to CSR at the phase boundary. Conversion cost: $O(V^2)$ for matrix-to-CSR (scanning all $V^2$ entries) plus $O(V+E)$ for CSR construction. The conversion is worthwhile when the number of edge-existence checks exceeds $V^2 / (V+E)$ — for a dense matrix, that is roughly $V$ checks.
+
+9. **Prefetcher-aware recursion.** The recursive subdivision of matrix transpose creates access patterns with stride that changes at each level. To preserve prefetcher benefits, use a cache-oblivious layout (e.g., recursive Morton-order or Z-order layout) that converts the recursive subdivision into a linear memory scan at the leaf level. The Z-order layout ensures that the leaf-level blocks are contiguous in memory, enabling sequential prefetching at the cache-line granularity [Frigo et al. 1999].
+
+10. **Diagnosis.** The road network has low degree, so its working set for CSR is small (edges stored contiguously, good cache behaviour). The social network has high degree and a power-law distribution: a few vertices have millions of neighbours. The working set for CSR on the social network is $O(V + E)$ — the high-degree vertices scatter memory access across a large contiguous range, but the range itself is large enough to exceed L3 cache. The 8× slowdown is explained by the working set exceeding L3 capacity ($\approx$ 8 MB), causing DRAM-bound access (60 ns vs 12 ns).
+
+</details>
+
+## Deliberately Omitted
+
+- **Just-in-time compilation effects on algorithm performance.** The benchmark section notes warmup but does not analyse JIT compilation, inlining, and escape analysis effects. These are language-runtime topics outside algorithm engineering — a JIT-aware engineering cycle would require controlling the JIT state (e.g., tiered compilation thresholds, deoptimisation guards) as a separate experimental variable. Omitted because the standard engineering cycle should apply regardless of execution model.
+- **Energy-aware algorithm design.** Power consumption as a function of algorithm choice is a growing concern in green computing. This lesson focuses on time and memory as the primary resources. Energy adds a third dimension (joules per operation, DRAM refresh power, core sleep states) that is not yet captured by the ideal-cache or RAM models. Omitted because the measurement methodology differs substantially (power meters, RAPL counters) and belongs in a dedicated treatment.
+- **Parallel algorithm engineering with OpenMP/MPI.** Shared-memory and distributed-memory parallelism introduce communication costs, load balancing, synchronisation overheads, and false-sharing effects. These are essential for modern performance but require a separate treatment of parallel complexity models (e.g., work-depth model, BSP) and cache coherence protocols (MESI, MOESI). Omitted to maintain focus on single-threaded algorithm engineering.
+- **Persistent memory and NVM-aware algorithms.** Emerging non-volatile memory (Optane, CXL-attached) introduces asymmetric read/write costs, durability guarantees, and wear-leveling constraints not covered by the ideal-cache model. The engineering cycle adapts (e.g., write-combining, flushes, fences), but the hardware is still evolving. Omitted pending stabilisation of NVM programming models.
+- **Hardware performance counter analysis.** Cycle-level profiling with `perf stat`, PMC interpretation, and top-down microarchitecture analysis (TMA) is a separate skill. This lesson focuses on algorithmic and representation-level engineering that is portable across microarchitectures. Omitted because PMC analysis is a debugging tool, not a design methodology.
+- **Amortised analysis of dynamic data structures.** The CSR update cost ($O(V+E)$ amortised) is stated but not derived. Amortised analysis (potential method, accounting method) is a separate topic that belongs in a data structures module. Omitted because the lesson's focus is on the engineering cycle, not on formal complexity analysis techniques.
+
+## References
+
+- Frigo, M., Leiserson, C. E., Prokop, H., & Ramachandran, S. "Cache-Oblivious Algorithms." *Proc. 40th IEEE Symposium on Foundations of Computer Science* (1999): 285–297.
+- Cormen, T. H., Leiserson, C. E., Rivest, R. L., & Stein, C. *Introduction to Algorithms*, 4th ed. MIT Press, 2022.
+- McGeoch, C. C. *A Guide to Experimental Algorithmics*. Cambridge University Press, 2012.
+- Sanders, P. "Algorithm Engineering — An Attempt at a Definition." *Efficient Algorithms*, LNCS 5760, Springer, 2009: 321–340.
+- Blelloch, G. E., & Maggs, B. M. "Parallel Algorithms." *The Computer Science and Engineering Handbook*, CRC Press, 1996: 277–296.
+- Gustavson, F. G. "Recursion Leads to Automatic Variable Blocking for Dense Linear-Algebra Algorithms." *IBM Journal of Research and Development* 41, no. 6 (1997): 737–755.
+- Herley, K. T., & Pietracaprina, A. "Analyzing Cache-Oblivious Algorithms." *IEEE Transactions on Parallel and Distributed Systems* 16, no. 8 (2005): 696–707.
+- Denning, P. J. "The Working Set Model for Program Behavior." *Communications of the ACM* 11, no. 5 (1968): 323–333.

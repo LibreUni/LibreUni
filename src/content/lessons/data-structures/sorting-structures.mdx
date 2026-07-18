@@ -3,95 +3,465 @@ title: "Sorting Structures and Selection"
 course: "data-structures"
 description: "Sorting interfaces, comparison lower bounds, stable representations, selection, and external-memory considerations."
 ---
+import StructureDiagram from '../../../components/StructureDiagram.astro';
+import StructureExercise from '../../../components/StructureExercise';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+
 # Sorting Structures and Selection
 
-Sorting is an algorithmic task, but data representation determines how comparisons, moves, memory, and stability behave. A sorting routine receives records and a comparator, then returns an ordered sequence under a total preorder or total order. The data structure may be an array, linked list, external runs, or an index over immutable records. A complete specification must define equal-key behavior, ownership, mutation, and whether the result is stable.
+**Prerequisites:** Asymptotic notation ($O$, $\Omega$, $\Theta$), recursion and recurrences, arrays and linked lists, basic sorting concepts.
+
+---
+
+You need the top 20 best-selling products from a catalog of 10 million. Sorting all 10 million ($O(n \log n)$) is wasteful when only 20 are needed. A min-heap of size 20 turns selection into $O(n \log 20)$ — nearly 500$\times$ faster. Sorting is not always the right answer.
+
+This lesson examines how data representation constrains sorting: **stability** (order of equal keys), **space usage** (in-place vs. auxiliary memory), **cache behavior** (contiguous vs. pointer-chasing access), and **external memory** (when data exceeds RAM). Understanding these constraints lets you choose the right strategy rather than reaching for a generic sort.
 
 ## Order and stability
 
-A comparator should be transitive and consistent with equality for the algorithm’s assumptions. If comparator(a,b) and comparator(b,a) are both false, keys may be equivalent; a stable sort preserves their original relative order. Stability matters when sorting by a secondary key after a primary-key sort, or when equal records carry timestamps or provenance.
+<StructureDiagram kind="sort" title="Stable merge fronts" caption="A merge chooses from two sorted fronts and preserves the left-to-right order of equal keys." />
 
-Sorting can rearrange records, rearrange pointers, or produce an array of indices. Moving large records is expensive; sorting compact references can reduce bytes moved but adds indirection on later access. If records are immutable and shared, an index sort preserves ownership. The representation choice must say whether input is mutated and whether output aliases input storage.
+| Requirement | Meaning | Failure symptom |
+| --- | --- | --- |
+| total order | comparisons are transitive | "sorted" has no answer |
+| stability | equal records retain order | pagination changes |
+| ownership | mutation is specified | caller data changes |
+
+<Quiz client:load question="What does stability constrain?" options={["The order of equal-key records", "The number of input records", "The comparator's memory address", "Whether arrays have indices"]} correctIndex={0} explanation="A stable sort preserves the relative order of records whose keys compare equal." />
+
+A comparator must be transitive and consistent with equality. If `comparator(a,b)` and `comparator(b,a)` are both false, keys are equivalent; a stable sort preserves their original relative order. Stability matters when sorting by a secondary key after a primary-key sort, or when equal records carry timestamps or provenance.
+
+Sorting can rearrange records, rearrange pointers, or produce an array of indices. Moving large records is expensive; sorting compact references reduces bytes moved but adds indirection on access. If records are immutable and shared, an index sort preserves ownership. The representation choice must specify whether input is mutated and whether output aliases input storage.
 
 ## Comparison lower bound
 
-Any comparison sort must distinguish among n! possible input permutations. A deterministic comparison algorithm can be represented by a decision tree whose leaves correspond to possible output orders. A binary comparison gives at most two branches, so a tree with at least n! leaves has height at least (lceillog_2(n!)rceil=Omega(nlog n)). This lower bound applies to worst-case comparisons, not to integer-key algorithms that inspect bits or exploit a restricted domain.
+<MathStatement id="comparison-lower-bound" kind="theorem" title="Comparison sorting lower bound" proofId="comparison-lb-proof">
+Every deterministic comparison-based sorting algorithm performs at least $\lceil \log_2(n!) \rceil = \Omega(n \log n)$ comparisons in the worst case to sort $n$ distinct keys.
+</MathStatement>
 
-Stability does not change the asymptotic comparison lower bound, but it constrains which equal-key permutations are legal. A comparator that is not transitive can make “sorted” undefined: a cycle a less than b less than c less than a has no sequence satisfying all pairwise demands. Validate comparator contracts in tests or document that behavior is unspecified.
+<MathProof id="comparison-lb-proof" for="comparison-lower-bound" collapsible open>
+Any deterministic comparison sort can be modeled as a binary decision tree. Each internal node represents a comparison between two keys; each leaf represents a permutation of the input that is the output order. There are $n!$ possible input permutations, and a correct algorithm must distinguish all of them, so the tree must have at least $n!$ leaves.
+
+A binary tree of height $h$ has at most $2^h$ leaves. Therefore $2^h \ge n!$, giving $h \ge \lceil \log_2(n!) \rceil$. By Stirling's approximation:
+
+$$
+n! \sim \sqrt{2\pi n}\left(\frac{n}{e}\right)^n
+\quad\Longrightarrow\quad
+\log_2(n!) = n\log_2 n - n\log_2 e + O(\log n) = \Omega(n \log n)
+$$
+</MathProof>
+
+<PlantUML theme="none" code={`@startuml
+title Decision tree for n=3
+rectangle "a:b?" as n1
+rectangle "b:c?" as n2l
+rectangle "a:c?" as n2r
+rectangle "a<b<c" as l1
+rectangle "a<c<b" as l2
+rectangle "b<a<c" as l3
+rectangle "b<c<a" as l4
+rectangle "c<a<b" as l5
+rectangle "c<b<a" as l6
+
+n1 --> n2l : a ≤ b
+n1 --> n2r : a > b
+n2l --> l1 : b ≤ c
+n2l --> n2r : b > c
+n2r --> l3 : a ≤ c
+n2r --> l4 : a > c
+
+note right of n2r : "implicit a:c branch\nfor b:c case" as note1
+@enduml`} />
+
+<CaseStudy client:load title="Choosing a sorting family" scenario="Records have fixed-width integer keys from a small known range." question="Which alternative may avoid the comparison lower bound?" options={["Counting sort", "A comparison decision tree only", "A stack", "Union-find"]} correctIndex={0} explanation="Counting and radix methods exploit representation assumptions rather than learning order only through comparisons." />
+
+The lower bound applies to worst-case comparisons, not to integer-key algorithms that inspect bits or exploit a restricted domain. Stability does not change the asymptotic comparison lower bound, but constrains which equal-key permutations are legal. A non-transitive comparator can make "sorted" undefined: a cycle $a < b < c < a$ has no sequence satisfying all pairwise demands. Validate comparator contracts in tests or document that behavior is unspecified.
 
 ## Merge and linked structures
 
-Mergesort divides a sequence, recursively sorts halves, and merges two sorted sequences. The merge invariant is that the output prefix contains the smallest remaining elements from the two input fronts, in stable order when ties choose the left input first. The recurrence (T(n)=2T(n/2)+O(n)) gives O(n log n) time. Array merges use O(n) auxiliary space; linked-list merges can relink nodes with O(1) extra pointer storage.
+<PlantUML theme="none" code={`@startuml
+title Mergesort flow
+rectangle "n unsorted" as input
+rectangle "split" as split
+rectangle "left\nn/2" as left
+rectangle "right\nn/2" as right
+rectangle "sort left\nrecursively" as sortl
+rectangle "sort right\nrecursively" as sortr
+rectangle "merge" as merge
+rectangle "n sorted" as output
+
+input --> split
+split --> left
+split --> right
+left --> sortl
+right --> sortr
+sortl --> merge
+sortr --> merge
+merge --> output
+
+note right of merge : "O(n) merge,\nstable when ties\nchoose left"
+@enduml`} />
+
+Mergesort divides a sequence, recursively sorts halves, and merges two sorted sequences. The merge invariant: the output prefix contains the smallest remaining elements from the two input fronts, in stable order when ties choose the left input first. The recurrence $T(n) = 2T(n/2) + O(n)$ gives $O(n \log n)$ time. Array merges use $O(n)$ auxiliary space; linked-list merges relink nodes with $O(1)$ extra pointer storage.
 
 For linked lists, split using slow/fast pointers or a counted midpoint, recursively sort, and splice runs. Ensure the split terminates for size 0 and 1; a bad midpoint can recurse forever. During merge, update exactly one next pointer at a time and terminate the final node with null. A cycle introduced by a pointer error may make later traversal nonterminating even if order tests pass on short prefixes.
 
+<CodeRunner client:load
+  title="Linked-list mergesort in Python"
+  language="python"
+  code={`class Node:
+    def __init__(self, val, nxt=None):
+        self.val = val
+        self.nxt = nxt
+
+def merge_sort(head):
+    if not head or not head.nxt:
+        return head
+    slow = fast = head
+    while fast.nxt and fast.nxt.nxt:
+        slow = slow.nxt
+        fast = fast.nxt.nxt
+    right = slow.nxt
+    slow.nxt = None
+    return merge(merge_sort(head), merge_sort(right))
+
+def merge(l, r):
+    dummy = cur = Node(0)
+    while l and r:
+        if l.val <= r.val:
+            cur.nxt = l
+            l = l.nxt
+        else:
+            cur.nxt = r
+            r = r.nxt
+        cur = cur.nxt
+    cur.nxt = l or r
+    return dummy.nxt
+
+def to_list(head):
+    vals = []
+    while head:
+        vals.append(head.val)
+        head = head.nxt
+    return vals
+
+head = Node(3, Node(1, Node(4, Node(1, Node(5, Node(9))))))
+print(to_list(merge_sort(head)))`}
+  output="[1, 1, 3, 4, 5, 9]"
+/>
+
+**Worked quicksort trace on [3, 7, 8, 5, 2, 1, 9, 5, 4].** Use Lomuto partition with the last element as pivot. Three-way partition groups equal keys.
+
+Initial array: $[3, 7, 8, 5, 2, 1, 9, 5, 4]$. Pivot = 4 (last element).
+
+**Partition pass 1** (indices 0..8, pivot=4): scan with i=0, j=0. Compare 3 ≤ 4: swap A[0]↔A[0], i=1. 7 > 4: no swap. 8 > 4: no swap. 5 > 4: no swap. 2 ≤ 4: swap A[1]↔A[4], i=2 → [3,2,8,5,7,1,9,5,4]. 1 ≤ 4: swap A[2]↔A[5], i=3 → [3,2,1,5,7,8,9,5,4]. 9 > 4: no swap. 5 > 4: no swap. Final swap A[3]↔A[8]: $[3,2,1,4,7,8,9,5,5]$. Pivot 4 at index 3. Left: [3,2,1], right: [7,8,9,5,5].
+
+**Recurse left [3,2,1]** (indices 0..2, pivot=1): partition → [1,2,3], pivot at index 0.
+
+**Recurse right [7,8,9,5,5]** (indices 4..8, pivot=5 at A[8]): i=4. A[4]=7 > 5: no swap. A[5]=8 > 5: no swap. A[6]=9 > 5: no swap. A[7]=5 ≤ 5: swap A[4]↔A[7] → [5,8,9,7,5], i=5. Final swap A[5]↔A[8] → $[5,5,9,7,8]$. Pivot at index 5. Left: [5] (single). Right: [9,7,8].
+
+**Recurse right [9,7,8]** (indices 6..8, pivot=8): partition → [7,8,9], pivot at index 7.
+
+Final sorted array: $[1, 2, 3, 4, 5, 5, 7, 8, 9]$.
+
+| Recurrence depth | Array segment | Pivot | Partitioned |
+|:---:|:---:|:---:|---|
+| 0 | [3,7,8,5,2,1,9,5,4] | 4 | [3,2,1,4,7,8,9,5,5] |
+| 1 (left) | [3,2,1] | 1 | [1,2,3] |
+| 1 (right) | [7,8,9,5,5] | 5 | [5,5,9,7,8] |
+| 2 (right) | [9,7,8] | 8 | [7,8,9] |
+
+This trace reveals key behaviors: Lomuto partition makes a single left-to-right pass; equal keys (the two 5s) end up on both sides of the pivot; recursion depth depends on pivot quality — here the median-ish 4 and 5 kept depth bounded.
+
+<CodeExercise client:load
+  title="Complete the partition predicate"
+  code={`def partition(A, lo, hi):
+    pivot = A[hi]
+    i = lo
+    for j in range(lo, hi):
+        if A[j] [!blank!] pivot:
+            A[i], A[j] = A[j], A[i]
+            i += 1
+    A[i], A[hi] = A[hi], A[i]
+    return i`}
+  answers={["<="]}
+  explanation="Lomuto partition advances the boundary i only when the scanned element is not greater than the pivot, ensuring elements ≤ pivot accumulate on the left."
+/>
+
 ## Quicksort and partition structures
 
-Quicksort partitions around a pivot, recursively sorts subarrays, and can use O(log n) expected stack depth with randomized pivots. A partition invariant describes regions less than, equal to, and greater than the pivot. Two-way partition performs poorly on many duplicates; three-way partition groups equal keys and can reduce work dramatically.
+<StructureDiagram kind="array" title="Partition state" caption="A partition separates regions before recursive work; each region has a precise meaning." variant="capacity" />
 
-Worst-case time is O(n^2) for adversarial pivots. Randomized pivot selection gives expected O(n log n) comparisons under an appropriate randomness model, but an attacker who observes the seed or a deterministic pivot policy can still force bad inputs. Introsort switches to heapsort after excessive recursion depth, combining average quicksort performance with worst-case O(n log n).
+Quicksort partitions around a pivot, recursively sorts subarrays, and can use $O(\log n)$ expected stack depth with randomized pivots. A partition invariant describes regions less than, equal to, and greater than the pivot. Two-way partition performs poorly on many duplicates; three-way partition groups equal keys and can reduce work dramatically.
+
+<PlantUML theme="none" code={`@startuml
+title Three-way partition regions
+rectangle "< pivot" as less #90EE90
+rectangle "= pivot" as equal #FFF7AA
+rectangle "> pivot" as greater #FFCCCC
+rectangle "unprocessed" as unproc #ADD8E6
+
+less -right-> equal
+equal -right-> greater
+greater -right-> unproc
+
+note top of less
+  A[lo..lt-1]
+end note
+note top of equal
+  A[lt..i-1]
+end note
+note top of greater
+  A[gt+1..hi]
+end note
+note top of unproc
+  A[i..gt]
+end note
+@enduml`} />
+
+<Quiz client:load
+  question="What happens to quicksort with two-way partition on all-equal keys?"
+  options={["O(n²) worst case", "O(n log n) like normal", "O(n) because no swaps", "Stability is guaranteed"]}
+  correctIndex={0}
+  explanation="Two-way partition on all-equal keys produces subproblems of size n-1 and 0 repeatedly, yielding O(n²) time. Three-way partition groups equal keys together in one pass, reducing to O(n)."
+/>
+
+Worst-case time is $O(n^2)$ for adversarial pivots. Randomized pivot selection gives expected $O(n \log n)$ comparisons under an appropriate randomness model, but an attacker who observes the seed or a deterministic pivot policy can still force bad inputs. Introsort switches to heapsort after excessive recursion depth, combining average quicksort performance with worst-case $O(n\log n)$.
 
 ## Heapsort and selection
 
-Heapsort provides worst-case O(n log n) comparisons and O(1) auxiliary array space under ordinary in-place representation, but is not stable. A heap’s order invariant ensures the maximum or minimum is at the root; repeated extraction establishes a sorted suffix.
+<StructureDiagram kind="heap" title="Heap order property" caption="Parent priority is no greater than children; the root is a global extremum." />
 
-Selection asks for the kth smallest without fully sorting. Quickselect partitions and recurses into one side; randomized expected time is O(n), while worst case is O(n^2). The median-of-medians pivot gives deterministic linear worst-case time by guaranteeing a constant fraction discarded each round. Its proof groups elements, finds group medians, recursively selects their median, and counts elements on both sides.
+Heapsort provides worst-case $O(n\log n)$ comparisons and $O(1)$ auxiliary array space under ordinary in-place representation, but is not stable. A heap's order invariant ensures the maximum or minimum is at the root; repeated extraction establishes a sorted suffix.
 
-**Worked selection reasoning.** Group n elements into groups of five, sort each group, and take its median. At least half the group medians are at least the median of medians; each such group contributes at least three elements at least as large, yielding a constant lower bound on discarded elements. The recurrence (T(n)le T(n/5)+T(7n/10)+O(n)) is linear because the recursive fractions sum below one.
+Selection asks for the kth smallest without fully sorting. Quickselect partitions and recurses into one side; randomized expected time is $O(n)$, while worst case is $O(n^2)$. The median-of-medians pivot gives deterministic linear worst-case time by guaranteeing a constant fraction discarded each round.
+
+<MathStatement id="median-of-medians" kind="theorem" title="Deterministic linear-time selection" proofId="mom-proof">
+There exists a deterministic algorithm that selects the $k$th smallest element from $n$ elements in $O(n)$ worst-case time.
+</MathStatement>
+
+<MathProof id="mom-proof" for="median-of-medians" collapsible open>
+Group the $n$ elements into $\lceil n/5 \rceil$ groups of five (the last group may have fewer). Sort each group and take its median. Recursively select the median of these $\approx n/5$ medians. Use this median-of-medians as the pivot.
+
+At least half the group medians are $\ge$ the median-of-medians. Each such group contributes at least three elements $\ge$ the pivot (the median plus the two larger elements in the group). So at least $3 \cdot \lceil (1/2) \cdot \lceil n/5 \rceil \rceil \ge 3n/10$ elements are $\ge$ the pivot. By symmetry, at most $7n/10$ elements can lie on the larger side after partition.
+
+The recurrence is $T(n) \le T(n/5) + T(7n/10) + O(n)$. Since $1/5 + 7/10 = 9/10 < 1$, the recurrence solves to $T(n) = O(n)$.
+</MathProof>
+
+<CodeRunner client:load
+  title="Quickselect implementation"
+  language="python"
+  code={`import random
+
+def quickselect(A, k):
+    if len(A) == 1:
+        return A[0]
+    pivot = random.choice(A)
+    left  = [x for x in A if x < pivot]
+    mid   = [x for x in A if x == pivot]
+    right = [x for x in A if x > pivot]
+    if k < len(left):
+        return quickselect(left, k)
+    elif k < len(left) + len(mid):
+        return pivot
+    else:
+        return quickselect(right, k - len(left) - len(mid))
+
+A = [3, 7, 8, 5, 2, 1, 9, 5, 4]
+print([quickselect(A, i) for i in range(9)])`}
+  output="[1, 2, 3, 4, 5, 5, 7, 8, 9]"
+/>
 
 ## Integer and domain-specific sorting
 
-If keys are integers in a bounded range, counting sort can run in O(n+k) time and space by counting occurrences, then prefix sums, and outputting stable positions. Radix sort applies a stable digit sort repeatedly; with d digits and base b, cost O(d(n+b)). These algorithms avoid the comparison lower bound by inspecting representations. They require key-domain and digit-cost assumptions, and large sparse ranges can make counting arrays impractical.
+<Quiz client:load
+  question="Why can counting sort beat the Ω(n log n) lower bound?"
+  options={["It does not use comparisons at all", "It runs on a quantum computer", "It sorts only when n is small", "It uses a hash function"]}
+  correctIndex={0}
+  explanation="Counting sort uses occurrences as array indices rather than pairwise comparisons, so the comparison lower bound does not apply."
+/>
 
-Bucket sort distributes values under a distribution assumption and can have expected linear time, but worst-case concentration makes a bucket expensive. State whether the guarantee is expected under a distribution or deterministic under bounded keys. Sorting algorithms are often chosen by key width, range, stability, memory, and input distribution rather than comparison count alone.
+If keys are integers in a bounded range, counting sort runs in $O(n+k)$ time and space by counting occurrences, computing prefix sums, and outputting stable positions. Radix sort applies a stable digit sort repeatedly; with $d$ digits and base $b$, cost is $O(d(n+b))$. These algorithms avoid the comparison lower bound by inspecting representations. They require key-domain and digit-cost assumptions, and large sparse ranges can make counting arrays impractical.
+
+Bucket sort distributes values under a distribution assumption and can have expected linear time, but worst-case concentration makes a single bucket expensive. State whether the guarantee is expected under a distribution or deterministic under bounded keys. Sorting algorithms are often chosen by key width, range, stability, memory, and input distribution rather than comparison count alone.
 
 ## External sorting
 
-When records do not fit in memory, external mergesort creates sorted runs that fit in memory, writes them, then performs multiway merges. The main cost is block I/O, not comparisons. A k-way merge uses a priority queue of one head per run and reads sequential blocks. Buffer sizing and run generation determine I/O passes; a cache-aware design should minimize random disk operations.
+<PlantUML theme="none" code={`@startuml
+title External mergesort
+rectangle "Disk: 100 GB\nunsorted" as disk
+rectangle "Phase 1:\nread M bytes,\nsort in RAM,\nwrite run" as phase1
+rectangle "Run 1" as r1
+rectangle "Run 2" as r2
+rectangle "Run K" as rk
+rectangle "Phase k:\nmultiway merge\n(min-heap over\nrun heads)" as merge
+rectangle "Disk:\nsorted output" as sorted
+
+disk --> phase1
+phase1 --> r1
+phase1 --> r2
+phase1 --> rk
+r1 --> merge
+r2 --> merge
+rk --> merge
+merge --> sorted
+
+note right of phase1
+  M = available RAM
+  produces ceil(100G/M) runs
+end note
+note right of merge
+  k-way merge reads
+  blocks sequentially,
+  random I/O is the bottleneck
+end note
+@enduml`} />
+
+When records do not fit in memory, external mergesort creates sorted runs that fit in memory, writes them to disk, then performs multiway merges. The main cost is block I/O, not comparisons. A $k$-way merge uses a priority queue of one head per run and reads sequential blocks. Buffer sizing and run generation determine I/O passes; a cache-aware design should minimize random disk operations.
 
 Sorting a linked in-memory structure may be less attractive than extracting records to a contiguous array because sequential scans and writes improve locality. Conversely, a database may sort record IDs and fetch payloads later. Separate logical order from physical record movement when analyzing storage systems.
 
 ## Verification and engineering
 
+<Quiz client:load
+  question="What two properties must a sorting correctness test verify?"
+  options={["Permutation and sortedness", "Memory and speed", "Input size and key range", "Stability and recursion depth"]}
+  correctIndex={0}
+  explanation="A correct sort must produce both a permutation of the input (no lost/duplicated elements) and a sequence ordered under the comparator. A sortedness-only test misses lost records."
+/>
+
 For every sorting implementation, test that the output is a permutation of the input and is ordered under the comparator. A sortedness-only test can miss lost or duplicated records; a permutation-only test can miss ordering. Stable tests attach original positions to equal keys and check that those positions remain increasing. Property-based tests should include empty arrays, singleton arrays, already sorted and reverse-sorted inputs, all-equal keys, repeated values, and sizes around partition or buffer boundaries.
 
 Instrumentation can expose the true bottleneck: comparisons, moves, allocations, recursion depth, cache misses, and I/O operations. A comparison-efficient algorithm may move large records; a stable algorithm may require auxiliary storage; an in-place algorithm may have worse locality. Report the metric that matches the deployment constraint instead of presenting one asymptotic number as a complete performance claim.
 
+## Counterexample and failure mode
+
+A quicksort implementation using two-way Lomuto partition on an array of 100,000 identical keys degrades to $O(n^2)$ because each partition produces one element (the pivot) and $n-1$ remaining — the recursion depth becomes $n$, and total comparisons become $n(n-1)/2$. This is not a theoretical curiosity; it occurs in production when sorting database columns with low cardinality (e.g., a boolean flag or a small enum field). Three-way partition or introsort's fallback to heapsort prevents this.
+
+<Quiz client:load
+  question="A production sort on a 'status' column (3 unique values) takes 30 seconds for 1M rows. The sort uses two-way quicksort. What is the most likely cause?"
+  options={["The algorithm performs O(n²) work on duplicate-heavy data", "The CPU cache is too small", "Recursion overflows the stack", "The comparator is non-transitive"]}
+  correctIndex={0}
+  explanation="Two-way partition on few distinct keys produces highly unbalanced partitions. Three-way partition groups equal keys in one pass, restoring O(n log n)."
+/>
+
+A non-transitive comparator is a second failure mode. If `compare(a,b)` and `compare(b,c)` both return `-1` but `compare(a,c)` returns `1`, no arrangement satisfies all pairwise constraints. The sort may crash, loop indefinitely, or produce garbage output. This violates the total-order prerequisite implicitly assumed by every comparison sort.
+
 ## Selection under mutation
+
+<CaseStudy client:load
+  title="Mutation contract for selection"
+  scenario="A web service uses quickselect to find the median response time from an array of recent measurements. The array is shared with a monitoring dashboard that reads the data concurrently. Quickselect rearranges elements in place as a side effect."
+  question="Which contract best describes the mutation exposure?"
+  options={["The input array is partially reordered after selection returns; concurrent readers see inconsistent state", "Selection never modifies the array", "The array is always copied before selection", "Only the median is moved to the front"]}
+  correctIndex={0}
+  explanation="In-place selection swaps elements during partitioning. Unless the caller explicitly copies the input or prohibits aliasing, concurrent readers may see a partially partitioned array."
+/>
 
 In-place selection rearranges elements, so callers must know whether the input is consumed or copied. If records are shared, returning an index or a reference can avoid moving payloads but requires an ownership contract. A selection routine that partially partitions an array before throwing or being canceled should document whether the partial mutation is observable. Strong exception safety requires building a result separately or providing rollback, which changes space and time costs.
 
 ## Exercises
 
+<StructureDiagram kind="list" title="Linked merge representation" caption="A linked merge rewires next pointers while maintaining sorted output and terminating the final node." />
+<StructureExercise client:load title="Check a stable merge" prompt="When equal keys compare as tied, which choice preserves stability?" options={["Choose the item from the left run first", "Choose randomly", "Reverse the equal block", "Drop one equal record"]} answer={0} explanation="Taking the left front first preserves the original order of equal-key records." kind="list" />
+
+### Recall and application
+
 1. Prove the comparison sorting lower bound with a decision tree.
+
+   <ExerciseSolution hint="A binary decision tree with height h has at most 2^h leaves. How many distinct output permutations must a correct comparison sort distinguish?">
+
+   There are $n!$ input permutations requiring distinct sorted-leaf outcomes. A binary comparison tree of height $h$ has at most $2^h$ leaves, so $2^h \ge n!$, giving $h \ge \log_2(n!) = \Omega(n\log n)$.
+   </ExerciseSolution>
+
 2. State a stable merge invariant and prove merge correctness.
+
+   <ExerciseSolution hint="When the two fronts compare equal, which one should be emitted to preserve original input order?">
+
+   At each merge step, output the smaller front; if equal, choose the left run first. The output prefix is sorted and contains exactly the smallest consumed elements, while each remaining run stays sorted. When one run empties, append the other unchanged.
+   </ExerciseSolution>
+
 3. Analyze quicksort with all equal keys under two-way and three-way partition.
+
+   <ExerciseSolution>
+   Two-way partition may produce subproblems n-1 and 0 repeatedly, yielding quadratic work. Three-way partition places all equal keys in the middle, so equal inputs finish after one linear partition and recursion on empty sides.
+   </ExerciseSolution>
+
 4. Explain randomized expected versus deterministic worst-case selection.
+
+   <ExerciseSolution>
+   Randomized quickselect has expected linear time over pivot choices but quadratic worst-case branches. Median-of-medians guarantees a constant fraction eliminated each round and gives deterministic $O(n)$, with larger constants.
+   </ExerciseSolution>
+
 5. Derive the median-of-medians recurrence.
+
+   <ExerciseSolution>
+   Sorting groups and recursively finding their median costs $O(n) + T(n/5)$. The chosen pivot leaves at most about $7n/10$ elements on the larger side, so $T(n) \le T(n/5) + T(7n/10) + O(n) = O(n)$.
+   </ExerciseSolution>
+
 6. Compare comparison, counting, and radix sort assumptions.
+
+   <ExerciseSolution>
+   Comparison sorts require only an order comparator and have $\Omega(n\log n)$ comparison lower bound. Counting requires a manageable integer range; radix requires fixed digit representation and stable passes; bucket uses distribution assumptions. Report memory and stability costs too.
+   </ExerciseSolution>
+
 7. Design an external multiway merge and identify its I/O bottleneck.
 
-### Diagnostic solutions
+   <ExerciseSolution>
+   Generate in-memory sorted runs, write them sequentially, then use a min-heap over run heads while buffering each run. Each pass reads and writes all records sequentially; the bottleneck is block transfers and number of merge passes, not the $O(n\log n)$ comparison count.
+   </ExerciseSolution>
 
+### Transfer and synthesis
 
-1. There are n! input permutations requiring distinct sorted-leaf outcomes. A binary comparison tree of height h has at most 2^h leaves, so (2^hge n!), giving hu2265log2(n!)=u03a9(n log n).
+8. You are given two sorted singly linked lists of lengths $m$ and $n$ ($m \ll n$). Design a merge that runs in $O(m \log(n/m))$ time by jumping through the longer list. Prove the bound and state the space cost.
 
-2. At each merge step, output the smaller front; if equal, choose the left run first. The output prefix is sorted and contains exactly the smallest consumed elements, while each remaining run stays sorted. When one run empties, append the other unchanged.
+   <ExerciseSolution hint="Use exponential search (galloping) to find where each element of the short list belongs in the long list.">
 
-3. Two-way partition may produce subproblems n-1 and 0 repeatedly, yielding quadratic work. Three-way partition places all equal keys in the middle, so equal inputs finish after one linear partition and recursion on empty sides.
+   For each element in the short list, use binary search (or galloping search followed by binary search) to locate its insertion point in the long list. Each search costs $O(\log n)$ in isolation, but because the short list elements are already sorted, the search intervals shrink. The total is $O(m \log(n/m))$. Space is $O(1)$ beyond the two list pointers.
+   </ExerciseSolution>
 
-4. Randomized quickselect has expected linear time over pivot choices but quadratic worst-case branches. Median-of-medians guarantees a constant fraction eliminated each round and gives deterministic O(n), with larger constants.
+9. A streaming system receives 1 billion integers per hour. You must report the running median after every 1000 values. Design a data structure that maintains the median under insertions only, with $O(\log N)$ per insertion and $O(1)$ median retrieval. Does the comparison lower bound prevent a faster solution?
 
-5. Sorting groups and recursively finding their median costs O(n)+T(n/5). The chosen pivot leaves at most about 7n/10 elements on the larger side, so (T(n)le T(n/5)+T(7n/10)+O(n)=O(n)).
+   <ExerciseSolution hint="Two heaps: a max-heap for the lower half and a min-heap for the upper half.">
 
-6. Comparison sorts require only an order comparator and have u03a9(n log n) comparison lower bound. Counting requires a manageable integer range; radix requires fixed digit representation and stable passes; bucket uses distribution assumptions. Report memory and stability costs too.
+   Maintain two heaps: a max-heap for the lower half of values and a min-heap for the upper half. On each insertion, add to the appropriate heap and rebalance so sizes differ by at most 1. Median is the max of the lower heap (odd count) or the average of both roots (even count). This is optimal under the comparison model because finding the exact median requires at least $n/2$ comparisons in the worst case, and heap operations achieve this asymptotically.
+   </ExerciseSolution>
 
-7. Generate in-memory sorted runs, write them sequentially, then use a min-heap over run heads while buffering each run. Each pass reads and writes all records sequentially; the bottleneck is block transfers and number of merge passes, not the O(n log n) comparison count.
+10. You are building a sort for a database that stores 64-bit integer keys. Determine whether you should use a comparison sort (quicksort variants), radix sort, or a hybrid, considering: (a) worst-case guarantees, (b) memory overhead, (c) stability requirements, (d) data distributions seen in practice. Write a paragraph justifying the trade-off.
 
+    <ExerciseSolution>
+    Radix sort on 64-bit keys with base $2^{16}$ requires four passes and $O(n + 2^{16})$ space per pass. This is fast when data fits in RAM and the distribution is dense, but sparse high-bit regions waste memory. A comparison sort (introsort) uses $O(1)$ extra space and guarantees $O(n\log n)$ worst case. A common hybrid: use radix for the lower 32 bits of the key (or for the highest byte when keys cluster) and fall back to introsort when the radix distribution is too sparse.
+    </ExerciseSolution>
 
+## Deliberately Omitted
 
-## References & Further Reading
+<Quiz client:load
+  question="Why is TimSort excluded from this lesson's scope?"
+  options={["It is a run-detection optimization, not a fundamental sorting-structure concept", "It is not used in any language", "It is slower than quicksort", "It is patented"]
+  }
+  correctIndex={0}
+  explanation="TimSort's galloping heuristics and run-length adaptation are engineering refinements on merge sort. The core structural concepts (stability, in-place vs. auxiliary, comparison lower bound) are already covered."
+/>
 
-* [MIT 6.006 Introduction to Algorithms](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/)
-* [Open Data Structures](https://opendatastructures.org/)
-* Cormen, Leiserson, Rivest, and Stein, *Introduction to Algorithms*.
+The following topics are relevant to sorting but intentionally excluded from this lesson to maintain focus on representation-level sorting structures:
+
+- **TimSort and adaptive merge sorts**: Detection of natural runs in real data combined with stable merge. TimSort is the default sort in Python and Java, but its galloping-mode analysis and run-length heuristics are engineering refinements rather than fundamental sorting-structure concepts.
+- **Parallel sorting algorithms**: Bitonic sort, sample sort, and GPU-based radix sort. These introduce communication and synchronization costs that change sorting to a parallel decomposition task.
+- **Sorting networks**: Comparator networks with fixed wiring that sort any input. These are hardware-oriented and rely on the zero-one principle rather than data-structure invariants.
+- **External sort with multiple disks and fault tolerance**: Sorting in a distributed file system with node failures. The core divide-and-conquer strategy extends external mergesort, but fault-tolerance and replication concerns belong in a distributed-systems course.
+- **Lower bounds for non-comparison models**: The decision-tree argument covers only comparison-based algorithms. Algebraic decision trees and the $A{\cal C}^0$ circuit lower bounds for sorting are active research areas beyond the scope of an undergraduate data structures course.
+
+## References
+
+1. Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, and Clifford Stein. *Introduction to Algorithms*, 4th ed. MIT Press, 2022. Chapter 8 (Sorting in Linear Time), Chapter 9 (Medians and Order Statistics), Chapter 7 (Quicksort). The lower bound proof (Theorem 8.1), median-of-medians selection (Section 9.3), and external sorting (Chapter 18 in the context of B-trees).
+2. Donald E. Knuth. *The Art of Computer Programming, Volume 3: Sorting and Searching*, 2nd ed. Addison-Wesley, 1998. Section 5.3 (Minimum-Comparison Sorting) covers the decision-tree model in depth, and Section 5.4 (External Sorting) analyzes run generation and multiway merge.
+3. Pat Morin. *Open Data Structures: An Introduction*. AU Press, 2013. Chapter 11 (Sorting Algorithms) provides an implementer's perspective on the trade-offs discussed here.
+4. J. W. J. Williams. "Algorithm 232: Heapsort." *Communications of the ACM* 7(6): 347–348, 1964. The original heapsort publication.
+5. Manuel Blum, Robert W. Floyd, Vaughan Pratt, Ronald L. Rivest, and Robert E. Tarjan. "Time Bounds for Selection." *Journal of Computer and System Sciences* 7(4): 448–461, 1973. The original median-of-medians paper establishing deterministic linear-time selection.
