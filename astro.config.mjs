@@ -9,20 +9,33 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 function checkPythonDiagramErrors() {
+  const errorLogs = [
+    'python-diagram-errors.log',
+    'puml-errors.log',
+    'tikz-errors.log',
+  ].map((file) => path.resolve(`./${file}`));
+
   return {
     name: 'check-python-diagram-errors',
     hooks: {
       'astro:build:start': () => {
-        const errorLog = path.resolve('./python-diagram-errors.log');
-        if (fs.existsSync(errorLog)) fs.unlinkSync(errorLog);
+        for (const errorLog of errorLogs) {
+          if (fs.existsSync(errorLog)) fs.unlinkSync(errorLog);
+        }
       },
       'astro:build:done': () => {
-        const errorLog = path.resolve('./python-diagram-errors.log');
-        if (fs.existsSync(errorLog)) {
-           const errStr = fs.readFileSync(errorLog, 'utf-8');
-           console.error('\\n\\x1b[31m❌ Python Diagram Errors found during build:\\x1b[0m\\n');
-           console.error(errStr);
-           throw new Error('Python Diagram Build Failed. See logs above.');
+        const failures = errorLogs
+          .filter((errorLog) => fs.existsSync(errorLog))
+          .map((errorLog) => ({
+            name: path.basename(errorLog),
+            text: fs.readFileSync(errorLog, 'utf-8'),
+          }));
+        if (failures.length) {
+          for (const failure of failures) {
+            console.error(`\\n\\x1b[31m❌ ${failure.name} errors found during build:\\x1b[0m\\n`);
+            console.error(failure.text);
+          }
+          throw new Error('Diagram build failed. See renderer logs above.');
         }
       }
     }

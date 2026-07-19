@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
 import { highlightCode } from './SyntaxHighlighter';
+import { findPlantUmlDiagnostics } from '../../scripts/plantuml-diagnostics.mjs';
 
 interface Props {
   code: string;
@@ -14,8 +15,30 @@ interface Props {
 
 const { code, theme, bookOnly = false } = Astro.props;
 
+// PlantUML does not accept literal line breaks inside quoted labels. MDX
+// template literals and child content can turn author-facing \n notation into
+// real newlines, so normalize those breaks at the renderer boundary.
+const escapeQuotedLineBreaks = (source: string) => {
+  let result = '';
+  let quoted = false;
+  let escaped = false;
+
+  for (const char of source) {
+    if (char === '"' && !escaped) quoted = !quoted;
+    if (char === '\n' && quoted) {
+      result += '\\n';
+    } else {
+      result += char;
+    }
+    escaped = char === '\\' && !escaped;
+    if (char !== '\\') escaped = false;
+  }
+
+  return result;
+};
+
 // Add theme custom by default if not specified
-let processedCode = code.trim()
+let processedCode = escapeQuotedLineBreaks(code.trim())
     .replace(/^@startuml\s*/i, '')
     .replace(/\s*@enduml$/i, '');
 
@@ -153,6 +176,13 @@ if (fs.existsSync(cacheFile)) {
       // We purposefully DO NOT cache the error content so it retries and logs again on next build
     }
   }
+}
+
+const diagnostics = findPlantUmlDiagnostics(svgContent);
+if (diagnostics.length) {
+  throw new Error(
+    `[PlantUML] ${Astro.url.pathname} diagram ${hash.substring(0, 8)} rendered with diagnostics:\n${diagnostics.join('\n')}`,
+  );
 }
 ---
 

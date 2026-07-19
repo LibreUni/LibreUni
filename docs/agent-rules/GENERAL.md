@@ -1,6 +1,6 @@
-# LibreUni — Agent & Contributor Reference
+# LibreUni — Project & Content Reference
 
-This is the single source of truth for anyone (human or AI agent) creating or modifying content for LibreUni. Follow all rules at all times.
+Read this through the `AGENTS.md` task router. It defines shared project and content requirements; `BASELINE.md` defines the universal operating contract, and task packs add stricter subject-specific requirements.
 
 ## Project Overview
 

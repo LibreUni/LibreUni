@@ -1,6 +1,6 @@
 # Testing And UX Pipeline
 
-LibreUni has a production-style local pipeline for regressions, accessibility, and UX inspection. It builds every app, serves their `dist/` folders through the same static server used by tests, and writes reports under `reports/`.
+LibreUni has a production-style local pipeline for regressions, accessibility, and UX inspection. It builds the production site, serves `dist/` through the same static server used by tests, and writes reports under `reports/`.
 
 ## First-Time Setup
 
@@ -14,24 +14,34 @@ npm run test:install
 ## Main Commands
 
 ```bash
-npm test
+npm run check:required
 ```
 
-Runs the full quality gate:
+Runs the required pull-request and push gate:
 
-- `npm run test:build` builds `main`, `lang`, and `history`.
-- `npm run test:e2e:run` runs desktop and mobile Playwright smoke tests.
-- `npm run test:ux:run` creates the UX report and fails on hard UX blockers.
-- `npm run test:lighthouse:run` runs Lighthouse CI budgets.
+- `npm run check:content` first verifies the router/package/CI contract, then runs lesson structure, course smoke, integrity unit, PlantUML diagnostics, and strict course-integrity checks.
+- `npm run check:build` builds the production site and validates rendered lessons, course visuals, and PDFs.
+- `npm run check:e2e` runs desktop and mobile Playwright smoke and accessibility checks.
+- `npm run check:ux` creates the UX report and fails on hard UX blockers.
+
+Use the complete local release gate before handoff when the change warrants it:
+
+```bash
+npm test
+# Alias: npm run check:full
+```
+
+`check:full` runs `check:required` and Lighthouse. Lighthouse is intentionally a main-branch-only CI check; this is the only difference between the required PR gate and the local full gate.
 
 Useful narrower commands:
 
 ```bash
-python3 scripts/course_integrity.py --strict
-npm run test:e2e
-npm run test:ux
-npm run test:lighthouse
-npm run test:visual
+npm run check:content
+npm run check:build
+npm run check:e2e
+npm run check:ux
+npm run check:lighthouse
+npm run check:visual
 npm run test:report
 ```
 
@@ -62,7 +72,7 @@ The visual capture test writes PNG files to `reports/visual/`. It is a review ai
 
 ## CI
 
-The GitHub Actions workflow in `.github/workflows/quality.yml` runs `npm test` on pushes and pull requests, then uploads `reports/` and `test-results/` as artifacts even when a check fails.
+The GitHub Actions workflow in `.github/workflows/quality.yml` invokes the same named `check:content`, `check:build`, `check:e2e`, and `check:ux` layers on pushes and pull requests. It runs `check:lighthouse` only on pushes to `main`, then uploads `reports/` and `test-results/` even when a check fails. This command-level parity is intentional: CI shows each layer separately while preserving the local `check:required` and `check:full` contracts.
 
 ## Adding Coverage
 

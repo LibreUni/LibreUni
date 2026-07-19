@@ -11,4 +11,4 @@ Host adapter files exist only because different tools look for different names:
 
 Do not add host-specific copies of course, research, UI, or validation rules. If a rule should apply to all agents, add it to the routed documents under `docs/agent-rules/`.
 
-The repository does not require a custom MCP server, API key, proposal store, or agent runtime. Harnesses use their ordinary file, shell, web, and review capabilities according to the same routed rules.
+The repository does not require a custom MCP server, API key, proposal store, or agent runtime. Shared durable context is deliberately small, Git-reviewed documentation under [`docs/agent-context/`](../agent-context/README.md), not host memory or a hidden orchestration system. Harnesses use their ordinary file, shell, web, and review capabilities according to the same routed rules.

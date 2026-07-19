@@ -113,16 +113,16 @@ Run the local quality pipeline with:
 
 ```bash
 npm run test:install
-npm test
+npm run check:required
 ```
 
-The pipeline builds the static site, runs Playwright smoke tests on desktop/mobile, generates a UX report with color-blind contrast and element spacing analysis, and runs Lighthouse CI budgets on main branch pushes. See [docs/agent-rules/VALIDATION.md](docs/agent-rules/VALIDATION.md) for the full command list and report locations.
+`check:required` runs content, build, desktop/mobile browser, and UX gates. Run `npm test` (alias for `npm run check:full`) before a release-quality handoff to add Lighthouse. CI runs the required layers on pushes and pull requests, with Lighthouse intentionally limited to pushes on `main`. See [docs/agent-rules/VALIDATION.md](docs/agent-rules/VALIDATION.md) for the full command list and report locations.
 
 ### CI Pipeline
 
 | Workflow | Trigger | Jobs |
 |---|---|---|
-| `quality.yml` | Push/PR on main | Validate content → Build + e2e + UX + Lighthouse → Publish quality badges → Deploy reports to Pages |
+| `quality.yml` | Push/PR on main | Named content → build → e2e → UX gates; Lighthouse, badges, and Pages deploy on `main` pushes |
 | `scheduled.yml` | Weekly Sunday | Dead link check, dependency audit (opens issues on failure) |
 | `dependabot.yml` | Monthly | Auto PRs for npm and Actions dependency updates |
 
@@ -175,9 +175,9 @@ If you prefer Coolify's source/static flow instead of Docker:
 We welcome contributions from the community! Whether it's fixing a typo, adding a new lesson, or improving the platform's features, your help is appreciated.
 
 **Before you start:**
-Please read our [agent router](AGENTS.md) first. It sends each task to the relevant rules under [docs/agent-rules](docs/agent-rules/), including the general rules for lesson structure, writing style, and quality standards.
+Please read our [agent router](AGENTS.md) first. It sends each task through a shared baseline and the relevant rules under [docs/agent-rules](docs/agent-rules/), including the general rules for lesson structure, writing style, and quality standards.
 
-AI agents and coding assistants must also start with [AGENTS.md](AGENTS.md), which points to the required project rules, sourcing workflow, UX guidance, and validation commands.
+AI agents and coding assistants must also start with [AGENTS.md](AGENTS.md), which points to the required project rules, sourcing workflow, UX guidance, validation commands, and the small Git-reviewed context for durable decisions.
 
 All coding harnesses use the same repository router. Course work, research, UI changes, PlantUML, and validation each have focused guidance under [docs/agent-rules](docs/agent-rules/); the harness does not select a different LibreUni workflow.
 
