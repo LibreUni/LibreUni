@@ -50,6 +50,6 @@ See [`../agent-context/DECISIONS.md`](../agent-context/DECISIONS.md): D-0001…D
 
 ## Open questions for the owner
 
-1. Confirm pilot course (recommended: **Computer Architecture**, see PLAN §Pilot choice).
+1. ~~Pilot course~~ — decided: Operating Systems (2026-10-06). Open: approve a 4th math course (`MATH_STRATEGY.md`).
 2. Are xv6-style external checkouts acceptable for OS labs, or must every lab be executable inside the repo?
 3. Is the 10-ECTS-level depth target still the bar? (Contracts assume university-level depth must not be lowered.)

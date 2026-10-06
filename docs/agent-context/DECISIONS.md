@@ -44,7 +44,14 @@
 
 ## D-0007 — Pilot one course to reference quality, then port, then verify, then scale
 
-- **Status:** proposed · 2026-10-06 (owner confirmation of the pilot course pending)
-- **Decision:** One course (proposed: Computer Architecture) is brought to reference quality first, with two owner-approved exemplar lessons. Its pattern is extracted and applied to Database Systems and Operating Systems; the trio is independently verified before any archived course is re-entered. Writers and verifiers are different agents; structural checks are never the acceptance criterion.
+- **Status:** accepted · 2026-10-06
+- **Decision:** One course (Operating Systems, chosen by the owner 2026-10-06; Architecture second as the diagram-heavy template) is brought to reference quality first, with two owner-approved exemplar lessons. Its pattern is extracted and applied to Database Systems and Operating Systems; the trio is independently verified before any archived course is re-entered. Writers and verifiers are different agents; structural checks are never the acceptance criterion.
 - **Rationale:** The refactor's structure and tooling passed all gates while the repair contracts still found missing inputs, invalid counterexamples, and unshipped lab fixtures. Quality has to be defined by one exemplar before parallel production multiplies defects.
 - **Sources:** [`docs/refactor/PLAN.md`](../refactor/PLAN.md), [`docs/refactor/STATE.md`](../refactor/STATE.md), [`docs/curriculum/repair-contracts/`](../curriculum/repair-contracts/)
+
+## D-0008 — Add an Introduction to Calculus course (and recover its source)
+
+- **Status:** accepted · 2026-10-06 (lesson table to be confirmed at Phase 0)
+- **Decision:** A single-variable "Introduction to Calculus" course (Calculus 1 level, about 7–8 lessons) is recovered from `aaee234^` and rewritten against the current standard. Multivariable, series, differential equations, and analysis remain staged in `archive/curriculum/2026-10-06-calculus-recovery/`. Its interactive-diagram pattern (single-claim playground, accessible control, static twin) is a reference for other courses, subject to D-0005's prediction and testing requirements.
+- **Rationale:** The trio assumes mathematical preparation it does not teach; a narrow course supplies it without becoming a full analysis curriculum. Recovery follows the archive rule: review per lesson, no wholesale restore.
+- **Sources:** [`docs/refactor/CALCULUS_RECOVERY.md`](../refactor/CALCULUS_RECOVERY.md), [`archive README`](../../archive/curriculum/2026-10-06-calculus-recovery/README.md)

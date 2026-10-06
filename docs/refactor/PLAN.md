@@ -2,11 +2,13 @@
 
 Goal: one course at **reference-perfect** level → its pattern applied to the other two → independent verification → only then mass production of further courses (retired ones can be re-entered from `archive/`).
 
-## Pilot choice (proposed; owner to confirm)
+## Pilot choice (owner decided 2026-10-06)
 
-**Computer Architecture** (20 lessons). Reasons: first course in the path (no upstream dependency on the other two); smallest conceptual surface with checkable numerics (CPI, AMAT, Amdahl, encodings, translation walks), so correctness can be verified independently; its repair contract already gives a lesson-by-lesson disposition table; playgrounds for cache, Amdahl, and device I/O exist. OS (28 lessons, 0 authored interactions, lab fixtures missing) is the hardest and should be second/third.
+**Operating Systems** (28 lessons) is the pilot: its history-heavy, mechanism-and-invariant content (traps, scheduling, concurrency, virtual memory, filesystems) forces the hardest requirements early: executable evidence, failure injection, independent oracles, and claim-level sources. Whatever pattern survives OS will be robust. **Computer Architecture** is the second course and the template for abstract diagram-driven teaching (state traces, waveforms, datapaths); its backlog is [`PORT_BACKLOG_ARCHITECTURE.md`](PORT_BACKLOG_ARCHITECTURE.md). Database Systems is third.
 
-If the owner picks another course, replace the backlog but keep the phases.
+Risk: OS is the largest and has missing lab fixtures. Mitigation: Phase 1 exemplars are two *non-lab* lessons; lab fixtures are a separate engineer track (see `PILOT_BACKLOG.md`).
+
+Curriculum shape (a possible fourth course) is in [`MATH_STRATEGY.md`](MATH_STRATEGY.md).
 
 ## Phases and exit gates
 
@@ -17,7 +19,7 @@ If the owner picks another course, replace the backlog but keep the phases.
 
 ### Phase 1 — Define "perfect" (human + 1 designer agent)
 - Write `docs/refactor/LESSON_EXEMPLAR_SPEC.md`: a concrete checklist derived from `COURSE_STANDARD.md`, `COURSE_PEDAGOGY.md`, `COURSE_INTEGRITY.md`, and the repair contracts. Must be testable: per-section worked example/counterexample, solved exercises with all inputs, omission statement, claim-level sources, executable-evidence rule, static/book parity.
-- Perfect **two exemplar lessons** by hand first (suggested: `cache-hierarchies`, `virtual-memory-hardware`) and have the owner approve them. They become the template for swarm output.
+- Perfect **two exemplar lessons** by hand first (suggested: `interleavings-and-atomicity` and `page-tables-and-tlbs`, which already have independently solved examples in the OS contract) and have the owner approve them. They become the template for swarm output.
 - Gate: owner approves the exemplars and spec.
 
 ### Phase 2 — Perfect the pilot (swarm, parallel by lesson)
