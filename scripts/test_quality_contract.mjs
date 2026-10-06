@@ -18,7 +18,7 @@ const qualityCommands = [
   'check:required',
   'check:full',
 ];
-const activeCourses = ['computer-architecture', 'database-systems', 'operating-systems'];
+const activeCourses = ['calculus-intro', 'computer-architecture', 'database-systems', 'operating-systems'];
 
 test('agent router exposes the shared operating contract', () => {
   const router = read('AGENTS.md');
@@ -107,7 +107,7 @@ test('course manifests are exact, ordered indexes rather than best-effort naviga
 });
 
 test('declared workload totals match every active course manifest', () => {
-  const expectedHours = { 'computer-architecture': 187, 'operating-systems': 189.5, 'database-systems': 180 };
+  const expectedHours = { 'calculus-intro': 28, 'computer-architecture': 187, 'operating-systems': 189.5, 'database-systems': 180 };
   for (const courseId of activeCourses) {
     const metadata = JSON.parse(read(`src/content/courses/${courseId}.json`));
     const manifest = parseYaml(read(`src/data/course-manifests/${courseId}.yml`));
