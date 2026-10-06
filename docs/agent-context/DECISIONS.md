@@ -41,3 +41,10 @@
 - **Decision:** Computer Architecture, Operating Systems, and Database Systems are the active reference curriculum, connected by one learning path with preparation, actual course assessment gates, and cross-course synthesis. Retired courses and paths are preserved outside Astro's content roots, including their uncommitted source. Reference selection is not a claim of completed academic certification.
 - **Rationale:** Correct explanations, visual models, meaningful interaction, and transfer assessment must coexist in a small reviewable curriculum before its patterns are expanded. Path evidence remains local and explicitly self-attested, separate from reading progress.
 - **Sources:** user-approved survivor scope; [`COURSE_CROSSWALK.md`](../curriculum/COURSE_CROSSWALK.md), [`systems-foundations.json`](../../src/content/careers/systems-foundations.json), [`archive README`](../../archive/curriculum/2026-09-14/README.md), [`test_quality_contract.mjs`](../../scripts/test_quality_contract.mjs)
+
+## D-0007 — Pilot one course to reference quality, then port, then verify, then scale
+
+- **Status:** proposed · 2026-10-06 (owner confirmation of the pilot course pending)
+- **Decision:** One course (proposed: Computer Architecture) is brought to reference quality first, with two owner-approved exemplar lessons. Its pattern is extracted and applied to Database Systems and Operating Systems; the trio is independently verified before any archived course is re-entered. Writers and verifiers are different agents; structural checks are never the acceptance criterion.
+- **Rationale:** The refactor's structure and tooling passed all gates while the repair contracts still found missing inputs, invalid counterexamples, and unshipped lab fixtures. Quality has to be defined by one exemplar before parallel production multiplies defects.
+- **Sources:** [`docs/refactor/PLAN.md`](../refactor/PLAN.md), [`docs/refactor/STATE.md`](../refactor/STATE.md), [`docs/curriculum/repair-contracts/`](../curriculum/repair-contracts/)
