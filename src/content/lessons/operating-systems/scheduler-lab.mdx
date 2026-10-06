@@ -1,0 +1,488 @@
+---
+title: "Scheduler Lab: Weighted Virtual Time in xv6"
+course: "operating-systems"
+description: "Instrument, replace, falsify, and evaluate xv6 scheduling with weighted virtual runtime, bounded wakeup credit, adversarial tests, and a defended measurement memo."
+prerequisites:
+  - "RISC-V traps, timer interrupts, kernel/user return, and the xv6 boot path"
+  - "Process-state invariants, kernel contexts, `p->lock`, and the xv6 rev5 scheduler loop"
+  - "FCFS, SJF/SRTF, round robin, response/turnaround/waiting metrics, and context-switch cost"
+  - "C integer overflow, ABI extension across kernel/user boundaries, Git, Make, QEMU, and GDB"
+outcomes:
+  - "Establish a reproducible scheduler baseline and map every process-state transition before changing policy."
+  - "Implement transition-based run/ready/sleep accounting and a checked self-observation syscall whose one-read sample timestamp yields exact live-state conservation without copying to user memory under a process lock."
+  - "Implement weighted virtual-runtime selection with child placement at max(parent debt, scheduler floor), bounded wakeup credit, deterministic ties, and overflow strategy."
+  - "Author adversarial tests that distinguish the intended design from at least eight named wrong implementations."
+  - "Measure share, response, overhead, and tail behavior under controlled workloads and defend causal claims with limitations."
+omissions:
+  - "No complete kernel patch, private grading tests, or copied university assignment is published; the learner must produce and defend the implementation."
+  - "The quantitative fairness contract is single-hart; multi-hart work tests safety and regression but does not claim exact global fairness."
+  - "Linux EEVDF, hard real-time scheduling, load balancing, NUMA, priority inheritance, and production security policy are not reimplemented."
+estimatedMinutes: 600
+assessment: "A clean-room xv6 patch, public/adversarial test suite, raw measurement data, design memo, failure analysis, and live or written defense graded against behavior, invariants, test discrimination, and evidence—not token presence."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
+# Scheduler Lab: Weighted Virtual Time in xv6
+
+A scheduler can pass `usertests`, print plausible shares, and remain wrong. Placing a child below both its parent's charged debt and the scheduler floor rewards sequential fork/wait chains. Resetting virtual time after sleep lets an interactive task monopolize the CPU after every wakeup. Copying statistics to a bad user pointer while holding `p->lock` can freeze the process table. Selecting a candidate from an unlocked scan can run one process on two harts.
+
+The lab treats a scheduling patch as a concurrent mechanism with evidence, not as a changed `if` statement.
+
+> **Original lab brief.** The task, milestones, interface, workloads, wrong-implementation matrix, and rubric below are original LibreUni material. They were designed against the permissively licensed upstream xv6 source and do not reproduce MIT 6.1810 lab instructions or solutions.
+
+{/* Source tracking: The baseline file map and invariants were verified against MIT PDOS tag `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`. The scheduling design is an original teaching policy; Linux EEVDF documentation is comparative background only. */}
+
+## Deliverable and non-negotiable boundary
+
+Implement a scheduler named **WVT** (weighted virtual time) in a detached checkout of xv6 rev5. Each runnable process has weight $w\in\{1,2,4,8\}$ and virtual runtime $v$. When a process leaves `RUNNING` after consuming measured processor time $\Delta t$,
+
+> **Definition.** WVT orders runnable processes by charged virtual service; weight changes the rate of debt accumulation, not the amount of physical time in a timer interval.
+
+$$
+v \leftarrow v + \max\left(1,\left\lfloor\frac{\Delta t}{w}\right\rfloor\right).
+$$
+
+On one hart, select a `RUNNABLE` process with minimum $v$; break exact ties by PID. Larger weight accumulates virtual time more slowly and therefore receives a larger long-run share while continuously runnable.
+
+The deliverable contains:
+
+- the patch, based on the exact commit below;
+- `schedtests`, a user-space test binary with machine-checkable summaries;
+- optional test-only kernel hooks isolated behind `#ifdef SCHED_TEST`;
+- raw CSV or TSV measurements and the script/notebook used to summarize them;
+- a design memo of at most 2,500 words plus appendices; and
+- answers to the defense questions.
+
+No full implementation appears here. Pseudocode exposes proof obligations, not line-by-line placement.
+
+### Entry diagnostic — explain before editing
+
+Why does “pick the smallest `vruntime`” fail as a complete specification? List at least five missing rules.
+
+<ExerciseSolution hint="Creation, sleeping, time measurement, ties, concurrency, and wraparound all change the order relation.">
+Missing rules include initialization, child placement at $\max(v_{parent}, floor)$, wakeup placement, permitted weights, when elapsed time is charged, how voluntary yield is charged, deterministic ties, candidate revalidation on multiple harts, lock order, overflow/renormalization, exit/reap accounting, and what “fair” means over a measurement window. Any five with consequences earn credit. A data-field definition is not a scheduling policy.
+</ExerciseSolution>
+
+## Reproducible setup
+
+The source authority is the upstream MIT PDOS repository. Preserve its copyright and permission notice.
+
+```bash
+git clone https://github.com/mit-pdos/xv6-riscv.git xv6-wvt
+cd xv6-wvt
+git switch --detach xv6-riscv-rev5
+git rev-parse HEAD
+git tag --points-at HEAD
+git status --short
+make clean
+make CPUS=1 qemu
+```
+
+Expected `git rev-parse HEAD` output is `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`, the tag output is `xv6-riscv-rev5`, and status is empty. Upstream's rev5 Makefile requires a RISC-V GCC/binutils toolchain and QEMU 7.2 or newer. Record exact versions:
+
+```bash
+riscv64-unknown-elf-gcc --version || riscv64-linux-gnu-gcc --version
+qemu-system-riscv64 --version
+make --version
+```
+
+Inside xv6, run `usertests` and `forktest`; save complete console output. Repeat the baseline with `CPUS=3`. If the unmodified baseline fails, stop. A policy comparison against a broken or unpinned baseline is uninterpretable.
+
+> **Revision guard.** Rev5 declares `sleep(void *chan, struct spinlock *lk)` and `copyout(pagetable_t, uint64, char *, uint64)`, and defines `r_time()` in `kernel/riscv.h`. A checkout exposing the branch-head `sleep_prepare` split or an extra process-size argument to `copyout` is not this lab's baseline. Adapt the lab only to the rev5 signatures; do not combine source fragments from different revisions.
+
+{/* Source tracking: Repository, rev5 tag/hash, license, toolchain inference, QEMU minimum, CPUS mechanism, `sleep`, `copyout`, and `r_time` signatures were checked directly in pinned upstream `LICENSE`, `Makefile`, `kernel/proc.c`, `kernel/defs.h`, and `kernel/riscv.h`. */}
+
+### Baseline record
+
+Submit this table before implementation:
+
+| Evidence | CPUS=1 | CPUS=3 |
+| --- | --- | --- |
+| commit hash | | |
+| compiler/QEMU versions | | |
+| `usertests` result and duration | | |
+| `forktest` result | | |
+| first ten scheduler selections with PID/state | | |
+| unexpected console output | | |
+
+<ExerciseSolution>
+The only fixed value is the commit hash. Times and PID traces are environment observations and must not be invented. A missing or dirty baseline blocks causal comparison because later failures cannot be attributed to WVT. “Tests passed” without preserved output and configuration is incomplete evidence.
+</ExerciseSolution>
+
+## Baseline mechanism map
+
+Read, annotate, and cite these files in the memo:
+
+| File | Question to answer |
+| --- | --- |
+| `kernel/proc.h` | Which fields require `p->lock`, and what do trapframe/context own? |
+| `kernel/proc.c` | Where does every state transition occur; where is the scheduler lock handoff? |
+| `kernel/swtch.S` | Which registers cross a scheduler switch, and why exactly those? |
+| `kernel/trap.c` | Which timer path calls `yield`, and where is the next timer requested? |
+| `kernel/start.c` | Which time source and timer interval are configured? |
+| `kernel/syscall.c`, `syscall.h`, `sysproc.c` | How are numbers, raw arguments, handlers, and checked copies connected? |
+| `user/user.h`, `user/usys.pl`, `Makefile` | How does a new syscall become callable and a test binary enter the image? |
+
+Run a repository search for every assignment to process state. Classify each as creation, selection, yield/preemption, sleep, wakeup, exit, or reap. A transition-based accountant is wrong if one assignment bypasses it.
+
+<PlantUML code={String.raw`
+component "timer trap" as TIMER
+component "yield / sleep / exit" as LEAVE
+component "state-accounting helper" as ACCOUNT
+component "WVT selector" as SELECT
+component "swtch" as SWITCH
+component "per-process p->lock" as PLOCK
+component "sched_get syscall" as ABI
+component "user schedtests" as TEST
+
+TIMER --> LEAVE : preemption event
+LEAVE --> ACCOUNT : RUNNING to next state
+ACCOUNT --> PLOCK : charge old state under lock
+SELECT --> PLOCK : inspect/revalidate RUNNABLE
+SELECT --> SWITCH : chosen process context
+SWITCH --> LEAVE : eventually returns to scheduler
+TEST --> ABI : request self snapshot
+ABI --> PLOCK : copy kernel snapshot
+ABI --> TEST : copyout only after lock release
+
+note bottom of ACCOUNT
+  One transition API prevents silent
+  accounting gaps and centralizes debt updates.
+end note
+`} />
+
+### Trace the unmodified switch
+
+Starting in user process A at a timer interrupt, list each lock/state/context cut until process B reaches user mode. Mark where A's runtime should be charged and where B's dispatch count should increase.
+
+<ExerciseSolution>
+A traps to its kernel stack; the timer path eventually calls `yield`. `yield` acquires A's lock and changes A from `RUNNING` to `RUNNABLE`; the transition helper should charge elapsed A runtime here using the dispatch timestamp and old weight. `sched()` switches A's kernel context to the per-CPU scheduler while A's lock participates in the handoff. On return to the scheduler, it clears current-process ownership and releases A's lock. The selector scans and revalidates B under B's lock, changes B `RUNNABLE→RUNNING`, increments B's dispatch count, records dispatch start, installs `c->proc`, and calls `swtch`. B resumes in its kernel continuation, releases its lock according to xv6's protocol, and eventually returns through its trapframe. Charging at timer entry alone misses voluntary block/exit intervals; incrementing dispatch after `swtch` returns charges the wrong time.
+</ExerciseSolution>
+
+## Contract: state accounting and user ABI
+
+Use RISC-V's monotonic `time` counter as the lab's raw unit. Do not call the xv6 `ticks` lock while holding `p->lock`; the timer path can hold `tickslock` and wake processes, producing an inverse lock order. Reading `r_time()` avoids that dependency in this platform model.
+
+Add per-process fields equivalent to:
+
+```c
+uint64 state_since;   /* raw time at last state-accounted transition */
+uint64 run_time;
+uint64 ready_time;
+uint64 sleep_time;
+uint64 dispatches;
+uint64 vruntime;
+uint64 dispatch_start;
+int weight;           /* exactly 1, 2, 4, or 8 */
+```
+
+Expose only current-process control and observation:
+
+```c
+struct sched_sample {
+    int pid;
+    int state;
+    int weight;
+    uint64 sample_time;
+    uint64 run_time, ready_time, sleep_time;
+    uint64 dispatches, vruntime;
+};
+
+int sched_set_weight(int weight);
+int sched_get(struct sched_sample *out);
+```
+
+`sched_set_weight` rejects all other values and updates elapsed `RUNNING` time under the old weight before changing it. `sched_get` acquires `p->lock` and performs exactly one `now = r_time()` read. Into a local kernel `sched_sample`, it sets `sample_time = now`, copies the stored counters, and adds `now-state_since` to the one counter selected by the current `RUNNING`, `RUNNABLE`, or `SLEEPING` state. It does not mutate the stored counters or `state_since`. It then releases the lock and performs rev5's four-argument `copyout`. The same `now` therefore anchors the reported state, all current-state accrual, and the sample timestamp. An invalid user destination returns `-1` and leaves the kernel usable.
+
+The self-only API avoids inventing a credential model xv6 does not have. Children report samples to parents through ordinary pipes before exit.
+
+{/* Source tracking: `r_time`, timer setup, `p->lock`, syscall dispatch, and four-argument `copyout` are xv6 rev5 mechanisms. The fields and ABI are original LibreUni design. */}
+
+### Accounting invariant at two sample cuts
+
+Let sample 1 and sample 2 come from the same process. If that process exists continuously between the cuts and every instant in the half-open interval belongs to exactly one of `RUNNING`, `RUNNABLE`, or `SLEEPING`, require
+
+$$
+\Delta sample\_time = \Delta run\_time + \Delta ready\_time + \Delta sleep\_time.
+$$
+
+This is an exact integer partition, not a statistical tolerance: each transition and each snapshot cuts the same raw `time` counter once, and snapshot work after that cut is outside the interval. The claim excludes intervals containing `USED`, `ZOMBIE`, reuse of a PID as a different process, or raw-counter wrap. `sample_time` is the guest RISC-V counter value, not host wall time or xv6 `ticks`. Keep raw integers in test output; decimal conversion can manufacture a residual that the kernel did not produce.
+
+### Milestone A — one transition helper
+
+Create one helper whose precondition is “`p->lock` held.” It reads time once, charges `now-state_since` to the old state, updates virtual runtime when leaving `RUNNING`, records the new state and timestamp, and performs new-state bookkeeping. Replace every relevant raw assignment or justify why construction/reap remains outside it.
+
+Pseudocode obligation:
+
+```text
+transition(p, new_state):
+    assert p->lock held
+    now = time()
+    delta = now - p.state_since
+    charge delta to p.old_state
+    if old_state == RUNNING:
+        p.vruntime += weighted(delta, p.weight) with overflow policy
+    p.state = new_state
+    p.state_since = now
+```
+
+Do not paste this pseudocode into C without handling initialization, same-state calls, overflow, exit, and fork creation placement.
+
+### Milestone B — checked ABI
+
+Wire declarations and numbers through all kernel/user layers; add a tiny test that changes each legal weight, rejects `0,3,16,-1`, and snapshots itself. Take two samples around known live-state activity and verify monotonic `sample_time` plus the exact three-state partition. Pass an invalid pointer and prove a subsequent `getpid`/`fork` still works. Inspect the disassembly or generated syscall stub once; a header declaration alone does not create an ABI.
+
+<ExerciseSolution hint="The dangerous operation is not reading the stats; it is copying them across a fallible boundary while owning scheduler state.">
+Full-credit behavior: legal weights round-trip; illegal values return `-1` without mutation; `sample_time` and current-state accrual derive from one `r_time()` read; paired live-state samples satisfy the exact partition; invalid `copyout` returns `-1`; no process lock remains held; baseline tests still pass. A kernel that reads time separately for each field, validates only the start address, or writes the user pointer directly fails the boundary contract. The implementation remains intentionally undisclosed.
+</ExerciseSolution>
+
+## Contract: WVT selection, creation, and wakeup
+
+> **Definition.** The WVT policy includes selection, debt charging, creation placement, wakeup placement, tie behavior, and overflow; omitting any one leaves observable behavior undefined.
+
+### Continuously runnable selection
+
+On `CPUS=1`, choose the minimum `vruntime` among `RUNNABLE` processes, then PID. Revalidate state and ordering assumptions while holding the candidate's lock before changing it to `RUNNING`. Record a dispatch before `swtch`, not after it returns.
+
+On `CPUS>1`, exact global minimum is not required: concurrent selectors observe a moving runnable set. Safety is required. No process may be selected by two harts; no stale candidate may be switched after it ceases to be runnable. Document the lock/revalidation protocol and quantify that fairness results are single-hart only.
+
+### Fork creation placement
+
+A new child inherits the parent's weight. At the creation cut, first materialize the parent's elapsed `RUNNING` charge under the old weight. Then place the child at exactly the greater of that charged parent value and the current scheduler floor:
+
+$$
+v_{child}=\max(v_{parent}, floor).
+$$
+
+Neither `v_child = 0` nor `v_child = v_parent` without the floor clamp satisfies the contract. The floor term matters when a parent sleeps in `wait` while a sequence of children consumes CPU: the sleeping parent's own debt no longer tracks that descendant work, but the global service frontier advances. Placement at $\max(v_{parent}, floor)$ prevents each new child from re-entering behind that frontier. It still does not provide group fairness when several descendants are runnable at once. State the lock order used to read/update parent debt, read the floor, and initialize the locked child.
+
+### Wakeup placement
+
+Maintain a nondecreasing scheduler floor representing recently selected virtual time. When a process becomes runnable after sleeping, preserve its old $v$ but clamp excessive credit:
+
+$$
+v \leftarrow \max(v,\; \max(0, floor-C)),
+$$
+
+where $C$ is a documented wakeup-credit bound, initially two baseline timer intervals in virtual-time units. A short sleeper can receive bounded latency credit; a process asleep for minutes cannot return at ancient virtual time and monopolize the CPU. All floor access needs a lock order with no reverse path.
+
+### Overflow
+
+Choose and defend one strategy:
+
+- renormalize all live virtual runtimes by subtracting a common floor before the 64-bit danger region, under a quiescent/single-hart test protocol; or
+- use a proven modular comparison and bound that guarantees no pair differs by $2^{63}$ or more.
+
+“It takes a long time” is not an integer-correctness argument. A test-only hook must place values near the boundary without waiting years.
+
+### Milestone C — policy and creation placement
+
+Implement minimum selection, exact tie behavior, weight charging, inherited weight, and child creation at $v_{child}=\max(v_{parent}, floor)$ after charging the parent to the creation cut. Implement floor maintenance and a documented lock order for that cut. Keep a compile-time baseline policy if useful for controlled comparison; do not let two policy implementations silently use different accounting.
+
+### Milestone D — bounded wakeup and overflow
+
+Add wakeup clamping and the test-only overflow path. Record why the chosen $C$ is a policy value, not a theorem. Run all functional tests before collecting performance data.
+
+## Public tests that kill named wrong implementations
+
+Every test prints one line beginning `SCHEDTEST name PASS` or `... FAIL` and exits nonzero on failure. Calibrate tolerances for statistical service/latency tests from at least 10 baseline repetitions; do not widen them until a known-bad implementation passes. W6 is not statistical: its in-scope integer residual must be zero.
+
+> **Warning.** A test that passes only the intended implementation but has never rejected its target defect has not demonstrated discrimination.
+
+| ID | Named wrong implementation | Test construction | Required discriminator |
+| --- | --- | --- | --- |
+| W1 `FIRST_SLOT` | restarts at the first runnable table slot after every dispatch | two equal CPU-bound children created in reverse slot/PID patterns | both receive service; ordering does not pin one indefinitely |
+| W2 `WEIGHT_IGNORED` | selects by $v$ but charges raw time equally for all weights | weight-1 and weight-4 CPU loops, barrier start, fixed wall window, CPUS=1 | median run-time ratio in a justified band around 4; swapped weights swap share |
+| W3 `FORK_BELOW_FRONTIER` | child starts at zero, or copies only stale parent debt below the floor | persistent competitor versus a sequential fork/wait chain with at most one attacker descendant runnable; run both known-bad variants | both known-bad builds fail; the competitor retains a substantial near-half share under the correct $\max(v_{parent}, floor)$ placement; fork rate does not buy unbounded service |
+| W4 `ANCIENT_WAKEUP` | sleeper returns with unbounded old credit | CPU hog plus repeated long-sleep/short-run task | wakeup latency remains bounded **and** post-wakeup burst does not monopolize multiple quanta |
+| W5 `TICK_ONLY_CHARGE` | charges only timer-preempted work | one task repeatedly yields after calibrated sub-tick work; one CPU-bound peer | yielding task cannot obtain arbitrarily more useful work for equal weight |
+| W6 `STATE_GAP` | one raw state assignment bypasses accounting, or snapshot fields use different clock reads | force yield, timed sleep, and wake paths between paired self-snapshots | `sample_time` is monotonic and $\Delta sample\_time-\Delta run\_time-\Delta ready\_time-\Delta sleep\_time=0$ for every in-scope pair |
+| W7 `LOCKED_COPYOUT` | holds `p->lock` across user copy | call `sched_get` with an invalid/unmapped pointer, then run fork/yield tests | returns error without deadlock, leaked lock, or later scheduler stall |
+| W8 `STALE_CANDIDATE` | switches a candidate after unlocked scan without recheck | CPUS=3 scheduler stress plus debug `on_cpu` invariant | no double-running assertion, stack-canary fault, or non-runnable dispatch |
+| W9 `WRAP_COMPARE` | unsigned minimum reverses after wrap | test-only virtual runtimes straddle the chosen boundary | selected order matches documented normalization/modular proof |
+
+The weight-share test needs two directions. A hard-coded preference for one PID can accidentally produce a 4:1 ratio once; swapping weights and creation order kills that counterfeit.
+
+### Test oracle details
+
+**Barrier start.** Parent creates report pipes, forks children, then releases both through a start pipe so fork/setup time is outside the measurement. Each child sets its own weight, waits for the token, burns deterministic integer work until a common `uptime` deadline, snapshots itself, and writes the sample.
+
+**Useful-work calibration.** Report both scheduler `run_time` and loop iterations guarded against optimization. A share claim needs agreement between service accounting and useful work; divergence exposes instrumentation or cache/compiler effects.
+
+**Snapshot cut.** `sched_get` must return the one raw `sample_time` used to accrue the current state. For each pair, assert identity continuity and record both sampled states. Apply the exact conservation oracle only when the process remained inside the three live states; do not hide a nonzero residual behind timing tolerance. Invalid-pointer tests are separate because no sample is returned.
+
+**Latency distribution.** The sleeper records elapsed time around each bounded sleep and subtracts the requested sleep interval under the lab clock model. Report median, p95, maximum, and raw samples. A mean alone does not kill one extreme wakeup.
+
+**Safety assertion.** Under `SCHED_TEST`, maintain `on_cpu` under `p->lock`: assert zero before `RUNNABLE→RUNNING`, set to hart ID plus one, clear only when scheduler regains ownership. The assertion is instrumentation, not a substitute for the lock proof.
+
+### Test-design checkpoint
+
+Why does a single 4:1 run-time observation fail to distinguish WVT from a scheduler that gives PID 2 four quanta for every one quantum of any other PID?
+
+<ExerciseSolution>
+The observed ratio may be caused by PID bias, not weight. Swap weights between the same processes, reverse creation order, and repeat with a third equal-weight competitor. WVT predicts service follows weight under the controlled window; PID bias follows identity/slot. A discriminating test changes one causal variable while controlling alternatives.
+</ExerciseSolution>
+
+## Failure injection matrix
+
+Run these after each milestone, not only at the end.
+
+> **Warning.** Failure injection is evaluated at the first invariant violation and recovery behavior, not by whether the kernel eventually prints a panic.
+
+| Injection | Expected behavior | Forbidden behavior |
+| --- | --- | --- |
+| `sched_get((void *)MAXVA)` or equivalent invalid destination | `-1`; process and scheduler continue | panic, lock leak, partial kernel-memory exposure |
+| illegal weight during active CPU use | reject atomically; old weight/debt retained | partial counter reset or free priority |
+| exhaust process slots with repeated `fork` | failures returned; existing tasks continue; no half-initialized runnable slot | crash, leaked lock/page, child placed below $\max(v_{parent}, floor)$ |
+| kill a sleeping process near wakeup | process becomes runnable/terminates according to xv6 policy; accounting closes exactly once | permanent sleep, double charge, double run |
+| force virtual-runtime boundary with `SCHED_TEST` | documented ordering survives | wrap to permanent priority or starvation |
+| CPUS=3 rapid fork/yield/sleep | baseline safety tests pass; no `on_cpu` assertion | exact-share claim without evidence, stale dispatch |
+
+For every observed failure, save the seed/configuration, first invariant violation, smallest reproducer, and corrected test. Do not patch from the final panic line without reconstructing the earlier state cut.
+
+### Milestone E — adversarial suite
+
+Demonstrate each public test against the intended implementation and at least four deliberately injected wrong variants, including W3, W4, W7, and W8. A test suite that has never failed is unvalidated.
+
+## Measurement protocol
+
+Functional correctness precedes claims about fairness or performance.
+
+### Controlled factors
+
+Record commit, host CPU, host load policy, QEMU version, compiler, optimization flags, `CPUS`, timer interval, workload seed, warmup, run duration, and repetitions. Run policy variants in randomized or counterbalanced order. Keep console logging outside measured windows; scheduler tracing can dominate the scheduler.
+
+### Required workloads
+
+1. **Equal CPU:** two and eight continuously runnable weight-1 jobs.
+2. **Weighted CPU:** weights 1:2, 1:4, and 1:8; repeat with identity/order swapped.
+3. **Interactive:** one CPU hog plus sleepers with two sleep/run duty cycles.
+4. **Fork adversary:** persistent job plus a sequential fork/wait chain; compare correct $\max(v_{parent}, floor)$ placement with zero-start and parent-only known-bad variants.
+5. **Mixed:** CPU, sleeper, and short-lived process creation together.
+6. **SMP safety:** CPUS=3 stress; no exact ratio claim.
+
+### Required metrics
+
+- per-process `sample_time`, run, ready, and sleep time from each coherent cut;
+- dispatches and virtual-runtime trajectory sampled at bounded frequency;
+- useful-work count;
+- response/wakeup median, p95, and maximum;
+- service-share error $|observed-target|$ over at least three windows;
+- wall completion and context switches per unit of useful work; and
+- exact live-state residual $\Delta sample\_time-\Delta run\_time-\Delta ready\_time-\Delta sleep\_time$, retained as a signed integer.
+
+For weights $w_i$, target share is $w_i/\sum_jw_j$ only while the measured set remains continuously runnable. Remove sleeping intervals or model them; otherwise the denominator is false.
+
+### Causal comparison
+
+Compare pinned baseline and WVT using the **same accounting instrumentation**. If WVT improves weighted-share error but increases dispatches or scan cost, report both. If response improves only because the timer interval changed, the scheduler-policy claim is confounded. If useful work falls while run time is unchanged, inspect cache/branch/compiler effects before blaming context switching.
+
+### Milestone F — results and uncertainty
+
+Provide raw observations and a plot/table that retains distributions. For each major result write:
+
+```text
+claim → model prediction → measurement → uncertainty → competing explanation → follow-up
+```
+
+“WVT is fair” is not a result. “With two continuously runnable processes at weights 1:4, CPUS=1, 12 randomized 200-tick runs produced median high-weight share X with range Y; swapped identity changed it by Z” is auditable.
+
+## Design memo
+
+The memo must contain:
+
+> **Remark.** The memo is a compact proof and evidence index; source narration without invariants, counterexamples, and measurements does not satisfy it.
+
+1. **Baseline and scope:** exact revision/toolchain; single-hart fairness boundary; unchanged upstream behavior.
+2. **State and invariants:** field ownership, state-transition API, lock order, selection linearization/revalidation.
+3. **Policy:** charging equation, tie rule, fork placement at $\max(v_{parent}, floor)$, wakeup clamp $C$, weight-change semantics, overflow strategy.
+4. **ABI:** argument validation, single-read `sample_time` cut, exact live-state conservation, copyout ordering, failure behavior.
+5. **Test discrimination:** W1–W9 mapping, known-bad demonstrations, statistical-tolerance derivation, and the zero-tolerance W6 oracle.
+6. **Measurements:** workload controls, raw-data link/path, distributions, overhead, anomalies.
+7. **Failure analysis:** at least one injected defect from symptom to first invariant violation.
+8. **Limitations:** QEMU, time source, coarse preemption, cache effects, SMP fairness, missing production features.
+
+Every design claim cites source lines by file/function or primary reference. Do not paste large source fragments.
+
+## Defense questions
+
+Answer without running the code, then use traces to check the answers.
+
+1. Why is `dispatches++` immediately after `swtch` returns attributed to the wrong event?
+2. A process changes weight from 1 to 8 halfway through a long uninterrupted run. Which weight charges the first half?
+3. Why is child `vruntime=parent.vruntime` insufficient when the parent waits for each short-lived child, and what placement closes that reset path?
+4. What behavior changes as wakeup credit $C$ moves from 0 to unbounded?
+5. Why can exact global minimum be ill-defined for concurrent CPU selectors?
+6. Which lock order could deadlock if accounting reads `ticks` while holding `p->lock`?
+7. How does W5 exploit timer-only charging, and which measurement exposes it?
+8. Why must `sched_get` use one time read under `p->lock`, then copy a local snapshot after releasing the lock?
+9. What does the single-hart SJF-style minimum scan cost asymptotically in `NPROC`, and which measurement could reveal it?
+10. Which result would falsify the claim that observed 1:4 share follows weight rather than PID or creation order?
+
+<details>
+<summary>Reveal defense diagnostics</summary>
+
+1. Return occurs when the process later yields back; the dispatch happened before entering it.
+2. Charge elapsed time to the change point under weight 1, reset the timestamp, then charge subsequent time under 8.
+3. The waiting parent's virtual runtime stops advancing while each child consumes service, so every new child can inherit stale debt. Initialize the child at `max(parent.vruntime, floor)` to keep it at the current service frontier. Multiple simultaneous descendants still create multiple schedulable entities; group scheduling needs a hierarchy.
+4. Zero removes latency credit and may penalize sleepers; unbounded lets ancient virtual time dominate after wakeup. A finite $C$ bounds both effects.
+5. Runnable state and virtual time change while selectors operate; only a serialized global run queue defines one total decision point. Safety can remain exact with approximate concurrent policy.
+6. Timer code can hold `tickslock` then acquire process locks during wakeup; `p->lock→tickslock` creates the reverse cycle.
+7. Yield before each timer tick to consume CPU without virtual debt. Compare useful-work and `r_time`-based service against virtual-runtime increments.
+8. One time read gives the state and all accrued counters a common linearization cut, making the three-state conservation equation exact. User memory access can fail and may invoke mechanisms forbidden while holding scheduler state; a local kernel copy preserves that cut without extending lock lifetime through `copyout`.
+9. A full scan is $O(NPROC)$ per selection. Measure scheduler CPU time or useful throughput as runnable count grows while holding work constant.
+10. Swapping weights while holding PID/order fixed fails to swap observed share, or reversing creation changes share more than weight does.
+
+</details>
+
+## Grading contract
+
+> **Warning.** Safety blockers cap the result regardless of throughput because a fast double-running or lock-leaking scheduler is not an acceptable scheduler.
+
+| Dimension | Points | Publication blocker |
+| --- | ---: | --- |
+| Baseline reproducibility and source map | 8 | wrong/unrecorded commit or broken baseline |
+| State/accounting invariants | 16 | bypassed transition, double charge, missing/split-read `sample_time`, or nonzero in-scope residual |
+| WVT policy completeness | 18 | child below $\max(v_{parent}, floor)$, no wakeup bound, undefined ties/overflow |
+| Locking and SMP safety | 14 | double-running, stale dispatch, or lock-order deadlock |
+| ABI and failure behavior | 10 | unchecked pointer, lock-held copyout, partial mutation |
+| Test discrimination | 16 | tests do not kill W3/W4/W7/W8, statistical tolerances are post-hoc, or W6 tolerates a nonzero residual |
+| Measurements and causal interpretation | 12 | no raw data, confounded policy comparison, invented values |
+| Memo and defense | 6 | cannot explain own state/lock protocol |
+| **Total** | **100** | |
+
+Passing requires at least 70 overall **and** no publication blocker. Performance cannot compensate for a safety defect. A human reviewer must inspect authorship and defense; the page cannot certify either automatically.
+
+## Handoff checklist
+
+> **Remark.** Every checked item must name retained evidence; an unchecked limitation remains explicit rather than being converted into a claim.
+
+- clean diff based on the pinned hash;
+- upstream license retained;
+- CPUS=1 and CPUS=3 baseline/regression outputs attached;
+- all W1–W9 tests and at least four known-bad demonstrations attached;
+- W3 rejects both `v_child=0` and parent-only placement without the floor clamp; creation-cut review confirms $v_{child}=\max(v_{parent}, floor)$;
+- every successful sample records the single-read `sample_time`, and all in-scope paired residuals are zero;
+- failure-injection matrix completed;
+- raw measurements and summarizer reproducible;
+- no debug print inside measured windows;
+- no `SCHED_TEST` hook in the normal build;
+- every new field initialized, inherited/reset, and reaped intentionally;
+- memo states what remains unproved.
+
+## Deliberate omissions
+
+WVT is not Linux EEVDF or CFS. It has no eligibility lag, requested latency, hierarchy, CPU affinity, migration cost, load balancing, cgroups, realtime class, deadline admission, priority inheritance, energy model, or security policy. Single-hart weighted-share measurements do not establish multicore fairness. QEMU timing does not predict hardware cache behavior. These omissions are part of the defense: extending the policy without new invariants and tests would lower quality.
+
+> **Remark.** The implementation may be correct inside this contract while remaining unsuitable for production; the memo must preserve that distinction.
+
+## References & Further Reading
+
+1. MIT PDOS, [official xv6 RISC-V rev5 tag](https://github.com/mit-pdos/xv6-riscv/tree/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa) and [license](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/LICENSE).
+2. MIT PDOS, rev5 [`kernel/proc.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/proc.c), [`kernel/proc.h`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/proc.h), [`kernel/swtch.S`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/swtch.S), [`kernel/trap.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/trap.c), and [`kernel/start.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/start.c).
+3. MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf), Chapters 4 and 7.
+4. RISC-V International, [*The RISC-V Instruction Set Manual, Volume II: Privileged Architecture*](https://docs.riscv.org/reference/isa/_attachments/riscv-privileged.pdf), time counter, timer, and supervisor trap architecture.
+5. RISC-V International, [RISC-V ABIs Specification](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/), register preservation and syscall calling-convention context (CC BY 4.0).
+6. Linux kernel documentation, [EEVDF Scheduler](https://docs.kernel.org/scheduler/sched-eevdf.html), used only to distinguish the teaching policy from current production virtual-time scheduling.

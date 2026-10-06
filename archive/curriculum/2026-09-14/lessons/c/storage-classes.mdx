@@ -1,0 +1,103 @@
+---
+title: "Scope, Storage Duration, Linkage, and Qualifiers"
+course: c
+description: "Separate visibility, lifetime, linkage, constness, and volatile access instead of treating storage-class keywords as a memory map."
+prerequisites:
+  - "Functions, pointers, translation units, and object lifetime"
+outcomes:
+  - "Classify an object by scope, storage duration, and linkage"
+  - "Use static and extern across translation units without creating hidden ownership"
+  - "State what const and volatile do and do not guarantee"
+omissions:
+  - "The C memory model for atomics and data races is deferred to concurrency work."
+estimatedMinutes: 60
+assessment: "Review declarations in two translation units and predict which names link and which objects persist."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Scope, Storage Duration, Linkage, and Qualifiers
+
+Four questions are often conflated: where can a name be used (scope), how long does an object exist (storage duration), which declarations denote the same entity across translation units (linkage), and may an access expression modify or omit an object access (qualifiers)? The keywords become predictable when these dimensions are separated.
+
+<Quiz client:load
+  title="What does file-scope static mean?"
+  question="What is the effect of `static int helper(void);` at file scope?"
+  options={["The function is called exactly once", "The function has internal linkage and is not named by other translation units", "The function is stored on the stack", "The function cannot access globals"]}
+  correctIndex={1}
+  explanation="At file scope, static gives internal linkage. It does not by itself change call count, storage location, or the function's access to objects."
+/>
+
+## Scope, duration, and linkage
+
+An automatic local object exists while execution is inside its block. A static local object has block scope but static storage duration and retains its value between calls. A file-scope `static` name has internal linkage; a non-static file-scope definition may have external linkage and be declared with `extern` elsewhere.
+
+```c
+/* counter.c */
+static int internal_count;
+int public_count;
+
+/* other.c */
+extern int public_count; /* same external object */
+```
+
+`extern` is a declaration, not an allocation instruction. Define external objects once and prefer functions or opaque modules over shared mutable globals when ownership matters.
+
+<CodeExercise client:load
+  title="Preserve state between calls"
+  code={`int next_id(void) {
+    [!blank!] int id = 0;
+    return ++id;
+}`}
+  answers={["static"]}
+  explanation="A static local is initialized once and retains its value. It still has block scope; callers cannot name it directly."
+/>
+
+## `const` is a view, not ownership
+
+`const int *p` prevents modification of the int through p; `int *const p` prevents changing p; `const int *const p` does both. `const` does not prove the underlying object was originally declared const, does not make an object thread-safe, and does not specify lifetime.
+
+## `volatile` and observable accesses
+
+`volatile` tells the implementation that accesses to the qualified object are observable and must not be optimized away or merged as ordinary accesses. It is appropriate for memory-mapped registers or an object changed by an interrupt mechanism defined by the platform. It is not a mutual-exclusion primitive, atomicity guarantee, memory-ordering protocol, or replacement for a lock.
+
+```c
+volatile unsigned status;
+while ((status & READY) == 0u) { /* poll a device register */ }
+```
+
+For threads, use the C atomic types and a synchronization design. For hardware, use the vendor's register width, ordering, and acknowledgement rules; a volatile qualifier alone does not make a device protocol correct.
+
+<CodeRunner client:load
+  title="Static storage has identity"
+  language="c"
+  code={`#include <stdio.h>
+
+static int calls;
+void visit(void) { printf("%d\\n", ++calls); }
+
+int main(void) { visit(); visit(); return 0; }`}
+  output="1\n2"
+/>
+
+## Transfer exercises
+
+1. Classify a function-local static's scope and storage duration.
+2. Explain why `volatile int ready` does not make `ready++` atomic between threads.
+3. Design a header declaration for a file-private helper and a public API function.
+4. Identify which qualifier is needed for a function that reads but does not modify a caller-owned buffer.
+
+### Diagnostic solutions
+
+1. Block scope; static storage duration. The object persists for the program's execution but the name is visible only in the block.
+2. The increment is a read-modify-write sequence and can interleave. Volatile affects optimization/observable access, not atomicity or inter-thread ordering.
+3. Put only the public function declaration in the header; define the helper with `static` in the implementation file. This prevents external linkage to the helper.
+4. Use a parameter such as `const unsigned char *data` plus an extent. Document the borrow lifetime.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.2.1, §6.2.2, §6.2.4, and §6.7.3](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [cppreference: storage duration](https://en.cppreference.com/w/c/language/storage_duration)
+* [SEI CON00-C: Manage concurrency consistently](https://wiki.sei.cmu.edu/confluence/display/c/CON00-C.+Understand+the+operational+model+of+the+program)

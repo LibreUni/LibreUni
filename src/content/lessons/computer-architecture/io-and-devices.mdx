@@ -2,8 +2,30 @@
 title: "I/O and Devices"
 course: "computer-architecture"
 description: "Device models, interrupts, polling, and ordering at the hardware boundary."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Specify device registers, descriptor rings, interrupts, polling, DMA, IOMMU authority, and completion state."
+  - "Trace ownership, barriers, timeout, reset, malformed input, and late completion behavior."
+  - "Evaluate an I/O design by CPU occupancy, latency, isolation, and a fault-injection invariant."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 480
+assessment: "Given a device protocol and an adversarial completion order, produce the ownership trace and state the barrier, generation, and bounds checks that prevent corruption."
 ---
 # I/O and Devices
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import DeviceIOPlayground from '../../../components/playgrounds/DeviceIOPlayground';
+
+<Quiz client:load title="Cross the device boundary"
+  question="Why does a memory-mapped device register need a volatile access rule in many C implementations?"
+  options={["The register behaves like an ordinary local variable owned by one thread", "The device can change or observe it outside ordinary program flow", "Volatile makes every device access atomic across CPUs and devices", "Volatile encrypts register values before they cross the device boundary"]}
+  correctIndex={1}
+  explanation="The compiler must not remove or merge accesses whose effects are observable to hardware. Volatile does not by itself guarantee atomicity, ordering, or synchronization."
+/>
 
 Input/output architecture connects a general-purpose processor to components whose timing, state, and failure behavior are not controlled by the instruction pipeline. A device may be a keyboard, disk, network interface, sensor, accelerator, timer, or virtual machine endpoint. It exposes a programming interface through registers, memory-mapped queues, interrupts, DMA, or a combination. A correct driver is a protocol implementation: it establishes ownership, orders commands and data, handles backpressure and errors, and does not assume that a device responds like ordinary memory.
 
@@ -25,6 +47,15 @@ For an event arrival rate $\lambda$, polling period $P$ gives average detection 
 
 An interrupt handler should do the minimum urgent work: identify and acknowledge the source, capture status, and schedule deferred processing. If it performs unbounded parsing or blocking I/O, it can delay higher-priority interrupts and create priority inversion. Nested interrupts require a defined masking and priority policy. A shared interrupt line requires reading each possible source and acknowledging only the one that is actually pending.
 
+<CaseStudy client:load
+  title="Completion must precede consumption"
+  scenario="A driver starts DMA into a buffer and immediately reads the buffer before observing device completion or applying the platform's synchronization rule."
+  question="Which trace exposes the ordering defect?"
+  options={["Descriptor ownership, DMA writes, completion event, barrier, and CPU read", "Source variable names, driver size, device brand, and interrupt number", "Only the final buffer bytes because their values prove ordering automatically", "Only CPU instructions because a device cannot modify memory independently"]}
+  correctIndex={0}
+  explanation="DMA creates another agent that can modify memory. Ownership, completion, and ordering rules determine when the CPU may safely consume the buffer; final bytes alone erase the race."
+/>
+
 ## Queues and descriptors
 
 High-throughput devices use rings rather than one register per item. A descriptor contains an address, length, operation, flags, ownership, and completion status. The producer publishes descriptors by writing fields first and advancing a producer index last. The consumer reads only published descriptors, performs the operation, writes completion fields, and advances a completion index.
@@ -40,6 +71,12 @@ DMA transfers data between a device and memory. It avoids CPU copy loops but exp
 The IOMMU translates device virtual addresses to physical frames, often using page tables and permissions analogous to CPU virtual memory. It may cache translations, so invalidation and synchronization are required when mappings change. A driver must not unmap a buffer and immediately hand its frame to another process while the device can still issue an old translated request.
 
 For a CPU-to-device buffer on a noncoherent platform, dirty CPU cache lines must be cleaned to memory before device ownership. For a device-to-CPU buffer, CPU cache lines that could contain stale data must be invalidated before reading completion data. On coherent systems, the platform’s DMA API may combine or abstract these actions, but the ownership and ordering proof remains necessary.
+
+The investigation below separates CPU occupancy from elapsed device time. For $B$ bytes, its assumed device time is $D=L+1000B/10^8$ milliseconds, where $L$ is latency in milliseconds. A 3 GHz CPU executes $3\times10^6$ cycles per millisecond. Interrupt-driven CPU copying costs $K=500+1200+2B$ CPU cycles: setup, interrupt, and copying. Thus busy time is $K/(3\times10^6)$ ms and elapsed time is $D+K/(3\times10^6)$ ms. These constants define a teaching model, not a device measurement.
+
+At 4096 bytes and 1 ms latency, the device consumes 1.04096 ms; the CPU consumes $9892/(3\times10^6)\approx0.003297$ ms. At 100 operations/s, the CPU demand is about 0.033%, despite more than 1 ms elapsed per operation. DMA replaces byte-proportional CPU copying with 1800 setup cycles plus 1200 interrupt cycles. Polling adds the entire device interval to CPU busy time. Predict which term dominates before changing transfer size or request rate.
+
+<DeviceIOPlayground client:load />
 
 ## Device state machines
 

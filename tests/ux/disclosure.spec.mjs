@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('lesson disclosures have consistent markers and vertical content flow', async ({ page }) => {
-  await page.goto('/lessons/algorithms/algorithm-engineering.html', { waitUntil: 'networkidle' });
+  await page.goto('/lessons/database-systems/recovery-and-logging.html', { waitUntil: 'networkidle' });
 
   const disclosures = page.locator('#lesson-container article.prose details:not(.diagram-source)');
   await expect(disclosures).not.toHaveCount(0);

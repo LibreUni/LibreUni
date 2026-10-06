@@ -1,0 +1,97 @@
+---
+title: "Open-Closed Design and Stable Variation Points"
+course: software-engineering
+description: "Use the open-closed principle when a known change axis warrants an extension boundary, while avoiding speculative abstractions."
+prerequisites:
+  - "Interfaces, single responsibility, and polymorphism"
+outcomes:
+  - "Identify a stable variation axis from change evidence"
+  - "Extend behavior without modifying a trusted policy core where appropriate"
+  - "Recognize when an abstraction is premature or makes invalid combinations possible"
+omissions:
+  - "Plugin loading and binary compatibility are deferred to architecture and delivery work."
+estimatedMinutes: 50
+assessment: "Design an extension point for a changing policy and name the invariants every extension must satisfy."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Open-Closed Design and Stable Variation Points
+
+The open-closed principle says a module should be open to required extension and closed to risky modification. It is not a command to never edit code. The design question is whether a change axis is stable enough, valuable enough, and constrained enough to earn an extension boundary.
+
+<Quiz client:load
+  title="Choose the extension point"
+  question="When does a strategy interface earn its cost?"
+  options={["Whenever an if statement exists", "When a recurring variation is expected and each implementation can satisfy a shared contract", "Only when a pattern catalog names it", "When the team wants fewer tests"]}
+  correctIndex={1}
+  explanation="An extension point adds indirection and testing obligations. Evidence of recurring variation plus a precise shared contract makes the trade defensible."
+/>
+
+## Variation and invariants
+
+Suppose checkout supports shipping rules. Keep invariant parts—order identity, authorization, money units, and persistence—outside the variation, and give each shipping strategy a contract such as: nonnegative cost, supported destination, deterministic result for the same inputs, and no mutation of the order.
+
+```python
+class FreeShipping:
+    def quote(self, order):
+        return 0
+
+class ThresholdShipping:
+    def __init__(self, threshold, fee):
+        self.threshold, self.fee = threshold, fee
+    def quote(self, order):
+        return 0 if order.subtotal >= self.threshold else self.fee
+
+def shipping_total(order, policy):
+    return policy.quote(order)
+```
+
+The caller is closed to adding a new policy, but the policy contract is open to implementations. The example still needs validation of threshold and currency in a real domain.
+
+<CaseStudy client:load
+  title="Avoid a false abstraction"
+  scenario="A team sees three payment providers and creates a generic `PaymentProvider` interface. One provider supports capture, another supports delayed authorization, and the third supports neither refunds nor idempotency keys."
+  question="What should happen before the interface is shared?"
+  options={["Force every provider into the largest interface", "Model the capabilities and guarantees explicitly; create smaller boundaries where behavior is truly substitutable", "Copy the first provider's API for all", "Hide the differences in comments"]}
+  correctIndex={1}
+  explanation="A common name is not a common contract. An extension point that permits unsupported operations or hides guarantees produces invalid clients and unsafe fallbacks."
+/>
+
+<CodeRunner client:load
+  title="Make the extension contract executable"
+  language="python"
+  code={`def choose_fee(policy, subtotal):
+    fee = policy(subtotal)
+    assert fee >= 0
+    return fee
+
+print(choose_fee(lambda subtotal: 0 if subtotal >= 50 else 7, 20))`}
+  output="7"
+/>
+
+## Modification is sometimes the right design
+
+If the rule is local, unstable, or used once, a direct edit may be clearer and safer than adding a hierarchy. Extension boundaries can also make illegal combinations possible, spread validation across implementations, or freeze a poor interface. Use tests and change history to decide where closure buys risk reduction.
+
+## Transfer exercises
+
+1. Identify a variation axis in a report exporter and its invariant contract.
+2. Give a case where editing a conditional is preferable to introducing polymorphism.
+3. Explain why an extension point must specify failure behavior as well as success behavior.
+4. List two tests that all shipping strategies must satisfy.
+
+### Diagnostic solutions
+
+1. Format variation (CSV/JSON) with an output encoding/escaping and failure contract; do not let exporters silently change business totals.
+2. A single stable branch with no expected variation may be easier to read and test; speculative abstraction adds surface without reducing change risk.
+3. Clients must know whether retries, partial output, or unsupported inputs are safe; hiding these differences makes substitution unsound.
+4. Nonnegative cost in the correct currency and same result for the same order/destination; add unsupported-destination behavior and rounding tests.
+
+## References & Further Reading
+
+* Martin, Robert C. *Agile Software Development, Principles, Patterns, and Practices*. Prentice Hall, 2002.
+* [MIT 6.005: abstraction and modularity](https://web.mit.edu/6.005/www/fa15/classes/06-specifications/)
+* Gamma et al., *Design Patterns*. Addison-Wesley, 1994.

@@ -1,0 +1,263 @@
+---
+title: "The Operating-System Contract"
+course: "operating-systems"
+description: "Derive the operating system as a mediator that turns shared, failure-prone hardware into protected abstractions with explicit safety and progress conditions."
+prerequisites:
+  - "C pointers, object lifetime, and integer representations"
+  - "CPU privilege modes, interrupts, address translation, and device registers"
+  - "State machines, invariants, and asymptotic reasoning"
+outcomes:
+  - "Distinguish abstraction, virtualization, multiplexing, mechanism, policy, and protection without treating the terms as synonyms."
+  - "Model a kernel operation as a state transition and state the authority, safety invariant, and progress assumption at its boundary."
+  - "Trace CPU, memory, and device ownership through two concrete requests and identify where mediation can fail."
+  - "Evaluate an unfamiliar operating-system design claim by exposing its trusted base, workload assumptions, and omitted failure modes."
+omissions:
+  - "Historical surveys, command-line administration, package management, and operating-system installation are outside this mechanism course."
+  - "Formal noninterference proofs, real-time schedulability, distributed coordination, and physical fault tolerance require dedicated treatments."
+  - "xv6 is used as a compact implementation model; its policies, scale limits, and attack surface are not presented as production practice."
+estimatedMinutes: 300
+assessment: "Produce and defend a mechanism map for an unfamiliar kernel service: define its abstract state, authority check, safety invariant, progress assumption, observable contract, and one adversarial failure trace."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
+# The Operating-System Contract
+
+A storage controller accepts physical addresses. A malicious process knows the controller's register layout and submits a direct-memory-access descriptor targeting another process's page. If the CPU permits the write, the controller faithfully corrupts the victim while the attacker remains in user mode. A filesystem API, process identifier, and graphical desktop can all exist on such a machine; none supplies protection unless access to the underlying mechanism is mediated.
+
+The operating system is necessary because hardware resources are shared and because the requests presented to them are not intrinsically trustworthy. Its central contract is stronger than “provide convenient functions”:
+
+> **Kernel mediation contract.** Every transition that can affect protected state must be reached through a controlled entry, checked against the caller's authority, executed while preserving global invariants, and reported through an interface whose failure semantics are explicit.
+
+{/* Source tracking: The privilege and protection model is synthesized from the RISC-V Privileged Architecture, Chapters 1, 3, and 12, and the xv6 book, Chapter 1. Both distinguish unprivileged execution from supervisor-mediated access. */}
+
+### Boundary prediction — the hostile DMA descriptor
+
+Before reading the model below, write four lines:
+
+1. the state the attacker wants to change;
+2. the first component that can prevent the change;
+3. the authority evidence that component needs; and
+4. one assumption under which prevention still fails.
+
+<ExerciseSolution hint="Separate the CPU's privilege check from the device's ability to access memory.">
+The protected state is the victim's physical page. The CPU can prevent user code from programming the controller by mapping its registers as supervisor-only; an IOMMU can separately constrain the device's DMA addresses. The kernel needs both the caller's right to use the device and ownership of the submitted buffers. Protection can still fail if the kernel validates the wrong length, retains a stale mapping, misprograms the IOMMU, or trusts malicious firmware. Naming only “permissions” misses the two distinct access paths: CPU loads/stores and device DMA.
+</ExerciseSolution>
+
+## Six ideas that must not collapse into one
+
+The same implementation may serve several roles, but the roles answer different questions.
+
+> **Definition.** An operating-system design is not characterized by one abstraction label; it is characterized by the resources it represents, the choices it makes, and the authority it mediates.
+
+| Idea | Precise question | Example | Non-example |
+| --- | --- | --- | --- |
+| **Abstraction** | Which details does the interface hide while preserving useful operations? | A file exposes byte reads instead of disk-sector commands. | Renaming a sector number `file_id` without adding semantics. |
+| **Virtualization** | How does one physical resource appear as multiple logical instances or as a different resource? | Each process observes a private virtual address space. | Merely serializing access to one global buffer. |
+| **Multiplexing** | Which claimant receives a finite resource, when, and for how long? | A scheduler allocates CPU intervals among runnable threads. | Mapping two names to the same object without allocating time or capacity. |
+| **Mechanism** | What operations make a policy enforceable? | Timer interrupts, saved contexts, and a ready queue permit preemption. | “Be fair” without a way to stop a running thread. |
+| **Policy** | Which allowed outcome should the mechanism choose? | Select the runnable thread with the earliest eligible virtual deadline. | The context-switch assembly that saves registers. |
+| **Protection** | Which subject may perform which operation on which object? | Page-table permissions reject a user-mode store to a kernel page. | Hiding an address while leaving it writable. |
+
+An abstraction can exist without isolation: two processes may hold descriptors for the same open file description. Virtualization can be partial: CPU time is virtualized while cache capacity remains visibly shared. Protection can be correct yet unavailable: a kernel that denies every request preserves confidentiality but offers no useful progress.
+
+### Retrieval under changed names
+
+A storage service assigns each tenant a “virtual disk,” queues all operations in one FIFO, and performs no access check because identifiers are 128-bit random values. Classify the design's three claims: abstraction, multiplexing, and protection.
+
+<ExerciseSolution>
+The block interface and tenant-specific names provide an abstraction. The FIFO multiplexes one physical service path. Protection is not established: identifier unpredictability is not an authorization proof, and accidental disclosure grants access. A correct answer that calls the random identifier a capability must also establish unforgeability, controlled transfer, revocation semantics, and complete mediation; length alone does none of those things.
+</ExerciseSolution>
+
+## A kernel operation as a transition system
+
+Let the machine state be
+
+$$
+S = (H, K, P_1,\ldots,P_n, D),
+$$
+
+where $H$ is architecturally visible hardware state, $K$ is kernel-owned state, each $P_i$ is a protection domain, and $D$ is device-visible state. An event $e$ proposes a transition $S \rightarrow S'$. Events include explicit requests such as a system call, synchronous faults caused by the current instruction, and asynchronous interrupts raised by devices or timers.
+
+The transition is acceptable only if three obligations hold:
+
+1. **Authorization:** the subject represented by $P_i$ has authority for the requested operation on the target object.
+2. **Safety:** an invariant $I(S)$ implies $I(S')$. Examples include “a physical frame has at most one mutable owner unless sharing is explicit” and “a runnable thread is not simultaneously linked into two run queues.”
+3. **Progress under assumptions:** if required resources and external events eventually become available, the request either completes or returns a documented error. This is conditional liveness, not a promise against broken hardware or infinite contention.
+
+{/* Source tracking: The state-transition framing is an original synthesis. Its concrete controlled-entry mechanisms and protected CSRs are grounded in the official RISC-V Privileged Architecture; xv6 Chapter 2 supplies the kernel organization and isolation examples. */}
+
+<PlantUML code={String.raw`
+left to right direction
+actor "untrusted process" as U
+rectangle "controlled entry" as E
+rectangle "authority check" as A
+rectangle "kernel mechanism" as M
+database "protected kernel state" as K
+node "CPU / memory / device" as H
+
+U --> E : request + arguments
+E --> A : caller identity + handles
+A --> M : validated operation
+M --> K : preserve invariant
+M --> H : privileged action
+H --> M : completion / fault / interrupt
+M --> U : result or explicit error
+
+note bottom of A
+  User pointers, lengths, handles,
+  and state-dependent rights are untrusted.
+end note
+note bottom of M
+  Mechanism is not policy:
+  several legal outcomes may remain.
+end note
+`} />
+
+The diagram is a proof obligation, not a literal function-call graph. Some kernels fuse entry and validation; a device completion may awaken a different thread; and hardware may reject a request before kernel code runs. The invariant must survive every path, including errors and cancellation.
+
+### Application — define an invariant before code
+
+A kernel exposes `map_shared(frame_handle, va, writable)`. Two processes may map the same frame. Write one safety invariant that is strong enough to prevent unintended mutable aliasing but weak enough to permit deliberate shared memory. Then list the information the authorization check needs.
+
+<ExerciseSolution hint="Ownership and writability need a relation; a count of mappings is insufficient.">
+One usable invariant is: “For every physical frame, either exactly one protection domain has a writable mapping, or every writable mapping belongs to a sharing group explicitly authorized by the frame owner; all other mappings are read-only.” The check needs the caller identity, the frame object denoted by the handle, the handle's map and write rights, the requested virtual interval and permissions, the caller's current address-space map, and the sharing-group policy. “At most one mapping” is too strong; “all handles may map” ignores rights encoded by the handle.
+</ExerciseSolution>
+
+## Worked trace: four bytes from a file
+
+Assume one process calls `read(fd, buf, 4)`. The descriptor already denotes a readable open file; `buf` is a user virtual address; the requested bytes are not cached.
+
+> **Example.** The trace records the controller and invariant at each cut so that a fast-path implementation can change without erasing the boundary proof.
+
+| Cut | Controller | Relevant state | Obligation before advancing |
+| ---: | --- | --- | --- |
+| 0 | user process | `fd`, `buf`, register state | User code may prepare a request but cannot issue disk DMA. |
+| 1 | trap hardware | saved user PC, cause, privilege state | Entry must land at a kernel-configured vector without trusting a user target. |
+| 2 | kernel dispatcher | call number and raw arguments | Reject unknown call numbers, invalid descriptors, overflowed ranges, and unwritable destinations. |
+| 3 | filesystem/device path | file offset, cache state, request queue | Serialize updates to shared file state; bind DMA to kernel-owned buffers. |
+| 4 | scheduler | caller is blocked; another thread runs | A blocked thread must not remain marked running on the same CPU. |
+| 5 | interrupt path | device reports completion | Match the completion to a live request before waking a waiter. |
+| 6 | return path | four bytes copied; result register is `4` | Restore the caller's user state and no kernel-only register or mapping. |
+
+This trace crosses abstraction layers but does not imply a copy at each boundary. A production kernel might satisfy the read from a page cache, perform readahead, or map data into user space. The contract remains: descriptor authority and user memory are checked, shared offsets change atomically according to the interface, and failure is reported without exposing unrelated state.
+
+{/* Source tracking: The descriptor and `read()` semantics are synthesized from POSIX.1-2024 `open()` and `read()`; the trap/validation/device path follows xv6 Chapters 4, 7, and 8 without copying implementation text. */}
+
+### Transfer — a cancellation cut
+
+At cut 4, another thread requests cancellation of the blocked operation. The disk later completes anyway. Give one safe ownership protocol for the request object and explain why “free it on cancellation” is wrong.
+
+<ExerciseSolution>
+Use a request state machine such as `QUEUED → IN_FLIGHT → COMPLETING → DONE`, with cancellation recording `CANCEL_REQUESTED` rather than freeing an in-flight object. The completion path owns the final transition, detaches the DMA mapping, records either completion or cancellation, wakes waiters, and releases the last reference. Immediate free permits the later interrupt to dereference reused memory or to copy device data into a new owner's buffer. The missing concept in that wrong answer is asynchronous lifetime, not merely locking.
+</ExerciseSolution>
+
+## Worked trace: one CPU, two processes, one page frame
+
+Consider processes $A$ and $B$ on one CPU. $A$ is running; $B$ is runnable. No free physical frame exists. $A$ requests a page that may be supplied by evicting a clean page owned by $B$.
+
+> **Example.** CPU preemption and frame reassignment virtualize different resources, yet both require revoking old ownership before publishing new ownership.
+
+1. A timer event transfers control to the kernel. The scheduler saves $A$'s execution context, changes $A$ from running to runnable, chooses $B$, and restores $B$.
+2. Later, $A$ runs and faults on an unmapped virtual page. The fault is synchronous: the current instruction cannot retire with its requested effect.
+3. The kernel chooses a victim frame using a replacement policy. The unmap and TLB invalidation mechanisms make that policy enforceable.
+4. Before reassigning the frame, every mapping that could write it as $B$'s page must cease to authorize access. The kernel records the new owner and mapping for $A$.
+5. The faulting instruction is retried. From $A$'s perspective, a private page appeared; from the machine's perspective, CPU time and a frame were multiplexed at different timescales.
+
+The CPU scheduler and memory manager solve different allocation problems but share one structure: observable abstraction, protected metadata, revocable hardware mechanism, and policy under scarcity.
+
+### Quantitative check — capacity is not a policy
+
+Suppose $A$ demands 8 ms of CPU every 20 ms and $B$ demands 15 ms every 25 ms. Compute average utilization demand and decide what the number proves.
+
+<ExerciseSolution hint="Add demand rates, then separate a necessary capacity condition from a schedule proof.">
+$A$ demands $8/20=0.4$ CPU and $B$ demands $15/25=0.6$, so average demand is $1.0$. This establishes no scheduling guarantee. At exactly full utilization there is no slack for kernel work, release jitter, cache effects, or unfavorable alignment, and average feasibility does not prove every deadline. The diagnostic distinction is capacity versus policy plus timing assumptions.
+</ExerciseSolution>
+
+## Mechanism, policy, and evidence
+
+“The kernel should be fair” is not implementable until fairness has an observable definition. Equal CPU time, weighted shares, bounded response time, and deadline satisfaction are different policies. A timer interrupt and context switch are mechanisms. A run queue is partly mechanism and partly policy because its ordering encodes a choice.
+
+> **Warning.** Evidence for one claim layer cannot be promoted into another: elapsed time does not prove authorization, and a type-checked call does not prove progress.
+
+Use this claim decomposition for any operating-system feature:
+
+| Claim layer | Required evidence |
+| --- | --- |
+| Interface | Inputs, outputs, error cases, concurrency semantics, and lifetime rules |
+| Safety | Invariant plus an argument over all state transitions, including failure paths |
+| Liveness | Workload and fairness assumptions; a bound or a counterexample when possible |
+| Performance | Cost model, controlled measurements, uncertainty, and a competing explanation |
+| Security | Threat model, authority path, trusted computing base, and revocation story |
+
+A benchmark cannot prove isolation. A type signature cannot prove progress. A successful happy-path test cannot prove recovery. Evidence must match the claim.
+
+### Synthesis — audit a “zero-copy” service
+
+A proposed service maps a network device's receive ring into every client for “zero-copy performance.” Clients are mutually hostile. Produce a compact mechanism map with: abstract objects, protected state, authority checks, one safety invariant, one liveness risk, and one measurement needed before accepting the performance claim.
+
+<ExerciseSolution>
+A defensible design exposes per-client receive buffers or immutable packet views, not the shared writable ring. Protected state includes descriptor ownership, producer/consumer indices, DMA mappings, and buffer lifetimes. Authority checks bind a client to its queue and map only buffers assigned to it. A useful invariant is: each writable descriptor and DMA target has exactly one current owner; clients cannot advance device-owned indices. A slow client can retain buffers and exhaust the ring, so liveness needs quotas, revocation, or copying under pressure. Measure end-to-end throughput and tail latency while accounting for IOMMU operations, cache-line contention, retained buffers, and fallback copies. A response that says only “use an IOMMU” omits ownership and denial-of-service.
+</ExerciseSolution>
+
+## Boundaries of the contract
+
+The kernel cannot create guarantees absent from its assumptions.
+
+> **Warning.** Every unconditional whole-system guarantee is suspect until the hardware, trusted-code, load, and durability assumptions are named.
+
+- **Hardware failure:** a CPU that violates privilege checks or memory ordering invalidates the software proof.
+- **Trusted-code defect:** a monolithic kernel bug may bypass every user/kernel boundary because the buggy code already has supervisor authority.
+- **Information leakage:** page isolation does not automatically hide timing through shared caches or queues.
+- **Permanent overload:** no scheduler can complete unbounded demand with finite capacity.
+- **Durability:** a successful write to volatile cache is not a persistence guarantee unless the interface defines and enforces a durability point.
+
+The trusted computing base (TCB) is the set of components whose correct behavior is necessary for a security property. Smaller is not automatically correct, but every additional trusted parser, driver, or privileged service enlarges what must be audited.
+
+{/* Source tracking: RISC-V specifies the architectural privilege boundary but not whole-system security; xv6 Chapter 2 explicitly motivates isolation while acknowledging the simplicity of its monolithic design. The limitations above are original threat-model synthesis. */}
+
+### Counterexample — a user-space filesystem
+
+“This filesystem runs in user space, therefore a filesystem bug cannot compromise the kernel.” Is the conclusion valid?
+
+<ExerciseSolution>
+Not without the IPC and authority design. Memory privilege may confine direct writes, yet a user-space filesystem can still be a confused deputy, return malicious metadata that a trusted client parses unsafely, retain capabilities, or cause denial of service. Conversely, a narrowly authorized service can reduce the TCB for unrelated kernel state. Placement is evidence about one boundary, not a complete security proof.
+</ExerciseSolution>
+
+## Mechanism-map defense
+
+Choose one unfamiliar service—GPU submission, encrypted block storage, a user-space network stack, or a language-runtime sandbox—and submit:
+
+> **Remark.** The defense is graded from consistency across state, authority, traces, and evidence; naming fashionable architecture patterns earns no independent credit.
+
+1. a state tuple naming protected and untrusted state;
+2. a diagram with controlled entries and authority flow;
+3. two traces: normal completion and one injected failure;
+4. one safety invariant argued across every transition in both traces;
+5. one progress claim with workload assumptions;
+6. a policy/mechanism separation; and
+7. an evidence plan that could falsify the performance claim.
+
+**Rubric (20 points).** State and boundaries 4; authority and TCB 4; invariant and failure trace 5; progress assumptions 3; policy/mechanism separation 2; falsifiable evidence plan 2. A polished diagram with unnamed authority earns no more than 8 points. A correct submission may conclude that the proposed service cannot support its advertised guarantee.
+
+### Diagnostic self-audit
+
+- If every box is called “the OS,” identify the owning subsystem and privilege domain.
+- If the invariant is “nothing goes wrong,” name the forbidden state precisely.
+- If progress is unconditional, construct overload or permanent-device-failure counterexamples.
+- If the policy is described only by code structure, state the choice it makes among legal outcomes.
+- If performance evidence is one elapsed-time number, identify confounders and a competing mechanism.
+
+## Deliberate omissions
+
+This treatment does not derive synchronization algorithms, page-table formats, filesystem recovery, capability calculi, real-time response-time analysis, or microarchitectural side-channel defenses. Those subjects need their own state variables and proof obligations. Historical operating-system lineages are omitted because chronology does not establish how a mechanism works. xv6 supplies a readable causal model; production Linux, Windows, and XNU contain additional policies, compatibility layers, security hooks, and scale mechanisms that cannot be responsibly reduced to a survey paragraph.
+
+> **Remark.** An omitted mechanism is not assumed away in an assessment; any design that depends on one must state it as an external precondition.
+
+## References & Further Reading
+
+1. RISC-V International, [*The RISC-V Instruction Set Manual, Volume II: Privileged Architecture*](https://docs.riscv.org/reference/isa/_attachments/riscv-privileged.pdf), especially privilege modes and supervisor trap state.
+2. MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf), Chapters 1–2. The xv6 code and book are distributed under permissive notices retained by upstream.
+3. The Open Group, [POSIX.1-2024 `open()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html) and [`read()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html), for the visible file-descriptor and I/O contracts used in the worked trace.
+4. MIT PDOS, [official xv6 RISC-V rev5 source](https://github.com/mit-pdos/xv6-riscv/tree/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa), pinned at commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa` for the implementation spine.

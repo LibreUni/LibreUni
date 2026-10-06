@@ -1,0 +1,352 @@
+---
+title: "Filesystem Implementation"
+course: "operating-systems"
+description: "On-disk layout, inodes, block mapping, directories, allocation, buffer caches, and the invariants that connect them."
+prerequisites:
+  - "Filesystem pathnames, directory entries, descriptors, links, and rename semantics"
+  - "C structs, integer arithmetic, pointers, and synchronization primitives"
+  - "Block-device I/O and interrupt-driven completion"
+outcomes:
+  - "Derive inode, bitmap, directory-entry, and data-block locations from an explicit disk layout."
+  - "Trace pathname lookup and byte-offset translation through caches to a physical block."
+  - "State and preserve allocation, reference-count, cache-uniqueness, and namespace invariants during mutation."
+  - "Evaluate an implementation against sparse-file, large-file, concurrency, and failure boundaries."
+omissions:
+  - "Extent trees, B-trees, copy-on-write trees, checksums, deduplication, compression, quotas, and flash-specific allocation are deferred to specialist storage material."
+  - "The concrete model derives a compact inode filesystem; its constants and scaling properties are not production recommendations."
+estimatedMinutes: 360
+assessment: "Given an unfamiliar compact filesystem layout and operation trace, compute every touched structure, justify lock and reference transitions, and identify the first violated invariant in a faulty implementation."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Filesystem Implementation
+
+Appending one byte can require more than one byte of work. If a file has exhausted its direct block pointers, the append may allocate an indirect block, allocate a data block, set a bitmap bit, install two pointers, extend the inode size, dirty several cache entries, and arrange for all of those changes to become recoverable. A design that models `write` as “copy bytes to disk” cannot explain either its cost or its failure modes.
+
+The implementation problem is to maintain one connected graph across several representations:
+
+$$
+\text{name} \rightarrow \text{inode number} \rightarrow \text{block map} \rightarrow \text{device blocks}.
+$$
+
+Every cache duplicates part of that graph in memory. Every allocator mutates its ownership relation. Correctness therefore depends less on individual helper functions than on invariants spanning layers.
+
+{/* Source tracking: The compact layout, formulas, and function responsibilities are synthesized from the MIT PDOS xv6 RISC-V book and tag xv6-riscv-rev5 at commit 7d7adbb1b0acbd67c9766a20d0f9900fef2789fa, especially kernel/fs.h, kernel/fs.c, kernel/bio.c, kernel/sysfile.c, and kernel/param.h. */}
+
+Every xv6-specific constant and control-path trace below is pinned to official tag `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`. A moving branch may change the format or helper behavior and is not evidence for these derivations.
+
+## A layered contract, not a call-stack accident
+
+The concrete model uses one block device, fixed-size blocks, one filesystem, inodes, fixed-size directory entries, a bitmap allocator, and a write-back buffer cache. System calls may execute concurrently. Device completion can sleep and wake a process. The model makes no crash-ordering assumption.
+
+<PlantUML code={`
+@startuml
+top to bottom direction
+rectangle "system-call layer\nopen, read, write, link, unlink" as SYS
+rectangle "name layer\npath components -> inode references" as NAME
+rectangle "directory layer\nfixed entries: name -> inum" as DIR
+rectangle "inode layer\ntype, size, links, block map" as INODE
+rectangle "block allocator\nbitmap ownership" as ALLOC
+rectangle "buffer cache\none in-memory buffer per (dev, block)" as CACHE
+rectangle "block device\nsector requests and completion" as DEV
+SYS --> NAME : pathname arguments
+SYS --> INODE : descriptor I/O
+NAME --> DIR : lookup each component
+DIR --> INODE : iget(inum)
+INODE --> ALLOC : grow or truncate
+INODE --> CACHE : read/write mapped blocks
+ALLOC --> CACHE : mutate bitmap blocks
+CACHE --> DEV : issue bounded I/O
+@enduml
+`} />
+
+Each arrow is a contract boundary:
+
+- the name layer returns a referenced inode identity, not an unprotected pointer into an on-disk block;
+- the inode layer maps a logical byte range to blocks without exposing allocator internals;
+- the allocator owns the rule that one block cannot belong to two live allocations;
+- the buffer cache serializes access to a cached block and prevents two divergent in-memory copies of the same device block; and
+- the device layer reports completion or error rather than deciding filesystem policy.
+
+Production kernels add virtual-filesystem dispatch, page-cache integration, writeback policy, extents, per-CPU structures, and many caches. The compact layers remain useful because their invariants can be enumerated completely.
+
+## Deriving the disk map
+
+Freeze these parameters for the traces:
+
+| parameter | value | consequence |
+| --- | ---: | --- |
+| block size $B$ | 1024 bytes | every region is addressed in 1 KiB units |
+| disk-block number | 32-bit unsigned | one indirect block stores 256 pointers |
+| on-disk inode size | 64 bytes | 16 inodes fit in one block |
+| direct addresses | 12 | logical blocks 0 through 11 are direct |
+| directory name bytes | 14 | one entry is a 2-byte inode number plus 14 name bytes |
+
+The disk regions are ordered:
+
+```text
+block 0       boot
+block 1       superblock
+next nlog     recovery log
+next ...      inode blocks
+next ...      free-space bitmap blocks
+remainder     file and directory data blocks
+```
+
+The superblock records region starts and sizes. Derived constants are
+
+$$
+IPB=\frac{B}{\operatorname{sizeof}(dinode)}=\frac{1024}{64}=16,
+$$
+
+$$
+BPB=8B=8192\ \text{allocation bits per bitmap block},
+$$
+
+and
+
+$$
+N_{indirect}=\frac{B}{4}=256.
+$$
+
+For inode number $i$ and data block $b$:
+
+$$
+inodeBlock(i)=inodeStart+\left\lfloor\frac{i}{IPB}\right\rfloor,
+\qquad inodeSlot(i)=i\bmod IPB,
+$$
+
+$$
+bitmapBlock(b)=bitmapStart+\left\lfloor\frac{b}{BPB}\right\rfloor,
+\qquad bitmapBit(b)=b\bmod BPB.
+$$
+
+### Worked trace: locate two pieces of metadata
+
+Let `inodeStart = 32` and `bitmapStart = 48`.
+
+- Inode 37 is in block $32+\lfloor37/16\rfloor=34$, slot $37\bmod16=5$.
+- Data block 9000 is represented in bitmap block $48+\lfloor9000/8192\rfloor=49$, bit $808$ of that block. Byte $\lfloor808/8\rfloor=101$ contains the bit; mask $1<<(808\bmod8)=1$ selects it.
+
+The formulas reveal a boundary condition: inode 16 starts a new inode block, and data block 8192 starts a new bitmap block. Tests that use only zero and small identifiers will not exercise those transitions.
+
+### Derivation checkpoint: resize the model
+
+The block size becomes 4096 bytes, inode size remains 64 bytes, and block numbers remain 32 bits. Compute `IPB`, `BPB`, and `NINDIRECT`. Then state which values are format commitments rather than values the kernel may change while mounting an existing image.
+
+<details>
+<summary>Reveal the derivation and diagnosis</summary>
+
+$IPB=4096/64=64$, $BPB=8\cdot4096=32768$, and $NINDIRECT=4096/4=1024$. Block size, on-disk inode layout, pointer width, region locations, and interpretation of bitmap bits are format commitments: changing them without a versioned migration changes the meaning of existing bytes. An in-memory cache capacity can change without rewriting the disk format, provided all observable behavior and invariants remain intact.
+
+A response giving `BPB=4096` has counted bytes rather than bits. A response treating `sizeof(struct dinode)` as automatically stable across compilers has missed why on-disk layouts need fixed-width fields, layout checks, and versioning.
+
+</details>
+
+## Inodes split identity from residency
+
+An on-disk inode stores persistent metadata: object type, device identifiers where applicable, link count, byte size, and block addresses. An in-memory inode adds transient state: device and inode identity, reference count, validity, and a sleepable lock protecting loaded metadata.
+
+These states must not be conflated:
+
+- `ref > 0` means kernel code holds an in-memory reference; it does not mean a directory names the inode.
+- `nlink > 0` means namespace entries name the object; it does not count open descriptors.
+- “valid in cache” means metadata has been read from disk; it does not mean a caller currently holds the inode lock.
+- the inode number identifies the object within a filesystem; the address of an in-memory cache slot is not persistent identity.
+
+The inode cache should return the same in-memory entry for a live `(device, inode-number)` pair. Otherwise two locks could protect two copies of one object's size and block map, making both updates appear locally synchronized while losing one globally.
+
+> **Cache-identity invariant.** At most one active in-memory inode entry represents a given `(dev, inum)`. Its reference count prevents reuse; its inode lock serializes metadata inspection and mutation.
+
+### Worked trace: why reference and link counts differ
+
+Object 52 has two names, `a` and `b`, and one open descriptor. Its state is `nlink=2`, with at least one in-memory reference from the open file.
+
+1. `unlink("a")` removes one directory entry and decrements `nlink` to 1.
+2. `unlink("b")` removes the other and decrements `nlink` to 0.
+3. The open descriptor still holds an inode reference, so truncation and inode reuse are postponed.
+4. Closing the descriptor drops the final reference. The implementation may then free data blocks and mark the inode unused inside an appropriate recoverable operation.
+
+Freeing at step 2 would let the allocator hand a still-open block to another file. Deferring forever because `nlink==0` but ignoring the reference transition would leak it.
+
+### Boundary checkpoint: detect the alias bug
+
+An inode cache searches without a lock, finds no entry for `(1,52)`, and two CPUs each install that identity into a different free slot. Each slot has its own sleep lock. Explain why adding locks around `writei` cannot repair the design.
+
+<details>
+<summary>Reveal the invariant failure</summary>
+
+The first failure is cache identity, before either `writei` begins. The two locks guard different memory objects, so both writers can hold a lock while independently reading and overwriting inode 52's size or block pointers. The lookup-and-reserve transition must be atomic under a cache-level lock or equivalent uniqueness mechanism. Per-inode locking is meaningful only after identity uniqueness has been established.
+
+</details>
+
+## Mapping byte offsets to blocks
+
+With 12 direct pointers and one single-indirect pointer, logical block number $l$ maps as follows:
+
+$$
+map(l)=
+\begin{cases}
+inode.addrs[l], & 0\le l<12,\\
+indirect[l-12], & 12\le l<12+256,\\
+\text{out of range}, & l\ge268.
+\end{cases}
+$$
+
+The maximum representable file is $268\cdot1024=274{,}432$ bytes in this model. The maximum valid byte offset is one less than that value. A zero pointer denotes a hole or an unallocated block according to the filesystem's policy; a growing write may allocate it, while a read from a sparse hole may return zeros in a filesystem that supports sparse files. Compact xv6 allocation eagerly allocates blocks reached by writes and is not a complete sparse-file implementation.
+
+### Worked trace: offset through the indirect block
+
+Translate byte offset $13\cdot1024+37=13{,}349$.
+
+1. Logical block is $\lfloor13{,}349/1024\rfloor=13$.
+2. In-block offset is $13{,}349\bmod1024=37$.
+3. Since $13\ge12$, consult indirect entry $13-12=1$.
+4. If the inode's indirect pointer names block 700 and word 1 of block 700 contains `912`, the requested byte is byte 37 of device block 912.
+
+This access can require two cache lookups: one for indirect block 700 and one for data block 912. Caching the inode does not cache the indirect block's contents inside the inode.
+
+### Application checkpoint: boundary test set
+
+Choose the smallest set of byte offsets that distinguishes direct mapping, the direct-to-indirect transition, the last representable byte, and the first rejected byte.
+
+<details>
+<summary>Reveal a minimal discriminating set</summary>
+
+One suitable set is:
+
+- `0`: first byte of direct logical block 0;
+- `12*1024 - 1 = 12287`: final byte reachable through the last direct pointer;
+- `12*1024 = 12288`: first byte requiring indirect entry 0;
+- `268*1024 - 1 = 274431`: final representable byte;
+- `268*1024 = 274432`: first out-of-range byte.
+
+Adding offsets around an inode-block and bitmap-block boundary tests different mechanisms and is valuable, but it is not required to distinguish the block-map branches themselves.
+
+</details>
+
+## Directory files implement the namespace edge
+
+In the compact format, a directory is a file whose data is an array of fixed-size entries:
+
+```c
+struct dirent {
+    uint16_t inum;
+    char name[14];
+};
+```
+
+An entry with inode number zero is free. Lookup scans entries, compares bounded names, and returns a referenced inode for the matched number. Insertion must reject duplicate names, find or append a free slot, and update the directory inode's size if it grows. Removal clears an entry and adjusts the target's link count under the operation's locking and recovery protocol.
+
+Fixed entries make traversal easy to inspect, but impose a severe name limit and linear lookup. Production directories commonly use hashed or tree indexes and variable-length records. Those structures optimize lookup; they do not change the abstract requirement that each live directory edge targets a valid object under the filesystem's rules.
+
+### Worked trace: `/usr/log` to a data byte
+
+Assume root inode 1, and directory contents:
+
+```text
+inode 1: "." -> 1, ".." -> 1, "usr" -> 18
+inode 18: "." -> 18, ".." -> 1, "log" -> 37
+inode 37: regular file, size 1500, direct[0] = 620, direct[1] = 777
+```
+
+Resolving byte 1200 of `/usr/log` performs this conceptual trace:
+
+| stage | state transition |
+| --- | --- |
+| root selection | acquire reference to inode 1 |
+| component `usr` | lock inode 1, scan its directory blocks, obtain referenced inode 18, release inode 1 |
+| component `log` | lock inode 18, scan entries, obtain referenced inode 37, release inode 18 |
+| type and range check | lock inode 37; verify regular file and `1200 < size` |
+| block map | logical block 1, in-block offset 176, direct pointer 777 |
+| data access | acquire buffer `(device,777)` and copy from byte 176 |
+
+The trace elides permission checks and mount traversal by assumption. It still exposes every identity and lock handoff needed to inspect a bug.
+
+## Allocation and the buffer cache
+
+Allocation scans bitmap blocks for a zero bit, sets one bit while synchronized, and normally zeroes the selected data block before exposing it to a file. Zeroing is a confidentiality and determinism obligation: otherwise a new file could read bytes left by a previous owner.
+
+The core allocation invariants are:
+
+1. each allocated block has its bitmap bit set;
+2. no live metadata path assigns one block to two owners unless the format explicitly supports sharing;
+3. a block is initialized before user-visible reads can reach it;
+4. freeing removes all live metadata references before clearing ownership; and
+5. allocator changes and pointer changes belong to one recoverable update protocol.
+
+The buffer cache maps `(device, block-number)` to one in-memory buffer. A cache lock protects the identity map and replacement metadata; a per-buffer sleep lock protects the bytes. Holding a global spinlock across device I/O would block unrelated CPUs and may sleep in an invalid context. Releasing all identity protection before marking a victim reserved can create duplicate buffers.
+
+{/* Source tracking: Linux VFS documentation is used only for the production contrast between dentry, inode, and open-file objects; the buffer and inode cache invariants are derived from the cited xv6 implementation and general cache-coherence obligations. */}
+
+### Worked mutation: crossing into indirect addressing
+
+A file is exactly 12 KiB long, with all direct blocks allocated and no indirect block. One byte is written at offset 12 KiB. Ignoring recovery order, a correct growth path must make these logical changes:
+
+1. allocate and zero an indirect block;
+2. store its block number in the inode's indirect slot;
+3. allocate and zero a data block;
+4. place the data-block number in indirect entry 0;
+5. copy the byte into that data block;
+6. set inode size to 12 KiB + 1.
+
+On rev5, `FSSIZE=2000` is smaller than `BPB=8192`, so both allocations necessarily dirty the filesystem's single bitmap block; the remaining unique blocks are the indirect block, data block, and inode block. A larger image using the same bitmap format could place the two allocations in different `BPB` ranges and dirty two bitmap blocks. Rewriting the same buffer twice should not consume two logical log slots in a log that absorbs duplicate block updates.
+
+Ordering these writes directly to home locations is unsafe: publishing the inode pointer before initializing its target exposes stale data; publishing a data allocation but never linking it leaks a block; growing size without a block pointer exposes an unmapped logical range. A transaction or copy-on-write publication mechanism must constrain the crash-visible states.
+
+### Transfer checkpoint: construct a killing test
+
+A faulty allocator sets the bitmap bit and returns the block but does not zero it. A prior file filled that block with `SECRET`, then was removed. Design a deterministic test that distinguishes the faulty allocator from a correct one without assuming which numeric block will be reused.
+
+<details>
+<summary>Reveal a test strategy and its limitation</summary>
+
+Fill the filesystem sufficiently to control the free set, create a file whose allocated blocks contain a repeated nonzero pattern, delete it, then allocate a new file into the now-constrained free space. Extend the new file in a way that makes newly allocated bytes readable without overwriting the full block—if the filesystem supports sparse extension—or instrument the teaching kernel immediately after allocation and before caller writes. Assert that every exposed byte in the new allocation is zero.
+
+On compact xv6, ordinary writes copy caller bytes into the written range, and its interface does not provide a rich sparse-file operation. A pure user-space test may therefore be unable to observe unwritten bytes deterministically. The honest solution is a kernel test hook or a scoped sparse-extension feature, not a claim that one lucky block reuse proves zeroing. The test must also restore or rebuild the image so free-space history is controlled.
+
+</details>
+
+## Synthesis: audit an append implementation
+
+Audit a candidate `writei`/`bmap` path for the one-byte indirect append. Produce:
+
+- a state table listing inode, indirect block, bitmap block or blocks, and data block before and after;
+- the lock protecting each transition;
+- the maximum unique dirty-block count;
+- the behavior on allocation exhaustion at each allocation point;
+- the cleanup or rollback obligation; and
+- one test for each branch boundary and one concurrent test.
+
+<details>
+<summary>Reveal the grading rubric</summary>
+
+Full-credit work demonstrates all of the following:
+
+- **Mapping (20%)** — computes logical block 12, indirect entry 0, and the exact representable-size boundary.
+- **Ownership (20%)** — never publishes an uninitialized block, never assigns a block twice, and handles the two-allocation partial-failure case without a silent leak or dangling pointer.
+- **Cache and locking (20%)** — identifies cache-identity protection separately from per-inode and per-buffer byte protection; does not sleep while holding a spinlock that forbids it.
+- **Mutation set (15%)** — counts unique dirty blocks rather than helper calls, proves rev5 uses one bitmap block, and explains how the bound changes for a larger image spanning several bitmap blocks.
+- **Tests (15%)** — covers last direct byte, first indirect byte, full file, out-of-space at both allocations, and concurrent growth of one inode.
+- **Limits (10%)** — states that a successful in-memory trace proves neither crash consistency nor production scalability.
+
+A patch that returns the expected bytes but cannot explain its partial-allocation and concurrent states does not meet the invariant requirement.
+
+</details>
+
+## Connections and deliberate boundary
+
+Path interfaces determine the graph this implementation must preserve. Recovery mechanisms constrain when changed blocks may become authoritative. Protection mechanisms constrain every path edge and open operation. Multicore design determines whether cache identity and allocation locks remain correct and scalable. These connections are causal; replacing an inode map with an extent tree does not remove them.
+
+The compact model omits extents, indexed directories, delayed allocation, page-cache/writeback integration, checksums, RAID interactions, reflinks, online resize, and flash translation layers. It is complete for deriving the named invariants and traces, not a compressed survey of those omitted mechanisms.
+
+## References & Further Reading
+
+- [MIT PDOS, xv6 RISC-V source and book](https://pdos.csail.mit.edu/6.1810/2025/xv6.html) — official entry point for the licensed teaching kernel and text.
+- [MIT PDOS, xv6-rev5 `kernel/fs.h`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/fs.h) — immutable on-disk format and mapping constants used by the concrete model.
+- [MIT PDOS, xv6-rev5 `kernel/fs.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/fs.c) — immutable block allocation, inode cache, block mapping, directories, and pathname traversal source.
+- [MIT PDOS, xv6-rev5 `kernel/sysfile.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/sysfile.c) — immutable filesystem system-call validation and transaction boundaries.
+- [MIT PDOS, xv6-rev5 `kernel/param.h`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/param.h) — immutable `FSSIZE`, per-operation log reservation, and cache-capacity constants used to bound rev5-specific traces.
+- [Linux kernel documentation, Overview of the Virtual File System](https://docs.kernel.org/filesystems/vfs.html) — production VFS object and operation boundaries.
+- [Linux kernel documentation, ext4 data structures](https://docs.kernel.org/filesystems/ext4/index.html) — a production-format contrast for superblocks, block groups, inodes, extents, and directories.

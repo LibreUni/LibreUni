@@ -2,8 +2,30 @@
 title: "Virtual-Memory Hardware"
 course: "computer-architecture"
 description: "Page tables, translation lookaside buffers, protection, and faults."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Decompose virtual addresses and derive multi-level page-table, TLB, permission, and physical-address behavior."
+  - "Trace TLB misses, page faults, copy-on-write, cache aliases, ASIDs, and invalidation across address spaces."
+  - "Prove that translation and permission changes cannot expose a reused frame or stale authority."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 600
+assessment: "Given a page size, table geometry, access type, and stale-TLB scenario, derive the walk/fault path and specify the ordering needed for safe reuse."
 ---
 # Virtual-Memory Hardware
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PageTablePlayground from '../../../components/playgrounds/PageTablePlayground';
+
+<Quiz client:load title="Translate safely"
+  question="What does a page-table translation add to a virtual address?"
+  options={["Only a new numeric base used to shorten the virtual address", "A physical-frame mapping plus permission and validity checks", "A cache-replacement policy selected independently for each translated page", "A compiler optimization that removes all repeated loads from memory"]}
+  correctIndex={1}
+  explanation="Translation maps a virtual page to a frame while hardware checks present, readable, writable, executable, and other protection bits."
+/>
 
 Virtual memory is an address-translation and protection system that gives each process an address space with a private naming convention, even though physical memory is shared. The illusion is not “infinite RAM” by itself. It is a contract among the ISA, memory-management unit (MMU), operating system, page tables, translation caches, and fault handler. A load from virtual address $v$ either returns the byte authorized by the current address space, or produces a defined fault without silently reading another process’s data.
 
@@ -29,6 +51,15 @@ For a 48-bit virtual address and 4 KiB pages, there are 36 VPN bits. If each pag
 
 Page-table entries commonly contain a present/valid bit, read/write and execute permissions, user/supervisor access, accessed/reference state, dirty state, caching attributes, and the PFN. The exact bit meanings are ISA-specific. A PTE with a valid bit clear may indicate an unmapped page, a swapped-out page encoded by the OS, or a reserved fault state. Hardware must not interpret OS-private encodings as ordinary physical addresses.
 
+<CaseStudy client:load
+  title="A TLB miss is not a page fault"
+  scenario="A load misses in the TLB. The page-table entry is present, readable, and maps to a resident physical frame."
+  question="Which sequence should the hardware or operating system perform?"
+  options={["Walk the page table, refill the translation, and retry the load", "Read the page from storage, allocate a frame, and resume later", "Reject the process because every translation miss violates protection", "Flush the data cache because translation and caching cannot overlap"]}
+  correctIndex={0}
+  explanation="A TLB miss means the translation is absent from the cache, not that the page is absent from memory. A valid present PTE supplies the mapping; a page fault is needed only for absence or another exceptional condition."
+/>
+
 ## TLBs and translation performance
 
 The translation lookaside buffer (TLB) caches recent VPN-to-PFN translations together with address-space identity and permission metadata. On a TLB hit, the MMU can form the physical address without walking the page table. On a TLB miss, hardware or software performs a page walk; if the PTE is valid, the translation is installed and the instruction retries or continues. A page fault is different: the translation is absent or disallowed and requires the operating system.
@@ -44,6 +75,10 @@ Virtual memory enforces isolation through permissions and address-space selectio
 Shared memory is an intentional exception. Two processes can map the same physical frame at different virtual addresses, perhaps with read-only permission or controlled write access. Shared library text can be mapped read-only into many processes; copy-on-write pages can be shared until one process writes, at which point the OS allocates a private frame and updates that process’s PTE.
 
 The permission check belongs to the access, not merely the page-table lookup. An instruction fetch, data read, and data write may have different permission requirements. A TLB entry must cache all permissions relevant to future use, or the MMU must recheck them. Reusing a translation while ignoring a permission change is a security violation.
+
+The explorer uses deliberately small 256-byte pages so the offset is the low eight bits. For process A, address `0x4a3` names VPN 4 and offset `0xa3`; its cached translation maps to frame 2, giving `0x2a3`. Predict what changes if the process or access permission changes. A cache hit cannot override permissions, and equal virtual addresses in different address spaces need not have equal translations.
+
+<PageTablePlayground client:load />
 
 ## Page faults and demand paging
 
@@ -75,7 +110,7 @@ Permission upgrades and downgrades require different reasoning. Before making a 
 
 ## Independent practice
 
-1. Decompose a 48-bit virtual address for 4 KiB pages and four 9-bit page-table indexes. Identify all fields and compute a translation for a supplied PFN.
+1. Decompose virtual address `0x123456789abc` for 4 KiB pages and four 9-bit page-table indexes, ordered from level 4 (top) to level 1 (leaf). The leaf PTE supplies PFN `0xABCDE`. Identify all fields and compute the physical address.
 2. Compare TLB reach for 64 entries with 4 KiB pages and 2 MiB pages. State the fragmentation trade-off.
 3. Explain the complete control flow for a copy-on-write fault after a `fork`-like operation.
 4. Compute AMAT-like cost for a TLB with hit/miss probabilities and a data cache, stating whether costs overlap.
@@ -86,7 +121,7 @@ Permission upgrades and downgrades require different reasoning. Before making a 
 <details>
 <summary>Diagnostic solutions</summary>
 
-1. Four 9-bit indexes consume 36 VPN bits and the 12-bit offset completes 48 bits. The fields are offset, level-1 through level-4 indexes, and no remaining tag in the virtual address; the final PTE supplies PFN bits for the physical address. A solution must preserve the offset exactly.
+1. Four 9-bit indexes consume 36 VPN bits and the 12-bit offset completes 48 bits. From the most-significant VPN bits downward, the indexes are $36,209,179,393$ (level 4 through level 1), and the offset is `0xabc`. With leaf PFN `0xABCDE`, $PA=(0xABCDE\ll12)|0xABC=0xABCDEABC$; the offset is preserved exactly. A different page-table walk ordering must be stated rather than silently swapping levels.
 2. 64 entries cover 256 KiB with 4 KiB pages and 128 MiB with 2 MiB pages. Huge pages improve reach and reduce walk pressure but can waste up to nearly a page per allocation and make fine-grained protection or sharing less flexible.
 3. Mark shared pages read-only, let both processes point to the same frame, and fault on a write. The handler verifies the fault is a valid copy-on-write case, allocates a private frame, copies data, updates only the writer’s PTE to writable, invalidates the stale translation, and retries the store. A failed allocation must not leave the page writable.
 4. Use $t_{hit}+m_{TLB}t_{walk}+t_{cache}$ only if the stated costs are additive and page walks do not evict data. If translation and cache lookup overlap, use a conditional timing model rather than adding both full latencies.

@@ -1,0 +1,274 @@
+---
+title: "Containers and Resource Control"
+course: "operating-systems"
+description: "Linux namespaces, cgroup v2, credentials, syscall filtering, shared-kernel threat boundaries, and overload behavior."
+prerequisites:
+  - "Processes, scheduling, virtual memory, filesystems, and kernel protection"
+  - "Principals, credentials, capabilities, least authority, and reference monitors"
+  - "Virtual-machine guest, VMM, and hardware boundaries"
+outcomes:
+  - "Explain a container as constrained host processes rather than as a small virtual machine."
+  - "Trace PID, mount, network, user-identity, and cgroup state from container view to host enforcement."
+  - "Derive CPU, memory, and process-count behavior under explicit cgroup v2 assumptions and overload."
+  - "Construct a layered container threat model that identifies the shared host kernel and avoids treating seccomp or namespaces as complete sandboxes."
+omissions:
+  - "Image distribution, registry protocols, cluster orchestration, service meshes, and supply-chain signing belong to deployment and security material."
+  - "Kernel-version-specific controller edge cases and every namespace type are bounded to the mechanisms needed for the traces."
+estimatedMinutes: 330
+assessment: "Given an unfamiliar multi-tenant workload, derive namespace views and cgroup behavior, identify the first shared trusted layer under compromise or overload, and defend a layered containment policy with testable failure states."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import IsolationBoundaryPlayground from '../../../components/playgrounds/IsolationBoundaryPlayground';
+
+# Containers and Resource Control
+
+Two services each report PID 1 and each sees `/` as its own image root. One service forks until the host cannot create another process. Another triggers a vulnerability in the filesystem parser and executes in kernel context. The first failure is a missing resource limit; the second crosses every container boundary that relies on that kernel.
+
+Names and resource accounting create convincing private views, but they do not create another kernel. A Linux container is a set of ordinary host tasks whose namespace memberships, cgroup memberships, credentials, filesystem view, and security policy are configured to constrain what those tasks can name and consume.
+
+{/* Source tracking: Namespace semantics are synthesized from the Linux man-pages namespaces(7), pid_namespaces(7), mount_namespaces(7), and user_namespaces(7); resource behavior is grounded in the Linux kernel cgroup v2 administration guide. */}
+
+## The boundary stack
+
+<PlantUML code={`
+@startuml
+top to bottom direction
+rectangle "container A user space\nPID 1, rootfs A, netns A" as A
+rectangle "container B user space\nPID 1, rootfs B, netns B" as B
+rectangle "host user space\nruntime, supervisor, services" as HOST
+rectangle "one shared host kernel\nscheduler, VFS, network, drivers, cgroups" as K
+rectangle "hardware\nCPU, RAM, devices" as HW
+A --> K : system calls under A namespaces + credentials
+B --> K : system calls under B namespaces + credentials
+HOST --> K : host system calls
+K --> HW : privileged control
+note right of K
+  A host-kernel defect is inside
+  every container's trusted base.
+end note
+@enduml
+`} />
+
+The runtime creates and joins kernel objects; it is not on the path of every later system call. Enforcement resides primarily in the host kernel and configured security modules. The image supplies user-space bytes. It does not supply a guest kernel.
+
+Contrast a virtual machine:
+
+```text
+container: application -> shared host kernel -> hardware
+VM:        application -> guest kernel -> VMM/hypervisor -> hardware
+```
+
+A VM's guest kernel is inside the VM boundary, but the VMM and hardware remain trusted dependencies. A container's kernel is the host kernel itself.
+
+## Namespaces alter views and identities
+
+A namespace wraps a class of global resources so member tasks observe a namespace-specific instance or mapping. It does not grant arbitrary permission over the underlying host resource.
+
+| namespace | selected virtualized view | important boundary |
+| --- | --- | --- |
+| PID | process identifiers and visible process hierarchy | host still schedules the same tasks; namespace PID 1 has special lifecycle duties |
+| mount | mount table and resulting filesystem tree | filesystem implementations execute in the shared kernel |
+| network | interfaces, routes, ports, protocol-stack view | packets and drivers still cross host-kernel code |
+| IPC | System V IPC and POSIX message-queue namespace | does not isolate every file-descriptor IPC channel |
+| UTS | hostname and domain name | presentation identity, not authority boundary by itself |
+| user | UID/GID mappings and namespaced capabilities | UID 0 inside may map to an unprivileged host UID |
+| cgroup | visible cgroup root | resource enforcement comes from controller state, not this view alone |
+| time | selected boot/monotonic clock offsets | not a separate scheduler or hardware clock |
+
+A task is a member of one namespace of each type. Namespace lifetimes can outlive their last member when file descriptors or bind-mounted namespace handles retain references.
+
+### Worked trace: one task, two PID and UID views
+
+Host state:
+
+```text
+host PID: 4242
+host UID: 100000
+child user namespace mapping: inside UIDs 0..65535 -> host UIDs 100000..165535
+child PID namespace: task is namespace init
+```
+
+Inside the container, the task sees PID 1 and UID 0. From the initial host namespaces, an administrator sees PID 4242 and UID 100000. A file created with inside UID 0 is owned by host UID 100000 under this mapping.
+
+“Root in the container” therefore describes authority evaluated in a user-namespace context. Operations reserved to the initial user namespace—such as loading arbitrary host kernel modules under the relevant Linux policy—do not become permitted merely because the task's inside UID is zero. Conversely, namespaced root can still exercise substantial authority over objects owned by that user namespace and can reach host-kernel attack surface through allowed system calls.
+
+### Application checkpoint: `/proc` shows the wrong tasks
+
+A process creates a PID namespace but reuses a `/proc` mount created in the parent namespace. Inside, `ps` lists host-visible PIDs rather than the intended child view. Explain the mismatch and repair.
+
+<details>
+<summary>Reveal the namespace/mount coupling</summary>
+
+The process joined a new PID-numbering domain, but the mounted procfs instance reflects the PID namespace of the process that mounted it. Create or use an appropriate mount namespace and mount a fresh procfs from the child PID namespace. A PID namespace alone does not rewrite bytes supplied by an already mounted procfs view.
+
+</details>
+
+## Predict the blast radius before moving the control
+
+A hostile process has already obtained arbitrary code execution in the **host kernel** through an allowed filesystem system call. Predict which container namespace, cgroup, or seccomp rule can still mediate that code as an untrusted user process.
+
+<IsolationBoundaryPlayground client:load />
+
+For the stated compromise, none of those user-process controls remains a sound boundary: the code executes inside the mechanism that implements them. The interaction is a trust-dependency model, not an exploitability score. Its four boxes represent the selected tenant, a peer tenant, their shared implementation, and hardware/firmware; red should be read as “this selected layer or a relied-on lower layer is no longer trustworthy,” not as a measured probability or a complete attack graph.
+
+### Transfer after changing the boundary
+
+Place the workload in a VM. A guest-kernel compromise occurs, while the VMM, its device models, second-stage translation, IOMMU configuration, firmware, and hardware remain correct under the threat model. What changes? Then move the compromise into the VMM.
+
+<details>
+<summary>Reveal both containment claims</summary>
+
+The guest-kernel compromise controls that guest and its applications, but second-stage translation and the VMM can contain architectural access to host and other-VM memory under the assumptions. If the VMM is compromised, the layer responsible for VM isolation is lost; guest boundaries cannot constrain it. The stronger first result depends on the VMM/hardware assumptions and does not prove absence of side channels or resource denial.
+
+</details>
+
+## Cgroups control resources, not names
+
+Cgroup v2 organizes tasks in a hierarchy. Controllers distribute or limit resources among children. Namespace membership answers “what identifiers and objects can this task name?” Cgroup membership answers “how is this task's resource use accounted and constrained?” A secure deployment usually needs both.
+
+### CPU weights are work-conserving shares
+
+Assume two sibling cgroups A and B are continuously runnable under one parent and no other constraints apply. With `cpu.weight` values 100 and 300, the idealized share is
+
+$$
+share_A=\frac{100}{100+300}=0.25,
+\qquad share_B=0.75.
+$$
+
+If the parent receives four cores for a 100 ms interval, its capacity is 400 core-ms. The model allocates about 100 core-ms to A and 300 to B while both can use them. If A is idle, a work-conserving scheduler may let B consume the available capacity rather than reserve 25% unused.
+
+{/* Source tracking: The weight range, proportional active-child model, top-down controller distribution, and CPU controller distinctions follow the Linux kernel cgroup v2 documentation. */}
+
+This is a policy model, not an exact short-window deadline guarantee. Runnable patterns, CPU affinity, per-CPU queues, priorities, bandwidth limits, topology, throttling, and measurement windows affect observed service. A weight does not promise a maximum latency.
+
+### Memory and process limits define overload states
+
+For a batch worker cgroup:
+
+```text
+memory.high = 384 MiB
+memory.max  = 512 MiB
+pids.max    = 128
+```
+
+`memory.high` is a pressure boundary that drives reclaim/throttling behavior rather than an immediate hard allocation failure in the ordinary model. `memory.max` is the hard containment boundary; if usage cannot be reduced, the kernel invokes cgroup-scoped out-of-memory handling according to controller policy. `pids.max` rejects creation when the task count would exceed the configured limit.
+
+Limits interact. Reclaim can consume CPU and produce I/O; a process unable to fork may fail a supervisor protocol; killing one task may leave shared state inconsistent. Resource isolation needs an application failure contract, not only numeric files.
+
+### Worked overload trace: decompression service
+
+Container A expands an adversarial archive. Container B serves latency-sensitive requests.
+
+| time | A state | kernel/controller action | impact to test |
+| --- | --- | --- | --- |
+| $t_0$ | 300 MiB, 20 tasks | below configured boundaries | baseline throughput and B latency |
+| $t_1$ | crosses 384 MiB | A experiences reclaim/throttling pressure | A throughput falls; host I/O may rise |
+| $t_2$ | approaches 512 MiB with unreclaimable pages | allocations stall/fail or cgroup OOM policy acts | verify victim scope and supervisor response |
+| $t_3$ | tries task 129 | creation rejected by `pids.max` | verify bounded error, no host-wide PID exhaustion |
+
+The target claim is not “B is unaffected.” Shared last-level cache, memory bandwidth, storage, kernel locks, and unaccounted resources can still interfere. Measure B's tail latency and host pressure, then add controls or admission policy for observed channels.
+
+### Quantitative checkpoint: idle sibling
+
+A and B have equal CPU weights. A is runnable for only 20 ms of a 100 ms interval; B is runnable throughout. Under an ideal work-conserving model on one core, how much CPU can B receive? Why is “exactly 50 ms” wrong?
+
+<details>
+<summary>Reveal the service bound</summary>
+
+During the 20 ms overlap, equal weights suggest roughly 10 ms each. During the remaining 80 ms, B can use the idle capacity. B therefore can receive about 90 ms, not a fixed 50 ms reservation. Exact short-window service depends on scheduler details and workload timing; the calculation states the simplified model. A hard bandwidth cap would be a different controller mechanism.
+
+</details>
+
+## Layer the security policy
+
+No single switch defines a container sandbox. A defensible policy composes:
+
+1. **user namespace and credentials** — map container identities to least host authority;
+2. **mount namespace and root filesystem** — expose required paths, make immutable inputs read-only, avoid unnecessary host mounts;
+3. **capability sets** — remove broad Linux privilege units, especially from the bounding and ambient paths where applicable;
+4. **no-new-privileges and exec policy** — prevent unexpected privilege gain across execution;
+5. **seccomp filtering** — reduce reachable syscall surface for the actual architecture and workload;
+6. **LSM/mandatory policy** — constrain object operations beyond discretionary mode bits where required;
+7. **device policy** — do not expose host devices whose `ioctl` or DMA authority exceeds the task;
+8. **cgroup limits** — bound CPU, memory, process, and I/O failure domains; and
+9. **runtime/supervisor policy** — validate configuration, retain minimal authority, and handle abnormal exit.
+
+{/* Source tracking: The seccomp role and explicit statement that syscall filtering alone is not a sandbox are synthesized from the Linux kernel seccomp-filter documentation; OCI runtime-spec references support the configuration mapping to namespaces, cgroups, devices, and process state. */}
+
+Seccomp filters inspect syscall number, architecture, and argument words under defined constraints. They cannot dereference arbitrary user pointers in the in-kernel filter. They reduce exposed kernel entry points; they do not validate application-level information flow, remove inherited descriptors, or repair a vulnerable allowed syscall.
+
+### Worked threat trace: inherited host descriptor
+
+A runtime opens `/var/run/admin.sock`, then starts a container without closing or marking the descriptor close-on-exec. The container has a private mount namespace and cannot name that path. It nevertheless inherits the connected descriptor.
+
+The mount namespace removed a pathname, not the open-reference edge. If `send` is allowed, the process may use the descriptor. Repair requires an explicit descriptor allowlist/close sweep at process creation and least-authority supervisor design. Adding another bind-mount rule cannot revoke an inherited object reference.
+
+### Boundary checkpoint: seccomp-only sandbox
+
+A parser receives untrusted images. Its filter allows `read`, `mmap`, `munmap`, `futex`, `close`, and `exit`; it shares the host kernel and has a writable descriptor to a tenant directory. State one property the filter supports and three it does not establish.
+
+<details>
+<summary>Reveal the scoped claim</summary>
+
+It reduces the parser's reachable syscall interface to the allowed set under the filter's architecture and argument rules. It does not establish memory safety in the parser, remove write authority carried by the directory descriptor, prevent exploitation of a vulnerability in an allowed syscall, or isolate the host from a compromised kernel. It also does not impose CPU/memory limits. Those require separate mechanisms and evidence.
+
+</details>
+
+## Containers are not resource guarantees by default
+
+Common non-examples expose category errors:
+
+- `chroot` changes pathname root but supplies no PID, network, user, or resource isolation.
+- namespaces without cgroups can expose private identifiers while allowing host-wide resource exhaustion.
+- cgroups without namespaces can partition resources while every process sees the same host object names.
+- an image without runtime constraints is a filesystem payload, not an active isolation policy.
+- UID 0 in a user namespace is not host UID 0, but it is not harmless; it has namespaced powers and kernel attack surface.
+- a CPU weight is not a latency deadline, and a memory limit is not graceful degradation.
+- a container boundary does not contain a host-kernel compromise.
+
+## Synthesis: contain a hostile build
+
+Design a container execution profile for untrusted source builds. Requirements: 2 CPU-equivalent shares under load, 2 GiB memory, 256 processes, 10 GiB scratch, read-only toolchain, no outbound network except a dependency proxy, and complete cleanup after 20 minutes.
+
+Submit:
+
+- namespace and UID/GID mapping;
+- filesystem mounts and inherited-descriptor policy;
+- cgroup controller values and overload behavior;
+- dropped Linux capabilities and syscall/LSM policy rationale;
+- network mediation path;
+- supervisor authority and timeout protocol;
+- tests for fork bomb, memory pressure, filesystem exhaustion, malformed syscall, kernel panic boundary, and cleanup; and
+- measured interference experiment against one co-tenant.
+
+<details>
+<summary>Reveal the transparent rubric</summary>
+
+- **Execution model, 15%.** Treats the build as host tasks sharing the kernel; identifies runtime, kernel, and hardware trust.
+- **Namespace policy, 15%.** Specifies PID, mount, network, IPC, UTS, and user mappings only where each serves a stated goal; mounts a matching procfs view.
+- **Resource control, 20%.** Distinguishes weight from cap, `memory.high` from hard maximum, process limit from memory limit, and defines OOM/timeout cleanup.
+- **Authority reduction, 20%.** Uses descriptor allowlisting, read-only mounts, mapped unprivileged identity, bounded network broker, reduced capability sets, and justified syscall/LSM policy.
+- **Adversarial evidence, 20%.** Tests every required failure and measures co-tenant tail behavior with raw data and a baseline.
+- **Boundary honesty, 10%.** States residual shared-kernel, cache, bandwidth, device, firmware, and side-channel dependencies; does not report modeled CPU shares as measurements.
+
+Automatic configuration validation can check declared settings and tests. It cannot certify that the threat model is complete or that a live defense is authored and understood by the learner.
+
+</details>
+
+## Connections and deliberate boundary
+
+Process semantics explain descriptor inheritance and PID 1 behavior. Filesystems explain mount views and shared kernel parsers. Protection explains namespaced credentials, authority, and syscall mediation. Scheduling and memory management explain controller interactions. Virtual machines supply a distinct guest-kernel boundary when the shared-kernel risk is unacceptable. Multicore observability is required to measure residual co-tenant interference.
+
+Image provenance, OCI distribution, orchestration, cluster scheduling, overlay-filesystem internals, service meshes, and confidential containers are omitted. They do not change the central result: namespaces virtualize views, cgroups account and constrain resources, and containers rely on one host kernel.
+
+## References & Further Reading
+
+- [Linux man-pages, `namespaces(7)`](https://man7.org/linux/man-pages/man7/namespaces.7.html) — namespace types, APIs, handles, and lifetimes.
+- [Linux man-pages, `pid_namespaces(7)`](https://man7.org/linux/man-pages/man7/pid_namespaces.7.html) — PID visibility, namespace init, and procfs coupling.
+- [Linux man-pages, `mount_namespaces(7)`](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html) — mount-table views and propagation restrictions.
+- [Linux man-pages, `user_namespaces(7)`](https://man7.org/linux/man-pages/man7/user_namespaces.7.html) — UID/GID mappings and namespaced capability scope.
+- [Linux kernel documentation, Control Group v2](https://docs.kernel.org/admin-guide/cgroup-v2.html) — hierarchy, controllers, weights, limits, and resource-distribution models.
+- [Linux kernel documentation, Seccomp BPF](https://docs.kernel.org/userspace-api/seccomp_filter.html) — syscall-filter mechanism, requirements, and sandbox boundary.
+- [Open Container Initiative, Runtime Specification: Linux](https://specs.opencontainers.org/runtime-spec/config-linux/) — runtime mapping for namespaces, cgroups, devices, and process configuration.
+- [Linux kernel documentation, Credentials in Linux](https://www.kernel.org/doc/html/latest/security/credentials.html) — task credentials and Linux capability sets.

@@ -1,0 +1,110 @@
+---
+title: "Operators, Evaluation, and Defined Behavior"
+course: c
+description: "Use arithmetic, bitwise, logical, and conditional operators without confusing precedence with evaluation order."
+prerequisites:
+  - "C types, conversions, and control flow"
+outcomes:
+  - "Distinguish precedence, associativity, and order of evaluation"
+  - "Use short-circuit and bitwise operators for their documented semantics"
+  - "Recognize expressions whose side effects make behavior undefined or unspecified"
+omissions:
+  - "Instruction-level optimization and atomic memory ordering are outside this expression-level lesson."
+estimatedMinutes: 60
+assessment: "Classify a compound expression as defined, unspecified, implementation-defined, or undefined and justify the classification."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Operators, Evaluation, and Defined Behavior
+
+An operator describes a computation, but punctuation alone does not tell you when every operand is evaluated. Three ideas must stay separate: precedence groups syntax, associativity resolves some equal-precedence syntax, and the language's sequencing rules determine when side effects become observable.
+
+<Quiz client:load
+  title="Do not use precedence as timing"
+  question="What does `a + b * c` establish?"
+  options={["That b*c is grouped before addition", "That b is evaluated before a and c", "That the compiler must use two instructions", "That all three operands are evaluated left to right"]}
+  correctIndex={0}
+  explanation="Precedence determines grouping. It does not specify operand evaluation order or the generated instruction sequence. Parentheses can clarify grouping, but they do not create a sequence point by themselves."
+/>
+
+## Arithmetic and conversions
+
+Integer division truncates toward zero: `-5 / 2` is `-2`, and the remainder satisfies `(a / b) * b + a % b == a` when the quotient is representable and `b` is nonzero. Division by zero is undefined. Before arithmetic, the usual conversions may change a small integer to `int` or convert an operand to an unsigned type; audit the types rather than relying on visual literals.
+
+Bitwise operators operate on integer representations. Use masks to set, clear, or test flags, but choose an unsigned type for portable shifts and make the width explicit:
+
+```c
+uint8_t flags = 0;
+flags |= (uint8_t)1u << 3;  /* set bit 3 */
+flags &= (uint8_t)~(1u << 3); /* clear bit 3 */
+```
+
+Signed right shift and shifts by a negative or too-large count have portability or undefined-behavior concerns. A left shift is not a universal “multiply by two” when signed overflow is possible.
+
+<CodeRunner client:load
+  title="Mask a register value"
+  language="c"
+  code={`#include <stdio.h>
+#include <stdint.h>
+
+int main(void) {
+    uint8_t flags = 0x01;
+    flags = (uint8_t)(flags | (1u << 3));
+    printf("0x%02x set=%s\\n", flags, (flags & (1u << 3)) ? "yes" : "no");
+    return 0;
+}`}
+  output="0x09 set=yes"
+/>
+
+## Short-circuit logic
+
+`&&` and `||` evaluate left to right and may skip the right operand. This is useful for guards:
+
+```c
+if (node != NULL && node->value == wanted) { ... }
+```
+
+The guard is a semantic dependency, not a style trick. Replacing `&&` with bitwise `&` evaluates both operands and can dereference a null pointer. The conditional operator `condition ? yes : no` evaluates only the selected arm, while the comma operator sequences its left operand before its right operand; use the latter sparingly because hidden side effects reduce auditability.
+
+## Sequencing and side effects
+
+An expression such as `i = i++ + 1` modifies `i` more than once without a permitted sequencing relationship and has undefined behavior. Parenthesizing it does not repair the problem. Split the operations into statements with a clear order:
+
+```c
+int old = i;
+++i;
+i = old + 1;
+```
+
+The safe rewrite must still match the intended result; “make it compile” is not the same as preserving behavior.
+
+<CodeExercise client:load
+  title="Classify the side effect"
+  code={`int i = 5;
+// i = i++ + 1 has: [!blank!]`}
+  answers={["undefined behavior"]}
+  explanation="The expression attempts unsequenced modifications of i. Split the operations and state the intended value instead of depending on a compiler's observed result."
+/>
+
+## Transfer exercises
+
+1. Explain why `ptr && ptr->value` is a valid guard but `ptr & ptr->value` is not.
+2. Compute `-5 / 2` and `-5 % 2`, then verify the identity.
+3. Classify `f(i++, i++)` without assuming a particular compiler.
+4. Rewrite a flag update so it changes only bit 2 and preserves all other bits.
+
+### Diagnostic solutions
+
+1. Logical AND may skip the second operand after a false pointer test; bitwise AND evaluates both integer operands and does not provide a null guard.
+2. The results are `-2` and `-1`; `(-2)*2 + (-1) == -5`.
+3. The argument evaluation order is not a portable left-to-right contract, and modifying the same scalar in both arguments creates undefined behavior.
+4. Set with `flags |= (1u << 2)` or clear with `flags &= ~(1u << 2)` after choosing an unsigned type of known width.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.5](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [CERT EXP30-C: Do not depend on order of evaluation](https://wiki.sei.cmu.edu/confluence/display/c/EXP30-C.+Do+not+depend+on+the+order+of+evaluation+for+side+effects)
+* [cppreference: operators](https://en.cppreference.com/w/c/language/operator_precedence)

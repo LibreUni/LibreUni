@@ -1,0 +1,313 @@
+---
+title: "Page Tables and TLBs"
+course: "operating-systems"
+description: "Trace an Sv39 page-table walk, quantify translation cost, and prove that permission changes remain unsafe until stale TLB authority is revoked."
+prerequisites:
+  - "Virtual pages, physical frames, page offsets, and read/write/execute permissions"
+  - "RISC-V supervisor and user privilege modes"
+  - "Binary and hexadecimal bit-field extraction"
+outcomes:
+  - "Decode an Sv39 virtual address and page-table entry, including leaf, non-leaf, permission, alignment, and canonical-address conditions."
+  - "Execute a complete multilevel page-table walk and distinguish a TLB miss from a page fault."
+  - "Derive translation effective-access time and TLB reach under explicit serial and overlap assumptions."
+  - "Design a local invalidation or multicore shootdown protocol that prevents a stale translation from retaining authority after a mapping change."
+omissions:
+  - "Microarchitectural page-walk caches, replacement algorithms inside a TLB, nested translation, and speculative side channels are outside the assessed model."
+  - "Architecture-specific extensions beyond the baseline Sv39 supervisor translation scheme are cited but not surveyed."
+estimatedMinutes: 360
+assessment: "For an unseen Sv39 page-table snapshot and multicore execution trace, decode every index and PTE, classify the access, calculate translation cost, and produce an ordered revocation protocol whose safety argument forbids frame reuse before all stale translations are gone."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import PageTablePlayground from '../../../components/playgrounds/PageTablePlayground';
+
+# Page Tables and TLBs
+
+A process removes write permission from a page, updates the page-table entry, and hands the physical frame to a read-only consumer. Another core writes through a translation cached before the update. The page table in memory is correct; the system is not.
+
+Page tables are authoritative data structures, but processors cache their results. Correctness therefore has two layers:
+
+1. a page-table walk must derive the right frame and authority from the current entries; and
+2. every translation cache that could hold an older result must stop using it before the old authority is considered revoked.
+
+> **Translation-cache invariant.** Every usable TLB entry must be equivalent to a currently authorized page-table translation, or the kernel must prevent the entry from being used until invalidation completes.
+
+## Sv39 is a radix-tree lookup
+
+The baseline RISC-V Sv39 scheme uses 4 KiB pages and three page-table levels. A page-table page contains 512 eight-byte entries, so each level consumes nine virtual-page-number bits. The 64-bit virtual address is interpreted as:
+
+| Field | Bits | Meaning |
+| --- | ---: | --- |
+| sign extension | `63:39` | must equal bit 38 for a canonical Sv39 address |
+| `VPN[2]` | `38:30` | root-page index |
+| `VPN[1]` | `29:21` | middle-level index |
+| `VPN[0]` | `20:12` | final-level index |
+| page offset | `11:0` | byte within a 4 KiB page |
+
+The `satp` control register identifies the translation mode, root page-table physical page number, and—when implemented and used—an address-space identifier (ASID). An Sv39 page table is a sparse radix tree: a non-leaf PTE points to the next page-table page; a leaf PTE supplies the final physical page number (PPN) and permissions.
+
+{/* Source tracking: Sv39 fields, canonical-address rule, PTE validity, superpage alignment, satp, and SFENCE.VMA semantics were checked against the ratified RISC-V Privileged Architecture supervisor chapter. */}
+
+### PTE meaning before arithmetic
+
+For the baseline Sv39 PTE, the relevant low bits are:
+
+| Bit | Name | Architectural role in this model |
+| ---: | --- | --- |
+| 0 | `V` | entry is valid |
+| 1 | `R` | loads permitted at a leaf |
+| 2 | `W` | stores permitted at a leaf |
+| 3 | `X` | instruction fetch permitted at a leaf |
+| 4 | `U` | user-mode access permitted |
+| 5 | `G` | mapping is global across address spaces |
+| 6 | `A` | page has been accessed, according to the implemented A/D scheme |
+| 7 | `D` | page has been written, according to the implemented A/D scheme |
+| `9:8` | `RSW` | reserved for supervisor software |
+| `53:10` | `PPN` | next table or mapped physical page |
+
+An entry with `V=0` is invalid. The combination `R=0, W=1` is also reserved as invalid. If any of `R`, `W`, or `X` is set in a valid entry, the entry is a leaf. If all three are clear, the entry is a pointer to the next level. User access additionally requires the appropriate operation permission and `U=1`.
+
+Leaf entries may appear above level zero to create superpages. A level-1 leaf maps 2 MiB; a level-2 leaf maps 1 GiB. The unused low PPN fields must be zero so the physical superpage is aligned. A high-level leaf with misaligned physical bits faults rather than rounding the address.
+
+**Retrieval — reconstruct the discriminator.** Why can the walker not decide “leaf versus next table” from `V` alone?
+
+<details>
+<summary>Reveal the diagnostic answer</summary>
+
+`V` establishes only that the entry has an architecturally valid form. A valid entry with `R=W=X=0` points to a lower-level table; a valid entry with any of `R`, `W`, or `X` set is a leaf. Treating every valid PTE as a leaf would interpret a page-table page's PPN as application data.
+
+</details>
+
+## Execute a complete page-table walk
+
+For a memory access at virtual address $v$, a conceptual Sv39 walker performs this state transition:
+
+```text
+require canonical(v)
+table_pa := satp.PPN × 4096
+for level i := 2 down to 0:
+    pte_pa := table_pa + VPN[i](v) × 8
+    pte := physical_memory[pte_pa]
+    reject invalid encodings
+    if pte is a leaf:
+        check superpage alignment, privilege, and access permission
+        combine leaf PPN, any inherited VPN bits, and offset
+        return physical address
+    if i = 0:
+        fault: no leaf exists
+    table_pa := pte.PPN × 4096
+```
+
+The pseudocode omits extension-dependent details but preserves the control dependencies: validity before dereference, leaf classification before permission checks, and permission checks before the data access completes.
+
+### Worked trace: a three-level 4 KiB mapping
+
+Translate a user read from virtual address `0x0000000123456789`. It is canonical because bit 38 and bits `63:39` are all zero.
+
+Field extraction gives:
+
+| Field | Decimal | Hex |
+| --- | ---: | ---: |
+| `VPN[2]` | 4 | `0x004` |
+| `VPN[1]` | 282 | `0x11A` |
+| `VPN[0]` | 86 | `0x056` |
+| offset | 1929 | `0x789` |
+
+Assume `satp.PPN` selects root table physical address `0x81000000`.
+
+1. Root PTE address: `0x81000000 + 0x004 × 8 = 0x81000020`. Its valid non-leaf PTE points to table `0x81200000`.
+2. Middle PTE address: `0x81200000 + 0x11A × 8 = 0x812008D0`. Its valid non-leaf PTE points to table `0x81300000`.
+3. Final PTE address: `0x81300000 + 0x056 × 8 = 0x813002B0`. It is a leaf with `V=1, R=1, W=0, X=0, U=1` and PPN `0x2A35F`.
+4. A user read is authorized. The physical address is `(0x2A35F << 12) | 0x789 = 0x2A35F789`.
+
+Changing the operation to a store produces a protection fault at step 3; the walker must not issue a store to `0x2A35F789`. Changing `U` to zero also rejects the user access even though `R=1`.
+
+### Worked trace: a level-1 superpage
+
+Take virtual address fields `VPN[2]=7`, `VPN[1]=12`, `VPN[0]=301`, offset `0x2A0`. At level 1 the walker finds an `R-X` leaf. A 2 MiB mapping replaces only the high physical page-number fields; the low nine PPN bits represented by `VPN[0]` come from the virtual address. The physical construction is conceptually:
+
+$$
+PA = \text{PTE.PPN}[2{:}1] \; || \; \text{VPN}[0] \; || \; \text{offset}.
+$$
+
+If `PTE.PPN[0]` is nonzero, the leaf is misaligned and the access faults. Copying the full PTE PPN into the physical address would map a 4 KiB page and discard the very property that made the entry a level-1 leaf.
+
+**Application — audit a walk.** A trace reaches level 0 with `V=1, R=0, W=0, X=0`. The implementation returns `PTE.PPN << 12 | offset`. Identify the defect and the correct architectural outcome.
+
+<details>
+<summary>Reveal the audit</summary>
+
+At level 0, a valid non-leaf entry asks the walker to descend when no level remains. No leaf translation exists, so the access faults. Returning the PPN exposes the page-table page itself as user data and can turn metadata into writable authority if subsequent checks are also wrong.
+
+</details>
+
+## A TLB caches a proof result, not only a number
+
+A translation lookaside buffer (TLB) caches a key such as `(ASID, VPN, page size)` and a result containing the PPN plus permission and status state. A TLB hit bypasses page-table memory references, but it does not bypass the access check. A cached read-only translation must still reject a store.
+
+A **TLB miss** means the translation is absent from the cache. A **page fault** means translation cannot complete under the current page-table and access rules. A TLB miss can end in a successful walk; a TLB hit can end in a protection fault.
+
+### Translation cost under an explicit serial model
+
+Assume:
+
+- a TLB lookup costs $t_T$;
+- each memory access costs $t_M$;
+- a miss performs an $L$-level serial page-table walk and then the requested data access;
+- the walk is not served by caches and does not overlap the data-cache lookup; and
+- page faults are excluded.
+
+With TLB hit rate $h$,
+
+$$
+E[T] = h(t_T+t_M) + (1-h)(t_T+(L+1)t_M).
+$$
+
+For $h=0.98$, $t_T=1$ ns, $t_M=60$ ns, and $L=3$:
+
+$$
+E[T]=0.98(61)+0.02(241)=64.6\text{ ns}.
+$$
+
+The 2% miss rate adds 3.6 ns over the 61 ns hit path under this model. Real processors overlap lookups and cache page-table entries, so this equation is a derivation exercise, not a hardware benchmark.
+
+**Application — expose the hidden assumption.** A report uses `1 ns + 3 × 60 ns + 60 ns = 241 ns` as the cost of *every* load on the machine above. Which observation would falsify the report fastest?
+
+<details>
+<summary>Reveal the diagnosis</summary>
+
+A high TLB hit rate falsifies the assumption that every load performs a walk. The 241 ns path applies only to a miss under the serial, uncached model. A useful follow-up measurement separates TLB hits, TLB misses with cached walk data, and page faults; averaging all memory operations into the worst modeled path erases the mechanism.
+
+</details>
+
+### Reach and page size
+
+TLB **reach** is the mapped byte span represented by useful cached entries. Sixty-four 4 KiB entries cover at most 256 KiB; sixty-four 2 MiB entries cover 128 MiB. Larger pages increase reach but coarsen allocation, sharing, protection, and fault granularity. Reach is an upper bound: conflicting sets, mixed page sizes, duplicate aliases, and context changes can reduce useful coverage.
+
+## Experiment: translation, permission, and cache state
+
+The investigation below uses a deliberately small machine: 12-bit virtual addresses, 256-byte pages, one page-table level, 4-bit physical frame numbers, and a fixed ASID-tagged TLB snapshot. It models address decomposition and permission decisions, not Sv39's three memory references, replacement behavior, A/D updates, or invalidation races.
+
+**Prediction — record an answer before changing a control.** Process A reads virtual `0x4A3`. Which bits are preserved in the physical address, and can a TLB hit make a later write legal if the PTE is read-only?
+
+<PageTablePlayground client:load />
+
+**Transfer — force three distinct outcomes.** Find one setting that produces a TLB hit, one that performs a successful page-table walk, and one that faults despite the page being present. For each, write `(process, access, VA, VPN, offset, result)` and identify the first decision that distinguishes it from the other two.
+
+<details>
+<summary>Reveal one admissible set and the grading criteria</summary>
+
+Examples from the fixed model:
+
+- `(A, read, 0x4A3)` selects VPN `0x4`, offset `0xA3`; A's TLB contains the mapping, so the result is frame `0x2`, physical `0x2A3`.
+- `(B, read, 0x8A3)` selects VPN `0x8`, offset `0xA3`; the page is present but absent from B's fixed TLB, so a walk maps it to frame `0x6`, physical `0x6A3`.
+- `(A, write, 0xCA3)` selects present VPN `0xC`, but its `r--` permission rejects the store.
+
+Thus the prediction preserves the low eight bits `0xA3`; a TLB hit cannot make a write legal when the cached translation is read-only because permission state is part of the cached result. Equivalent states earn full credit. The decisive evidence is not the widget label: the answer must show key lookup, presence, and operation-specific authority as separate checks.
+
+</details>
+
+## Context switches, ASIDs, and invalidation
+
+Without ASIDs, a context switch that installs a new address space may require discarding untagged user translations. With ASIDs, translations from multiple address spaces can coexist and be selected by `(ASID, VPN)`. ASIDs optimize identity; they do not remove revocation. Reusing an ASID for a different page table requires invalidating translations associated with the old meaning.
+
+RISC-V `SFENCE.VMA` orders the issuing hart's explicit page-table updates with that hart's later translations and invalidates translations selected by its operands. It is a **local-hart** operation. Revoking a mapping on a multicore system requires coordination with every hart that could use the address space.
+
+{/* Source tracking: Local SFENCE.VMA scope and ASID-reuse ordering are synthesized from the RISC-V Privileged Architecture; the shootdown protocol below is an original pedagogical derivation. */}
+
+<PlantUML
+  code={`@startuml
+title "Permission revocation across two harts"
+participant "initiating hart" as H0
+participant "page table" as PT
+participant "remote hart" as H1
+participant "frame allocator" as FA
+H0 -> PT : clear writable / invalidate PTE
+H0 -> H0 : order page-table store
+H0 -> H1 : send shootdown request\\n(ASID, virtual range)
+H1 -> H1 : stop target execution path
+H1 -> H1 : execute local SFENCE.VMA
+H1 --> H0 : acknowledge invalidation
+H0 -> H0 : execute local SFENCE.VMA
+H0 -> FA : permit frame reuse only after acknowledgements
+@enduml`}
+/>
+
+The protocol's safety point is the final arrow. Reusing the frame after changing the PTE but before remote acknowledgement can expose the new owner's bytes through an old translation. Sending an interprocessor interrupt without waiting for completion is also insufficient: delivery is not invalidation.
+
+### Worked race: stale writable authority
+
+1. Hart 1 runs process A and caches `(ASID 9, VPN 4) → PFN 21, RW`.
+2. Hart 0 changes A's PTE to read-only and maps PFN 21 into process B as private data.
+3. Hart 0 performs a local fence but sends no shootdown.
+4. Hart 1 resumes A and stores through its cached `RW` entry.
+
+The page-table snapshot appears secure, yet A modifies B's data. The defect is not “the TLB contains old data” in an abstract sense; it retains **old authority**. The repair must cover every hart on which A could have run, or prove that a hart never cached A's translations.
+
+**Transfer — optimize without weakening safety.** A process has run only on harts 0 and 2 of a 64-hart machine. State a valid targeted shootdown and the evidence the kernel must maintain to avoid sending 62 unnecessary invalidations.
+
+<details>
+<summary>Reveal the argument</summary>
+
+Track an address-space CPU mask that conservatively includes every hart that may hold its translations. Update the PTE, send range/ASID invalidations to harts 0 and 2, execute the corresponding local invalidation on the initiating hart when applicable, wait for acknowledgements, and only then complete revocation or frame reuse. The optimization is sound only if mask updates are synchronized with scheduling; a false negative is a security bug, while a false positive costs performance.
+
+</details>
+
+## Counterexamples that separate the mechanisms
+
+| Claim | Counterexample | Correct distinction |
+| --- | --- | --- |
+| “TLB miss means the page is on storage.” | present PTE absent from TLB | cache miss versus not-present fault |
+| “A valid PTE is a leaf.” | valid `R=W=X=0` entry | next-table pointer versus leaf |
+| “ASIDs eliminate flushes.” | ASID reuse or permission downgrade | identity tagging versus revocation |
+| “A larger page always improves performance.” | sparse writes dirty an entire coarse mapping and waste memory | reach versus granularity |
+| “Updating the PTE revokes access.” | remote hart retains writable TLB entry | authoritative table versus cached authority |
+| “More TLB entries give exactly proportional reach.” | set conflicts and mixed mappings | capacity bound versus effective coverage |
+
+## Synthesis assessment: walk, cost, and revocation
+
+Address space A has ASID 12 and an Sv39 `satp` root at `0x90000000`. A user load uses virtual address `0x0000000123456789`, with the same indices derived earlier. The root and level-1 PTEs point to `0x90100000` and `0x90200000`. The level-0 entry is `V=1, R=1, W=1, X=0, U=1`, PPN `0x34567`. Hart 3 has a TLB entry for this mapping tagged ASID 12.
+
+Answer all parts:
+
+1. List the three PTE physical addresses and final data physical address.
+2. Classify a user load, store, and instruction fetch.
+3. Compute serial effective access time for `h=0.995`, `t_T=1.5 ns`, `t_M=70 ns`, and a three-level walk.
+4. The kernel unmaps A's VPN and plans to give PFN `0x34567` to another security domain as private memory. Produce the minimum safe event order for harts 0 and 3.
+5. Explain why a local `SFENCE.VMA` on hart 0 followed by immediate frame reuse fails even if hart 3 is currently in kernel mode.
+
+<details>
+<summary>Reveal reference solution and rubric</summary>
+
+1. PTE addresses are `0x90000020`, `0x901008D0`, and `0x902002B0`. The physical data address is `0x34567789`.
+2. Load and store are authorized; instruction fetch faults because `X=0`. `U=1` permits user privilege but does not replace operation permission.
+3. Hit path: `1.5 + 70 = 71.5 ns`. Miss path: `1.5 + 4 × 70 = 281.5 ns`. Therefore `0.995(71.5) + 0.005(281.5) = 72.55 ns`.
+4. Prevent A from resuming through the old address-space state; invalidate A's PTE for the VPN; perform required store ordering; request an ASID/range invalidation on hart 3; execute local invalidation on hart 0; make hart 3 execute its local invalidation and acknowledge; wait for acknowledgement; verify that no other mapping grants access and that ownership/lifetime references permit transfer; only then expose PFN `0x34567` as private memory in the new domain. A production protocol may batch or reorder independent local/remote requests, but the happens-before relation from PTE invalidation through every relevant translation invalidation and final alias/lifetime check to reuse must hold.
+5. Kernel mode does not prove hart 3's user TLB entry vanished. It may survive until A resumes. A stale translation is dangerous because the frame now has a different owner.
+
+Rubric, 24 points:
+
+- 6 points: exact index arithmetic and addresses;
+- 4 points: operation-specific classifications;
+- 4 points: cost equation, paths, and numeric result with assumptions;
+- 7 points: ordered multicore revocation ending before frame reuse;
+- 3 points: stale authority explained independently of current privilege mode.
+
+Treating the TLB as a data cache without permissions caps the score at 12 points because that model cannot justify revocation safety.
+
+</details>
+
+## Deliberate boundary and source trail
+
+The cost model excludes caches, page-walk caches, overlap, speculative execution, and page faults. The architectural analysis uses baseline Sv39 rather than Sv48/Sv57, hypervisor two-stage translation, or extension-specific A/D behavior. These omissions prevent a tractable walk from being misreported as a universal performance model.
+
+{/* Source tracking: The xv6 comparison and root-page-table organization were checked against xv6-riscv rev5 Chapters 3 and 4 and kernel/vm.c at commit 7d7adbb. */}
+{/* Source tracking: Linux's requirement that page-table changes be followed by architecture-appropriate TLB flushing was checked against the kernel Cache and TLB Flushing documentation. */}
+
+## References & Further Reading
+
+- [RISC-V Privileged Architecture: Supervisor-Level ISA and Sv39](https://docs.riscv.org/reference/isa/priv/supervisor.html)
+- [RISC-V Privileged Architecture PDF, ratified snapshot 2024-04-11](https://docs.riscv.org/reference/isa/v20240411/_attachments/riscv-privileged.pdf)
+- [xv6-riscv revision 5 book, Chapters 3–4](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf)
+- [xv6-riscv `kernel/vm.c` at revision 5](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/vm.c)
+- [Linux kernel: Cache and TLB Flushing Under Linux](https://docs.kernel.org/core-api/cachetlb.html)

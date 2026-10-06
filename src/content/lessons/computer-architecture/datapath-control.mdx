@@ -2,8 +2,30 @@
 title: "Datapath and Control"
 course: "computer-architecture"
 description: "How instruction execution is organized into datapath operations and control signals."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Map instruction semantics to datapath resources, typed control signals, and next-PC transitions."
+  - "Compare single-cycle and multicycle organizations by critical path, temporary state, and resource conflicts."
+  - "Trace stalls and memory responses while preserving precise side-effect and refinement invariants."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 600
+assessment: "Given an instruction mix and resource budget, produce control tables and a multicycle trace, then diagnose a duplicated write or unqualified memory response."
 ---
 # Datapath and Control
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+
+<Quiz client:load title="Separate mechanism and control"
+  question="What is the role of control logic in a datapath?"
+  options={["It stores the entire program", "It selects and sequences datapath operations according to instruction semantics", "It replaces registers with memory", "It guarantees every instruction takes one cycle"]}
+  correctIndex={1}
+  explanation="The datapath provides resources such as registers, ALU, and buses. Control signals select how those resources realize each instruction, often across several steps."
+/>
 
 A processor is not an instruction-shaped black box. It is a coordinated network of storage elements, combinational operators, multiplexers, decoders, and control state. The *datapath* carries and transforms values; the *control unit* determines which values move, which operation an arithmetic unit performs, which registers are written, and how the next program counter is selected. Separating these roles makes a design analyzable: the datapath can be checked against value-flow equations, while control can be checked against an instruction-state transition table.
 
@@ -26,6 +48,34 @@ The list is a design hypothesis, not yet an implementation. One ALU may serve ev
 
 **Worked example: register arithmetic.** The instruction fetches from address `PC`, decodes `rs1`, `rs2`, and `rd`, reads both operands, computes `ALU(rs1,rs2)`, writes the result to `rd` at the clock edge, and sets `PC←PC+4`. The control signals include `RegWrite=1`, `ALUSrc=0`, `MemRead=0`, `MemWrite=0`, `MemToReg=0`, and `PCSrc=sequential`. If `MemWrite` were accidentally high, the instruction would have an unintended store side effect even though its arithmetic result was correct. Correctness includes negative behavior: controls for irrelevant resources must disable them.
 
+The data paths distinguish the store value from its effective address: the ALU computes `rs1 + immediate`, but the register file supplies `rs2` as the bytes to store. Opcode bits go to control decoding; register indexes select operands. The diagram omits next-PC selection to isolate this arithmetic/load/store slice.
+
+<PlantUML code={`@startuml
+rectangle "Instruction bits" as I
+rectangle "Control decoder" as C
+rectangle "Register file" as R
+rectangle "Immediate extension" as E
+rectangle "ALU operand mux" as M
+rectangle "ALU" as A
+database "Data memory" as D
+rectangle "Writeback mux" as W
+I --> C : opcode / function
+I --> R : source / destination indexes
+I --> E : immediate bits
+R --> A : rs1 value
+R --> M : rs2 value
+E --> M : extended immediate
+M --> A : selected second operand
+A --> D : effective address
+R --> D : store value (rs2)
+D --> W : load result
+A --> W : arithmetic result
+W --> R : destination value
+C ..> M : operand select
+C ..> D : read / write enables
+C ..> W : result select
+@enduml`} />
+
 ## Single-cycle organization
 
 In a single-cycle processor, one instruction completes between two clock edges. The path includes instruction memory, decode, register read, immediate generation, ALU, data memory if needed, write-back selection, and state updates. The clock period must exceed the longest instruction path plus register overhead. A load usually determines the period because it needs fetch, decode, address calculation, memory access, and write-back.
@@ -33,6 +83,15 @@ In a single-cycle processor, one instruction completes between two clock edges. 
 Single-cycle timing makes the control truth table easy to understand but wastes hardware time for short instructions. An add waits for the load-sized cycle even though it does not access data memory. The design also needs enough combinational resources to perform all phases without intermediate storage. A branch needs both a comparison and a target calculation; if the same ALU cannot do both in the cycle, the design adds hardware or changes the timing model.
 
 **Worked timing comparison.** Suppose instruction fetch is 300 ps, register read 150 ps, ALU 200 ps, data memory 400 ps, register setup and clock overhead 100 ps, and multiplexing adds 50 ps. A load path may be $300+150+200+400+50+100=1200$ ps, so the clock cannot be shorter than 1.2 ns. An add may use only $300+150+200+50+100=800$ ps but still completes once every 1.2 ns. The throughput is one instruction per cycle; the latency is one cycle. Improving the add unit does not raise the clock until the load path or another critical path changes.
+
+<CaseStudy client:load
+  title="Trace the wrong-path write"
+  scenario="A taken branch computes the correct target, but the next sequential instruction still writes a register before the PC redirects."
+  question="Which trace best localizes the control defect?"
+  options={["PC select, branch decision timing, pipeline validity, and register-write enable", "Source line numbers, variable names, comment count, and compiler version", "Register-file capacity, cache size, bus width, and package temperature", "Instruction spelling, assembly indentation, executable size, and linker order"]}
+  correctIndex={0}
+  explanation="The target calculation may be correct while the validity or write-enable path is late. A cycle trace connecting branch resolution to PC selection and side-effect suppression reveals the faulty control transition."
+/>
 
 ## Multicycle organization
 

@@ -1,0 +1,134 @@
+---
+title: "Arrays, Extents, and Contiguous Representation"
+course: c
+description: "Reason about array objects, pointer conversion, multidimensional layout, and the limits of C's bounds model."
+prerequisites:
+  - "C expressions, objects, and pointers"
+outcomes:
+  - "Compute an element address from an array's extent and element type"
+  - "Distinguish an array object from a pointer after the standard conversion rules"
+  - "Design an interface that carries enough extent information to avoid out-of-bounds access"
+omissions:
+  - "Compiler-specific vector extensions and allocator internals are deferred to systems-performance work."
+estimatedMinutes: 55
+assessment: "Explain why a pointer parameter cannot recover a caller's array extent, then propose and test a safe interface."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Arrays, Extents, and Contiguous Representation
+
+An array is an object containing a fixed number of adjacent elements of one type. The important contract is not “arrays are fast”; it is that the object has an extent and that each element has a well-defined position relative to the first. A caller that loses the extent can still hold an address, but it no longer has enough information to prove an access is valid.
+
+<Quiz client:load
+  title="Object or pointer?"
+  question="Inside `void f(int a[10])`, what does the parameter declaration mean after adjustment?"
+  options={["The function receives a copied ten-element array", "The function receives a pointer to int; the bound is not part of the parameter type", "The function can recover the caller's exact array length with sizeof(a)", "The function receives a pointer whose bounds are checked by C"]}
+  correctIndex={1}
+  explanation="An array parameter is adjusted to a pointer parameter. The function must receive an extent separately or use a different interface; sizeof(a) measures the pointer, not the caller's array."
+/>
+
+## Element addresses and pointer arithmetic
+
+For an array `T a[n]`, the expression `a[i]` is defined in terms of pointer arithmetic: `*(a + i)`. The address calculation is scaled by `sizeof(T)`, so `a + 1` advances one element, not one byte. Pointer arithmetic is defined within the same array object (or one position past its end); dereferencing that one-past pointer is invalid.
+
+<CodeExercise client:load
+  title="Preserve the element scale"
+  code={`int values[8];
+int *p = values;
+// The expression naming the fourth element is: [!blank!]`}
+  answers={["*(p + 3)"]}
+  explanation="The first element has offset zero, so the fourth element has offset three. Pointer arithmetic scales the offset by sizeof(int); no byte-size multiplication belongs in the source expression."
+/>
+
+For `int values[4]` starting at address `1000`, with `sizeof(int) == 4`, `&values[2]` is `1008`. This arithmetic is a model of an object, not permission to manufacture arbitrary addresses and dereference them. A pointer one past `values[3]` may be compared or used as a loop sentinel, but not read.
+
+## Extents are part of the interface
+
+The following interface is incomplete:
+
+```c
+int sum(const int *values) {
+    /* No portable way to know how many int objects are available. */
+}
+```
+
+Use an explicit count, a sentinel with a documented invariant, or a view type that couples pointer and extent:
+
+```c
+struct int_view {
+    const int *data;
+    size_t length;
+};
+
+int sum_view(struct int_view view) {
+    int total = 0;
+    for (size_t i = 0; i < view.length; ++i) total += view.data[i];
+    return total;
+}
+```
+
+The view does not make a dangling pointer safe. Its caller still owns the proof that `data` points to at least `length` readable `int` objects for the duration of the call. If the function stores the view, the lifetime obligation must extend beyond the call.
+
+<CodeRunner client:load
+  title="Make the extent visible"
+  language="c"
+  code={`#include <stdio.h>
+#include <stddef.h>
+
+int sum(const int *values, size_t length) {
+    int total = 0;
+    for (size_t i = 0; i < length; ++i) total += values[i];
+    return total;
+}
+
+int main(void) {
+    const int sample[] = {3, -1, 4, 1};
+    printf("%d\\n", sum(sample, sizeof sample / sizeof sample[0]));
+    return 0;
+}`}
+  output="7"
+/>
+
+## Multidimensional arrays
+
+An object declared `int matrix[2][3]` contains two adjacent arrays, each containing three `int` objects. In row-major layout, the element at row `r` and column `c` has linear offset `r * 3 + c`. The second dimension is required when a pointer walks rows:
+
+```c
+void clear_rows(size_t rows, size_t columns, int matrix[rows][columns]) {
+    for (size_t r = 0; r < rows; ++r)
+        for (size_t c = 0; c < columns; ++c)
+            matrix[r][c] = 0;
+}
+```
+
+The parameter is still adjusted to a pointer, but its pointed-to type is “array of `columns` int”. If the stride is wrong, accesses can land in a different row even when every index appears small. A dynamically allocated `int **` is not automatically interchangeable with a contiguous `int [rows][columns]`; it may describe separately allocated rows.
+
+## Counterexamples and boundary cases
+
+- `sizeof values` yields the whole array size only while `values` is an array expression that has not decayed; in a function parameter, it yields pointer size.
+- `values[8]` for an eight-element array is undefined behavior even if the adjacent bytes look readable in one build.
+- `memcpy` can copy an array's representation, but it does not establish a valid object lifetime for every possible destination type.
+- A variable-length array's bound is evaluated at run time, but it still has no automatic bounds checking.
+
+## Transfer exercises
+
+1. Given `double samples[5]` at address `2000` and `sizeof(double) == 8`, compute the address of `samples[4]` and the one-past pointer.
+2. Explain why `sizeof` cannot implement a general `length` function that accepts `const int *`.
+3. Design a function for a rectangular image that cannot read outside a caller-provided buffer. State the precondition for `rows * columns` overflow.
+4. Construct a two-row example showing why `int **` and `int [2][3]` have different representations.
+
+### Diagnostic solutions
+
+1. `samples[4]` is at `2032`; the one-past pointer is at `2040`. The latter may be formed but not dereferenced.
+2. A pointer carries an address and type, not the number of elements in the original object. The count must be passed or encoded by a sentinel/view contract.
+3. Pass `data`, `rows`, and `columns`; first check that multiplication fits the chosen size type and that the caller owns at least that many elements. Use checked arithmetic when dimensions are external input.
+4. A contiguous matrix has one allocation with a fixed row stride. An `int **` points to pointer objects, each of which may point to a separate row; the pointer array and row allocations are additional objects.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.5.2.1 and §6.7.6.3](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [SEI CERT C ARR rules](https://wiki.sei.cmu.edu/confluence/display/c/ARR00-C.+Understand+how+arrays+work)
+* [cppreference: array declaration](https://en.cppreference.com/w/c/language/array)

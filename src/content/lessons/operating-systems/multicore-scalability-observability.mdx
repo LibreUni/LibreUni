@@ -1,0 +1,368 @@
+---
+title: "Multicore Scalability and Observability"
+course: "operating-systems"
+description: "Amdahl bounds, lock contention, cache-line migration, sharding, RCU, kernel tracing, performance counters, and reproducible bottleneck diagnosis."
+prerequisites:
+  - "Threads, locks, atomic operations, memory ordering, and condition variables"
+  - "Cache coherence, false sharing, interrupts, and scheduling"
+  - "Statistical summaries, experimental controls, and asymptotic reasoning"
+outcomes:
+  - "Derive speedup and efficiency bounds from serialized work and identify where the model omits coherence and queueing costs."
+  - "Trace lock contention, false sharing, sharded invariants, and RCU reclamation on multiple cores."
+  - "Choose counters, samples, traces, and pressure signals that can discriminate competing kernel bottleneck hypotheses."
+  - "Design a reproducible scaling experiment and report model outputs, measurements, uncertainty, and threats separately."
+omissions:
+  - "Full weak-memory proofs, lock-free data-structure verification, NUMA placement policy, real-time multicore analysis, and architecture-specific PMU event catalogs are deferred."
+  - "The interactive curves are analytical models with stated assumptions; they are not benchmark results."
+estimatedMinutes: 360
+assessment: "Given an unfamiliar throughput collapse, derive competing causal models, inspect a supplied counter/trace bundle, propose a correctness-preserving redesign, and specify the experiment needed to support or reject the claim."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import LockScalabilityPlayground from '../../../components/playgrounds/LockScalabilityPlayground';
+
+# Multicore Scalability and Observability
+
+A kernel service completes 1.0 million operations per second on one core, 3.4 million on four, 4.2 million on eight, and 4.1 million on sixteen. All sixteen cores are busy. The team concludes that the operation is “CPU-bound” and adds cores.
+
+Busy cores do not imply useful parallel work. They may spin on one lock, migrate a cache line, retry an atomic operation, handle interrupts, or run instrumentation. Scalability analysis needs a causal chain from workload to shared state to hardware event to observable delay.
+
+{/* Source tracking: The serialized-fraction bound is derived from Amdahl's 1967 primary paper. Linux-specific RCU, perf, ftrace, lockstat, and PSI mechanisms are grounded in the Linux kernel documentation and Linux man-pages. */}
+
+## Define the quantities before drawing a curve
+
+For fixed work $W$:
+
+- throughput $X(N)$ is completed operations per unit time on $N$ cores;
+- latency is elapsed time per operation, whose distribution includes tails;
+- speedup is $S(N)=T(1)/T(N)$ for the same work and defined environment;
+- efficiency is $E(N)=S(N)/N$;
+- scalability is how a metric changes as a named resource or workload dimension changes;
+- contention is delay or retry caused by competition for a shared resource; and
+- serialization is work that the model permits only one participant to perform at once.
+
+Strong scaling fixes total work. Weak scaling grows work with resources. A server saturation study may fix offered load, increase it to capacity, or keep per-core load fixed; those are different experiments.
+
+### Derive Amdahl's bound
+
+Normalize one-core time to 1. If fraction $s$ remains serial and fraction $1-s$ parallelizes perfectly over $N$ cores, then
+
+$$
+T(N)=s+\frac{1-s}{N},
+$$
+
+so
+
+$$
+S(N)=\frac{1}{s+(1-s)/N},
+\qquad \lim_{N\to\infty}S(N)=\frac{1}{s}.
+$$
+
+This is an upper bound under the model. Real multicore costs can grow with $N$: lock handoff, coherence messages, remote memory, scheduler migration, interrupts, and queueing. Treating $s$ as a universal constant can hide the mechanism being diagnosed.
+
+### Worked calculation: eight percent serialized
+
+With $s=0.08$ and $N=16$:
+
+$$
+S(16)=\frac{1}{0.08+0.92/16}
+=\frac{1}{0.1375}\approx7.27,
+$$
+
+$$
+E(16)=7.27/16\approx45.5\%.
+$$
+
+The asymptotic bound is $12.5\times$. If measured speedup is 5×, Amdahl's model does not prove that the serial fraction is exactly 16.7%; growing overhead can produce the same curve.
+
+### Retrieval checkpoint: invert the model carefully
+
+A fixed-work experiment measures $S(8)=4$. Under the ideal Amdahl model, solve for $s$. Then state why this inferred value is not yet a measured lock critical-section fraction.
+
+<details>
+<summary>Reveal the inversion and caveat</summary>
+
+Solve
+
+$$
+\frac{1}{s+(1-s)/8}=4.
+$$
+
+Thus $s+(1-s)/8=1/4$, so $8s+1-s=2$, $7s=1$, and $s=1/7\approx14.3\%$. This is an **effective serial fraction in the model**. It can absorb load imbalance, memory stalls, scheduling, coherence, and other overhead. Only instrumentation tying time to a lock path can identify a lock critical-section fraction.
+
+</details>
+
+## Predict the analytical curves
+
+At 16 cores and 10% serialized critical work, predict the global-lock relative throughput and its infinite-core limit before changing any control. All designs will be divided by the **one-core global-lock** throughput, not by their own one-core result. Given a fixed RCU management/grace cost, predict whether the RCU curve may begin above, at, or below 1× on one core. Then predict its direction as the read share falls from 90% to 10%.
+
+<LockScalabilityPlayground client:load />
+
+Normalize the one-core global-lock time to 1. With critical-work fraction $f$, read share $r$ within that work, core count $N$, and $K=\min(8,N)$ active shards, the displayed relative-throughput hypotheses are
+
+$$
+R_G(N)=\frac{1}{f+(1-f)/N},
+$$
+
+$$
+R_S(N)=\frac{1}{f/K+(1-f)/N},
+$$
+
+and
+
+$$
+R_R(N)=\frac{1}{f(1-r)+0.08fr+\big((1-f)+fr\big)/N}.
+$$
+
+For the global lock, $R_G(16)=1/(0.10+0.90/16)=6.4$ and the limit is 10×. The RCU expression does **not** delete read-side critical work: $fr$ moves into the parallel term. Updates $f(1-r)$ remain serialized, and the illustrative $0.08fr$ management/grace term is fixed with respect to core count. Therefore $R_R(1)=1/(1+0.08fr)$ can be slightly below the common 1× baseline. Lowering read share erodes the modeled RCU opportunity because more critical work becomes serialized update work. The sharded curve assumes balanced requests across at most eight shards.
+
+The graph labels all three designs; color is supplementary. Every value is relative throughput against the same one-core global-lock baseline, so it is not a within-design speedup when the selected design is sharding or RCU. The 8% RCU term is an illustrative model assumption, not a measured grace-period cost; the sharded curve omits skew. None of the curves includes cache-coherence traffic, NUMA, allocator contention, interrupt placement, or correctness cost.
+
+### Transfer after breaking balance
+
+Keep eight shards but send 90% of operations to one shard. Explain why the displayed sharded curve becomes optimistic and derive a lower-level bottleneck hypothesis.
+
+<details>
+<summary>Reveal the skew diagnosis</summary>
+
+The model divides critical work evenly by the number of active shards. Under 90% hot-shard traffic, one lock serializes most operations while seven locks are lightly used. Aggregate shard count is not effective parallelism. Hypotheses include hot-key distribution, a shared allocator beneath all shards, or one cache line containing multiple shard locks. Measure per-shard acquisition/wait distributions and address placement before attributing the curve to the high-level design alone.
+
+</details>
+
+## Lock contention is a queueing mechanism
+
+A contended lock has at least four times:
+
+```text
+request -> wait/spin -> acquire -> critical work -> release/handoff
+```
+
+Reducing critical-section instruction count can help, but a lock's cost also includes cache-line ownership transfer and wakeup/scheduling. A spinlock is appropriate only when sleeping is forbidden or expected waits are shorter than sleep/wakeup cost under the stated preemption model. A mutex avoids burning CPU during long waits but can add scheduler transitions and convoy behavior.
+
+### Worked trace: one global inode-cache lock
+
+Four cores repeatedly look up distinct inodes. The cache uses one lock for lookup, reference increment, and a slow eviction scan.
+
+| time | core 0 | core 1 | core 2 | core 3 | lock line |
+| --- | --- | --- | --- | --- | --- |
+| $t_0$ | acquires; scans | requests | requests | requests | owned by core 0 |
+| $t_1$ | releases | acquires | spins/waits | spins/waits | migrates to core 1 |
+| $t_2$ | requests again | scans | waits | waits | remains core 1 |
+| $t_3$ | waits behind earlier callers | releases | acquires | waits | migrates to core 2 |
+
+Distinct inode identities do not help because lookup and eviction share one lock. Core count increases both queue length and ownership migration. Candidate redesigns include partitioning lookup buckets, separating eviction policy from fast lookup, per-CPU references with safe aggregation, or an RCU-protected read path. Each changes invariants and must be proven before performance testing.
+
+### Application checkpoint: shorten or split?
+
+Profiling shows 70% of lock hold time is a linear scan for an eviction victim; 20% is hash lookup; 10% is reference update. Give one local optimization and one structural optimization. State a correctness risk for each.
+
+<details>
+<summary>Reveal two defensible directions</summary>
+
+A local optimization maintains an eviction data structure so victim selection does not scan the whole cache under the lock. Its risk is stale or inconsistent replacement metadata under concurrent hits. A structural optimization shards the identity map and separates global eviction coordination; its risk is duplicate cache identities, cross-shard lock cycles, or an eviction selecting an entry whose shard/reference state changed. “Use a faster lock” does not remove the long serialized scan.
+
+</details>
+
+## False sharing without a logical lock
+
+Cache coherence commonly tracks fixed-size lines. If core 0 increments counter A and core 1 increments adjacent counter B in the same line, each write requires ownership of the line even though the variables are logically independent.
+
+```text
+64-byte cache line
++----------------------+----------------------+-------------------+
+| counter[0] (core 0)  | counter[1] (core 1)  | unused / others   |
++----------------------+----------------------+-------------------+
+```
+
+The ownership trace alternates:
+
+```text
+core 0 obtains write ownership -> invalidates core 1 copy -> writes A
+core 1 obtains write ownership -> invalidates core 0 copy -> writes B
+repeat
+```
+
+No source-level data race exists if each counter has one writer. Performance still collapses through coherence. Padding or per-CPU allocation can place counters on separate lines, followed by occasional aggregation. The trade-off is footprint, cache pressure, aggregation cost, and topology dependence.
+
+### Boundary checkpoint: padding did not help
+
+After aligning counters to separate lines, throughput remains flat and lock-wait time remains high. What conclusion is justified?
+
+<details>
+<summary>Reveal the bounded conclusion</summary>
+
+The tested padding did not remove the dominant measured bottleneck under that workload. It does not prove false sharing was absent, because the event attribution or layout may be wrong; nor does it prove the global lock is causal solely because wait time correlates with flattening. Inspect addresses/layout, coherence or cache events where supported, lock traces, and a controlled lock-structure change.
+
+</details>
+
+## Sharding changes the proof
+
+Partition a table by $h(key)\bmod K$. A single-key operation locks one shard. A two-key operation may need two. Canonical shard order prevents deadlock, but atomic multi-key semantics may still require a version, global sequence, or retry protocol.
+
+The critical invariants are:
+
+- each key has exactly one authoritative shard under the current mapping;
+- resize or rehash does not make a key absent or duplicated to readers beyond the API's allowed state;
+- operations touching multiple shards acquire them in one global order; and
+- per-shard accounting sums to the global quantity without lost updates or double counting.
+
+### Worked cross-shard transfer
+
+Moving one resource from key A in shard 7 to key B in shard 2 must atomically preserve total ownership.
+
+1. Compute both shard identities before locking.
+2. Lock shard 2, then shard 7 because $2<7$, independent of transfer direction.
+3. Revalidate source ownership and destination eligibility.
+4. Remove A and add B while both locks are held.
+5. Release shard 7, then shard 2.
+
+If the reverse transfer locks source first, concurrent opposite transfers can deadlock. If each operation releases one shard between remove and add, readers can observe missing or duplicated ownership.
+
+## RCU separates removal from reclamation
+
+Read-copy update targets read-mostly structures. Readers enter an RCU read-side critical section, obtain a protected pointer, and traverse an immutable or carefully updated version. An updater publishes a new pointer or removes the old object, then waits for a grace period before reclaiming memory that pre-existing readers could still hold.
+
+<PlantUML code={`
+@startuml
+participant "reader R1" as R1
+participant "shared root" as ROOT
+participant "updater U" as U
+participant "grace-period mechanism" as GP
+R1 -> R1 : rcu_read_lock()
+R1 -> ROOT : rcu_dereference(root)
+ROOT --> R1 : old pointer O
+U -> ROOT : publish new pointer N
+U -> GP : wait / defer callback
+R1 -> R1 : read immutable O fields
+R1 -> R1 : rcu_read_unlock()
+GP --> U : all pre-publication readers quiesced
+U -> U : reclaim O
+@enduml
+`} />
+
+{/* Source tracking: The removal–grace-period–reclamation sequence and API roles synthesize the Linux kernel RCU documentation; exact Linux ordering requirements remain those of the current API documentation and code comments. */}
+
+RCU does not mean “reads need no rules.” The pointer must be published and dereferenced with the required primitives; referenced data must remain valid through the read-side critical section; updates requiring atomic multi-field visibility need an appropriate publication design; and reclamation cannot precede the grace period. Writers commonly still serialize with locks.
+
+### Worked failure: reclaim before grace
+
+R1 reads pointer O and is preempted. U removes O from the shared list and immediately frees it. The allocator reuses O's memory for object X. R1 resumes and interprets X bytes as O. No stale-list link is needed; lifetime alone is violated. A grace period delays reuse until every reader that could have obtained O has completed.
+
+### Transfer checkpoint: RCU under write-heavy load
+
+Why can an RCU conversion worsen a write-heavy workload even if read-side lock acquisition disappears?
+
+<details>
+<summary>Reveal the cost shift</summary>
+
+Writers still need synchronization, allocate or copy versions, publish pointers with ordering, track callbacks, and delay reclamation. Frequent updates can build callback backlog, increase memory footprint, and spend more work copying than the removed reader lock cost. RCU is a correctness protocol with a read-mostly performance opportunity, not a universally faster lock replacement.
+
+</details>
+
+## Observe mechanisms at the right resolution
+
+Different evidence answers different questions:
+
+| evidence | strength | common ambiguity |
+| --- | --- | --- |
+| aggregate counter | low overhead count/rate | loses temporal and call-path context |
+| sampled event | attributes recurring events to code | sampling bias, skid, lost samples, multiplexing |
+| tracepoint/event trace | ordered state transitions with timestamps | instrumentation overhead and finite buffers |
+| lock statistics | acquisition, contention, wait/hold distributions | configuration overhead; correlation is not redesign proof |
+| pressure signal | time workloads stall for CPU/memory/I/O | identifies resource pressure, not the exact code path |
+| controlled intervention | tests a causal prediction | change may alter several mechanisms at once |
+
+Linux `perf_event_open` supports counting and sampled hardware, software, cache, tracepoint, and implementation-specific events. Availability and meaning vary by platform. `time_enabled` and `time_running` reveal multiplexing. Ftrace supplies function, function-graph, latency, and event tracing. Lockstat requires a configured kernel and reports lock behavior. PSI reports time in which some or all non-idle work is stalled on CPU, memory, or I/O pressure.
+
+Illustrative commands—not portable promises—might include:
+
+```bash
+perf stat -r 15 -e cycles,instructions,context-switches,cpu-migrations ./workload
+perf lock record ./workload
+perf lock report
+```
+
+Record whether events exist, whether kernel access is permitted, whether counters were multiplexed, and what scope was measured. Raw cache-event names are processor-specific; a command succeeding does not make two machines' event semantics identical.
+
+### Worked evidence bundle
+
+The following values are **illustrative data**, not results measured for LibreUni:
+
+| cores | throughput (Mop/s) | p99 (µs) | global-lock wait share | migrations/op |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1.0 | 12 | 0.5% | 0.00 |
+| 2 | 1.9 | 14 | 3% | 0.01 |
+| 4 | 3.4 | 23 | 12% | 0.03 |
+| 8 | 4.2 | 71 | 35% | 0.08 |
+| 16 | 4.1 | 190 | 58% | 0.15 |
+
+The bundle supports a hypothesis: a global lock and associated migration become dominant as concurrency rises. It does not isolate whether hold time, handoff, scheduler placement, or a shared cache line beneath the lock causes the wait. Next evidence should include hold/wait distributions by call path, owner/waiter CPU, critical-section samples, and a controlled implementation that removes or partitions the suspected shared state while preserving workload and correctness tests.
+
+### Application checkpoint: choose a discriminating measurement
+
+Two hypotheses fit the flat curve: H1, long critical sections queue on one lock; H2, per-CPU counters falsely share a line outside that lock. Choose one observation and one intervention that distinguish them.
+
+<details>
+<summary>Reveal a discriminating pair</summary>
+
+Observe lock hold/wait distributions tied to call paths and inspect counter addresses/cache-line layout with coherence/cache events where the platform supports meaningful ones. Intervene separately: first remove the counters from shared lines without changing lock code; then, in another build, shorten or shard the lock path without changing counter layout. H1 predicts lock wait and throughput respond primarily to the lock intervention; H2 predicts the layout intervention reduces coherence traffic and improves scaling even if lock statistics are unchanged. Run correctness tests for both builds.
+
+</details>
+
+## Reproducible scaling experiment
+
+A defensible experiment records:
+
+1. source revision, configuration, compiler, kernel, firmware, and microcode where relevant;
+2. processor topology, SMT state, CPU affinity, NUMA placement, frequency/turbo policy, and interrupt placement;
+3. workload generator, offered-load model, dataset, operation mix, seeds, warm-up, and stopping rule;
+4. baseline and changed implementation built from the same environment;
+5. repetitions at each core count in randomized or counterbalanced order;
+6. throughput plus latency distributions, not throughput alone;
+7. raw counter/trace output with lost-sample and multiplex information;
+8. uncertainty intervals or complete replicate distributions; and
+9. threats to construct, internal, external, and conclusion validity.
+
+Instrumentation can perturb the schedule. First quantify no-trace versus trace overhead. High-rate tracing that drops events cannot support complete event counts unless loss is modeled.
+
+## Synthesis: diagnose and redesign
+
+Given the illustrative table, design a review package for the global-lock hypothesis:
+
+- derive the Amdahl curve that would fit one chosen serialized fraction;
+- explain why the fit is not causal evidence;
+- request a minimal counter/trace bundle;
+- propose one local and one structural redesign;
+- state the invariant each redesign risks;
+- define functional, stress, and failure tests; and
+- specify the scaling experiment and decision criterion.
+
+<details>
+<summary>Reveal the grading rubric</summary>
+
+- **Model, 15%.** Defines fixed work/load, derives speedup and efficiency, and labels outputs as analytical.
+- **Mechanism trace, 20%.** Connects caller, wait queue or spin, owner, cache line, critical work, and handoff; includes a competing hypothesis.
+- **Correctness, 20%.** States cache identity, ownership, cross-shard ordering, or RCU lifetime invariants affected by each redesign.
+- **Observability, 15%.** Selects evidence that can discriminate hypotheses and records scope, event support, multiplexing, loss, and perturbation.
+- **Experiment, 20%.** Pins environment, controls topology/load, repeats, reports throughput and tails with uncertainty, and preserves raw data.
+- **Boundary, 10%.** Separates correlation, modeled limit, measured result, and production generalization; names NUMA, device, and workload omissions.
+
+Passing a throughput threshold without invariant tests or an explanation of measurement validity does not establish a successful kernel redesign.
+
+</details>
+
+## Connections and deliberate boundary
+
+Synchronization defines correctness; cache coherence and topology define communication costs; scheduling defines waiter and interrupt placement; filesystems and networking supply shared kernel objects; containers and VMs change accounting and observation scope. Observability connects these mechanisms to evidence but cannot replace the mechanism argument.
+
+Weak-memory litmus proofs, lock-free reclamation beyond RCU, NUMA allocators, PMU programming catalogs, and real-time multicore guarantees are omitted. Each requires architecture- or policy-specific derivations beyond this bounded diagnosis workflow.
+
+## References & Further Reading
+
+- [Amdahl, “Validity of the Single Processor Approach to Achieving Large Scale Computing Capabilities”](https://doi.org/10.1145/1465482.1465560) — primary serialized-work argument.
+- [Linux kernel documentation, RCU Concepts](https://docs.kernel.org/RCU/rcu.html) and [What is RCU?](https://docs.kernel.org/RCU/whatisRCU.html) — removal, grace periods, reclamation, and API obligations.
+- [Linux man-pages, `perf_event_open(2)`](https://man7.org/linux/man-pages/man2/perf_event_open.2.html) — event types, counting, sampling, scope, multiplexing, and permissions.
+- [Linux kernel documentation, ftrace](https://docs.kernel.org/trace/ftrace.html) — function, event, and latency tracing.
+- [Linux kernel documentation, Lock Statistics](https://docs.kernel.org/locking/lockstat.html) — lock acquisition and contention instrumentation.
+- [Linux kernel documentation, Pressure Stall Information](https://docs.kernel.org/accounting/psi.html) — CPU, memory, and I/O pressure signals.
+- [Clements et al., “The Scalable Commutativity Rule” project](https://pdos.csail.mit.edu/archive/multicore/) — workload/interface reasoning about kernel scalability.

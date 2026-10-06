@@ -1,0 +1,292 @@
+---
+title: "Virtual Machines"
+course: "operating-systems"
+description: "Virtual-machine monitors, direct execution, VM exits, two-stage translation, virtual interrupts and devices, and the limits of VM isolation claims."
+prerequisites:
+  - "Privilege modes, traps, interrupts, and system-call control transfer"
+  - "Page tables, TLBs, faults, and memory permissions"
+  - "Device registers, DMA, interrupt delivery, and kernel protection"
+outcomes:
+  - "State the fidelity, resource-control, and efficiency obligations of a virtual-machine monitor."
+  - "Trace a guest instruction, VM exit, virtual interrupt, and two-stage address translation across guest, VMM, and hardware state."
+  - "Derive performance hypotheses from exit and translation events while distinguishing analytical models from measurements."
+  - "Evaluate VM isolation claims against VMM, device-model, firmware, hardware, and side-channel dependencies."
+omissions:
+  - "Nested virtualization, live migration protocols, confidential-computing attestation, device assignment/IOMMUs, and architecture-specific VM-control structures are bounded to interfaces or extension questions."
+  - "No numerical overhead is asserted without a pinned machine, VMM, guest, workload, and measurement method."
+estimatedMinutes: 330
+assessment: "Given an unfamiliar virtualized execution trace, identify every privilege and translation boundary, predict exits and faults, then defend a VMM design and measurement plan under explicit hardware and threat assumptions."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Virtual Machines
+
+A guest kernel believes it controls page tables, interrupt masking, and device registers. Running it as an ordinary host process cannot preserve that illusion: an unmodified privileged instruction may fail, silently expose host state, or alter resources belonging to another guest. Running it with unrestricted hardware privilege is worse—the first guest bug becomes a host compromise.
+
+A virtual-machine monitor (VMM) resolves the contradiction by giving most guest instructions direct hardware execution while retaining control of sensitive state. Hardware establishes a guest execution mode, records controlled exits, and inserts another authorization/translation stage below guest decisions. The abstraction is an entire machine, not merely another virtual address space.
+
+{/* Source tracking: The VMM requirements and sensitive-instruction condition synthesize Popek and Goldberg's 1974 primary paper; modern control and translation mechanisms are grounded in the ratified RISC-V Hypervisor extension, Intel's architecture manuals, and the Linux KVM API documentation. */}
+
+## The VMM contract
+
+Use these terms precisely:
+
+| term | role |
+| --- | --- |
+| host | execution environment that owns physical resources and runs the VMM stack |
+| guest | software stack presented with a virtual hardware interface |
+| VMM/hypervisor | trusted mechanism that multiplexes and controls virtual machines |
+| vCPU | schedulable virtual processor state: guest registers, virtual control state, pending events |
+| VM entry | transfer from VMM control into guest execution |
+| VM exit | hardware-mediated transfer from guest execution to VMM handling |
+| emulated device | software state machine implementing a guest-visible device contract |
+| paravirtual interface | guest-aware interface designed to avoid expensive hardware emulation paths |
+
+Popek and Goldberg's model gives three requirements:
+
+1. **Equivalence/fidelity:** software in the virtual environment has behavior equivalent to the real-machine contract, apart from permitted differences such as timing and resource availability.
+2. **Resource control/safety:** the VMM retains control of the resources it virtualizes.
+3. **Efficiency:** a statistically dominant subset of guest instructions executes without VMM intervention.
+
+For their abstract machine, a sufficient condition is that every sensitive instruction be privileged—one that traps when executed without the required privilege. Modern extensions supply explicit guest modes and intercept controls where older instruction sets made classical trap-and-emulate difficult. The theorem is model-specific; it is not a claim that every modern device, timing source, or microarchitectural effect is perfectly virtualized.
+
+### Retrieval checkpoint: why not emulate everything?
+
+State one correctness benefit and two costs of interpreting every guest instruction in software instead of using controlled direct execution.
+
+<details>
+<summary>Reveal the trade-off</summary>
+
+Interpretation gives the monitor an opportunity to inspect and define every instruction's effect, which can support architectures unlike the host or detailed instrumentation. It adds dispatch/translation work to every instruction and prevents the hardware from directly exploiting its normal execution pipeline and many caches. Controlled direct execution keeps VMM intervention concentrated on selected exits. It still requires the VMM to validate every exit path and preserve the guest-visible contract.
+
+</details>
+
+## Controlled direct execution
+
+Before VM entry, the VMM loads or identifies guest register state, virtual interrupt state, intercept policy, and the root of second-stage translation. Hardware executes guest instructions until an event configured to exit, a second-stage fault, an external interrupt requiring host handling, or an explicit hypercall transfers control to the VMM.
+
+<PlantUML code={`
+@startuml
+participant "host scheduler" as HS
+participant "VMM / vCPU thread" as VMM
+participant "virtualization hardware" as HW
+participant "guest kernel" as GK
+participant "device model" as DM
+HS -> VMM : schedule vCPU thread
+VMM -> HW : VM entry with guest state + controls
+HW -> GK : execute guest directly
+GK -> HW : write virtual device register
+HW -> VMM : VM exit(reason, guest PC, qualification)
+VMM -> VMM : validate exit and decode bounded operation
+VMM -> DM : update virtual device state
+DM --> VMM : completion requires virtual interrupt
+VMM -> HW : mark interrupt pending; resume guest
+HW -> GK : inject interrupt at permitted boundary
+GK -> GK : guest handler acknowledges virtual device
+@enduml
+`} />
+
+The exit record is untrusted input in the security sense: a malicious guest can deliberately trigger unusual exit reasons and operands. The VMM must validate addresses, lengths, device state, and transitions before touching host resources.
+
+### Worked trace: emulated MMIO completion
+
+Assumptions: a paravirtual block device exposes a queue-notify register in guest-physical MMIO space; that page is configured to exit on write; descriptors reside in guest memory; no device assignment is active.
+
+1. The guest driver places a request descriptor chain in guest memory.
+2. It executes a store to the notify register's guest virtual address.
+3. Guest page tables translate that address to the MMIO guest-physical page.
+4. The second-stage mapping marks the access for VMM handling, so hardware records a VM exit rather than issuing a host physical store.
+5. The VMM verifies the exit reason and guest-physical address, then the device model validates descriptor bounds and translates guest memory references through VMM-controlled mappings.
+6. After host I/O completes, the VMM marks a virtual interrupt pending.
+7. Hardware injects it only when guest interrupt state permits; the guest handler consumes the completion.
+
+This trace is one design, not universal VM I/O. Device assignment can let hardware DMA directly under IOMMU control; userspace device models can add process crossings; polling can replace interrupts. The guest-visible device contract and trust boundary must be stated before performance claims.
+
+### Application checkpoint: classify four events
+
+For each event, state whether it necessarily exits under all VMM designs, may execute directly, or depends on configured interception: ordinary integer addition, guest page-table update, second-stage permission failure, and virtual-device MMIO write.
+
+<details>
+<summary>Reveal the classification</summary>
+
+- Ordinary integer addition is intended to execute directly when it touches no intercepted state.
+- A guest page-table memory write may execute as an ordinary store, while later TLB-management or page-table use is virtualized; a VMM may instead write-protect and intercept page-table pages in a shadow-paging design.
+- A second-stage permission failure necessarily transfers to a more privileged handler because the guest cannot authorize access beyond the VMM mapping.
+- A virtual-device MMIO write depends on the device path: emulation usually arranges an exit, while a directly assigned device may be mapped for hardware access under IOMMU and interrupt-remapping controls.
+
+Answers that label every privileged-looking guest operation an exit have ignored hardware guest modes and configuration. Answers that let a second-stage fault remain entirely under guest control violate resource control.
+
+</details>
+
+## Two-stage address translation
+
+The guest controls a mapping from guest virtual address (GVA) to guest physical address (GPA). The VMM controls a second mapping from GPA to host physical address (HPA):
+
+$$
+GVA \xrightarrow{\text{guest page tables}} GPA
+\xrightarrow{\text{VMM-controlled stage}} HPA.
+$$
+
+The effective permission is the intersection of both stages. A guest cannot grant itself host memory by installing a permissive guest PTE when the second stage lacks that mapping.
+
+RISC-V's ratified H extension names the first guest-controlled translation VS-stage and the second G-stage. Other architectures use different names and control structures. The causal model is the same: guest ownership claims are subordinate to VMM resource mappings.
+
+### Worked translation: permission stops the write
+
+Assume 4 KiB pages:
+
+```text
+GVA 0x00004123
+guest PTE: GVPN 0x4 -> GPFN 0x2a, permissions R/W
+second-stage PTE: GPFN 0x2a -> HPFN 0x91, permission R only
+```
+
+Translation preserves the 12-bit offset `0x123`:
+
+$$
+GPA=(0x2a\ll12)+0x123=0x2a123,
+$$
+
+$$
+HPA=(0x91\ll12)+0x123=0x91123.
+$$
+
+A read may reach HPA `0x91123`. A write passes the guest PTE but fails the second-stage write check before host memory is modified. Hardware reports a guest-page or second-stage fault to the VMM with architecture-defined state; the VMM may inject a guest-visible fault, populate/mutate a mapping according to policy, or terminate the VM.
+
+### TLB composition and invalidation
+
+Walking guest page tables can itself require GPA-to-HPA translations for each page-table memory reference. Hardware therefore caches combined translations in TLB structures and may cache intermediate walk results. Changing either stage creates invalidation obligations scoped by virtual address, guest identifier, address-space identifier, and processor.
+
+A stale combined TLB entry after second-stage revocation can bypass the new VMM policy until invalidated. Correctness requires this ordering pattern:
+
+```text
+remove or restrict second-stage PTE
+perform architecture-required synchronization
+invalidate relevant guest/combined translations on every vCPU that may cache them
+wait for required completion
+only then reuse the physical page for another protection domain
+```
+
+The exact fence and shootdown instructions are architecture-specific. Reusing the page before remote invalidation completes is a cross-VM confidentiality failure, not a performance defect.
+
+### Transfer checkpoint: ballooning and stale translation
+
+A VMM reclaims guest frame `0x2a` through a balloon driver and immediately assigns its HPA to another VM. One vCPU still has a combined GVA-to-HPA TLB entry. Construct the violation and name the missing synchronization.
+
+<details>
+<summary>Reveal the cross-VM trace</summary>
+
+The old vCPU issues a load to GVA `0x4123`; its combined TLB entry bypasses both page-table walks and reaches the reassigned HPA. It reads the other VM's data. The VMM must revoke the second-stage mapping and complete architecture-required invalidation on every vCPU that can retain the translation before reassignment. Guest cooperation by the balloon driver is not sufficient evidence that hardware caches are empty.
+
+</details>
+
+## CPU state, time, and interrupts
+
+A vCPU has more state than general registers: control registers, pending exceptions, virtual interrupt controller state, timers, debug state, and architecture features. The VMM chooses which features to expose and must preserve migration and scheduling invariants for that virtual contract.
+
+Virtual time has at least three meanings:
+
+- execution time consumed while the vCPU runs;
+- wall or monotonic time expected by guest software; and
+- virtual timer deadlines delivered despite vCPU descheduling.
+
+Pausing a VM while exposing an unadjusted wall clock can produce a large apparent jump. Freezing wall time can violate external protocol expectations. The policy is part of the virtual platform contract.
+
+Interrupts add a three-way race: a host interrupt arrives, a virtual interrupt becomes pending, and the guest changes its interrupt-enable state. Hardware/VMM state must ensure no required event is lost and no interrupt is injected at a guest-forbidden point. Coalescing can improve throughput while worsening latency.
+
+### Worked scheduling trace: pending timer
+
+Guest timer deadline is virtual time 100 ms. At virtual time 96 ms, the host deschedules the vCPU for 20 ms of host wall time.
+
+- Under execution-time semantics, virtual time may remain 96 ms while descheduled; the timer fires after four more milliseconds of vCPU execution.
+- Under wall-correlated semantics, the deadline passes during descheduling; the VMM should mark the timer pending and inject it when the vCPU can receive interrupts.
+
+Neither behavior is universally correct. A real-time guest, benchmark, and general-purpose VM can require different contracts. Reporting only “timer latency 20 ms” without defining the clock is uninterpretable.
+
+## A cost model that refuses to impersonate data
+
+For a fixed workload, a diagnostic decomposition is
+
+$$
+T_{vm}=T_{direct}+N_{exit}C_{exit}+N_{walk}C_{walk}+C_{emulation}+C_{schedule}+C_{noise}.
+$$
+
+This is an accounting model. It predicts questions:
+
+- Does reducing exits lower time when exit handling dominates?
+- Do huge pages or better locality reduce second-stage walk cost?
+- Does batching device notifications trade completion latency for fewer exits?
+- Does vCPU overcommit add host scheduling delay?
+
+The symbols are not constants transferable across processors. `N_exit` must be counted for the actual workload; costs vary by exit reason, caches, mitigations, VMM path, device model, and hardware. Measure baseline and changed system on a pinned environment. A modeled reduction from 10,000 to 1,000 exits is not a measured 10× speedup.
+
+### Quantitative checkpoint
+
+An illustrative model assigns 1.2 µs to each of 20,000 exits and 0.15 µs to each of 40,000 expensive translation events; direct execution and all other costs total 70 ms. Compute modeled total. If an optimization halves exits but increases translation events to 100,000, compute the new modeled total and state what cannot be concluded.
+
+<details>
+<summary>Reveal the arithmetic and boundary</summary>
+
+Baseline overhead is $20{,}000(1.2\ \mu s)+40{,}000(0.15\ \mu s)=24+6=30$ ms, so modeled total is 100 ms. Changed overhead is $10{,}000(1.2\ \mu s)+100{,}000(0.15\ \mu s)=12+15=27$ ms, so modeled total is 97 ms.
+
+The model predicts a 3% reduction under fixed costs. It does not establish real exit costs, causal independence, cache effects, tail latency, throughput under contention, or statistical significance. Measurement could reverse the result if the new translation events alter locality or the assumed event costs are wrong.
+
+</details>
+
+## Isolation is a dependency chain
+
+A guest-kernel compromise gives the attacker guest-kernel authority. Containment then depends on:
+
+1. CPU virtualization controls and second-stage translation;
+2. VMM exit validation and memory-management code;
+3. virtual device models, often a large parser surface;
+4. host kernel and process isolation when device models run in userspace;
+5. IOMMU and interrupt remapping for assigned devices;
+6. firmware and hardware correctness; and
+7. the accepted side-channel model.
+
+A VM has a separate guest kernel, unlike a container. It does not remove the VMM or hardware from the trusted computing base. Shared caches, speculative state, memory deduplication, shared devices, and host resource exhaustion can create channels or denial of service even when architectural memory isolation holds.
+
+> **Counterexample.** “The guest cannot map host memory through its page tables” proves only that the guest-controlled translation stage is subordinate. It does not prove that an emulated device lacks an out-of-bounds write into VMM memory.
+
+## Synthesis: defend a virtual platform
+
+Design a VM platform for mutually distrustful build jobs. Each job needs two vCPUs, 4 GiB RAM, a read-only base image, a writable scratch disk, network access only to one artifact service, and a 15-minute deadline. Produce:
+
+- the virtual CPU, memory, device, clock, and shutdown contracts;
+- the guest-to-host authority boundary;
+- a two-stage translation and page-reuse protocol;
+- a virtual-device choice and its trusted-code impact;
+- resource limits and overload behavior;
+- functional and adversarial tests; and
+- a measurement plan separating exits, translation, I/O, and host scheduling.
+
+<details>
+<summary>Reveal the grading rubric</summary>
+
+- **Platform contract, 20%.** Specifies exposed ISA/features, clock semantics, device interfaces, interrupt behavior, and deadline termination.
+- **Memory safety, 20%.** States permission intersection, remote invalidation before page reuse, zeroing, and DMA/IOMMU obligations.
+- **Authority and isolation, 20%.** Constrains artifact network access, identifies VMM/device model/host/hardware dependencies, and does not claim side-channel elimination without evidence.
+- **Failure behavior, 15%.** Handles malformed descriptors, guest reset during I/O, host overcommit, lost device backend, and deadline expiry.
+- **Evidence, 15%.** Uses event counts and traces to test hypotheses, includes a native or no-change baseline, repeats measurements, and reports uncertainty.
+- **Boundary, 10%.** Separates modeled outcomes from measured results and names omitted nested, migration, confidential-computing, and passthrough concerns.
+
+A design that states “use KVM for security and performance” without a device, memory-reuse, and threat trace has not supplied a mechanism argument.
+
+</details>
+
+## Connections and deliberate boundary
+
+Virtual memory supplies the first translation stage; scheduling supplies vCPU time; device I/O supplies exit and completion paths; protection supplies authority over host resources; containers may isolate VMM processes but still share the host kernel; observability supplies event and latency evidence. VM design is the composition of those mechanisms.
+
+Nested virtualization, live migration, post-copy faults, confidential-VM attestation, direct device assignment, and microarchitectural side-channel defenses are omitted because each changes a core proof obligation. Their names are not substitutes for those proofs.
+
+## References & Further Reading
+
+- [Popek and Goldberg, “Formal Requirements for Virtualizable Third Generation Architectures”](https://doi.org/10.1145/361011.361073) — primary VMM model and virtualizability condition.
+- [RISC-V Ratified Specifications, Hypervisor Extension](https://docs.riscv.org/reference/isa/priv/hypervisor) — guest privilege, VS-stage, G-stage, and hypervisor control semantics.
+- [Intel 64 and IA-32 Software Developer's Manuals](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html) — official VMX, memory, interrupt, and protection architecture reference.
+- [Linux kernel documentation, KVM](https://docs.kernel.org/virt/kvm/index.html) — official KVM userspace API and architecture documentation.
+- [Linux kernel documentation, KVM API](https://www.kernel.org/doc/Documentation/virt/kvm/api.rst) — virtual machine, vCPU, memory, and device control interface.
+- [seL4 Reference Manual](https://docs.sel4.systems/projects/sel4/manual.html) — a contrasting capability and virtualization-support boundary where applicable.

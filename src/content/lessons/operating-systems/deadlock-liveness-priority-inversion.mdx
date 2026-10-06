@@ -1,0 +1,245 @@
+---
+title: "Deadlock, Liveness, and Priority Inversion"
+course: "operating-systems"
+description: "Wait-for graphs, lock ordering, prevention and recovery, starvation, livelock, and priority-aware synchronization."
+prerequisites:
+  - "Locks, atomics, and memory ordering"
+  - "Condition variables and semaphores"
+  - "CPU scheduling metrics and priorities"
+outcomes:
+  - "Construct resource-allocation and wait-for graphs and state when a cycle proves deadlock."
+  - "Distinguish deadlock, starvation, livelock, and priority inversion from a finite execution trace."
+  - "Prove a lock hierarchy excludes circular wait and identify operations that violate the hierarchy through callbacks or re-entry."
+  - "Evaluate prevention, avoidance, detection/recovery, timeout, priority inheritance, and priority ceiling under explicit assumptions."
+omissions:
+  - "Formal temporal logic, distributed deadlock detection, and complete real-time schedulability analysis require dedicated courses."
+  - "The lesson does not claim that one priority protocol makes arbitrary blocking code deterministic."
+estimatedMinutes: 330
+assessment: "Given an unseen multi-resource trace, derive the wait-for relation, classify the liveness failure, prove or refute a proposed prevention rule, and select a recovery or priority protocol with bounded claims."
+---
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+
+# Deadlock, Liveness, and Priority Inversion
+
+Thread A holds the process-table lock and requests the filesystem-cache lock. Thread B holds the filesystem-cache lock and calls a helper that requests the process-table lock. Both locks work exactly as designed: each excludes the other thread forever.
+
+Safety mechanisms can destroy progress when their acquisition dependencies form a cycle. Liveness analysis asks not only whether state remains valid, but whether required operations retain a path to completion.
+
+## Classify the stalled system before repairing it
+
+<MathStatement id="def-progress-failures" kind="definition" title="Four distinct progress failures">
+- **Deadlock:** a nonempty set of participants is permanently blocked because each waits for an event that only another participant in the set can cause.
+- **Starvation:** one participant can remain unable to make progress while other participants continue completing work.
+- **Livelock:** participants continue taking steps and changing protocol state, but the required operation never completes.
+- **Priority inversion:** a higher-priority task is blocked, directly or transitively, by work owned by a lower-priority task; the inversion is **unbounded** when unrelated intermediate-priority work can extend that delay without a protocol bound.
+</MathStatement>
+
+These categories overlap in symptoms, not definitions. “The service hung” supplies no diagnosis.
+
+| Trace | Classification | Decisive evidence |
+| --- | --- | --- |
+| A waits for L2 held by B; B waits for L1 held by A | deadlock | closed wait-for cycle; neither owner can release |
+| reader-preferred lock admits a stream of readers while one writer waits | possible writer starvation | system completes reads; one enabled class is postponed indefinitely |
+| two polite workers repeatedly release and retry in synchrony | livelock | both run and mutate state; neither commits |
+| high-priority H waits for a mutex held by low-priority L while medium M preempts L | priority inversion | M delays the owner that could unblock H |
+
+**Retrieval.** A low-priority thread is preempted for 2 ms while holding a mutex needed by a high-priority thread. Is that fact alone deadlock, starvation, or priority inversion?
+
+<details>
+<summary>Answer</summary>
+
+It is priority inversion during that interval. A finite delay does not establish deadlock or starvation. To claim an unbounded inversion, show that unrelated work can keep the owner from running without a protocol bound. To claim starvation, show an allowed infinite execution in which the waiting thread never completes while others do.
+
+</details>
+
+## Resource graphs expose ownership and demand
+
+{/* Source tracking: Deadlock conditions and resource-allocation framing synthesized from Coffman, Elphick, and Shoshani, “System Deadlocks,” 1971. */}
+
+A resource-allocation graph has thread nodes and resource nodes. An edge $T \rightarrow R$ means T requests R; an edge $R \rightarrow T$ means an instance of R is assigned to T. For single-instance reusable resources, collapse each request through the current owner into a wait-for edge $T_i \rightarrow T_j$.
+
+<PlantUML code={`
+@startuml
+left to right direction
+rectangle "thread A" as A
+rectangle "thread B" as B
+hexagon "process-table lock Lp" as LP
+hexagon "filesystem-cache lock Lf" as LF
+LP --> A : assigned
+A --> LF : requests
+LF --> B : assigned
+B --> LP : requests
+note bottom of A
+wait-for projection:
+A → B → A
+end note
+@enduml
+`} />
+
+In a wait-for graph where every resource has one instance and blocked requests cannot be withdrawn, a directed cycle is necessary and sufficient for deadlock among the cycle's threads. With multiple interchangeable instances, a cycle is necessary but may not be sufficient: a thread outside the cycle can release another instance and satisfy a request. State the resource model before interpreting a cycle.
+
+**Worked graph.** A holds one of two database connections and waits for a log slot. B holds the log slot and waits for a database connection. The graph contains A→B and B→A if edges are projected only through the currently observed connection owner. Yet a third thread C can return the second connection, allowing B to proceed. The projected cycle did not prove deadlock because the resource had another instance and another release path.
+
+The four classical conditions describe a resource regime in which deadlock can arise:
+
+1. **mutual exclusion:** at least one resource cannot be shared simultaneously;
+2. **hold and wait:** a participant holds resources while requesting more;
+3. **no forced preemption:** resources are released by their owners rather than safely taken away; and
+4. **circular wait:** a closed chain of participants each waits for a resource held by the next.
+
+All four are necessary for deadlock in that model. Their availability as system policies is not proof that a particular execution is deadlocked; construct the current ownership and wait relation.
+
+## A lock order is a proof, not a comment
+
+Assign every lock a rank in a strict total order and require a thread to acquire locks only in increasing rank. Suppose a deadlock cycle exists:
+
+$$
+T_1 \rightarrow L_2 \rightarrow T_2 \rightarrow \cdots
+\rightarrow T_k \rightarrow L_1 \rightarrow T_1.
+$$
+
+Each thread holds one lock and requests the next, so the order rule implies
+
+$$
+rank(L_1) < rank(L_2) < \cdots < rank(L_k) < rank(L_1),
+$$
+
+which is impossible for a strict order. The policy eliminates circular wait.
+
+<PlantUML code={`
+@startuml
+start
+:need locks for process P and inode I;
+:map each lock to documented rank;
+if (current maximum rank < next rank?) then (yes)
+  :acquire next lock;
+  :revalidate objects protected before acquisition;
+else (no)
+  :release, reorder, or redesign operation;
+  :never call through an unknown callback while holding the lock;
+endif
+:restore every protected invariant;
+:release locks;
+stop
+@enduml
+`} />
+
+**Worked transfer operation.** To move a page from source cache bucket 9 to destination bucket 3, the semantic order “source then destination” conflicts with numeric rank. Acquire bucket 3 then bucket 9, regardless of transfer direction. Because the source was inspected before both locks were held, revalidate that the page remains in bucket 9 and that the destination does not already contain it. Lock order prevents deadlock; revalidation preserves correctness.
+
+**Counterexample: hidden acquisition.** Code holds rank-20 lock L and invokes a callback supplied by another subsystem. The callback acquires rank-10 lock K. The local source file shows no descending acquisition, but the dynamic call graph violates the proof. Solutions include forbidding callbacks under L, splitting prepare/commit phases, passing immutable data, or making the callback's lock contract explicit and mechanically checked.
+
+**Application.** A recursive tree traversal acquires each child lock while retaining its parent lock. Does “parent before child” define a global order when another operation can rotate the tree?
+
+<details>
+<summary>Analysis</summary>
+
+Only if parent/child relationships remain stable for the entire acquisition and no operation needs child-before-parent. Rotation changes topology, so a relation derived from mutable structure may cease to be acyclic or consistently observed. Stable object IDs, address/rank order, lock coupling with revalidation, or a coarser tree lock can supply a defensible order. The answer must include object lifetime: comparing addresses is unsafe if objects can be freed and reused while a contender waits.
+
+</details>
+
+## Prevention, avoidance, and recovery solve different contracts
+
+> **Remark.** Prevention constrains every execution before a cycle forms; avoidance rejects grants that would remove all safe completion sequences; detection accepts risk and requires a credible rollback or victim policy.
+
+| Strategy | Required knowledge or power | Useful case | Boundary |
+| --- | --- | --- | --- |
+| prevent hold-and-wait | request all resources together or release before requesting more | small known resource set | lowers concurrency; all-or-nothing acquisition may be impossible |
+| prevent circular wait | stable global rank | kernel lock hierarchies | hidden callbacks and dynamic resources complicate ranking |
+| avoidance | declared maximum future demand; grant only if state remains safe | controlled batch/resource systems | inaccurate maximum claims make policy unusable or unsafe |
+| detection and recovery | observable allocation state plus a victim/rollback mechanism | transactions, killable jobs | kernel locks and irreversible I/O may not be safely revoked |
+| timeout | clock and abort path | bounds one caller's wait when abort is valid | does not prove the cycle is gone; synchronized retries can livelock |
+
+Avoidance asks whether there exists a **safe completion sequence** after a proposed grant. A state can be safe even when not every thread could complete next; at least one sequence lets all finish within declared maximum demands. Banker's-style reasoning is meaningful only when maximum claims and resource counts are trustworthy.
+
+**Worked safe-state check.** Two processes share three identical buffers. A holds one and may need at most one more; B holds one and may need at most two more. One buffer is free. Grant it to A: A can finish and release two, then B can obtain its remaining demand. Grant it to B: B would hold two and need one, A would hold one and need one, and none would be free; under the declared maxima, no completion sequence remains. The second grant is unsafe, though no one is deadlocked at the instant before either makes its next request.
+
+Detection does not imply recovery. Killing a process that holds a user-space mutex may be acceptable if robust-mutex recovery marks protected state inconsistent. Killing a kernel thread halfway through device programming may leave hardware and memory in an unrepairable protocol state. Define the rollback boundary before choosing “detect and abort.”
+
+## Backoff can replace deadlock with livelock
+
+Two transfer threads each `trylock` one account, fail on the second, release, wait exactly 1 ms, and retry. Their lockstep behavior can continue forever. There is no blocked cycle because each releases; there is no progress because both repeat the same collision.
+
+> **Warning.** Random delay reduces the probability of synchronized retry under a stated adversary; it is not a deterministic liveness proof. Fair queueing, asymmetric rank, a bounded retry followed by serialization, or scheduler-assisted parking can supply a stronger contract.
+
+Starvation requires a fairness argument. A test-and-set spin lock can repeatedly admit a nearby core while a remote core loses cache-line races. A reader-preferred reader/writer lock can admit an endless stream of readers ahead of a writer. FIFO admission bounds overtaking but can create convoying when the head waiter is descheduled. Liveness and throughput objectives can conflict.
+
+**Transfer.** Define a test that distinguishes deadlock from livelock without declaring every slow run a failure.
+
+<details>
+<summary>Test design</summary>
+
+Instrument protocol state and completed operations. In a controlled schedule, deadlock reaches a stable wait-for cycle with no enabled participant that can release a required resource. Livelock continues producing state transitions or retries while a completion counter remains unchanged. Use a finite watchdog only to trigger capture; classify from the captured wait-for and transition evidence. A wall-clock timeout alone cannot distinguish load, preemption, deadlock, and livelock.
+
+</details>
+
+## Priority inversion is a dependency-scheduling problem
+
+{/* Source tracking: Priority-inheritance behavior and nested propagation synthesized from the Linux rt-mutex design documentation and Sha, Rajkumar, and Lehoczky's priority protocol paper. */}
+
+Let H have high priority, M medium priority, and L low priority:
+
+1. L acquires mutex R.
+2. H becomes runnable, preempts L, then blocks on R.
+3. M becomes runnable. Because M outranks L, M runs.
+4. H is effectively delayed by M even though H and M share no lock.
+
+<PlantUML code={`
+@startuml
+hide footbox
+participant "high H" as H
+participant "medium M" as M
+participant "low L" as L
+participant "mutex R" as R
+L -> R : acquire
+H -> R : request; block behind L
+M -> M : runs while L cannot release R
+R --> H : wait extends with M's execution
+note over H,L
+Priority inheritance temporarily raises L to H's priority,
+so L can finish the critical section and unblock H.
+end note
+L -> R : release
+R --> H : acquire
+@enduml
+`} />
+
+Under **priority inheritance**, L temporarily inherits the highest priority of a waiter on R. If L itself blocks on a mutex owned by another task, the boost may propagate along that dependency chain. The boost is removed when the relevant dependency ends. This bounds interference from unrelated medium-priority work under the protocol's scheduler assumptions; it does not shorten L's critical section or cure a deadlock cycle.
+
+A **priority-ceiling** protocol associates a ceiling with each resource based on the highest-priority task that may lock it. Variants can prevent certain deadlocks and bound a task's blocking by restricting acquisitions according to active ceilings. Those guarantees assume fixed-priority scheduling, declared resource use, bounded critical sections, and the specified protocol. They are not inherited by an arbitrary mutex with a “priority” field.
+
+**Worked nested inversion.** H waits for R1 held by L. L waits for R2 held by X. Boosting only L does not help because X remains preemptible by M. A transitive PI implementation propagates H's effective priority through L to X; X releases R2, L resumes and releases R1, then H proceeds. The chain also shows why PI implementation needs cycle detection and careful priority restoration.
+
+## Synthesis studio: review a two-subsystem protocol
+
+A storage path acquires `inode_lock`, then calls quota code that acquires `quota_lock`. A quota-reclamation worker holds `quota_lock`, selects an inode, and acquires `inode_lock`. Both workers are killable; updating disk allocation is not reversible after submission. A high-priority flush thread can wait on either lock.
+
+Produce a design review containing:
+
+1. the current resource and wait-for graphs;
+2. the shortest deadlocking schedule;
+3. a stable global acquisition order or a phase split that removes nested ownership;
+4. revalidation needed after any release/reacquire boundary;
+5. why timeout-and-kill is unsafe after irreversible I/O submission; and
+6. whether priority inheritance is still useful after deadlock prevention.
+
+<details>
+<summary>Diagnostic review and rubric</summary>
+
+Current edges are `inode_lock → storage`, `storage → quota_lock`, `quota_lock → reclaim`, and `reclaim → inode_lock`, forming a cycle. One schedule lets storage hold inode and request quota while reclaim holds quota and requests inode.
+
+A global `quota_lock < inode_lock` order requires storage to acquire quota first or split into: inspect under inode; release; reserve quota; reacquire inode; revalidate inode version/allocation; commit; release. The split needs rollback for an unused reservation and must place irreversible I/O after the state needed to recover is durable. Timeout can free a caller but cannot safely revoke a submitted device action or assume protected metadata is consistent.
+
+Priority inheritance remains relevant because a high-priority flush can still block behind a low-priority legitimate owner even after cycles are removed. PI addresses scheduling interference, not circular wait.
+
+Rubric: graph and legal schedule 25%; prevention proof 25%; revalidation/rollback 20%; recovery boundary 15%; priority analysis 10%; explicit assumptions 5%.
+
+</details>
+
+## References & Further Reading
+
+- Edward G. Coffman Jr., M. J. Elphick, and Arie Shoshani, [“System Deadlocks”](https://doi.org/10.1145/356586.356588), *ACM Computing Surveys*, 1971.
+- Lui Sha, Ragunathan Rajkumar, and John P. Lehoczky, [“Priority Inheritance Protocols: An Approach to Real-Time Synchronization”](https://doi.org/10.1109/12.57058), *IEEE Transactions on Computers*, 1990.
+- Linux kernel documentation, [RT-mutex implementation design](https://docs.kernel.org/next/locking/rt-mutex-design.html).
+- The Open Group, [POSIX.1-2024 mutex priority protocols](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_mutexattr_setprotocol.html).
+- Remzi H. Arpaci-Dusseau and Andrea C. Arpaci-Dusseau, [*Operating Systems: Three Easy Pieces*, deadlock chapter](https://pages.cs.wisc.edu/~remzi/OSTEP/).

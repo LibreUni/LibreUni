@@ -8,10 +8,10 @@ const REPORT_DIR = path.resolve(process.cwd(), 'reports/ux');
 
 const TARGETS = [
   { app: 'main', name: 'Home (Modern Light)', url: 'http://127.0.0.1:4321/', theme: 'modern', mode: 'light' },
-  { app: 'main', name: 'C Lesson (Monochrome Light)', url: 'http://127.0.0.1:4321/lessons/c/intro.html', theme: 'monochrome', mode: 'light' },
-  { app: 'main', name: 'C Lesson (Monochrome Dark)', url: 'http://127.0.0.1:4321/lessons/c/intro.html', theme: 'monochrome', mode: 'dark' },
-  { app: 'main', name: 'Career Path (Monochrome Light)', url: 'http://127.0.0.1:4321/careers/computer-science-core.html', theme: 'monochrome', mode: 'light' },
-  { app: 'main', name: 'Career Path (Monochrome Dark)', url: 'http://127.0.0.1:4321/careers/computer-science-core.html', theme: 'monochrome', mode: 'dark' },
+  { app: 'main', name: 'Database Lesson (Monochrome Light)', url: 'http://127.0.0.1:4321/lessons/database-systems/relational-model.html', theme: 'monochrome', mode: 'light' },
+  { app: 'main', name: 'Database Lesson (Monochrome Dark)', url: 'http://127.0.0.1:4321/lessons/database-systems/relational-model.html', theme: 'monochrome', mode: 'dark' },
+  { app: 'main', name: 'Systems Foundations Path (Monochrome Light)', url: 'http://127.0.0.1:4321/careers/systems-foundations.html', theme: 'monochrome', mode: 'light' },
+  { app: 'main', name: 'Systems Foundations Path (Monochrome Dark)', url: 'http://127.0.0.1:4321/careers/systems-foundations.html', theme: 'monochrome', mode: 'dark' },
 ];
 
 const VIEWPORTS = [
@@ -640,6 +640,14 @@ test('generate UX health report', async ({ page }, testInfo) => {
         ].join(',');
 
         function isRendered(element) {
+          // Closed details descendants can retain layout rectangles even though
+          // they are not painted or interactive. Only their summary is visible.
+          for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+            if (ancestor.tagName === 'DETAILS' && !ancestor.open) {
+              const summary = ancestor.querySelector(':scope > summary');
+              if (!summary?.contains(element)) return false;
+            }
+          }
           const style = window.getComputedStyle(element);
           const rect = element.getBoundingClientRect();
           const hasDisabledPointerAncestor = Boolean(element.closest('.pointer-events-none,[aria-hidden="true"]'));
@@ -813,6 +821,14 @@ test('generate UX health report', async ({ page }, testInfo) => {
 
       const colorPairs = await page.evaluate(() => {
         function isRendered(element) {
+          // Closed details descendants can retain layout rectangles even though
+          // they are not painted or interactive. Only their summary is visible.
+          for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+            if (ancestor.tagName === 'DETAILS' && !ancestor.open) {
+              const summary = ancestor.querySelector(':scope > summary');
+              if (!summary?.contains(element)) return false;
+            }
+          }
           const style = window.getComputedStyle(element);
           const rect = element.getBoundingClientRect();
           return (

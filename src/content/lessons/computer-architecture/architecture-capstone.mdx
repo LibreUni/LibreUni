@@ -2,8 +2,29 @@
 title: "Architecture Capstone"
 course: "computer-architecture"
 description: "A quantitative design exercise connecting representation, execution, memory, and parallelism."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Design a processor-backed image pipeline whose representation, ISA, memory, DMA, parallelism, and fault contract are explicit."
+  - "Derive arithmetic, traffic, latency, and bottleneck claims and test them with a reproducible experiment."
+  - "Defend correctness, ownership, security, and alternatives with invariants, sensitivity analysis, and fault injection."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 900
+assessment: "Submit a defended image-pipeline design with architecture specification, trace/diagram, correctness proof, quantitative model, measured or simulated evidence, and fault-injection results."
 ---
 # Architecture Capstone
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+
+<Quiz client:load title="Start with the bottleneck"
+  question="What should a capstone specification identify before choosing a cache or pipeline?"
+  options={["A preferred ISA selected before measuring the intended workload", "A workload, correctness contract, and measurable latency, throughput, or energy budget", "The largest memory capacity available within the component catalog", "The highest clock frequency reported for any candidate processor"]}
+  correctIndex={1}
+  explanation="Hardware choices are meaningful relative to a workload and contract. A budget turns a design narrative into a falsifiable engineering argument."
+/>
 
 This capstone integrates representation, instruction-set semantics, datapath/control, pipelining, memory hierarchy, I/O, performance modeling, and parallel execution. The problem is to design a processor-backed image-filter service that accepts frames from a device, applies a configurable convolution and color transform, and emits results under a latency and energy budget. The goal is not to choose a fashionable CPU feature. It is to make a defensible architecture argument in which every abstraction, optimization, and failure mode is explicit.
 
@@ -11,7 +32,7 @@ This capstone integrates representation, instruction-set semantics, datapath/con
 
 Assume a sensor produces 1920×1080 frames at 30 frames per second. Pixels arrive as four 8-bit channels; the filter applies a 3×3 kernel to each channel, clamps results to 0–255, and writes an output frame. The system has a 2 GHz 64-bit RISC-style core, 32 KiB 4-way L1 data cache with 64-byte lines, 256 KiB private L2, shared DRAM bandwidth of 20 GB/s, and a DMA-capable input device. These are modeling assumptions, not facts about one real processor; change them if your design justifies it.
 
-The service must sustain the input rate, keep 99th-percentile frame processing below 25 ms after the complete frame is available, reject malformed descriptors, and never allow the device to write outside an owned buffer. The output may be delayed by buffering, but the system must state its queue bound and behavior when input outruns processing. An energy-aware design should report memory traffic and active-core time, not simply claim that SIMD is efficient.
+The service must sustain the input rate, keep 99th-percentile frame processing below 25 ms after the complete frame is available, reject malformed descriptors, and never allow the device to write outside an owned buffer. The output may be delayed by buffering, but the system must state its queue bound and behavior when input outruns processing. An energy-aware design should report memory traffic and active-core time rather than claim that SIMD is efficient.
 
 ## Baseline arithmetic model
 
@@ -21,13 +42,22 @@ This count is a first estimate, not a timing result. If the kernel coefficients 
 
 **Worked arithmetic-intensity estimate.** A naive output pixel reads 9 input pixels and writes one output pixel. At four bytes per pixel, ignoring reuse, that is 40 bytes and roughly 68 arithmetic operations, giving 1.7 operations per byte. With 20 GB/s of DRAM bandwidth, the roofline bandwidth ceiling is about 34 GFLOP/s-equivalent operations per second under this simplified count. Tiling can reuse input values from cache and raise effective intensity; it cannot be credited until the tile fits and the access trace is shown.
 
+<CaseStudy client:load
+  title="Connect the claim to falsifiable evidence"
+  scenario="A capstone claims a new prefetcher improves performance by reducing memory stalls, but reports only end-to-end speedup on one input."
+  question="Which evidence package can test the proposed mechanism?"
+  options={["Defined workloads, baseline controls, stall events, coverage, accuracy, and repeated timing", "A larger prefetcher diagram, additional labels, and the fastest timing result", "A vendor comparison, product history, and a list of supported instructions", "A source-code diff, total line count, and one screenshot of execution"]}
+  correctIndex={0}
+  explanation="The mechanism predicts changes in stalls and prefetch quality before end-to-end speedup. Controlled workloads and repeated measurements connect those intermediate effects to the final claim and reveal harmful cases."
+/>
+
 ## Representation and ISA choices
 
 Specify whether pixels are stored interleaved RGBA or in separate channel planes. Interleaved layout is convenient when all channels of one pixel are processed together; planar layout can improve SIMD scans of one channel and simplify separable filters. State byte order, alignment, signedness of coefficients, accumulator width, and saturation behavior. A signed 8-bit coefficient multiplied by an unsigned 8-bit pixel can require a signed 32-bit accumulator to avoid intermediate overflow.
 
 The ISA needs loads/stores, integer or vector multiply-add, widening arithmetic, min/max or clamp, pointer increments, branches or masked operations, and a memory-ordering primitive for DMA ownership. If coefficients are programmable, define their encoding and validation. If the vector instruction saturates, verify whether it rounds, truncates, or wraps; using modular arithmetic where saturation is required produces visually subtle but systematic errors.
 
-**Worked overflow bound.** If pixels are at most 255 and kernel coefficients have absolute value at most 127, one channel’s absolute convolution sum is at most $9\cdot255\cdot127=291,465$, which fits in signed 19 bits but not signed 16 bits. A 32-bit accumulator provides margin for bias, intermediate transforms, and implementation variation. The final result must be rounded and clamped after the full sum, not after each product unless the specification permits that approximation.
+**Worked overflow bound.** If pixels are at most 255 and kernel coefficients have absolute value at most 127, one channel’s absolute convolution sum is at most $9\cdot255\cdot127=291,465$. That requires 19 magnitude bits plus a sign bit (20 signed bits): signed 19-bit range ends at 262,143. A 32-bit accumulator provides margin for bias, intermediate transforms, and implementation variation. The final result must be rounded and clamped after the full sum, not after each product unless the specification permits that approximation.
 
 ## Datapath and pipeline implications
 

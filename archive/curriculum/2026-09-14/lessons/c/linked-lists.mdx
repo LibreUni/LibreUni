@@ -1,0 +1,108 @@
+---
+title: "Linked Lists, Invariants, and Ownership"
+course: c
+description: "Implement a singly linked list while preserving reachability, ownership, and cleanup invariants."
+prerequisites:
+  - "Structures, pointers, dynamic storage, and loops"
+outcomes:
+  - "State a linked-list representation invariant"
+  - "Insert, traverse, and destroy nodes without losing ownership"
+  - "Compare pointer-heavy lists with contiguous sequences under a workload model"
+omissions:
+  - "Concurrent lists and lock-free reclamation are deferred to advanced systems work."
+estimatedMinutes: 60
+assessment: "Review an insertion/deletion trace and identify the first step that breaks reachability or ownership."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Linked Lists, Invariants, and Ownership
+
+A linked list trades contiguous storage and indexed access for local insertion and a representation that can grow node by node. The trade is worthwhile only when its update pattern or lifetime model justifies extra pointers, allocations, and cache misses.
+
+<Quiz client:load
+  title="State the invariant"
+  question="Which statement belongs to a singly linked-list invariant?"
+  options={["Every pointer in memory is part of the list", "Starting at head and following next eventually reaches NULL without revisiting a node", "The list supports constant-time indexing", "Every node is adjacent to the previous node"]}
+  correctIndex={1}
+  explanation="Reachability and acyclicity are correctness properties. Contiguity and constant-time indexing are not properties of a singly linked list."
+/>
+
+## Representation and ownership
+
+```c
+struct node {
+    int value;
+    struct node *next;
+};
+```
+
+A list with `head == NULL` is empty. A valid list has a finite acyclic chain from `head` to `NULL`; each reachable node is live and owned by the list. The list owner is responsible for destroying every reachable node exactly once. An external cursor is a borrow and must not free a node behind the list's back.
+
+## Insertion and deletion
+
+Head insertion is constant time because it changes two links:
+
+```c
+new_node->next = list->head;
+list->head = new_node;
+```
+
+For deletion, save the successor before releasing the current node. If a list maintains a tail pointer or length, update those fields in the same operation or the invariant is broken. A failure to allocate must leave the old list unchanged; do not publish a partially initialized node.
+
+<CodeExercise client:load
+  title="Preserve the successor"
+  code={`struct node *old = head;
+head = old->[!blank!];
+free(old);`}
+  answers={["next"]}
+  explanation="Read the successor while old is still alive, then release old. Dereferencing old after free would be a use-after-free."
+/>
+
+<CodeRunner client:load
+  title="Traverse and release"
+  language="c"
+  code={`#include <stdio.h>
+#include <stdlib.h>
+
+struct node { int value; struct node *next; };
+
+int main(void) {
+    struct node third = {3, NULL};
+    struct node second = {2, &third};
+    struct node first = {1, &second};
+    for (struct node *p = &first; p != NULL; p = p->next)
+        printf("%d ", p->value);
+    putchar(10);
+    return 0;
+}`}
+  output="1 2 3"
+/>
+
+The runner uses automatic nodes to keep cleanup outside the demonstration. A heap-backed list needs a destructor that advances before `free`.
+
+## Cost and locality
+
+Indexing the kth node costs Θ(k) pointer traversals. Inserting at a known node can be O(1), but finding that node is not. Nodes allocated far apart cause dependent loads and cache misses; an array or a growable vector may win even when both algorithms are O(n). Choose from a workload and mutation pattern, not an operation table alone.
+
+## Transfer exercises
+
+1. Prove that head insertion preserves acyclicity when the new node is freshly allocated and its next pointer is the old head.
+2. Add a length field and list the updates needed for insert-empty, insert-nonempty, and delete-last.
+3. Explain how a shared cursor becomes dangling after deletion.
+4. Compare a list and a vector for repeated append followed by indexed reads.
+
+### Diagnostic solutions
+
+1. The new node points into the old finite acyclic chain and no old node points to the new node, so following next still reaches NULL without a cycle.
+2. Increment/decrement length on successful mutation; set both head and tail for the first node; set both to NULL after deleting the final node.
+3. The cursor designates an object whose lifetime ended. Invalidate cursors or use a stable-handle/reclamation protocol if external references are required.
+4. A vector gives amortized constant append and constant indexed reads with locality. A list gives cheap insertion after a known node but linear indexed reads and allocation overhead.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.2.5 and §6.5.2.3](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [SEI CERT C MEM rules](https://wiki.sei.cmu.edu/confluence/display/c/MEM30-C.+Do+not+access+freed+memory)
+* [Open Data Structures: linked lists](https://opendatastructures.org/ods-cpp/3_Linked_Lists.html)

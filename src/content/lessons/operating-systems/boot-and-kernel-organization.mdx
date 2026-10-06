@@ -1,0 +1,267 @@
+---
+title: "Boot and Kernel Organization"
+course: "operating-systems"
+description: "Trace a RISC-V machine from its firmware handoff to concurrent scheduler loops, deriving initialization order, publication, and kernel subsystem boundaries from explicit invariants."
+prerequisites:
+  - "RISC-V privilege modes, control and status registers, and calling convention"
+  - "Linking, ELF sections, static storage, and C initialization"
+  - "Page tables, interrupts, and acquire-release synchronization at a conceptual level"
+outcomes:
+  - "Reconstruct the xv6 rev5 boot path from QEMU's entry address through machine-mode setup, supervisor initialization, and per-hart scheduling."
+  - "Derive an initialization dependency graph and distinguish construction, publication, and per-hart activation."
+  - "Explain why a source-code module boundary is not necessarily a protection or fault-containment boundary."
+  - "Diagnose an early-boot failure from register, symbol, and initialization-order evidence rather than from boot folklore."
+omissions:
+  - "UEFI services, ACPI, device-tree parsing, secure/measured boot, dynamic kernel modules, and platform-specific firmware are represented only by their handoff contracts."
+  - "Linker relocation, physical-memory discovery, NUMA bring-up, and production Linux initialization are not implemented."
+  - "Microkernel, hybrid-kernel, and exokernel designs are compared only where an address-space or authority boundary changes the failure analysis."
+estimatedMinutes: 330
+assessment: "Given an unfamiliar multiprocessor boot trace and subsystem dependency graph, identify the violated precondition, prove a safe publication order, and redesign one module boundary with an explicit protection argument."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
+# Boot and Kernel Organization
+
+Hart 0 builds the kernel page table, writes `started = 1`, and enables paging. Hart 1 observes `started == 1` and immediately loads a stale page-table root because the compiler or CPU made the flag visible before the page-table writes. The source order looks correct; `volatile` would still not create inter-hart publication. Early boot is a concurrent protocol with fewer diagnostics than ordinary code, not a magical phase exempt from memory ordering.
+
+Boot has one governing invariant:
+
+> **Activation invariant.** No execution context may use a facility until the facility's state is constructed, its dependencies are live, and publication makes those writes visible to that context.
+
+{/* Source tracking: The concrete startup protocol was checked against xv6 tag `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`, in `entry.S`, `start.c`, `main.c`, `kernel.ld`, and `Makefile`. The Linux comparison uses the official RISC-V boot requirements. RISC-V privilege transitions follow the official Privileged Architecture. */}
+
+### Failure localization before terminology
+
+For the stale-page-table scenario, separate the failure into three questions: Was the table constructed? Was its address published? Was the consuming hart activated only after an acquire operation? State one observation that distinguishes each failure.
+
+<ExerciseSolution hint="A ready flag can have the correct value while the object it announces is not safely visible.">
+Construction is tested by inspecting the producing hart's table memory and root value before publication. Publication is tested by verifying a release operation occurs after all table writes and that the announced root is the one later loaded. Activation is tested by verifying each secondary hart performs a matching acquire before reading the table or enabling translation. A zero or malformed PTE suggests construction; a wrong root suggests publication of identity; correct producer memory but stale consumer data suggests missing synchronization. A debugger that halts all harts may accidentally add ordering and hide the defect.
+</ExerciseSolution>
+
+## Reset, handoff, entry, and activation
+
+These stages must be named by contract rather than by a universal product sequence.
+
+> **Definition.** A boot stage is an ownership transfer with explicit postconditions; a product name such as firmware or bootloader does not supply those postconditions by itself.
+
+| Stage | Producer's obligation | Kernel may assume | Kernel must not assume |
+| --- | --- | --- | --- |
+| Reset/firmware | Establish architecture-defined reset state and platform firmware behavior | Only the documented platform contract | A C stack, a page table, or discovered RAM unless promised |
+| Loader/firmware handoff | Place the image and provide entry parameters | Entry PC, image layout, register/CSR state explicitly specified | UEFI, BIOS, or device tree on every platform |
+| Assembly entry | Establish stack and minimal execution environment | Linker-defined symbols and handoff registers | Allocator, interrupts, or global constructors are ready |
+| Privilege setup | Configure delegation, protection, timer access, and return target | CSRs written by the boot code | Supervisor mode is active before `mret` |
+| Global construction | Initialize shared allocators, tables, drivers, and the first process | Single bootstrap owner where the protocol guarantees it | Secondary harts see writes before publication |
+| Per-hart activation | Install hart-local translation, trap vector, and interrupt routing | Published global state | Another hart configured this hart's local CSRs |
+
+“Bootloader” is therefore a role, not one mandatory binary. In the xv6 rev5 QEMU configuration, QEMU loads the kernel at physical `0x80000000` with `-bios none` and starts each hart at `_entry`. A production RISC-V Linux kernel expects a different documented handoff, including hart ID and device-tree address registers and `satp=0`.
+
+### Retrieval — identify the contract, not the brand
+
+A platform jumps to the kernel with translation disabled, `a0=hartid`, `a1=device_tree_pa`, and interrupts masked. Which facts belong in a portable kernel-entry contract, and which would be unjustified additions?
+
+<ExerciseSolution>
+The four stated facts belong in the contract: entry PC by implication, translation disabled, register arguments, and interrupt state. It is unjustified to infer UEFI remains callable, RAM begins at a particular address, all harts enter simultaneously, `.bss` is zeroed, or a stack exists. Those may be supplied by a specific image format or loader, but each needs separate evidence. The reasoning gap is replacing an explicit handoff with a familiar PC boot story.
+</ExerciseSolution>
+
+## Worked trace: one xv6 hart reaches C
+
+Xv6 rev5 fixes enough details for an exact trace.
+
+| Cut | Mode | PC / operation | Stack and translation | Established fact |
+| ---: | --- | --- | --- | --- |
+| 0 | M | QEMU jumps to `_entry` at `0x80000000` | no xv6 stack; paging off | image placement matches `kernel.ld` |
+| 1 | M | `_entry` reads `mhartid` | selects one 4096-byte slice of `stack0` | C calls cannot collide across harts |
+| 2 | M | `call start` | valid aligned stack; paging off | C machine-mode setup can run |
+| 3 | M | `start` writes `mstatus.MPP=S`, `mepc=main`, `satp=0` | same stack | `mret` target and next privilege fixed |
+| 4 | M | delegates traps, configures PMP, timer access, and `tp=hartid` | same stack | supervisor kernel receives intended events/resources |
+| 5 | S | `mret` transfers to `main` | paging still off | C supervisor initialization begins |
+
+The stack formula is
+
+$$
+sp = \operatorname{addr}(stack0) + (hartid+1)\cdot4096.
+$$
+
+The `+1` makes `sp` point just above the hart's downward-growing stack slice. If hart 0 used `stack0 + 0`, its first push would write before the allocation.
+
+{/* Source tracking: Addresses, stack size, CSR setup, and `mret` path are derived directly from xv6 rev5 `kernel/entry.S`, `kernel/start.c`, `kernel/kernel.ld`, and the Makefile's QEMU options. */}
+
+<PlantUML code={String.raw`
+start
+:QEMU loads kernel at 0x80000000;
+:each hart enters _entry in M-mode;
+:select stack0 slice from mhartid;
+:start() configures delegation, PMP, timer, tp;
+:mret to main() in S-mode;
+if (hart id is zero?) then (bootstrap)
+  :construct allocator and kernel page table;
+  :activate paging and trap vector on hart 0;
+  :initialize process, interrupt, file, and device state;
+  :create first user process;
+  :full fence, then volatile started = 1;
+else (secondary)
+  :spin on volatile started, then full fence;
+  :activate paging and trap vector on this hart;
+endif
+:enter per-hart scheduler loop;
+stop
+`} />
+
+The diagram encodes a partial order, not a duration chart. Global construction occurs once; CSR activation occurs per hart. Rev5 implements publication with `__sync_synchronize()` before the bootstrap hart's volatile flag store and another `__sync_synchronize()` after a secondary observes the flag. Those full compiler/hardware fences play the ordering role; the volatile access alone would not publish the preceding object initialization. This is the concrete rev5 protocol, not a claim that the source uses C11 release/acquire atomics.
+
+### Application — corrupt the entry stack
+
+Assume `NCPU=8` but `stack0` reserves only four 4096-byte slices. Explain two distinct failure signatures: hart 5 enters C, and hart 5 never enters C because only four harts are started.
+
+<ExerciseSolution>
+If hart 5 enters, its computed SP points beyond `stack0`; a call or spill corrupts adjacent static storage, often producing delayed, symbol-dependent failures. If the platform starts only harts 0–3, the undersized array is latent: no current access is out of bounds, but the binary violates its declared `NCPU` configuration. A correct audit checks both allocated capacity and the actual set of entering hart IDs; “it boots on my four-core QEMU command” does not prove the formula safe.
+</ExerciseSolution>
+
+## From machine mode to a supervisor kernel
+
+`mret` uses `mstatus.MPP` to choose the next privilege and `mepc` as the next PC. xv6 also arranges that supervisor mode can access RAM through PMP, receives delegated exceptions and interrupts, can read the time counter, and receives timer events. These are independent permissions. Setting the return privilege does not automatically delegate traps or grant physical-memory access.
+
+> **Warning.** Successful control transfer into S-mode proves neither RAM authority nor interrupt delegation; each CSR establishes a separate part of the execution contract.
+
+The trap delegation values in a teaching kernel are a platform choice, not a portable recipe. A firmware environment may retain machine-mode responsibilities. A secure monitor may deliberately withhold regions. A robust explanation lists the authority each CSR grants rather than presenting a block of writes as ceremony.
+
+{/* Source tracking: RISC-V `mstatus`, `mepc`, delegation, PMP, counter-enable, and timer compare behavior are grounded in the official Privileged Architecture. The selected values are xv6 rev5 platform policy, not generalized. */}
+
+### Transfer — one missing machine-mode permission
+
+Supervisor code reaches `main` but faults on its first RAM access. `satp=0`, the physical address is correct, and `mstatus.MPP` was set to S. Which machine-mode setup should be investigated first, and why does successful `mret` not exonerate it?
+
+<ExerciseSolution>
+Investigate PMP configuration. The privilege return and physical-memory authorization are separate controls: `mret` can enter S-mode while PMP denies S-mode access to the RAM region. Check `pmpaddr0`/`pmpcfg0` and firmware-reserved ranges before blaming the page table, which is disabled. The failure reveals a missing authority grant, not an incorrect control-transfer target.
+</ExerciseSolution>
+
+## Global construction is a dependency graph
+
+On the bootstrap hart, xv6 rev5 performs this high-level order:
+
+```text
+console → physical allocator → kernel page table → enable paging
+        → process table → trap state → interrupt controller
+        → buffer cache → inode/file tables → disk → first process
+        → publish started
+```
+
+The real graph branches. Console output can precede the allocator. Kernel stacks require physical pages and mappings. Per-hart trap-vector installation requires a valid vector address on that hart. The first user process needs process-table and filesystem-facing state. The scheduler needs a process table and a valid per-hart context, but it need not wait for every optional driver in a different design.
+
+<PlantUML code={String.raw`
+component "physical allocator" as PA
+component "kernel page table" as PT
+component "per-process kernel stacks" as KS
+component "process table" as PR
+component "trap vectors" as TV
+component "interrupt controller" as IC
+component "buffer cache" as BC
+component "inode + file tables" as FS
+component "disk driver" as DD
+component "first process" as INIT
+component "scheduler" as SCH
+
+PA --> PT : supplies table pages
+PA --> KS : supplies stack pages
+PT --> KS : maps guarded stacks
+KS --> PR : process slots name stacks
+PR --> INIT : allocates process state
+TV --> INIT : user return needs trap path
+IC --> DD : routes completion interrupts
+BC --> FS : caches filesystem blocks
+DD --> FS : supplies persistent blocks
+FS --> INIT : resolves / and /init
+PR --> SCH : exposes RUNNABLE state
+INIT --> SCH : creates runnable work
+
+note right of SCH
+  An arrow means "must be usable before",
+  not "must live in another source file."
+end note
+`} />
+
+The graph is more useful than memorizing calls because it supports counterfactual design. A RAM-only first process could remove the disk/filesystem dependency. A demand-loaded driver could move activation later. Every moved node needs a revised error and concurrency contract.
+
+### Dependency exercise — parallelize without guessing
+
+A team wants to initialize the buffer cache, inode table, and interrupt controller on secondary harts before `started` is published. Give a safe plan or reject the proposal. State the ownership and publication needed for each parallel task.
+
+<ExerciseSolution>
+A safe plan needs more than graph independence. The allocator and kernel mappings must already be published to workers. Each initialization task must have exclusive ownership of its state or internal synchronization; the bootstrap hart needs a join/acquire before any consumer runs. Buffer-cache construction and inode-table construction may contend for allocator state and may have an ordering edge if inode initialization assumes cache locks exist. Interrupt-controller setup often has both one-time global and per-hart parts, so assigning it wholesale to one worker is incorrect. Reject the proposal unless these contracts are exposed. Parallelizing a short teaching-kernel boot is unlikely to justify the proof burden, but the decision should follow dependencies and measurements, not instinct.
+</ExerciseSolution>
+
+## Worked failure trace: publishing before the first process
+
+Suppose rev5's `__sync_synchronize(); started = 1` publication sequence is moved immediately after the page table is initialized, before `procinit()` and `userinit()`.
+
+> **Example.** Correct fence/flag publication can announce the wrong readiness predicate perfectly; visibility does not strengthen what the predicate means.
+
+1. Hart 1 observes nonzero `started`, crosses rev5's consumer-side full fence, safely observes the page table, installs translation and its trap vector, then calls `scheduler()`.
+2. The scheduler scans `proc[]` while hart 0 is still initializing process locks and states.
+3. Hart 1 may acquire an uninitialized lock, observe zero-filled state that happens to resemble an enum member, or race with `userinit()` publishing the first runnable process.
+4. The fence/flag/fence ordering has worked; the published predicate did not imply that process state was initialized.
+
+The repair is not “use stronger memory ordering.” Publish a condition whose truth implies every stated dependency of the consumer, or use separate phase barriers. Synchronization orders writes; it does not invent the right invariant.
+
+### Counterexample — a successful boot that is still wrong
+
+Hart 1's scheduler sees no runnable process, executes `wfi`, and later wakes on a timer after hart 0 has created the first process. The system appears to work. Why must the early publication still be rejected?
+
+<ExerciseSolution>
+The path relies on accidental zero-state interpretations, interrupt timing, and unsynchronized concurrent initialization. A different compiler, hart count, timer phase, or lock representation can expose corruption. Eventual wakeup does not prove process-lock construction or state publication was race-free. The correct criterion is the activation invariant across all allowed executions, not one observed boot transcript.
+</ExerciseSolution>
+
+## Kernel organization: call boundary, protection boundary, fault boundary
+
+xv6 is monolithic: process management, virtual memory, filesystems, and drivers execute in one supervisor address space. Source files and C interfaces improve reasoning, but a wild write in one subsystem can mutate another subsystem's state.
+
+> **Definition.** A module boundary organizes code; a protection boundary mediates authority; a fault boundary limits propagation. One design edge may provide any subset of the three.
+
+Compare three kinds of boundary:
+
+| Boundary | Enforcement mechanism | Failure contained? | Typical cost |
+| --- | --- | --- | --- |
+| C module/API | language and build conventions | not against memory corruption in privileged C | ordinary call |
+| in-kernel compartment | memory protection, language isolation, or control-flow enforcement | depends on mechanism and shared authority | checked call / mapping change |
+| user-space service | separate address space plus IPC authority | direct memory faults usually contained; protocol faults may propagate | trap, scheduling, copying or mapping |
+
+Moving a driver to user space can reduce direct kernel-memory authority, but it adds IPC, lifecycle, and recovery paths. A monolithic call can be fast and simple, but every privileged parser joins the TCB. “Microkernel is secure” and “monolithic is fast” are incomplete claims until the workload, hardware, and authority graph are specified.
+
+{/* Source tracking: xv6's monolithic organization and subsystem layering are synthesized from Chapters 2 and 4–8 of the official xv6 book. No production-kernel equivalence is claimed. */}
+
+### Synthesis — isolate a fallible parser
+
+A new kernel feature parses an untrusted, variable-length device manifest during boot. Design two placements: privileged in-process and isolated service. For each, state the earliest boot phase, required authority, failure recovery, and evidence needed to choose.
+
+<ExerciseSolution>
+The privileged design can run after a bounded input buffer, allocator, and diagnostics exist. Give it read-only access to the manifest and a narrow builder API rather than raw global pointers; parse into temporary state, validate references and lengths, then commit. Failure can reject the device or stop boot, but memory corruption remains in the TCB. The isolated design requires address spaces, IPC, scheduling, and a way to hand over a bounded buffer, so it must run later or use a pre-kernel compartment mechanism. It can be restarted on a fault, but the kernel must validate the returned object graph and handle service absence. Measure boot latency and memory cost, fuzz both protocol boundaries, and audit authority. Isolation is valuable only if the trusted consumer does not blindly accept malicious parsed output.
+</ExerciseSolution>
+
+## Boot forensics assessment
+
+Analyze a supplied trace containing: entry register dump, linker symbols, per-hart PCs, CSR values, publication events, and the subsystem dependency graph. Submit:
+
+> **Remark.** Diagnosis is graded at the first violated precondition, not at the final panic or missing console line.
+
+1. the last cut satisfying the activation invariant;
+2. the first violated precondition and two competing hypotheses;
+3. one observation that discriminates those hypotheses;
+4. a corrected partial order with a release/acquire or join argument;
+5. one boundary redesign and its authority consequences.
+
+**Rubric (20 points).** Exact handoff reconstruction 4; dependency reasoning 5; publication proof 4; discriminating diagnosis 3; boundary/TCB analysis 3; explicit uncertainty 1. Award no publication points for adding fences without naming the predicate they publish.
+
+## Deliberate omissions
+
+This boot model does not teach PC-compatible BIOS/UEFI chronology, executable relocation, device-tree parsing, ACPI, entropy initialization, KASLR, secure boot, measured boot, initramfs, kernel modules, suspend/resume, or hotplug. The Linux boot reference is used only to demonstrate that a production kernel consumes a documented platform contract different from xv6's QEMU contract. Detailed microkernel architecture, formal component isolation, and multicore memory-model proofs require dedicated mechanisms rather than labels.
+
+> **Remark.** None of these omitted facilities may be assumed in the xv6 traces unless it is added to the handoff contract explicitly.
+
+## References & Further Reading
+
+1. MIT PDOS, xv6 rev5 [`kernel/entry.S`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/entry.S), [`kernel/start.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/start.c), [`kernel/main.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/main.c), [`kernel/kernel.ld`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/kernel.ld), and [`Makefile`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/Makefile).
+2. MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf), Chapters 1–2.
+3. RISC-V International, [*The RISC-V Instruction Set Manual, Volume II: Privileged Architecture*](https://docs.riscv.org/reference/isa/_attachments/riscv-privileged.pdf), machine/supervisor privilege, delegation, PMP, and return-from-trap sections.
+4. Linux kernel documentation, [RISC-V Kernel Boot Requirements and Constraints](https://docs.kernel.org/arch/riscv/boot.html), for a production handoff comparison rather than an xv6 requirement.

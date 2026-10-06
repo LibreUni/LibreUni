@@ -1,85 +1,167 @@
 ---
-title: "Normalization"
+title: "Normalization: decompose without losing facts"
 course: "database-systems"
-description: "1NF through BCNF as controlled redundancy elimination."
+description: "Use functional dependencies to remove repeated facts, prove a binary decomposition is lossless, and choose deliberately between BCNF and dependency preservation."
+prerequisites:
+  - "Functional dependencies, closure, superkeys, and candidate keys"
+  - "Relation grain, joins, and foreign-key constraints"
+outcomes:
+  - "Identify a dependency that causes an update, insertion, or deletion anomaly at a stated relation grain."
+  - "Decompose a relation on a violating dependency and test the binary lossless-join criterion."
+  - "Explain when a 3NF design may be preferred to a stricter BCNF design."
+omissions:
+  - "Multivalued dependencies, 4NF/5NF, and physical denormalization performance work are deferred."
+estimatedMinutes: 480
+assessment: "Given a relation and functional dependencies, identify its key, choose a decomposition, show why it is lossless or lossy, and document a dependency-preservation trade-off."
 ---
-# Normalization
 
-Normalization decomposes relations to reduce update, insertion, and deletion anomalies while preserving dependencies and enabling lossless reconstruction. 3NF tolerates some dependencies for key preservation; BCNF requires every nontrivial determinant to be a superkey.
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import MathStatement from '../../../components/MathStatement.astro';
 
-Decomposition is not automatically safe: a lossy split can invent tuples when joined. Losslessness and dependency preservation are separate tests.
+# Normalization: decompose without losing facts
 
-## Why redundancy creates anomalies
+Normalization is not a ritual of splitting tables. It asks whether one tuple stores several facts whose values can change independently. If it does, a dependency tells us where the repetition comes from and a lossless decomposition tells us whether we can separate the facts safely.
 
-Suppose Enrollment(student, course, instructor, room) stores one row per student-course offering while course and term determine instructor and room. The same offering fact is repeated for every student. If an instructor changes, every copy must change; missing one creates contradictory answers. A course offering cannot be inserted until at least one student enrolls if the schema has no separate offering relation. Deleting the last enrollment can erase the only record that the offering existed. These update, insertion, and deletion anomalies are symptoms of multiple independent facts sharing one relation.
+> **Definition.** A relation has an update anomaly when one logical fact is stored in multiple tuples and those copies can disagree. Normalization uses dependencies to move each independently determined fact to a relation whose key actually determines it.
 
-Normalization separates facts according to their determinants. It does not mean “split every table as far as possible.” A decomposition must preserve the intended information, avoid spurious tuples when relations are joined, and ideally preserve dependencies so constraints can be checked without reconstructing the original relation. Performance-driven denormalization may be correct when its redundancy is maintained transactionally and its trade-offs are explicit.
+{/* Source tracking: The normal-form definitions, lossless-join criterion, and decomposition trade-offs are synthesized from Ramakrishnan and Gehrke’s schema-refinement chapters. */}
 
-## First, second, and third normal forms
+## See the repeated fact before naming a normal form
 
-First normal form is commonly understood as atomic, domain-valued attributes rather than repeating groups or nested sets in a relation. Atomicity depends on the application’s operations: an address string may be atomic for one system and a structured object for another. First normal form alone does not remove functional-dependency redundancy.
+Suppose one relation records both registrations and scheduled-section facts:
 
-Second normal form requires no non-prime attribute be functionally dependent on a proper subset of a candidate key, primarily relevant when keys are composite. If Enrollment(student, course, term, student_name, course_title) has key (student,course,term), then student_name depends only on student and course_title only on course, creating partial dependencies. Decompose Student, Course, and Enrollment so each fact is stored with its determinant.
+```text
+Registration(student_id, course_code, term, instructor, room)
+```
 
-Third normal form requires for every nontrivial dependency X - greater than  A, either X is a superkey or A is prime, meaning part of some candidate key. The prime-attribute exception allows a dependency needed to preserve a key in some schemas. 3NF synthesis can produce a dependency-preserving, lossless decomposition, though it may not satisfy BCNF.
+The grain is **one student's registration in one course offering during one term**. The scheduling rule says
 
-## Boyce–Codd normal form
+$$
+(course\_code, term) \to (instructor, room).
+$$
 
-BCNF requires every nontrivial functional dependency X - greater than  A to have X as a superkey. It eliminates more redundancy than 3NF but can sacrifice dependency preservation. Consider a relation Teaching(student, course, instructor) with dependencies (student,course)- greater than instructor and instructor- greater than course, where an instructor teaches only one course but many students take it. Instructor is not a superkey because it does not determine student, so the second dependency violates BCNF. A decomposition into InstructorCourse(instructor,course) and StudentInstructor(student,instructor) may be lossless but may require a join to check all original dependencies.
+| `student_id` | `course_code` | `term` | `instructor` | `room` |
+| --- | --- | --- | --- | --- |
+| Ada | DB101 | 2026S | Ng | R101 |
+| Bo | DB101 | 2026S | Ng | R101 |
+| Cy | DB201 | 2026S | Shah | Lab3 |
 
-BCNF is about all dependencies implied by the domain, not only the ones listed in a schema document. If a hidden business rule changes, the normal-form analysis may change. Conversely, a dependency that holds only accidentally in current data should not drive decomposition.
+> **Worked example.** `(student_id, course_code, term)` is a candidate key under the stated rules, yet `instructor` and `room` depend only on `(course_code, term)`. Changing DB101's room requires editing Ada's and Bo's rows. A missed edit creates a contradiction about the same offering.
 
-## Lossless-join decomposition
+### Predict the anomaly
 
-A decomposition of R into R1 and R2 is lossless with respect to F if joining the projections of every valid r reconstructs exactly r. For a binary decomposition, a sufficient and necessary condition is that the common attributes R1 intersect R2 functionally determine all attributes of R1 or all attributes of R2 under F. In Enrollment decomposition, course - greater than  instructor and the common attribute course determines the instructor relation’s attributes, so the join is lossless.
+DB101 moves from R101 to R202 before any student enrolls. Which operation is awkward in this relation, and what data could be lost if the last DB101 registration is deleted?
 
-The chase generalizes losslessness tests. Start with a tableau representing a hypothetical tuple and mark symbols shared according to projection. Apply dependencies to equate symbols until a row becomes all distinguished symbols; that result demonstrates that no spurious tuple is forced. The chase is mechanical but requires careful treatment of functional and join dependencies.
+<ExerciseSolution hint="The relation's grain begins with a student registration, but the new fact is about an offering.">
 
-A lossy decomposition can create a tuple that never existed. If R(A,B,C) is decomposed into AB and BC without A- greater than B or B- greater than C, joining projections can pair an A from one original tuple with a C from another through the same B. The result satisfies each projection but invents a combination. Losslessness is therefore a semantic guarantee, not a visual intuition about shared columns.
+Inserting the offering fact is awkward because there is no `student_id` to make a registration tuple. Deleting the last DB101 registration also deletes the only stored instructor/room fact. These are insertion and deletion anomalies; they reveal that an offering fact has been forced into a registration-grain relation.
+</ExerciseSolution>
 
-## Dependency preservation
+## Use the normal forms as tests
 
-A decomposition preserves dependencies if the dependencies projected onto the decomposed schemas imply every original dependency. If a dependency is not preserved, enforcing it may require joining relations or using a transaction-level check, which can be expensive and vulnerable to concurrency races if implemented only in application code. Dependency preservation is distinct from losslessness: a decomposition may be lossless but require cross-relation checks, or preserve dependencies but be lossy.
+| Form | Useful test |
+| --- | --- |
+| 1NF | Each attribute value is modeled as one value in its chosen domain; repeating groups are made explicit relations when they represent repeated facts. |
+| 2NF | Every non-prime attribute is fully dependent on every candidate key; no non-prime fact depends on a proper subset of a composite candidate key. |
+| 3NF | For every nontrivial $X \to A$, either $X$ is a superkey or $A$ is prime (belongs to a candidate key). |
+| BCNF | For every nontrivial $X \to Y$, $X$ is a superkey. |
 
-The 3NF synthesis algorithm starts with a minimal cover, creates a relation containing each dependency’s determinant and dependent attributes, removes schemas contained in others, and adds a relation containing a candidate key if none contains one. It preserves dependencies by construction and is lossless under the standard assumptions. The result may contain redundant schemas or require practical index and constraint choices.
+> **Warning.** “Atomic” does not mean “never split a value.” A postal address may be a single value for one application and several independently queried facts for another. Choose domains from the operations and constraints you must support.
 
-BCNF decomposition repeatedly finds a violating dependency X - greater than  Y in relation S, replaces S by S-Y and XY, and recurses. The decomposition is lossless because X is a determinant of one component, but dependency preservation is not guaranteed. A design review should choose whether local constraint enforcement or stronger normal form has higher value for the workload and operational model.
+In `Registration`, `(course_code, term)` is not a superkey because it does not determine `student_id`. Its dependency to `instructor, room` therefore violates BCNF. Because those attributes are non-prime and depend on a proper subset of the composite key, it also violates 2NF.
 
-## Multivalued dependencies
+### Recheck the determinant
 
-A multivalued dependency X - greater than  greater than  Y says that for a fixed X, the set of Y values is independent of the remaining attributes. A relation StudentLanguageHobby(student, language, hobby) may repeat every language-hobby combination if languages and hobbies are independent. Fourth normal form decomposes independent multivalued facts. This is distinct from a functional dependency, where X determines one value of Y.
+Trace the dependency inside the actual normalization example rather than changing fixtures.
 
-Over-normalization can increase joins, latency, and implementation complexity. Denormalization can be justified for read performance, historical snapshots, materialized aggregates, or distributed locality, but every redundant copy needs an owner, update path, repair process, and invariant. A materialized count is not correct merely because it was once computed correctly; concurrent updates and failures must preserve or reconcile it.
+| Start | Dependency applied | Closure after the step | Missing attribute |
+| --- | --- | --- | --- |
+| `(course_code, term)` | `(course_code, term) → (instructor, room)` | `(course_code, term, instructor, room)` | `student_id` |
 
-## Worked Enrollment decomposition
+<ExerciseSolution hint="In `Registration`, the scheduling determinant cannot add a student identifier.">
 
-Let R(student, course, term, instructor, room) with F containing (course,term)- greater than instructor and (course,term)- greater than room, and (student,course,term)- greater than instructor,room by transitivity. A candidate key is student,course,term if every enrollment is identified by that offering. The offering determinant is not a superkey because it does not determine student, so R violates BCNF. Decompose Offering(course,term,instructor,room) and Enrollment(student,course,term). The common attributes course,term determine Offering, making the join lossless; the original dependency is enforced locally in Offering.
+For `Registration`, `(course_code, term)^+` adds `instructor` and `room`, not `student_id`; it is not a superkey. That is exactly the BCNF failure. The functional-dependencies lesson's explorer is the place to practice the general closure algorithm; this table keeps the proof tied to the relation being decomposed.
+</ExerciseSolution>
 
-## Exercises
+## Decompose, then prove the join is lossless
 
-1. Identify partial and transitive dependencies in a relation.
-2. Test a binary decomposition for losslessness.
-3. Construct a spurious tuple from a lossy decomposition.
-4. Compare 3NF and BCNF on dependency preservation.
-5. Run the 3NF synthesis outline on a minimal cover.
-6. Explain a justified denormalization and its maintenance invariant.
+Split the relation on the violating dependency:
 
-### Diagnostic solutions
+```text
+Offering(course_code, term, instructor, room)
+Enrollment(student_id, course_code, term)
+```
 
+`Offering` has one tuple per scheduled offering. `Enrollment` has one tuple per student's registration in that offering. A foreign key from `(course_code, term)` in `Enrollment` to the key of `Offering` records the intended connection.
 
-1. A dependency from part of a composite key is partial; a dependency through a non-key determinant is transitive. Move each independent fact to a relation whose key is its determinant.
-2. Compute the common attributes’ closure under F. If it contains every attribute of one component, the binary decomposition is lossless; otherwise construct or chase a possible counterinstance.
-3. Use R(A,B,C) decomposed into AB and BC with no dependency. Original tuples (a1,b,c1) and (a2,b,c2) project to rows that join into (a1,b,c2) and (a2,b,c1), which were not present.
-4. 3NF may retain a dependency whose right side is prime, helping preserve dependencies and keys. BCNF rejects every nontrivial dependency whose determinant is not a superkey, but its decomposition may lose local dependency preservation.
-5. For each minimal-cover dependency X- greater than A, create XA; remove contained schemas and add a key schema if needed. Show dependency preservation and invoke the synthesis losslessness argument.
-6. Store a cached count for fast reads, but maintain it in the same transaction as inserts/deletes, reconcile periodically, and define behavior after crash or missed event. The invariant is count equals the specified committed subset.
+<MathStatement id="lossless-binary" kind="proposition" title="Binary lossless-join criterion">
 
+For a decomposition of relation $R$ into $R_1$ and $R_2$, the decomposition is lossless with respect to $F$ when
 
+$$
+(R_1 \cap R_2) \to R_1
+\quad \text{or} \quad
+(R_1 \cap R_2) \to R_2
+$$
 
-**Exercise.** Decompose `Enrollment(student, course, instructor)` under `course→instructor`. Explain the join key and which anomaly disappears.
+is implied by $F^+$. In words: the shared attributes determine one whole side.
+</MathStatement>
 
-## References & Further Reading
+For every proposed split, submit a three-part evidence record: the two projected relations, their natural join on the shared attributes, and either (a) equality with the original legal instance under the stated dependencies or (b) a concrete spurious tuple. A lossless claim without the shared-attribute closure and this counterexample test is incomplete. The join test is a finite witness for the supplied instance; the criterion above is the dependency-level argument that generalizes it.
 
-* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
-* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [Database System Concepts, Functional Dependencies](https://pages.cs.wisc.edu/~dbbook/openAccess/thirdEdition/slides/slides3ed-english/Ch19-FDs-95.ppt)
+> **Worked example.** The shared attributes are `(course_code, term)`. They determine all of `Offering` by the scheduling dependency, so joining `Enrollment` back to `Offering` does not invent extra registration/offering combinations. The decomposition is lossless under the stated rule.
+
+> **Counterexample.** Let $R(A,B,C)$ contain `(a1,b1,c1)` and `(a2,b1,c2)`. Decompose it into $R_1(A,B)$ and $R_2(B,C)$ without any dependency that makes `B` determine either side. Joining the projections produces four tuples, including spurious `(a1,b1,c2)` and `(a2,b1,c1)`. Splitting columns alone is not a proof.
+
+### Work the criterion
+
+For the `Registration` split, name $R_1$, $R_2$, their intersection, and the dependency that satisfies the criterion.
+
+<ExerciseSolution hint="Put the scheduled-offering relation on the side determined by the shared pair.">
+
+Take $R_1 = Offering(course\_code, term, instructor, room)$ and $R_2 = Enrollment(student\_id, course\_code, term)$. Their intersection is $(course\_code, term)$, and $(course\_code, term) \to R_1$ follows from $(course\_code, term) \to (instructor, room)$ plus reflexivity. The criterion therefore proves the binary decomposition lossless.
+</ExerciseSolution>
+
+## BCNF is not the only goal
+
+To decompose a schema $S$ on a BCNF-violating dependency $X \to Y$, form:
+
+$$
+S_1 = X \cup Y, \qquad S_2 = S - (Y - X).
+$$
+
+> **Definition.** A BCNF decomposition keeps the determinant $X$ in its second relation. Writing only $S - Y$ can accidentally remove attributes needed to join the pieces back and is not the BCNF decomposition rule.
+
+BCNF removes every dependency whose determinant is not a superkey. It can sacrifice local enforcement of another dependency. 3NF is often chosen when lossless decomposition **and** dependency preservation matter more than removing every BCNF anomaly.
+
+> **Worked example.** Let $R(A,B,C)$ have $F = \{AB \to C, C \to B\}$. Candidate keys are `AB` and `AC`; all attributes are prime, so $C \to B$ satisfies 3NF but violates BCNF because `C` is not a superkey. Decomposing on $C \to B$ yields `CB` and `AC`. The original dependency $AB \to C$ is not contained in either relation, so enforcing it may require a join or another design decision.
+
+### Choose the trade-off
+
+Your team can enforce dependencies with single-relation checks during every write, but a BCNF decomposition would require checking one dependency across a join. What design question should be documented before choosing 3NF or BCNF?
+
+<ExerciseSolution hint="There is no automatic winner: name the anomaly risk and the cost of enforcement.">
+
+Document the business cost of inconsistent redundant facts, the dependency that would no longer be locally enforceable under BCNF, the write path that must enforce it, and the expected query/join cost. Choose 3NF when preserving that dependency locally is important and its residual redundancy is understood; choose BCNF when the stronger anomaly protection outweighs that enforcement cost.
+</ExerciseSolution>
+
+## Transfer task: normalize a revised schedule
+
+The university permits a section to meet in several rooms at several times. Start from
+
+```text
+SectionRegistration(student_id, course_code, section, term, meeting_time, room, instructor)
+```
+
+Assume `(course_code, section, term) → instructor` and `(course_code, section, term, meeting_time) → room`. Propose relations with clear grains, state one key for each, and show one binary lossless-join argument. Do not invent a dependency between `room` and `instructor`.
+
+<ExerciseSolution hint="Separate registration, section, and repeated meeting facts. Each relation should store one kind of fact once.">
+
+One design is `Section(course_code, section, term, instructor)`, `Meeting(course_code, section, term, meeting_time, room)`, and `Registration(student_id, course_code, section, term)`. Their grains are one section, one scheduled meeting, and one student registration. Keys can be `(course_code, section, term)`, `(course_code, section, term, meeting_time)`, and `(student_id, course_code, section, term)`. Decomposing `SectionRegistration` first into `Section` and the remaining attributes is lossless because the shared `(course_code, section, term)` determines all of `Section`; apply the same check for the `Meeting` split using its stated determinant.
+</ExerciseSolution>
+
+## References
+
+- [Ramakrishnan and Gehrke, *Database Management Systems*: schema-refinement chapters in the open-access contents](https://pages.cs.wisc.edu/~dbbook/openAccess/secondEdition/dbbook.toc.html)
+- [Ramakrishnan and Gehrke: Functional Dependencies slides](https://pages.cs.wisc.edu/~dbbook/openAccess/thirdEdition/slides/slides3ed-english/Ch19_FDs-95.pdf)
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)

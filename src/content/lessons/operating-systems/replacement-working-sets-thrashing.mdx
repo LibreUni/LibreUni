@@ -1,0 +1,342 @@
+---
+title: "Replacement, Working Sets, and Thrashing"
+course: "operating-systems"
+description: "Analyze page-replacement policies from reference traces, prove the stack-property boundary, and diagnose when aggregate working-set demand turns reclaim into thrashing."
+prerequisites:
+  - "Demand paging, page faults, physical frames, and file/anonymous backing"
+  - "Sets, sequences, recency order, and basic proof by induction"
+  - "Latency, throughput, and queueing as distinct performance measures"
+outcomes:
+  - "Execute FIFO, exact LRU, OPT, and CLOCK-style replacement traces with explicit victim and dirty-page costs."
+  - "Use the stack property to explain why LRU avoids Bélády's anomaly while FIFO does not."
+  - "Compute a process working set over a reference window and diagnose system-wide thrashing from demand exceeding available frames."
+  - "Design a reclaim experiment that separates policy quality, workload locality, writeback cost, and memory-allocation scope."
+omissions:
+  - "Swap-device implementation, compressed memory, NUMA balancing, huge-page reclaim, and Linux Multi-Gen LRU internals beyond its documented model are not implemented."
+  - "The interactive trace uses exact LRU and a single global frame pool; production kernels use approximations, multiple page classes, and resource-control boundaries."
+estimatedMinutes: 330
+assessment: "Given an unseen multi-process reference trace with clean and dirty pages, execute competing replacement policies, prove or refute monotonicity as frames change, estimate working sets, identify the onset of thrashing, and defend a recovery policy with measurable evidence."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import PageReplacementPlayground from '../../../components/playgrounds/PageReplacementPlayground';
+
+# Replacement, Working Sets, and Thrashing
+
+Demand paging can admit more virtual memory than physical memory. Once every free frame is occupied, satisfying one not-present fault requires reclaiming or evicting something else. A poor victim may be referenced again immediately, causing another fault that evicts another hot page. Under sufficient pressure, CPUs spend their time servicing faults and storage traffic while application throughput collapses.
+
+Replacement is not “choose the oldest page.” It is an online decision under incomplete knowledge. The kernel must estimate which resident page has the lowest future value while accounting for dirty writeback, sharing, fairness, and the allocation domain from which the victim may be taken.
+
+> **Reclaim objective.** Free enough usable memory while minimizing future stall cost and preserving allocation isolation. A policy must be evaluated against a reference workload and cost model, not by its name.
+
+## Reference strings make policy claims falsifiable
+
+Let a **reference string** $r_1,r_2,\ldots,r_n$ record virtual page numbers in access order. A **resident set** $R_t$ is the set of pages occupying the assessed frames after reference $t$. A reference is a **hit** if $r_t \in R_{t-1}$ and a **fault** otherwise. On a fault with no free frame, the policy selects a victim $v \in R_{t-1}$.
+
+The small trace model assumes:
+
+- every reference accesses one page;
+- all pages have equal size;
+- any evicted page can later be restored;
+- replacement decision time is ignored;
+- faults are counted equally unless dirty cost is introduced explicitly; and
+- prefetching, sharing, NUMA, and concurrent references are absent.
+
+These assumptions isolate victim choice. They do not model end-to-end program time.
+
+### Four comparison policies
+
+| Policy | Victim rule | Knowledge required | Principal boundary |
+| --- | --- | --- | --- |
+| FIFO | page loaded earliest | arrival order | can evict a frequently used old page |
+| exact LRU | page referenced least recently | total recency order | metadata/coordination cost is high |
+| OPT/MIN | page whose next use is farthest in the future | future trace | offline lower bound, not deployable online |
+| CLOCK/second chance | first candidate whose reference bit is clear | approximate recent-use bit | scan rate and bit sampling affect quality |
+
+OPT is useful because it separates “the workload inherently needs many faults” from “the online policy chose poorly.” It is not an implementation proposal.
+
+**Retrieval — recover the online boundary.** Why can OPT be used in an evaluation even though a kernel cannot implement it for an arbitrary future workload?
+
+<details>
+<summary>Reveal the diagnostic answer</summary>
+
+An offline experiment already has the complete recorded trace, so it can compute the minimum achievable fault count for that trace and frame capacity. The gap between an online policy and OPT is evidence about victim decisions. Deploying OPT would require knowledge of future references that the running kernel does not possess.
+
+</details>
+
+## FIFO can get worse when memory increases
+
+Consider the reference string
+
+```text
+1 2 3 4 1 2 5 1 2 3 4 5
+```
+
+### Worked trace: FIFO with three frames
+
+The queue is written oldest→newest.
+
+| Ref | Frames/queue after access | Result | Evicted | Faults |
+| ---: | --- | --- | ---: | ---: |
+| 1 | `1` | fault | — | 1 |
+| 2 | `1 2` | fault | — | 2 |
+| 3 | `1 2 3` | fault | — | 3 |
+| 4 | `2 3 4` | fault | 1 | 4 |
+| 1 | `3 4 1` | fault | 2 | 5 |
+| 2 | `4 1 2` | fault | 3 | 6 |
+| 5 | `1 2 5` | fault | 4 | 7 |
+| 1 | `1 2 5` | hit | — | 7 |
+| 2 | `1 2 5` | hit | — | 7 |
+| 3 | `2 5 3` | fault | 1 | 8 |
+| 4 | `5 3 4` | fault | 2 | 9 |
+| 5 | `5 3 4` | hit | — | 9 |
+
+With four frames, FIFO faults **10** times on the same trace. The larger resident set changes queue order so that pages 1–5 repeatedly displace one another near the end. This is Bélády's anomaly: increasing allocated frames can increase faults for a non-stack policy.
+
+{/* Source tracking: The anomaly definition and FIFO boundary were verified against Bélády, Nelson, and Shedler's 1969 primary paper; the tabulated trace is independently executed LibreUni work. */}
+
+> **Stack property.** A replacement algorithm has the stack property if, after every common reference prefix, the resident set with $k$ frames is a subset of the resident set with $k+1$ frames.
+
+Exact LRU has this property. Maintain all referenced pages in one recency order. The $k$-frame resident set is the first $k$ pages of that order; the $(k+1)$-frame set is the first $k+1$. Therefore every hit with $k$ frames is also a hit with $k+1$, so adding a frame cannot increase exact-LRU faults. FIFO's resident sets are not prefixes of one shared order, so the proof does not apply.
+
+## Experiment: force a non-monotonic fault curve
+
+The simulator implements FIFO, exact LRU, and offline OPT for fixed reference strings. It counts all faults equally, assumes clean pages, and uses two to five frames in one global pool. Its “changing working set” and “cyclic scan” traces are deterministic examples, not workload measurements.
+
+**Prediction — write the number before moving the frame control.** For the Bélády trace under FIFO, will four frames produce fewer, equal, or more faults than three? State which invariant would rule out your answer for exact LRU.
+
+<PageReplacementPlayground client:load />
+
+**Transfer — construct a policy challenge.** Select the cyclic scan and compare exact LRU with OPT at two and five frames. Explain why recency performs poorly even though its stack property still holds. Then describe one trace shape where LRU should approach OPT.
+
+<details>
+<summary>Reveal the reasoning target</summary>
+
+For the prediction, FIFO rises from 9 faults with three frames to 10 with four; exact LRU's stack property rules out such an increase. On the six-page cyclic scan, exact LRU faults 12 times at both two and five frames. OPT faults 10 times at two frames and 7 times at five. With five frames, LRU's least-recent page is the one needed next after the current insertion, so every reference misses even though adding capacity has not made the count worse. A trace with a compact repeatedly reused set plus rare one-time pages gives recency useful evidence and can make LRU approach OPT.
+
+</details>
+
+## Locality produces a working-set demand
+
+Programs usually move through phases: a loop touches a compact set of code and data; a later phase touches another set. A **working set** estimates the pages in active use over a recent window. For window length $\Delta$ references,
+
+$$
+W(t,\Delta)=\{r_i \mid t-\Delta < i \le t\},
+\qquad
+w(t,\Delta)=|W(t,\Delta)|.
+$$
+
+The window is a model parameter. Too small a $\Delta$ omits pages whose reuse interval is slightly longer; too large a $\Delta$ mixes phases and overestimates current demand.
+
+{/* Source tracking: Working-set definition and its joint processor/memory-demand purpose were synthesized from Peter Denning's 1967/1968 primary working-set papers. */}
+
+### Worked trace: a phase boundary
+
+Use references
+
+```text
+1 2 1 3 2 1  |  8 9 8 10 9 8
+```
+
+At $t=6$ with $\Delta=5$, the window is `2 1 3 2 1`, so $W(6,5)=\{1,2,3\}$ and $w=3$. At $t=9$, the window is `2 1 8 9 8`, so $W(9,5)=\{1,2,8,9\}$ and $w=4$: the window straddles the transition. At $t=12$, the window is `9 8 10 9 8`, so $W(12,5)=\{8,9,10\}$ and $w=3$.
+
+Allocating only two frames to either steady phase forces recurrent faults. Allocating four because of the transient boundary may be reasonable if phase changes are frequent, but it is not evidence that every phase needs four.
+
+**Application — compare windows.** For the same trace at $t=12$, compute $W(t,3)$ and $W(t,8)$. Which estimate responds faster to a phase change, and which retains stale pages longer?
+
+<details>
+<summary>Reveal the sets and interpretation</summary>
+
+The final three references are `10 9 8`, so $W(12,3)=\{8,9,10\}$. The final eight are `2 1 8 9 8 10 9 8`, so $W(12,8)=\{1,2,8,9,10\}$. The shorter window adapts faster but may miss a page with a reuse distance greater than three; the longer window retains pages 1 and 2 from the old phase and therefore reacts more slowly.
+
+</details>
+
+## Thrashing is a system state, not a large fault count alone
+
+Suppose $m$ processes have estimated working-set sizes $w_i(t,\Delta)$ and the allocation domain has $F$ usable frames. If
+
+$$
+D(t,\Delta)=\sum_{i=1}^{m} w_i(t,\Delta) > F,
+$$
+
+the domain cannot keep all estimated working sets resident. Repeatedly stealing a needed page from one process to satisfy another can create a positive feedback loop: faults increase, blocked processes release CPUs, runnable processes touch more nonresident pages, and I/O queues grow.
+
+This inequality is a diagnostic model, not a universal threshold. Shared pages may reduce physical demand; inaccurate windows distort $D$; clean file pages and dirty anonymous pages have different reclaim costs. The key signal is loss of useful progress per unit of fault/reclaim work.
+
+<PlantUML
+  code={`@startuml
+title "Thrashing feedback and intervention points"
+rectangle "active working-set demand\nexceeds usable frames" as PRESSURE
+rectangle "evict a page still in active use" as EVICT
+rectangle "near-future reference faults" as FAULT
+rectangle "storage / zero-fill / copy work\nand blocked execution" as COST
+rectangle "lower application throughput\nwith continued memory demand" as DROP
+rectangle "intervene: reduce admission,\nprotect a working set, or add memory" as CONTROL
+PRESSURE --> EVICT
+EVICT --> FAULT
+FAULT --> COST
+COST --> DROP
+DROP --> EVICT : pressure persists
+PRESSURE --> CONTROL
+CONTROL --> PRESSURE : reduce demand below capacity
+@enduml`}
+/>
+
+### Worked diagnosis: multiprogramming overload
+
+Three jobs have stable working-set estimates of 40, 35, and 30 frames. The cgroup has 90 usable frames. Their combined demand is 105. Equal allocation gives 30 frames each: the third job fits, while the first two continually lose ten and five active pages. Giving 40/35/15 protects two jobs but makes the third fault heavily. No replacement ordering creates 15 missing frames.
+
+Admitting only the first two jobs uses 75 frames and leaves 15 for kernel/reclaim variation. Throughput may increase even though fewer jobs run concurrently. The defensible claim is not “suspend the largest process”; it is “reduce simultaneous working-set demand below measured capacity, then compare completed work and tail latency.”
+
+**Transfer — distinguish pressure from thrashing.** Name two measurements that show productive progress and two that show reclaim cost. Explain why CPU utilization alone is ambiguous.
+
+<details>
+<summary>Reveal an evidence set</summary>
+
+Productive measures include completed transactions, retired application work units, or useful bytes processed. Cost measures include major/minor fault rate, reclaim scans, swap/file reads, dirty writeback, and time blocked on faults. CPU utilization can stay high because kernel reclaim and fault handling consume CPU even while application throughput falls; it can also fall because tasks block on storage. A diagnosis needs both progress and cost over the same interval.
+
+</details>
+
+## CLOCK approximates recency with bounded metadata
+
+Exact LRU needs a total recency update on every reference, which is expensive on multicore systems. CLOCK arranges candidate frames in a circle and maintains an accessed/reference bit `A`:
+
+1. inspect the frame under the hand;
+2. if `A=1`, clear it and advance, granting a second chance;
+3. if `A=0` and the page is eligible, select it;
+4. if the page is dirty, either schedule writeback and continue or account for its higher cost;
+5. advance the hand after selection.
+
+RISC-V permits implementation-dependent A/D update schemes within architectural rules; a kernel must follow the architecture's contract when sampling or clearing those bits. A software-managed bit or fault-assisted scheme can replace hardware updates, but it changes overhead.
+
+### Worked trace: second chances and dirty cost
+
+Four frames under the hand contain:
+
+| Frame | Page | `A` | Dirty | Eligible |
+| ---: | ---: | ---: | ---: | --- |
+| 0 | 7 | 1 | no | yes |
+| 1 | 2 | 0 | yes | yes |
+| 2 | 9 | 0 | no | no, pinned for I/O |
+| 3 | 4 | 0 | no | yes |
+
+Starting at frame 0, CLOCK clears page 7's `A` and advances. Page 2 is unreferenced but dirty. If the policy minimizes immediate stall, it can schedule page 2 for writeback and continue. Page 9 is ineligible. Page 4 is clean, unreferenced, and eligible, so it is the immediate victim. A later pass may reclaim page 2 after writeback completes.
+
+Calling page 2 “the correct victim” from recency alone ignores the assessed objective. If clean and dirty evictions have different latency, policy needs a cost rule in addition to recency.
+
+**Application — mutate one bit.** If page 4 has `A=1` instead, trace the hand until a victim is found under the rule “schedule dirty writeback but do not block on it; pinned pages are skipped.”
+
+<details>
+<summary>Reveal the trace</summary>
+
+Frame 0: clear page 7 and advance. Frame 1: schedule page 2 writeback and advance. Frame 2: skip pinned page 9. Frame 3: clear page 4 and advance. On the next revolution, page 7 now has `A=0`, is clean and eligible, so page 7 is selected—unless a real reference set its bit again before the hand returned. Omitting that concurrency caveat treats CLOCK as a fixed-reference batch algorithm.
+
+</details>
+
+## Production reclaim adds allocation and page classes
+
+Real kernels cannot place every page in one undifferentiated queue:
+
+- anonymous pages may require swap before eviction;
+- clean file-cache pages can often be discarded and reread;
+- dirty file pages require writeback and ordering;
+- shared pages serve several mappings;
+- pinned or unevictable pages are not candidates;
+- memory cgroups and NUMA nodes constrain where reclaim occurs; and
+- refault observations can reveal that recently evicted pages were still hot.
+
+Linux's documented Multi-Gen LRU groups pages by estimated recency generations and provides working-set/refault-oriented controls. Its existence is evidence that production reclaim is an adaptive subsystem, not evidence that one named policy is universally optimal.
+
+{/* Source tracking: Multi-Gen LRU statements are limited to behavior documented by the Linux kernel project; no undocumented kernel-internal guarantee is asserted. */}
+
+### Counterexample: global efficiency can violate isolation
+
+A global policy may evict pages from a latency-sensitive service because a batch job generates more faults. Total faults might fall while the service misses its latency objective. A local or cgroup-bounded policy can preserve allocation isolation at some cost to global utilization. The correct scope follows the resource contract and workload objective.
+
+## Synthesis assessment: two processes, dirty pages, one overload
+
+An allocation domain has five frames. Process P references
+
+```text
+A B C A B D A B C D
+```
+
+while process Q references
+
+```text
+X Y X Z Y X
+```
+
+P's pages `B` and `D` become dirty on their first reference; all others are clean. Q's pages are clean. The scheduler interleaves two P references followed by one Q reference until Q finishes, then runs P's remainder.
+
+Produce:
+
+1. the combined reference string;
+2. exact working sets at the point immediately after Q's second `X`, using a six-reference window;
+3. an argument for whether five frames can hold both current working sets;
+4. a FIFO trace and fault count for the combined string;
+5. one cost-aware deviation from pure FIFO when the oldest candidate is dirty and a clean non-working-set page exists; and
+6. an experiment that can distinguish “replacement policy defect” from “aggregate demand exceeds capacity.”
+
+<details>
+<summary>Reveal reference solution and rubric</summary>
+
+The interleaving is:
+
+```text
+A B X C A Y B D X A B Z C D Y X
+```
+
+Q's second `X` is combined reference 9. The six-reference window is positions 4–9: `C A Y B D X`, whose global set is `{A,B,C,D,X,Y}`. Per-process windows over the same interval give P `{A,B,C,D}` and Q `{X,Y}`; combined demand is six distinct pages, greater than five frames. Sharing is absent, so at least one active page cannot remain resident.
+
+FIFO with five frames:
+
+| Ref | Resident queue after reference | Hit/fault | Evicted |
+| --- | --- | --- | --- |
+| A | A | F | — |
+| B | A B | F | — |
+| X | A B X | F | — |
+| C | A B X C | F | — |
+| A | A B X C | H | — |
+| Y | A B X C Y | F | — |
+| B | A B X C Y | H | — |
+| D | B X C Y D | F | A |
+| X | B X C Y D | H | — |
+| A | X C Y D A | F | B |
+| B | C Y D A B | F | X |
+| Z | Y D A B Z | F | C |
+| C | D A B Z C | F | Y |
+| D | D A B Z C | H | — |
+| Y | A B Z C Y | F | D |
+| X | B Z C Y X | F | A |
+
+FIFO produces 12 faults. The trace alone assigns equal cost to all faults. If the oldest candidate is dirty `B` or `D` while a clean page outside the estimated working sets exists, a cost-aware policy may schedule dirty writeback and evict the clean cold page first. It must not classify “outside working set” from future knowledge unavailable online; use sampled recency/refault evidence.
+
+Run the same recorded workload over a frame sweep and compare FIFO, an online recency approximation, and offline OPT while measuring application progress, fault count, bytes written, and blocked time. If every online policy approaches OPT yet performance collapses below six frames, capacity is the dominant constraint. If one policy has a large avoidable gap at a capacity that holds the active set, victim choice is implicated.
+
+Rubric, 30 points:
+
+- 4 points: exact interleaving;
+- 5 points: window and per-process sets;
+- 3 points: capacity argument without claiming a precise universal threshold;
+- 8 points: reproducible FIFO states and count;
+- 4 points: dirty cost handled without using future knowledge;
+- 6 points: experiment includes OPT bound, frame sweep, progress, and reclaim cost.
+
+An answer reporting only fault count earns at most 10 points because it cannot distinguish bad policy from insufficient capacity or expensive dirty eviction.
+
+</details>
+
+## Deliberate boundary and source trail
+
+The interactive and hand traces use equal-size pages, fixed reference strings, exact LRU, and one global frame pool. The broader analysis adds dirty cost and allocation scope but does not implement swap, compressed memory, NUMA reclaim, huge pages, or a production kernel's concurrency. Simulator output is therefore evidence about its model, not a direct kernel benchmark.
+
+{/* Source tracking: FIFO anomaly facts were checked against Bélády, Nelson, and Shedler (1969); working-set definitions and thrashing motivation were checked against Denning's primary papers; all traces and exercises were independently constructed. */}
+
+## References & Further Reading
+
+- [L. A. Bélády, R. A. Nelson, and G. S. Shedler, “An anomaly in space-time characteristics of certain programs running in a paging machine” (1969)](https://research.ibm.com/publications/an-anomaly-in-space-time-characteristics-of-certain-programs-running-in-a-paging-machine)
+- [Peter J. Denning, “The Working Set Model for Program Behavior” (1968)](https://denninginstitute.com/pjd/PUBS/WSModel_1968.pdf)
+- [Peter J. Denning, working-set primary-publication index](https://denninginstitute.com/pjd/PUBS/Workingsets.html)
+- [Linux kernel documentation: Multi-Gen LRU](https://docs.kernel.org/admin-guide/mm/multigen_lru.html)
+- [RISC-V Privileged Architecture: accessed and dirty PTE state](https://docs.riscv.org/reference/isa/priv/supervisor.html)

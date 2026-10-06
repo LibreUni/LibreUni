@@ -1,0 +1,118 @@
+---
+title: "Functions, Contracts, and Call Frames"
+course: c
+description: "Use function declarations, value semantics, recursion, and storage duration to build verifiable C interfaces."
+prerequisites:
+  - "C expressions, types, and pointers"
+outcomes:
+  - "Read a function declaration as a type-level contract"
+  - "Trace value passing, pointer-mediated mutation, and automatic storage lifetime"
+  - "Choose a function boundary that makes ownership and failure visible"
+omissions:
+  - "ABI-specific register allocation is treated in the systems-programming lesson."
+estimatedMinutes: 55
+assessment: "Trace a caller and callee through a mutation and identify which object owns each lifetime."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Functions, Contracts, and Call Frames
+
+Functions are useful because they make a computation nameable and testable, not because every call necessarily creates a particular physical stack layout. The C language specifies parameter and return semantics; an optimizer may inline a call or keep values in registers while preserving those semantics.
+
+<Quiz client:load
+  title="What crosses a call boundary?"
+  question="How can a C function change a caller's `int x`?"
+  options={["By passing x, because C parameters are references", "By receiving the value of &x and dereferencing a valid pointer to x", "By relying on a global stack frame name", "It cannot change x under any circumstances"]}
+  correctIndex={1}
+  explanation="C passes every argument by value. Passing &x copies an address value; the callee can then use that pointer to access the caller's object while the object remains alive."
+/>
+
+## Declarations and definitions
+
+A declaration tells the compiler the function's type; a definition supplies the body. A prototype is not optional documentation: it lets the compiler check conversions at each call site.
+
+```c
+int square(int x);        /* declaration */
+
+int use_square(void) {
+    return square(5);     /* checked against the prototype */
+}
+
+int square(int x) {       /* definition */
+    return x * x;
+}
+```
+
+The phrase “single-pass compiler” is a poor model. Implementations commonly perform several translation phases and may compile multiple translation units before linking. The portable lesson is simpler: a call needs an appropriate visible declaration, and a program needs one compatible definition for the externally linked function.
+
+<CodeExercise client:load
+  title="Declare the contract"
+  code={`/* Return the larger of two int values. */
+[!blank!] max_int(int a, int b);`}
+  answers={["int"]}
+  explanation="The declaration's return type is part of the function type. A prototype also states the parameter types so calls can be checked."
+/>
+
+## Value semantics and observable mutation
+
+```c
+void increment_value(int value) { ++value; }
+void increment_object(int *value) { ++*value; }
+```
+
+`increment_value(x)` changes only a local parameter object. `increment_object(&x)` changes `x`, provided `&x` is valid and the caller permits mutation. The pointer itself is still passed by value; assigning a new address to `value` cannot rebind the caller's pointer.
+
+<CodeRunner client:load
+  title="Trace the two contracts"
+  language="c"
+  code={`#include <stdio.h>
+
+void by_value(int x) { x += 10; }
+void through_pointer(int *x) { *x += 10; }
+
+int main(void) {
+    int n = 2;
+    by_value(n);
+    printf("after value: %d\\n", n);
+    through_pointer(&n);
+    printf("after pointer: %d\\n", n);
+    return 0;
+}`}
+  output="after value: 2\nafter pointer: 12"
+/>
+
+## Automatic storage and recursion
+
+An object with automatic storage duration is created when execution enters its block and ceases to exist when execution leaves it. Returning the address of a local object creates a dangling pointer; the bytes may remain unchanged in a debugger, but the object lifetime has ended.
+
+Recursion adds a logical activation for each call. A recursive function needs a base case and a measure that moves toward it. Stack depth is an implementation resource, not a correctness proof: a mathematically terminating recursion can still exhaust a finite stack for a large input.
+
+```c
+unsigned factorial(unsigned n) {
+    if (n <= 1) return 1;
+    return n * factorial(n - 1);
+}
+```
+
+## Transfer exercises
+
+1. Write a prototype for a function that fills a caller-owned buffer and returns `0` on success or a negative error code.
+2. Explain why returning `&local` is invalid even if the address prints consistently in one run.
+3. Trace `f(&x)` when `f` assigns its parameter to point at a different object. Which pointer changes?
+4. Replace a recursive countdown with an iterative loop and state the invariant.
+
+### Diagnostic solutions
+
+1. For example, `int fill(char *buffer, size_t capacity);` with a contract that writes at most `capacity` bytes and documents termination. The return convention must distinguish truncation or failure.
+2. The pointed-to object has automatic storage duration and ends at function return. Reading through the pointer afterward is undefined behavior regardless of observed bytes.
+3. The callee's parameter is a copy of the address, so only the local parameter changes. Mutating `*parameter` changes the pointed-to caller object.
+4. Maintain “all values below the current counter have been processed”; decrement the counter until the base case is reached. The loop uses constant call-stack space.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.2.4, §6.5.2.2, and §6.9](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [cppreference: function declaration](https://en.cppreference.com/c/language/functions)
+* [SEI CERT C MEM rules](https://wiki.sei.cmu.edu/confluence/display/c/MEM30-C.+Do+not+access+freed+memory)

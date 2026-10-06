@@ -1,0 +1,300 @@
+---
+title: "Protection and Authority"
+course: "operating-systems"
+description: "Principals, subjects, objects, access matrices, ACLs, capabilities, complete mediation, least authority, and confused-deputy repair."
+prerequisites:
+  - "Processes, system calls, file descriptors, and pathname resolution"
+  - "Kernel/user privilege separation and virtual memory permissions"
+  - "Basic threat modeling: assets, adversaries, trust, and attack surfaces"
+outcomes:
+  - "Model protection decisions as authority over named objects and operations rather than as vague privilege levels."
+  - "Derive ACL and capability representations from an access matrix and compare delegation, attenuation, and revocation."
+  - "Trace and repair confused-deputy and time-of-check/time-of-use failures."
+  - "Distinguish object capabilities from Linux's per-thread capability privilege units and from authentication credentials."
+omissions:
+  - "Mandatory information-flow control, noninterference proofs, covert channels, cryptographic authentication protocols, and complete seL4 verification are deferred to security and formal-methods study."
+  - "Protection mechanisms reduce authority; they do not prove that authorized code is correct or that hardware has no side channels."
+estimatedMinutes: 330
+assessment: "Given an unfamiliar service and authority graph, identify ambient and delegated authority, construct a concrete exploit trace, then redesign and grade the boundary under explicit revocation and failure assumptions."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Protection and Authority
+
+A privileged document converter receives an input descriptor and a caller-supplied output pathname. It also needs write access to `/var/lib/converter/accounting`. A malicious caller chooses that accounting pathname as the output. The converter faithfully opens the requested name with its own authority and overwrites the file it was supposed to protect.
+
+No memory-safety violation is required. Authentication succeeded, permissions behaved as configured, and the converter performed a permitted write. The failure is **authority confusion**: the converter could not tell whether a write request exercised authority delegated by the caller or ambient authority held for its own bookkeeping.
+
+{/* Source tracking: The protection principles and access-matrix reasoning synthesize Saltzer and Schroeder's 1975 primary paper; the confused-deputy model is independently derived in the tradition of Hardy's original problem rather than copied from its wording. */}
+
+## Name the actors and the authority
+
+Protection answers whether a subject may perform an operation on an object in a state. The vocabulary must remain separate:
+
+| term | precise role | example |
+| --- | --- | --- |
+| principal | entity to which accountability or policy attaches | user, service identity, tenant |
+| subject | active execution context acting for one or more principals | process, thread, protection domain |
+| object | protected resource with stable identity | inode, endpoint, address space, device |
+| operation | requested state transition or observation | read, map, signal, send, delegate |
+| permission | policy relation allowing one operation | `read` on object 17 |
+| authority | usable power to affect an object, including powers obtained by delegation | descriptor granting write to object 17 |
+| credential | evidence used to establish a principal or attributes | UID, signed token, certificate |
+
+Authentication establishes or supports a claim about a principal. Authorization decides whether the acting subject has the required authority. Auditing records a decision or action. None substitutes for the others.
+
+For subjects $S$, objects $O$, and operation set $R$, an access matrix is
+
+$$
+A:S\times O\rightarrow\mathcal{P}(R).
+$$
+
+$A[s,o]$ is the set of operations subject $s$ may invoke on object $o$. The matrix is a specification, not usually a dense implementation. An access-control list stores a column by object: which subjects have which rights. A capability list stores a row by subject: which object references and rights the subject possesses.
+
+> **Object capability.** An unforgeable reference that designates an object and carries authority to invoke a bounded set of operations on it. Possession supplies both designation and authorization.
+
+Unforgeability can come from kernel-managed table entries, tagged hardware, cryptographic construction under a stated threat model, or another protected representation. A pathname string is not an object capability: it is forgeable data requiring a fresh namespace lookup and separate authorization.
+
+{/* Source tracking: Dennis and Van Horn's 1966 primary report motivates protected references to shared objects; the seL4 manual and capability tutorial support the modern kernel-object capability terminology. */}
+
+### Worked representation: one matrix, two indexes
+
+Suppose:
+
+| subject / object | upload U | cache directory C | audit endpoint L |
+| --- | --- | --- | --- |
+| parser P | `read` | — | `send` |
+| renderer R | `read` | `create` | `send` |
+| janitor J | — | `list`, `remove` | — |
+
+Object C's ACL is `{R:create, J:list+remove}`. R's capability list is `{U:read, C:create, L:send}`. Both encode cells from the same abstract matrix, but their engineering costs differ:
+
+- answering “who can remove from C?” is local in C's ACL;
+- handing R attenuated `create` authority to one worker is local with a delegable capability;
+- revoking all access to C is direct at a central ACL check;
+- revoking one copied capability requires indirection, versioning, a revocation tree, object destruction, or another explicit mechanism.
+
+The words ACL and capability do not decide policy quality. A capability carrying broad directory mutation can exceed least authority; an ACL can be narrowly scoped and completely mediated.
+
+### Retrieval checkpoint: designation versus authorization
+
+Why can `open("/tenant/report", O_WRONLY)` be vulnerable even when every pathname component passes a permission check?
+
+<details>
+<summary>Reveal the missing distinction</summary>
+
+The caller supplied a **designation**—a string interpreted in a mutable namespace. Permission checks answer whether the converter's subject may traverse and write the object that the string resolves to. They do not establish that the caller was authorized to choose that object for this operation. A confused deputy exploits the converter's broader authority. A sound protocol must bind caller-conferred authority to the designated object, for example by accepting an already opened descriptor with bounded rights or resolving beneath a directory capability supplied for this request.
+
+</details>
+
+## Derive the reference monitor obligations
+
+A protection decision is trustworthy only if every relevant access path passes through a mechanism that policy controls. Three obligations follow:
+
+1. **Complete mediation:** every security-relevant access is checked against current or validly cached authority.
+2. **Tamper resistance:** untrusted subjects cannot alter the monitor, its policy state, or protected references.
+3. **Verifiability:** the mechanism is small and structured enough to analyze relative to its specification.
+
+Complete mediation does not require a slow policy database lookup on every byte. A successful `open` can create a kernel-protected descriptor that embodies the authorized object and access mode; subsequent `read` operations mediate possession and rights of that descriptor. The cached decision is valid only while the policy contract permits it. Revocation semantics must say whether existing descriptors continue working.
+
+Saltzer and Schroeder's related design principles sharpen the mechanism:
+
+- **fail-safe defaults:** authority is absent unless granted;
+- **least privilege/least authority:** a subject receives only powers needed for the current task and duration;
+- **least common mechanism:** minimize shared mechanism on which mutually distrusting subjects depend;
+- **separation of privilege:** require independent conditions when one condition is too dangerous; and
+- **economy of mechanism/open design:** make the trusted mechanism analyzable rather than relying on design secrecy.
+
+These are design tests, not slogans. “Use least privilege” is incomplete until the object set, operations, duration, delegation, and failure state are enumerated.
+
+## Worked exploit: the pathname deputy
+
+The converter runs with write authority to:
+
+```text
+/var/lib/converter/accounting
+/srv/jobs/<tenant-output>
+```
+
+Its API is `convert(input_fd, output_path)`. It validates document syntax, then opens `output_path` itself. The attack trace is:
+
+| step | subject and authority | transition |
+| --- | --- | --- |
+| 1 | caller controls string but cannot write accounting | passes `/var/lib/converter/accounting` |
+| 2 | converter has ambient write authority | resolves string under converter credentials |
+| 3 | kernel authorizes converter | returns writable descriptor to accounting object |
+| 4 | converter writes output | accounting object is corrupted |
+
+The permission system did exactly what its input requested. The API discarded provenance: it could not express “use only write authority delegated by this caller for this job.”
+
+<PlantUML code={`
+@startuml
+left to right direction
+rectangle "untrusted caller" as CALLER
+rectangle "converter\nambient account + job authority" as DEPUTY
+rectangle "mutable pathname namespace" as NS
+rectangle "accounting inode" as ACCOUNT
+rectangle "job directory capability" as JOBDIR
+rectangle "worker\ninput fd + output fd only" as WORKER
+CALLER --> DEPUTY : attacker-controlled path string
+DEPUTY --> NS : open with deputy credentials
+NS --> ACCOUNT : resolves protected name
+CALLER --> JOBDIR : request is authorized for tenant scope
+JOBDIR --> DEPUTY : broker opens bounded output object
+DEPUTY --> WORKER : delegate input/output descriptors
+WORKER --> ACCOUNT : no authority path
+note bottom of NS
+  Vulnerable path: designation from caller,
+  authorization from deputy's ambient authority.
+end note
+note bottom of WORKER
+  Redesigned path: worker receives only
+  object-specific authority for this conversion.
+end note
+@enduml
+`} />
+
+### Repair A: descriptor-oriented delegation
+
+An authorized broker opens the output under the tenant's approved directory, verifies object type, and passes the descriptor to a worker. The worker receives input-read, output-write, and bounded audit-send authority. It never receives a pathname-based ability to open arbitrary files.
+
+The API becomes conceptually `convert(input_fd, output_fd, audit_endpoint)`. The worker can corrupt the designated output if its conversion logic is faulty; it cannot select accounting unless the broker delegated that object.
+
+### Repair B: attenuated directory authority
+
+If the worker must create a name, give it a descriptor for one tenant directory and use relative, confinement-aware resolution. Restrict mutation operations, final-component policy, symbolic links, and mount crossings according to the service contract. On capability systems, derive a child capability with reduced rights; on POSIX-like systems, compose directory descriptors, process credentials, namespaces, and kernel resolution controls.
+
+Neither repair proves content safety, kernel correctness, or durability. It removes a specific authority path.
+
+### Application checkpoint: verify least authority
+
+The worker needs to read one input, create one output in a tenant directory, and emit one audit record. It receives a read-write descriptor for the entire tenant root and a network socket able to contact any address. Identify excess authority and propose an attenuated set.
+
+<details>
+<summary>Reveal the authority delta</summary>
+
+Excess powers include reading or overwriting unrelated tenant objects, traversing subdirectories, deleting or renaming names if the descriptor and APIs permit it, and sending arbitrary network traffic. A narrower set is: an input descriptor with read-only access; either an already opened output descriptor with write-only/truncate semantics or a create-only authority scoped to one directory and validated name; and a connected or brokered audit endpoint that accepts only the expected message form. Close or revoke each after the conversion.
+
+The answer must discuss operations as well as object scope. Replacing “tenant root” with “tenant output directory” while retaining remove, rename, and read authority may still exceed the task.
+
+</details>
+
+## Delegation, attenuation, and revocation
+
+Capabilities make delegation explicit: subject A transfers or derives a reference for B. Safe derivation is **monotonic attenuation**—the child authority is no greater than the parent in object scope, operation set, or an enforced constraint such as time or quota.
+
+Let a capability be modeled as $c=(o,R,g)$, where $o$ is an object, $R$ rights, and $g$ an optional guard. A derived capability $c'=(o',R',g')$ is attenuated only if the kernel-enforced meaning satisfies
+
+$$
+Authority(c')\subseteq Authority(c).
+$$
+
+Matching object identifiers and checking $R'\subseteq R$ is insufficient if a new guard broadens name resolution or if the derived reference reaches an alias outside the parent's object scope.
+
+Revocation is not automatic:
+
+- an ACL check can reject future opens after an entry is removed, while already open descriptors may remain valid by policy;
+- a direct object capability copied to many subjects may require deleting the object, traversing a derivation tree, or routing through a revocable proxy;
+- time-limited signed capabilities rely on clock and key assumptions; and
+- revocation that races an in-flight operation needs a defined linearization point.
+
+### Worked trace: delegated read with revocation proxy
+
+Subject A owns object X and creates proxy P. B receives capability `read(P)`, while P holds `read(X)`.
+
+1. Before revocation, B invokes P; P checks its live state and forwards read to X.
+2. A marks P revoked under P's lock.
+3. A later read beginning after that transition is rejected.
+4. A read already forwarded to X may complete unless the contract includes cancellation.
+
+The proxy adds an indirection and a failure/availability dependency. It supplies a crisp future-use revocation point that an unmediated copied capability lacks. Destroying X revokes more broadly but may violate other clients' availability.
+
+### Transfer checkpoint: choose the revocation contract
+
+A signing service delegates “sign at most ten artifacts before 18:00” to a build worker. List the kernel or trusted-service state required to enforce both constraints, and explain why a bearer token containing those words is insufficient by itself.
+
+<details>
+<summary>Reveal the enforcement obligations</summary>
+
+The operation count needs non-forgeable, race-free mutable state shared by all copies or a trusted online mediator that decrements a counter atomically. The deadline needs a trusted clock and a policy for clock rollback and in-flight operations. The object and key must remain bound to the authority; the worker must not possess an unrestricted signing-key copy. A bearer token is only serialized policy input until a trusted component verifies it and controls every signing path. Copying a ten-use token to two workers must not create twenty uses.
+
+</details>
+
+## ACLs and capabilities fail in different ways
+
+Consider an object store with one million objects and short-lived workers:
+
+| question | ACL-centered pressure | capability-centered pressure |
+| --- | --- | --- |
+| enumerate all users of one object | local to object policy | may require tracking distributed copies |
+| delegate one object to a worker | update policy or mint scoped credential | transfer/derive object reference |
+| revoke all future access | update central policy | revoke proxy/version/object or derivation subtree |
+| avoid ambient object naming | naming and authorization remain separable | designation and authority can be one reference |
+| audit principal intent | identity policy is direct | possession may need explicit principal/audit binding |
+
+A system can combine them. The relevant review question is which component mediates which path and what state survives delegation, caching, process creation, and revocation.
+
+## Linux capabilities are not object capabilities
+
+Linux divides powers traditionally associated with superuser into per-thread **capability** units such as `CAP_CHOWN` or `CAP_NET_ADMIN`. Permitted, effective, inheritable, ambient, and bounding sets govern their availability across operations and `execve` under detailed rules.
+
+{/* Source tracking: Linux-specific credential and capability-set claims are synthesized from the Linux kernel credentials documentation and capabilities(7). */}
+
+Despite the name, `CAP_DAC_OVERRIDE` is not an unforgeable reference to one file. It is broad privilege to bypass a class of discretionary access checks within the relevant namespace context. Granting it may increase ambient authority over many objects. By contrast, a descriptor opened to one file is closer to an object-specific capability: it designates one kernel object and carries bounded access mode, though surrounding APIs, `ioctl`s, delegation, and revocation semantics still require review.
+
+Similarly, a UID is a credential attribute, not a reference to every object that policy might allow that UID to access. “Use capabilities” is ambiguous until the mechanism is named.
+
+### Boundary checkpoint: seccomp and authority
+
+A worker may call only `read`, `write`, `close`, and `exit` under a system-call filter. It inherits a writable descriptor for the host's audit database. Is it least-authority with respect to that database?
+
+<details>
+<summary>Reveal the counterexample</summary>
+
+No. `write` remains permitted and the inherited descriptor designates the database with write authority. Reducing syscall surface does not attenuate the descriptor. The worker needs the descriptor closed or replaced with a narrower endpoint. Conversely, closing the descriptor does not eliminate every kernel attack path; syscall filtering and object authority address different dimensions.
+
+</details>
+
+## Synthesis: authority review for an image pipeline
+
+Review a pipeline with uploader U, decoder D, transformer T, publisher P, cache C, and audit sink A. Produce:
+
+1. a subject-object-operation matrix;
+2. the authority each process receives at creation;
+3. every delegation edge and attenuation rule;
+4. the revocation and process-exit behavior;
+5. one confused-deputy trace and its repair;
+6. one time-of-check/time-of-use trace and its repair; and
+7. the trusted computing base for the stated policy.
+
+<details>
+<summary>Reveal the grading rubric and diagnostic markers</summary>
+
+- **Model, 20%.** Distinguishes principals, subjects, objects, operations, credentials, and authority. Path strings are not listed as capabilities.
+- **Least authority, 20%.** D receives only input-read and bounded output; T receives explicit input/output references; P alone receives publish authority; A is a constrained endpoint rather than general network access.
+- **Delegation/revocation, 15%.** Every transfer states whether rights can be copied, attenuated, inherited, and revoked; in-flight behavior is defined.
+- **Exploit traces, 20%.** Each trace identifies attacker-controlled designation, deputy authority or namespace race, exact monitor decisions, and the first unauthorized effect.
+- **Repair, 15%.** Removes the authority edge or binds validation to the opened object; does not merely add another pathname check.
+- **Boundary, 10%.** Names kernel, broker/reference monitor, and hardware assumptions; does not claim that access control proves decoder memory safety or information-flow secrecy.
+
+Responses lose substantial credit for equating authentication with authorization, Linux privilege bits with object capabilities, or successful permission checks with caller intent.
+
+</details>
+
+## Connections and deliberate boundary
+
+Path resolution determines whether a name can be attacker-controlled between validation and use. Process creation determines descriptor and credential inheritance. Containers reshape namespace views and resource policy while sharing a kernel. Virtual machines insert a VMM and hardware boundary below a guest. Kernel architecture determines the size of the trusted computing base and where authority checks execute.
+
+The lesson deliberately omits mandatory labels, Bell–LaPadula/Biba models, noninterference, covert-channel bounds, remote authentication, cryptographic capability construction, and complete capability-kernel verification. Naming those topics without deriving them would not add mastery.
+
+## References & Further Reading
+
+- [Saltzer and Schroeder, “The Protection of Information in Computer Systems” (1975)](https://www.mit.edu/~Saltzer/publications/protection/) — primary statement of design principles and protection mechanisms.
+- [Norman Hardy, “The Confused Deputy (or why capabilities might have been invented)”](https://doi.org/10.1145/54289.871709) — primary confused-deputy formulation and capability-oriented diagnosis.
+- [Dennis and Van Horn, “Programming Semantics for Multiprogrammed Computations” (MIT-LCS-TR-023)](https://publications.csail.mit.edu/lcs/pubs/pdf/MIT-LCS-TR-023.pdf) — primary capability-oriented protection model.
+- [Watson et al., “Capsicum: Practical Capabilities for UNIX”](https://research.google/pubs/capsicum-practical-capabilities-for-unix/) — object-capability application compartmentalization on a UNIX interface.
+- [seL4 Reference Manual](https://docs.sel4.systems/projects/sel4/manual.html) and [capability tutorial](https://docs.sel4.systems/Tutorials/capabilities.html) — kernel-object capability semantics and rights.
+- [Linux kernel documentation, Credentials in Linux](https://www.kernel.org/doc/html/latest/security/credentials.html) — task, file, UID/GID, key, and capability credential structures.
+- [Linux man-pages, `capabilities(7)`](https://man7.org/linux/man-pages/man7/capabilities.7.html) — Linux privilege-unit semantics and capability sets.
+- [Linux man-pages, `openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html) — resolution controls relevant to descriptor-relative confinement.

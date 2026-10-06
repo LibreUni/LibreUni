@@ -1,0 +1,116 @@
+---
+title: "Advanced Pointers, Qualifiers, and Callbacks"
+course: c
+description: "Use pointer-to-pointer interfaces, const qualifiers, opaque handles, and function pointers without hiding ownership or representation assumptions."
+prerequisites:
+  - "Pointers, functions, arrays, and object lifetime"
+outcomes:
+  - "Read nested pointer and qualifier declarations accurately"
+  - "Use pointer-to-pointer and callback interfaces with explicit ownership"
+  - "Identify representation and aliasing assumptions that are not portable C"
+omissions:
+  - "Lock-free atomic reclamation and platform-specific calling conventions are deferred."
+estimatedMinutes: 65
+assessment: "Review a callback API and state its lifetime, reentrancy, and ownership obligations."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Advanced Pointers, Qualifiers, and Callbacks
+
+Pointer syntax becomes difficult when several independent contracts are compressed into one declaration. Expand each declaration from the identifier outward, then ask which object can be mutated, who owns it, and how long the value remains usable.
+
+<Quiz client:load
+  title="Read the qualifier"
+  question="What can a function do with `const int *p`?"
+  options={["Change the int through p but not the pointer", "Change the pointer value and the int", "Read the designated int but cannot modify it through p; the pointer parameter itself is still local", "Free p because const means ownership"]}
+  correctIndex={2}
+  explanation="const qualifies the pointed-to int. It does not by itself describe lifetime or ownership, and another non-const alias could exist; the function must honor the read-only view it received."
+/>
+
+## Pointer-to-pointer interfaces
+
+An `int **out` parameter lets a function write a pointer value into a caller-owned pointer object. This is useful for allocation and replacement, but it creates two validity obligations: the outer pointer must designate a live pointer object, and the new inner pointer must follow its own ownership contract.
+
+```c
+int make_buffer(size_t n, char **out) {
+    char *buffer = malloc(n);
+    if (buffer == NULL) return -1;
+    *out = buffer;       /* transfer ownership to caller */
+    return 0;
+}
+```
+
+The function must not write `*out` on failure unless the API says so. A caller can initialize `char *buffer = NULL`, call the function, and free it only after successful ownership transfer.
+
+<CodeExercise client:load
+  title="Declare a read-only output view"
+  code={`/* The function may change the caller's pointer, not the bytes it points to. */
+int expose(const [!blank!] char **out);`}
+  answers={["const"]}
+  explanation="The const applies to the char data. The outer pointer remains writable so the function can store the returned view. The full API must also document how long the view remains valid."
+/>
+
+## Function pointers and callbacks
+
+A function pointer is a value designating a function with a compatible type. A callback API must specify when the callback runs, what arguments mean, whether it may re-enter the caller, and whether the callback remains registered after the call.
+
+```c
+typedef void (*event_handler)(int event, void *context);
+
+struct listener {
+    event_handler handler;
+    void *context;       /* borrowed or owned — document which */
+};
+```
+
+In interrupt or signal context, ordinary application callbacks may be unsafe because they allocate, block, take non-reentrant locks, or access non-atomic shared state. A safer design records a small event and processes it in a normal context.
+
+<CodeRunner client:load
+  title="Pass behavior and state separately"
+  language="c"
+  code={`#include <stdio.h>
+
+typedef int (*transform)(int, void *);
+
+int add_context(int value, void *context) {
+    return value + *(int *)context;
+}
+
+int apply(int value, transform fn, void *context) {
+    return fn(value, context);
+}
+
+int main(void) {
+    int amount = 5;
+    printf("%d\\n", apply(7, add_context, &amount));
+    return 0;
+}`}
+  output="12"
+/>
+
+## Representation and aliasing boundaries
+
+`void *` can carry an object pointer and be converted back to the original compatible type, but it is not a license to ignore alignment, lifetime, or effective-type rules. Casting a pointer changes the type used for access; it does not change the bytes into a new object. Use `memcpy` or a documented serialization format for representations that cross trust or ABI boundaries.
+
+## Transfer exercises
+
+1. State the difference between `const int *p`, `int *const p`, and `const int *const p`.
+2. Design an unregister operation for a callback that may be running concurrently. What synchronization or deferred reclamation is required?
+3. Explain why a callback context pointer cannot outlive the object it designates.
+4. Identify one reason a byte-wise cast of a network packet into a struct can fail.
+
+### Diagnostic solutions
+
+1. Read-only data through a mutable local pointer; fixed pointer to mutable int; fixed pointer to read-only int, respectively.
+2. The design needs a happens-before rule: wait for active callbacks, use reference counting/epochs, or forbid unregister during dispatch. Merely setting the function pointer to null can race with a call.
+3. The callback may later dereference a dangling pointer. Copy owned state, extend its lifetime, or unregister before destruction.
+4. Padding, alignment, endianness, representation, and strict aliasing can all differ. Parse fields explicitly or use a specified serialization layout.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.5.4 and §6.7.3](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [SEI CERT C EXP rules](https://wiki.sei.cmu.edu/confluence/display/c/EXP39-C.+Do+not+access+a+variable+through+a+pointer+of+an+incompatible+type)
+* [cppreference: function pointer](https://en.cppreference.com/w/c/language/pointer)

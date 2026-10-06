@@ -2,8 +2,30 @@
 title: "Performance Investigation"
 course: "computer-architecture"
 description: "Design and evaluate an experiment that distinguishes compute, cache, and memory bottlenecks."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Formulate a mechanism-level performance hypothesis with workload, baseline, predicted counter, and falsifier."
+  - "Control warm-up, affinity, compiler, input, thermal, and statistical confounders while measuring relevant counters."
+  - "Report effect size, uncertainty, correctness checks, and limits without turning one benchmark into a universal claim."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 480
+assessment: "Given noisy benchmark observations, construct a controlled workload matrix and decide whether the proposed cache/compute explanation is supported."
 ---
 # Performance Investigation
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+<Quiz client:load title="Measure before tuning"
+  question="What is the first step in a defensible performance investigation?"
+  options={["Change the most visible code before measuring any resource behavior", "State a workload and hypothesis with a measurable metric", "Increase every cache capacity without identifying the limiting resource", "Report one best-case run as the expected production performance"]}
+  correctIndex={1}
+  explanation="A workload and hypothesis define what evidence could support or falsify the diagnosis. Without them, a benchmark is an anecdote."
+/>
 
 This laboratory treats a performance claim as a falsifiable engineering hypothesis. The subject is two implementations of a matrix kernel: a naive traversal and a tiled/vectorized implementation. The aim is not to produce a chart that flatters an optimization. It is to determine which resource limits each version, quantify uncertainty, and identify the input boundary where the conclusion changes.
 
@@ -20,6 +42,15 @@ Fix element type, matrix dimensions, initialization, compiler version, optimizat
 Warm-up matters. The first iteration may include page faults, instruction-cache fills, dynamic linking, frequency ramp, and allocator effects. Decide whether the target is cold-start latency or steady-state throughput. For steady state, run warm-up iterations and report that policy. For cold start, reset or isolate state rather than silently discarding the first observation.
 
 Repeat enough times to observe scheduling and thermal variation. Report median, interquartile range, and high percentiles; show raw repetitions when sample count is small. A single fastest run is a lower bound on incidental interference, not an estimate of typical performance.
+
+<CaseStudy client:load
+  title="One warm run is not a result"
+  scenario="One warm benchmark run places design A eight percent ahead of design B. The report attributes the difference to A's cache policy without collecting cache events."
+  question="What evidence is needed before accepting that causal claim?"
+  options={["Repeated controlled trials plus cache measurements predicted by the policy model", "The fastest observed run plus a stronger sentence in the report conclusion", "A shorter benchmark that reduces opportunities to observe cache behavior", "A new product name that distinguishes the two measured configurations"]}
+  correctIndex={0}
+  explanation="Performance is an empirical claim. A model predicts the mechanism, while controls and repeated measurements distinguish that mechanism from cache state, thermal drift, scheduling, or workload bias."
+/>
 
 ## Measurement boundaries
 
@@ -56,6 +87,30 @@ Test aliasing and alignment assumptions. If the API permits overlapping input/ou
 Run four matrix sizes: 64×64, 256×256, 1024×1024, and 4096×4096, with three tile sizes and both implementations. Warm up five times, measure ten repetitions per cell, pin to one core, and record cycles, instructions, L1/L2/LLC misses, branch misses, and memory bytes. For each cell, verify a checksum and report median cycles per element and p99.
 
 If tiling helps only at 1024 and 4096 while L2/LLC misses per element fall, the cache hypothesis gains support. If it helps at all sizes with unchanged misses but lower instructions, vectorization or loop overhead is likely. If p50 improves but p99 worsens, investigate preemption, memory contention, or tile-size-dependent allocation. If the compiler emits identical loops, the source-level optimization has no measured implementation effect and the hypothesis must be revised.
+
+**Worked evidence calculation.** Consider this deliberately small fixture, where each row is one paired trial and the cache counter is normalized per element:
+
+| size | variant | median cycles/element | L2 misses/element | p99 cycles/element |
+| ---: | --- | ---: | ---: | ---: |
+| 1024² | naive | 8.0 | 0.22 | 10.1 |
+| 1024² | tiled | 6.4 | 0.11 | 7.0 |
+| 64² | naive | 2.1 | 0.01 | 2.3 |
+| 64² | tiled | 2.0 | 0.01 | 2.2 |
+
+At 1024², tiling reduces median time by $(8.0-6.4)/8.0=20\%$ and L2 misses by 50%; at 64² it changes time by only $4.8\%$ with no miss reduction. This pattern supports the stated cache hypothesis only for the larger working set. It does not prove causation: vector instructions, frequency, and allocation must still be controlled or measured. The table is a shipped deterministic teaching fixture, not a claim about measured hardware.
+
+<CodeRunner client:load
+  title="Reproduce the fixture's effect sizes"
+  language="python"
+  code={`rows = [(8.0, 0.22, 6.4, 0.11), (2.1, 0.01, 2.0, 0.01)]
+for naive_time, naive_miss, tiled_time, tiled_miss in rows:
+    time_change = (naive_time - tiled_time) / naive_time
+    miss_change = (naive_miss - tiled_miss) / naive_miss if naive_miss else 0.0
+    print(f"time reduction={time_change:.1%}, L2-miss reduction={miss_change:.1%}")`}
+  output="time reduction=20.0%, L2-miss reduction=50.0%\ntime reduction=4.8%, L2-miss reduction=0.0%"
+/>
+
+The runner computes only the supplied fixture; it is not a hardware benchmark and cannot establish cache causality. A learner's report must separate this deterministic arithmetic from evidence collected on a real target.
 
 ## Independent practice
 

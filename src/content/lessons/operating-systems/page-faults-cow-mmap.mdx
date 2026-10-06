@@ -1,0 +1,367 @@
+---
+title: "Page Faults, Copy-on-Write, and mmap"
+course: "operating-systems"
+description: "Treat page faults as validated state transitions that materialize anonymous memory, preserve fork isolation with copy-on-write, and connect file objects to process address spaces."
+prerequisites:
+  - "Virtual pages, PTE permissions, TLB invalidation, and physical-frame allocation"
+  - "Processes, fork-style creation, files, and reference counting"
+  - "Locks, sleep/wakeup, and failure-atomic state updates"
+outcomes:
+  - "Classify RISC-V instruction, load, and store page faults by region, backing object, access, and recoverability."
+  - "Derive a restartable fault-handler protocol that validates authority before allocating or exposing a frame."
+  - "Trace copy-on-write fork through refcounts, PTE changes, concurrent writers, TLB invalidation, and allocation failure."
+  - "Distinguish anonymous, file-backed, MAP_PRIVATE, and MAP_SHARED fault behavior, including object-end and writeback boundaries."
+omissions:
+  - "Swap layout, page-replacement policy, huge-page collapse, userfaultfd, NUMA migration, and memory-mapped device I/O are not implemented."
+  - "The lesson specifies a correct COW design but does not publish a complete xv6 patch or a production VM locking scheme."
+estimatedMinutes: 360
+assessment: "Given a mixed anonymous/file-backed address map and an adversarial sequence of fork, read, write, truncate, and allocation-failure events, classify each fault, update mappings and refcounts, preserve retry semantics, and defend the final state against data disclosure or unintended sharing."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Page Faults, Copy-on-Write, and mmap
+
+A 1 GiB process calls `fork()`, and the child immediately replaces its image with a small program. Eagerly copying 1 GiB delays the child and consumes memory for bytes it never reads. Pre-materializing every valid page avoids its initial not-present fault but pays work before demand exists. Deferring all allocation without recording region intent lets an invalid pointer masquerade as legitimate demand.
+
+A page fault resolves that tension. It is a synchronous exception raised by the current instruction when address translation or access checking cannot complete. Some faults are policy requests—materialize a valid lazy page or make a private copy. Others are violations—unmapped address, forbidden operation, or access beyond the backing object. The same hardware event can represent either class; region metadata and access intent decide which.
+
+> **Fault-resolution invariant.** Retrying the faulting instruction is safe only after the kernel has installed a mapping that (1) belongs to the faulting region, (2) represents the correct backing object and byte offset, (3) grants no more authority than the region allows, and (4) is visible after required translation invalidation.
+
+## A fault is evidence, not a diagnosis
+
+The assessed machine uses precise, restartable RISC-V page faults. `sepc` identifies the faulting instruction; `scause` identifies the access class; `stval` supplies the faulting virtual address when the implementation reports it. Relevant synchronous cause codes are:
+
+| `scause` code | Access that failed | Typical policy distinction |
+| ---: | --- | --- |
+| 12 | instruction page fault | executable mapping, code loading, or execute denial |
+| 13 | load page fault | readable mapping, demand-zero, or file read |
+| 15 | store/AMO page fault | writable mapping, dirtying, or copy-on-write |
+
+Hardware does not know whether an absent PTE means “grow a heap,” “load a file page,” “guard page,” “mapping removed,” or “process bug.” The kernel must look up the virtual-memory region that contains the address and apply its policy.
+
+{/* Source tracking: RISC-V page-fault cause codes, sepc/scause/stval roles, and retry model were verified against the RISC-V Privileged Architecture trap and supervisor-translation chapters. */}
+
+A useful classification key is the tuple
+
+$$
+(\text{region},\ \text{access},\ \text{PTE state},\ \text{backing state}).
+$$
+
+| Region/PTE condition | Load | Store | Instruction fetch |
+| --- | --- | --- | --- |
+| anonymous, authorized, absent | allocate zeroed frame | allocate zeroed frame | reject unless region executable |
+| private file, authorized, absent | load/cache file page | load then preserve private-write semantics | load if executable |
+| present COW mapping | read shared frame | create or promote private writable frame | follow execute permission |
+| present genuine read-only mapping | read | reject | follow execute permission |
+| no containing region | reject | reject | reject |
+| guard region | reject | reject | reject |
+
+**Retrieval — state the missing evidence.** A store page fault arrives at an address whose PTE has `W=0`. Why is “make it writable” an invalid generic handler?
+
+<details>
+<summary>Reveal the diagnostic answer</summary>
+
+`W=0` could encode a genuine read-only mapping, a COW mapping, a guard, or an invalid state. The handler needs region permission and a COW-specific marker or equivalent metadata. Promoting every read-only PTE grants write authority to code, constants, and shared read-only objects.
+
+</details>
+
+## Derive a restartable fault protocol
+
+Fault resolution crosses several ownership domains: process metadata, page tables, physical allocator, file/page cache, and scheduler. A robust protocol separates **validation**, **preparation**, **commit**, and **retry**.
+
+<PlantUML
+  code={`@startuml
+title "Recoverable page-fault decision"
+start
+:capture fault VA, access, and process;
+:find containing virtual-memory region;
+if (region exists and access is allowed?) then (yes)
+  :inspect PTE and backing-object state;
+  if (recoverable lazy or COW case?) then (yes)
+    :prepare frame or backing page;
+    :revalidate mapping under its lock;
+    if (state still matches fault?) then (yes)
+      :commit PTE, refcount, and dirty state;
+      :invalidate stale translation as required;
+      :retry faulting instruction;
+    else (no)
+      :release unused prepared resources;
+      :retry classification;
+    endif
+  else (no)
+    :deliver process-visible failure;
+    stop
+  endif
+else (no)
+  :deliver process-visible failure;
+  stop
+endif
+@enduml`}
+/>
+
+The prepare-before-commit shape matters under memory pressure. If allocation or file I/O fails, the old mapping remains valid and no partial authority is exposed. Revalidation matters under concurrency: another thread may resolve, unmap, protect, or replace the region while the handler sleeps for memory or storage.
+
+The handler also needs a bounded lock discipline. Holding a spinlock across file I/O or a sleeping allocator deadlocks or stalls unrelated CPUs. Dropping all protection without recording a generation permits committing a page into a region that has been unmapped and reused. A production kernel solves this with layered locks, reference counts, region versions, or retry protocols; the assessed invariant is that commit rechecks the state it relied on.
+
+### Worked trace: anonymous demand-zero allocation
+
+Region `[0x400000, 0x404000)` is anonymous, user read/write, non-executable. No pages are resident. A process stores `7` at `0x4012A0`.
+
+1. `scause=15` identifies a store page fault; `stval=0x4012A0` identifies the address.
+2. Region lookup succeeds and authorizes a store.
+3. The absent PTE is an expected lazy state, not a COW or file-backed state.
+4. The kernel allocates a 4 KiB frame and zeroes **all** bytes before user exposure. Zeroing prevents disclosure of a prior owner's data.
+5. Under the mapping lock, the kernel rechecks that the region still covers the address and the PTE is still absent.
+6. It installs a user read/write, non-executable leaf for page `0x401000`, performs architecture-required translation synchronization, and retries the store.
+7. The retried store changes only offset `0x2A0`; every other byte remains zero.
+
+If frame allocation fails at step 4, the PTE stays absent. Mapping an uninitialized frame and planning to zero it later violates confidentiality as soon as user mode can load from it.
+
+### Worked trace: a competing unmap
+
+Thread T0 faults at `0x4012A0` and drops the region lock to allocate. T1 concurrently unmaps `[0x400000, 0x404000)` and maps a read-only file at the same virtual interval. T0 resumes with a zeroed frame.
+
+Committing from the stale region snapshot would overwrite the new file mapping with a writable anonymous page. Revalidation detects that the region generation or backing object changed; T0 releases its frame and restarts classification. The restarted store now fails against the read-only file region.
+
+**Application — order the operations.** Place these actions into a safe demand-zero sequence: `publish writable PTE`, `zero frame`, `allocate frame`, `validate region`, `revalidate region/PTE`, `retry instruction`, `invalidate stale translation if needed`.
+
+<details>
+<summary>Reveal the ordering and failure points</summary>
+
+Validate region → allocate frame → zero frame → revalidate region/PTE → publish writable PTE → invalidate any stale translation required by the architecture → retry. Allocation and zeroing may occur before the commit lock; publication cannot. Failure before publication releases the candidate frame. Failure after publication must use a defined rollback that first removes authority and completes invalidation; avoiding that complex path is why commit should contain no fallible work.
+
+</details>
+
+## Copy-on-write preserves fork semantics lazily
+
+POSIX requires a child's private mappings to behave as private after `fork()`: writes performed by either process after the fork are not visible through the other's private mapping. It does not require an eager physical copy. Copy-on-write (COW) implements the semantic contract with temporary physical sharing plus write faults.
+
+{/* Source tracking: fork inheritance and MAP_PRIVATE visibility requirements were verified against POSIX.1-2024 fork(); the COW state machine is an original derivation consistent with xv6's teaching model. */}
+
+For each writable private page at fork time:
+
+1. map the same PFN into parent and child;
+2. clear writable permission in **both** PTEs;
+3. mark both mappings as COW using software metadata distinguishable from genuine read-only state;
+4. increment the physical frame's reference count for the additional mapping; and
+5. invalidate any parent translation that may still cache write authority before either process resumes.
+
+The COW invariant is:
+
+> A COW frame may have multiple readers, but a process receives writable authority only to a frame that is private to the mapping or is being atomically converted to private ownership.
+
+### Worked trace: parent and child diverge
+
+Before `fork`, parent VPN 6 maps PFN 40 `RW`; frame 40 contains bytes `[A, B, C, …]` and has reference count 1.
+
+After `fork`:
+
+| Mapping | PTE | Physical frame | Refcount |
+| --- | --- | ---: | ---: |
+| parent VPN 6 | `R--, COW` | 40 | 2 |
+| child VPN 6 | `R--, COW` | 40 | 2 |
+
+The child stores `Z` at offset 1:
+
+1. Hardware raises a store page fault because the child PTE is not writable.
+2. Region and software metadata prove this was originally writable private memory and is now COW.
+3. Refcount 2 means another mapping still needs frame 40. Before relying on its bytes outside the mapping lock, the handler acquires a temporary reference/pin to frame 40. It allocates frame 91 and copies all 4 KiB from the pinned source.
+4. Under the relevant locks, it revalidates the child PTE, establishes frame 91's mapping reference, and maps child VPN 6 to frame 91 as `RW` without COW. It retains both the child's old mapping reference to frame 40 and the temporary pin while any stale child translation can still name frame 40.
+5. It completes the required invalidation on every hart that could use the child's old translation. Only after those acknowledgements may it drop the child's old mapping reference and then the temporary pin. Frame 40 now has one mapping reference, held by the parent.
+6. The store retries and changes frame 91 offset 1 to `Z`. Parent frame 40 remains `[A, B, C, …]`.
+
+The parent later writes the same page. Since frame 40 now has refcount 1 and the parent's PTE is still COW, the kernel may remove the COW marker and restore write permission in place. No copy is needed, but translation invalidation still is.
+
+### The original permission must survive
+
+Suppose a text page was read/execute before `fork`. Marking every shared page COW would let a store fault convert executable text into writable memory. The design needs to distinguish:
+
+- **private writable, temporarily read-only because of COW**; and
+- **intrinsically read-only or execute-only**.
+
+Software-reserved PTE bits can carry a COW marker on an architecture that permits it, or region/page metadata can. The encoding choice is subordinate to the semantic proof: only a mapping whose policy includes write may resolve a COW store.
+
+### Concurrent COW faults
+
+Two threads in one process can fault on the same COW page concurrently. Both may allocate candidate frames before either commits. At commit, one wins and installs its private frame. The other must detect that the PTE no longer matches the old COW state, release its unused candidate, and retry the store against the new writable mapping. Installing both candidates in sequence can leak one frame or lose a completed write.
+
+A failure-atomic skeleton is:
+
+```text
+lock mapping and old-frame references
+snapshot := require current COW PTE
+acquire a temporary pin while snapshot's mapping reference is valid
+unlock
+candidate := allocate and copy old frame
+lock mapping and old-frame references
+if current PTE != snapshot:
+    unlock; free candidate; drop temporary pin; retry classification
+establish candidate's mapping reference
+install candidate as private writable
+retain old mapping reference and temporary pin
+unlock
+invalidate every target translation and wait for completion
+drop old mapping reference, then drop temporary pin
+retry instruction
+```
+
+The two retained old-frame references have different meanings: one accounts for the PTE that was replaced, and one pins the snapshot while the handler works. Neither may be released in a way that makes the old frame reusable before stale translations are gone. A kernel may instead invalidate the old PTE and complete shootdown before publishing the candidate, but it must serialize competing faults through that transient state. The real implementation must define lock ordering, shootdown waiting, and the exact reference-count operations. The skeleton intentionally omits a complete kernel patch.
+
+**Transfer — allocation failure.** A child faults on a shared COW page with refcount 2, but no frame is available. Which three states must remain unchanged, and why is “temporarily grant write to the shared frame” invalid?
+
+<details>
+<summary>Reveal the failure contract</summary>
+
+The child's PTE must remain read-only COW, the parent's mapping must remain unchanged, and the shared frame's reference count/content must remain valid. Granting the child write authority would make its modification visible to the parent, violating private mapping semantics. The kernel may report an out-of-memory failure or apply a documented reclamation policy; it cannot weaken isolation to make the instruction complete.
+
+</details>
+
+## mmap binds regions to memory objects
+
+`mmap()` establishes a region whose bytes correspond to an anonymous object or to a file object's byte range. `prot` describes permitted accesses. `MAP_PRIVATE` and `MAP_SHARED` describe the disposition of writes, not whether initial physical pages are shared.
+
+| Mapping | Read fault | First authorized write | Persistence relation |
+| --- | --- | --- | --- |
+| anonymous private | supply zero page/frame | private writable frame | no file object |
+| file `MAP_PRIVATE` | obtain file-backed page | COW to process-private frame | modification does not change underlying object |
+| file `MAP_SHARED` | obtain shared file page | dirty shared page under VM/filesystem rules | modification targets underlying object |
+
+A private mapping can initially reference the same page-cache frame as other mappings. “Private” constrains the visibility of modifications; it does not demand a unique frame for every read.
+
+{/* Source tracking: mmap protection, MAP_PRIVATE/MAP_SHARED write semantics, object references, and accesses beyond object bounds were verified against POSIX.1-2024 mmap(). */}
+
+### Worked trace: one file, two mapping policies
+
+A file contains 6,000 bytes. Page size is 4,096 bytes. Process P maps 8,192 bytes `MAP_PRIVATE | PROT_READ | PROT_WRITE`; process Q maps the same range `MAP_SHARED | PROT_READ | PROT_WRITE`.
+
+1. P and Q read offset 100. Both may map the same page-cache frame; no private copy is required.
+2. P writes offset 100. A COW fault gives P a private frame for the first file page. Q and the file object do not observe P's byte.
+3. Q writes offset 5,000. Q modifies the shared second file page and marks it dirty according to the OS/filesystem contract.
+4. Bytes from file offset 6,000 to the end of the last partial page are zero-filled under POSIX mapping semantics, and modifications there are not written to the file.
+5. If a longer mapping included a whole page beyond the object and the process referenced that page, POSIX requires `SIGBUS` for the out-of-object whole-page access.
+
+Closing the file descriptor after a successful mapping does not remove the mapping: POSIX specifies that the mapping holds an additional reference to the file until the mappings are gone.
+
+### Truncation is a concurrent object change
+
+If another process changes the mapped file's size after `mmap`, POSIX leaves the effect on added or removed portions unspecified. A robust application cannot treat a concurrent truncation as an ordinary stable-memory event. Kernel internals still need coherent invalidation and fault behavior, but portable application reasoning must stay within the interface contract.
+
+**Application — classify without the slogan “fault equals disk.”** For each event, state whether disk I/O is required under the information given:
+
+1. first write to a COW page whose source frame is resident;
+2. first read of an anonymous demand-zero page;
+3. read fault on a file page already in the page cache;
+4. read fault on a nonresident file page;
+5. store to a genuine read-only mapping.
+
+<details>
+<summary>Reveal classifications</summary>
+
+1. No file read is required; memory allocation and a RAM copy may be required.
+2. No file read is required; a zeroed frame or protected shared-zero-page mechanism is sufficient.
+3. No storage read is required; install a translation to the resident cached page subject to permissions.
+4. Storage I/O is required unless another cache/device layer already supplies the data.
+5. No recovery I/O is justified; the access is rejected.
+
+The diagnostic gap is conflating a translation exception with one particular backing-store action.
+
+</details>
+
+## Fault-handler boundaries that prevent security defects
+
+### Zero before exposure
+
+A newly allocated user frame may contain bytes from a previous process or kernel object. Zeroing after PTE publication creates a disclosure interval. The zeroing operation must complete before any user-readable mapping exists.
+
+### Validate arithmetic and object offsets
+
+For file-backed mapping start $v_0$, fault address $v$, and file offset $f_0$, the backing byte begins at
+
+$$
+f = f_0 + \operatorname{page\_floor}(v-v_0).
+$$
+
+Every subtraction, alignment, addition, and length check must be overflow-safe. An overflow that wraps into the beginning of a file can map an authorized virtual address to the wrong object bytes.
+
+### A timeout or kill does not revoke DMA or I/O
+
+If a process is killed while a fault waits on storage, the in-flight I/O may still own a kernel buffer. The process mapping can be abandoned only through a path that preserves buffer and request lifetimes. Process cancellation is not device cancellation.
+
+### Kernel accesses to user memory need a policy
+
+Copying syscall data through `copyin` or `copyout` may encounter lazy pages without arriving through the ordinary user-trap path. The kernel must either invoke the same validated fault mechanism or reject the copy according to its contract. Bypassing region checks because the CPU is privileged can turn a user pointer into kernel-chosen memory corruption.
+
+{/* Source tracking: The xv6-specific observation that copyin/copyout can call vmfault was checked in xv6-riscv rev5 kernel/vm.c; production kernels may structure this path differently. */}
+
+## Synthesis assessment: mixed backing under pressure
+
+Page size is 4 KiB. Parent P has:
+
+- anonymous private region A at `[0x400000, 0x404000)`, read/write;
+- private file mapping F at `[0x600000, 0x603000)`, read/write, file offsets `[0, 12288)`;
+- shared file mapping S at `[0x700000, 0x702000)`, read/write;
+- read/execute text T at `[0x100000, 0x102000)`.
+
+Before `fork`, A page 0 maps PFN 10, F page 1 maps page-cache PFN 20, S page 0 maps page-cache PFN 30, and T page 0 maps PFN 40. All frame reference counts are 1. P forks child C. The implementation applies COW only where private writes must diverge.
+
+Trace these events:
+
+1. C reads A at `0x400080`.
+2. C writes F at `0x601120`; allocation succeeds with PFN 77.
+3. P writes A at `0x400040`; allocation fails.
+4. C writes S at `0x700010`.
+5. C writes T at `0x100008`.
+6. P unmaps A while C still maps it.
+
+For each event, state the fault/no-fault outcome, mapping/refcount changes, and whether another process or the file object observes a changed byte. End with the final references to PFNs 10, 20, 30, 40, and 77.
+
+<details>
+<summary>Reveal reference trace and rubric</summary>
+
+Immediately after fork:
+
+- A/PFN 10: parent and child PTEs are read-only COW; refcount 2.
+- F/PFN 20: parent and child mappings may share the resident file page read-only COW for private-write semantics; refcount/accounting is at least 2 mapping references in this model.
+- S/PFN 30: both mappings remain shared read/write; refcount 2.
+- T/PFN 40: both remain genuine read/execute, not COW; refcount 2.
+
+Events:
+
+1. C's read of A succeeds without a fault under the COW read-only mapping. No byte changes.
+2. C's store faults and validates private writable policy plus COW state. The handler pins PFN 20, copies it to PFN 77, establishes 77's mapping reference, and maps C's F page writable/private to 77 while retaining C's old mapping reference and the temporary pin on 20. After invalidating every stale C translation, it drops the old mapping reference and pin, then retries. P and the file object do not observe C's modification.
+3. P's store to A faults. Allocation failure leaves both COW mappings and PFN 10 refcount 2 unchanged; no store completes.
+4. C's store to S proceeds through the shared writable mapping (or dirties it through an implementation-specific first-write mechanism). P's shared mapping and the underlying file object are within the visibility/persistence contract for that changed page.
+5. C's store to T is rejected. T was never writable, so COW resolution is forbidden.
+6. P removes its A PTE, performs required invalidation, and decrements PFN 10 to refcount 1. C retains a valid read-only COW mapping; because it is now sole owner, a later authorized write could promote in place.
+
+Final references in the stated model: PFN 10 → C only (1); PFN 20 → P's private file mapping (1 mapping reference); PFN 30 → P and C shared mappings (2); PFN 40 → P and C text mappings (2); PFN 77 → C private file page (1). Cache-owned references, if modeled separately, must be stated rather than silently mixed with mapping references.
+
+Rubric, 28 points:
+
+- 5 points: correct post-fork classification of writable-private, shared, and genuine read-only mappings;
+- 6 points: COW success commits PFN 77 without changing P or the file;
+- 4 points: allocation failure leaves all old state intact;
+- 4 points: MAP_SHARED visibility distinguished from durability timing;
+- 3 points: text write rejected without COW;
+- 3 points: unmap decrements only P's reference after invalidation;
+- 3 points: final refcounts use one declared counting convention.
+
+Any trace that grants write access to PFN 10 after failed allocation or converts text to COW violates the central isolation contract and cannot receive more than half credit.
+
+</details>
+
+## Deliberate boundary and source trail
+
+The fault model excludes replacement and swap, huge pages, NUMA migration, memory-mapped devices, user-space fault handling, and speculative side effects. It assumes a page-oriented file cache and a precise restartable ISA. The COW skeleton establishes state obligations but deliberately omits production lock topology and a complete teaching-kernel patch.
+
+{/* Source tracking: xv6 page-fault dispatch and vmfault behavior were checked against revision 5 kernel/trap.c and kernel/vm.c at commit 7d7adbb; LibreUni examples and assessment are original. */}
+
+## References & Further Reading
+
+- [RISC-V Privileged Architecture: trap causes and supervisor address translation](https://docs.riscv.org/reference/isa/priv/supervisor.html)
+- [POSIX.1-2024 `fork()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fork.html)
+- [POSIX.1-2024 `mmap()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html)
+- [xv6-riscv revision 5 book, virtual memory and traps](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf)
+- [xv6-riscv `kernel/trap.c` at revision 5](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/trap.c)
+- [xv6-riscv `kernel/vm.c` at revision 5](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/vm.c)

@@ -2,14 +2,35 @@
 title: "Architecture Assessment"
 course: "computer-architecture"
 description: "Integrated written assessment for computer architecture."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Solve unseen integrated problems spanning bit representation, ISA transitions, datapath control, pipelines, caches, VM, I/O, and parallelism."
+  - "Produce precise traces, derivations, invariants, and failure analyses with explicit assumptions and units."
+  - "Transfer the methods to an unfamiliar machine and distinguish architectural guarantees from implementation evidence."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 600
+assessment: "Complete the integrated written assessment: derive results, show one timed trace per mechanism, explain a counterexample, and defend design choices against changed parameters."
 ---
 # Architecture Assessment
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+
+<Quiz client:load title="Assessment standard"
+  question="Which answer shows a quantitative architecture argument rather than a component inventory?"
+  options={["A cache list with capacities but no workload or timing relation", "A pipeline diagram labeling stages without dependencies or cycle costs", "A latency model with assumptions, measurements, uncertainty, and a stated trade-off", "An instruction inventory grouped by encoding width and operand count"]}
+  correctIndex={2}
+  explanation="Architecture claims are conditional. A model and evidence connect a design choice to a measurable outcome and expose where the model may fail."
+/>
 
 This assessment tests whether a student can connect the layers of computer architecture rather than recite isolated definitions. Answer every part using explicit assumptions, units, and invariants. A numerical answer without a model earns little credit; a design answer without a failure case is incomplete. Where the prompt leaves an implementation choice open, state the choice and explain how the result depends on it.
 
 ## Part I: representation and ISA
 
-A processor has 32-bit registers and byte-addressed memory. An instruction encodes a signed 12-bit displacement in bytes, two 5-bit register identifiers, and an opcode. A branch uses PC-relative addressing from the address of the next instruction. Explain the signed immediate range, sign-extension procedure, and target calculation for an instruction at `0x1000` with displacement `-16`.
+A processor has 32-bit registers, fixed four-byte instructions, and byte-addressed memory. An instruction encodes a signed 12-bit displacement in bytes, two 5-bit register identifiers, and an opcode. A branch uses PC-relative addressing from the address of the next instruction. Explain the signed immediate range, sign-extension procedure, and target calculation for an instruction at `0x1000` with displacement `-16`.
 
 Then define the architectural transition for a load of a 16-bit signed value from `base + displacement`. Include alignment, permission, byte order, extension, destination write, PC update, and the exception state if the page is absent. State which details are ISA guarantees and which can vary by microarchitecture.
 
@@ -22,6 +43,15 @@ Design a single-cycle datapath for register-register addition, load, store, cond
 The proposed timing is: instruction memory 280 ps, register read 160 ps, ALU 220 ps, data memory 420 ps, multiplexing 70 ps, and register setup/clock overhead 100 ps. Compute the load critical path and minimum clock period. Explain why a store and an add may finish sooner but do not increase single-cycle clock frequency.
 
 Replace the design with a multicycle machine using one ALU and one memory port. Give states for fetch, decode, address calculation, memory read/write, execute, branch, and write-back. For every temporary register, state its meaning and lifetime. Include a memory stall or response-not-ready event and explain how the controller avoids repeating a device write.
+
+<CaseStudy client:load
+  title="Assessment evidence must expose state"
+  scenario="A pipeline answer gives the correct final register value but omits every cycle, forwarding decision, stall, and invalidated instruction."
+  question="Why is the answer incomplete?"
+  options={["The final value cannot establish that hazards and side effects were handled", "A correct final value proves every intermediate control decision was correct", "Cycle traces matter only for performance and never for architectural correctness", "Forwarding decisions are implementation secrets outside an architecture assessment"]}
+  correctIndex={0}
+  explanation="A final value can occur accidentally despite an invalid schedule or incorrect side effect. The trace is the evidence that the timed implementation refines sequential architectural behavior."
+/>
 
 ## Part III: pipeline reasoning
 
@@ -41,11 +71,11 @@ Explain the difference between holding the PC/IF-ID registers, inserting a bubbl
 
 ## Part IV: memory hierarchy and virtual memory
 
-A cache is 32 KiB, 4-way set associative, with 64-byte lines and 32-bit physical addresses. Derive offset, index, tag, number of sets, and the mapping of two supplied addresses. Construct a conflict-miss trace and compare direct-mapped and 2-way behavior.
+A cache is 32 KiB, 4-way set associative, with 64-byte lines and 32-bit physical addresses. Derive offset, index, tag, number of sets, and the mapping of addresses `0x12345678` and `0x12347678`. Construct a conflict-miss trace and compare direct-mapped and 2-way behavior, keeping total capacity and line size fixed when comparing organizations.
 
 The L1 hit time is 1 cycle with a 6% local miss rate. L2 hit time is 8 cycles with a 15% local miss rate; main memory adds 90 cycles after an L2 miss. Compute AMAT and explain what changes if someone mistakenly treats the 15% as a global rate.
 
-A process uses 4 KiB pages and a four-level page table with 512 entries per level. For a given virtual address, show the VPN fields and offset, then explain the TLB hit, page-table walk, permission fault, and page fault paths. Describe the copy-on-write handler after a fork-like operation and the TLB invalidation needed after installing a private writable page.
+A process uses 4 KiB pages and a four-level page table with 512 entries per level. For the 48-bit virtual address `0x123456789abc`, show the VPN fields and offset, then explain the TLB hit, page-table walk, permission fault, and page fault paths. Describe the copy-on-write handler after a fork-like operation and the TLB invalidation needed after installing a private writable page.
 
 Finally, explain a physically indexed/physically tagged cache versus a virtually indexed/physically tagged cache. Identify synonyms, page-offset constraints, ASIDs, and the security consequence of stale translations after physical-frame reuse.
 
@@ -63,15 +93,17 @@ Your essay must include a sequence diagram from device arrival to output complet
 
 ## Diagnostic answer guide
 
-For Part I, the displacement range is $[-2048,2047]$ bytes if all 12 bits are signed; `-16` is sign-extended and the target is `0x0FF0` when the current instruction address is `0x1000` and the branch base is the next instruction only if the prompt explicitly says the next address. A load must check access and alignment before reading, sign-extend the 16-bit value, and leave the destination unchanged on a fault. Negative lengths must be rejected before unsigned conversion.
+For Part I, the displacement range is $[-2048,2047]$ bytes. The 12-bit encoding of −16 is `0xff0`; extending its sign bit to 32 bits gives `0xfffffff0`. The branch base is `0x1004`, so the target is `0x1004 − 0x10 = 0x0ff4`, not `0x0ff0`. A load must check access and the stated alignment rule, assemble the bytes in the selected byte order, sign-extend the 16-bit value, and leave the destination unchanged on a fault. The faulting PC is retained for a restartable fault. Converting signed −1 to a 32-bit unsigned size produces 4,294,967,295; validate negativity before conversion, then check the upper bound and any multiplication used to compute allocation bytes.
 
 For Part II, the load path is $280+160+220+420+70+100=1250$ ps under the additive model. A multicycle design needs temporary registers because one ALU and one memory port are reused. An unready memory response holds the transaction state without reissuing a non-idempotent device request.
 
-For Part III, the load-use pair causes one bubble; the dependent `sub` can use forwarded `r3` from the add, and branch resolution determines whether the younger `or` is flushed. Holding and bubbling are different: hold preserves the consumer and fetch state, while the bubble allows the producer to advance and occupies the dependent stage with no side effect.
+For Part III, the load-use pair causes a bubble in EX at cycle 4; `add` remains in ID while the load advances through MEM. With fetch starting at cycle 1, `add` occupies EX/MEM/WB at cycles 5/6/7, `sub` at 6/7/8, and the branch at 7/8/9. Forward the loaded value from MEM/WB to the add, the add result from EX/MEM to the sub, and the sub result from EX/MEM to the branch comparison. At the end of cycle 7, the taken branch squashes the younger `or` in ID; the target starts IF at cycle 8. The three older instructions still write back exactly once. Hold preserves fetch/consumer state; the bubble advances through the pipeline without a side effect. Holding the load in EX instead would keep its consumer waiting forever.
 
-For Part IV, there are $32768/(64\cdot4)=128$ sets, six offset bits, seven index bits, and nineteen tag bits. AMAT is $1+0.06(8+0.15\cdot90)=2.29$ cycles. A global L2 rate would multiply the L2 miss term differently and undercount misses conditional on reaching L2. A four-level 512-entry page table consumes 36 VPN bits plus a 12-bit offset. Copy-on-write allocates and maps a private frame only after validating the fault, then invalidates the writer’s stale translation.
+For Part IV, there are $32768/(64\cdot4)=128$ sets, six offset bits, seven index bits, and nineteen tag bits. Both addresses have offset `0x38` and set index 89; their tags are `0x91a2` and `0x91a3`. For a fixed four-line comparison cache, blocks `0,4,0,4` all miss when direct mapped but have two warm-up misses then two hits at two-way associativity.
 
-For Part V, speedup is $1/(0.1+0.9/P)$: 1.82× on 2, 3.08× on 4, 4.71× on 8, and 10× as a limit. DMA ownership and ordering prevent simultaneous CPU/device mutation; generation tags reject late completions. Coherence is not sufficient on a noncoherent platform without explicit cache operations.
+AMAT is $1+0.06(8+0.15\cdot90)=2.29$ cycles. The actual global L2 miss rate is $0.06\cdot0.15=0.009$, or 0.9% of processor accesses. Treating 15% as global would produce $1+0.06\cdot8+0.15\cdot90=14.98$ cycles and is internally impossible here: L2 misses cannot exceed the 6% of accesses that even reach L2. The 48-bit address has top-to-bottom VPN indexes 36, 209, 179, and 393, with offset `0xabc`. Copy-on-write allocates and maps a private frame only after validating the fault, then invalidates the writer’s stale translation before allowing the writable access to proceed.
+
+For Part V, speedup is $1/(0.1+0.9/P)$: 1.82× on 2, 3.08× on 4, 4.71× on 8, and 10× as a limit. Tiling can reduce repeated memory traffic; avoiding false sharing can reduce coherence traffic, but neither guarantees a benefit without a workload. DMA ownership and ordering prevent simultaneous CPU/device mutation. Generation tags reject stale completion records, but cannot stop a late device memory write: buffer reuse also requires quiescence and completed mapping invalidation. Coherent DMA still needs ordering; noncoherent DMA additionally needs the platform's prescribed cache synchronization.
 
 For Part VI, the strongest answers connect representation to overflow bounds, layout to cache-line reuse, vector width to tail handling, DMA protocol to security, and measured counters to the performance model. The alternative must change a real trade-off—arithmetic versus traffic, latency versus throughput, area versus frequency, or isolation versus sharing—and the sensitivity analysis must identify the measurement that would reverse the decision.
 

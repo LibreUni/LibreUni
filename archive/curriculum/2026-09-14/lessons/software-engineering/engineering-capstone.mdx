@@ -1,0 +1,155 @@
+---
+title: "Software Engineering Capstone: Evolve a Safety-Critical Service"
+course: software-engineering
+description: "A specification-first project that integrates design, testing, refactoring, delivery, and operational evidence."
+prerequisites:
+  - "Software construction, testing, interfaces, refactoring, and basic delivery automation"
+  - "Ability to read and modify a small multi-module codebase"
+outcomes:
+  - "Turn safety-relevant product requirements into observable contracts, invariants, and failure policies"
+  - "Evolve an implementation while preserving behavior through tests, design evidence, and operational checks"
+  - "Defend engineering decisions with reproducible experiments, review artifacts, and an incident-ready runbook"
+omissions:
+  - "This capstone does not certify clinical safety, regulatory compliance, or production readiness for real medical systems."
+estimatedMinutes: 180
+assessment: "Submit a runnable service change, contract and invariant specification, test portfolio, design record, delivery evidence, and incident/recovery runbook; defend one ambiguous failure boundary orally."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Software Engineering Capstone: Evolve a Safety-Critical Service
+
+The capstone is an engineering argument backed by executable evidence. You will evolve a small service that schedules medication reminders for a care team. The service is intentionally modest: the difficulty is making its guarantees explicit, preserving them while requirements change, and showing what the system does when dependencies fail.
+
+<Quiz client:load
+  title="Choose the first artifact"
+  question="Before selecting a framework or splitting the system into services, what should the team make testable?"
+  options={["The complete class hierarchy", "The externally observable behavior, invariants, failure policy, and evidence plan", "The cloud provider's default architecture", "The final deployment YAML"]}
+  correctIndex={1}
+  explanation="A design is accountable to a behavioral contract. Naming observable behavior, invariants, and failure boundaries first lets the team reject attractive designs that cannot provide the required evidence."
+/>
+
+## Product contract
+
+The service accepts a request to schedule a reminder for a patient, medication, local time, and recurrence rule. A reminder may be delivered at most once for a scheduled occurrence, but a provider may retry a delivery request. A caregiver may cancel a future occurrence; cancellation must not erase the audit record. The system must never silently invent a dose, send a reminder after a recorded cancellation, or expose one patient's data to another care team.
+
+Write the contract in a form another engineer can test. Define the identity of an occurrence, the time zone and daylight-saving policy, the meaning of a missed delivery, the maximum tolerated delay, and the behavior when the notification provider is unavailable. Distinguish hard safety invariants from service-level objectives. “Reliable” is not a requirement until the team specifies the event, denominator, window, and evidence.
+
+<CaseStudy client:load
+  title="Make the failure boundary explicit"
+  scenario="The scheduler has persisted an occurrence and is about to call the notification provider. The provider times out, but the request may have reached it. A retry could deliver the reminder twice; suppressing the retry could lose it. The product contract permits a duplicate provider request only if the provider-side idempotency key is stable and the user-visible effect remains at-most-once."
+  question="Which design decision should be recorded before implementing the retry loop?"
+  options={["Retry forever until a request succeeds", "Use a stable occurrence identifier, record attempts, bound retries, and define reconciliation for ambiguous outcomes", "Treat every timeout as proof that no request arrived", "Move the call into a background thread and omit it from tests"]}
+  correctIndex={1}
+  explanation="A timeout is an ambiguous outcome. A stable identity makes retries deduplicable; an attempt record makes behavior observable; bounds and reconciliation prevent an unbounded or silently unsafe policy."
+/>
+
+## Specification and design evidence
+
+Submit a short specification containing:
+
+- preconditions, postconditions, and invariants for scheduling, cancellation, dispatch, and audit;
+- a state model for an occurrence, including legal and illegal transitions;
+- examples and counterexamples for time zones, duplicate requests, provider timeouts, and authorization;
+- an explicit non-goal list; and
+- a traceability table linking each outcome to a test, review artifact, or operational check.
+
+Use a domain model that keeps policy separate from infrastructure. A pure recurrence calculator should not open a database connection. A repository should not decide whether a caregiver is authorized. A dispatcher should coordinate retries without becoming the source of truth for occurrence state. The boundaries are hypotheses: defend them with change scenarios and failure analysis, not pattern names.
+
+## A small executable seam
+
+The following pure function is deliberately incomplete. It defines one seam that can be tested without a clock, database, network, or framework. Extend it only after writing the cases that determine the policy.
+
+<CodeRunner client:load
+  title="Inspect a pure scheduling seam"
+  language="python"
+  code={`from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Occurrence:
+    occurrence_id: str
+    cancelled: bool
+    delivered: bool
+
+def dispatch_decision(occurrence):
+    if occurrence.cancelled:
+        return "suppress:cancelled"
+    if occurrence.delivered:
+        return "suppress:already-delivered"
+    return "send"
+
+cases = [
+    Occurrence("dose-1", False, False),
+    Occurrence("dose-2", True, False),
+    Occurrence("dose-3", False, True),
+]
+for case in cases:
+    print(case.occurrence_id, dispatch_decision(case))`}
+  output="dose-1 send\ndose-2 suppress:cancelled\ndose-3 suppress:already-delivered"
+/>
+
+The runner is not the capstone implementation. It is a fast feedback surface for the policy boundary. The submitted service must add persistence, authorization, provider idempotency, observability, and failure recovery without changing the meaning of the pure decision.
+
+## Verification and evolution
+
+Build a test portfolio, not a test-count trophy. Include:
+
+1. example-based unit tests for each legal state transition;
+2. property tests for occurrence identity, cancellation monotonicity, and duplicate delivery requests;
+3. integration tests against a real persistence boundary or a faithful test container;
+4. contract tests for the notification provider and the public API;
+5. a concurrency test for two dispatch workers claiming one occurrence; and
+6. a regression test for every defect discovered during the project.
+
+For each test, state what defect it could detect and what it cannot establish. A green suite that never exercises a crash between commit and provider call does not establish delivery safety. A mock that returns only happy-path responses does not establish the provider contract.
+
+Refactor in small, behavior-preserving steps. Before each structural change, record the characterization tests that constrain it. Afterward, compare the public behavior, mutation-test a representative rule, and inspect the diff for accidental contract changes. If a design pattern appears, explain the pressure that caused it and the cost it introduces; a pattern is not evidence of quality by itself.
+
+## Delivery and operations
+
+Provide a reproducible pipeline that performs formatting, static analysis, unit tests, integration tests, dependency checks, and an artifact build. Separate required gates from advisory reports. Pin action/tool versions, produce machine-readable results, and make a failed gate actionable.
+
+The deployment plan must state:
+
+- how configuration and secrets enter the process without appearing in logs;
+- how database migrations are expanded, observed, and rolled back or repaired;
+- how a canary is judged and stopped;
+- which metrics expose scheduling lag, duplicate provider requests, authorization failures, and queue age;
+- how an operator reconstructs one occurrence from audit records; and
+- how the team restores service after a bad release or corrupted queue.
+
+<CaseStudy client:load
+  title="Review a release decision"
+  scenario="A release passes unit and integration tests. In the canary, scheduling latency is normal, but the duplicate-provider-request metric rises from 0.01% to 0.4% for one provider region. No duplicate user-visible reminders are confirmed yet."
+  question="What is the most defensible next action?"
+  options={["Continue rollout because no customer harm is confirmed", "Pause or roll back the canary, preserve evidence, compare the provider contract and idempotency keys, and define the promotion threshold", "Delete the metric to remove noise", "Disable all audit logging until the incident is resolved"]}
+  correctIndex={1}
+  explanation="The signal violates a stated operational assumption and may precede visible harm. Pausing preserves a smaller blast radius while the team checks whether the cause is local, provider-specific, or a contract regression."
+/>
+
+## Deliverables and assessment
+
+Submit a repository that a reviewer can build from a clean checkout, plus a design report of at most 2,500 words. The report must include the contract, domain/state model, architecture decision records, traceability matrix, threat and failure model, test strategy, measurement evidence, deployment plan, and deliberate omissions.
+
+Assessment is based on:
+
+- semantic correctness and explicit invariants (25%);
+- tests that demonstrate transfer, failure handling, and concurrency (25%);
+- design trade-offs and maintainability evidence (20%);
+- delivery, observability, and recovery evidence (20%); and
+- clarity, reproducibility, and professional responsibility (10%).
+
+Full credit requires a counterexample for each major rejected alternative. A polished diagram without executable evidence is incomplete; a large test suite without a precise contract is also incomplete. Do not claim exactly-once behavior when the system only provides idempotent effects under a documented provider contract.
+
+## Deliberate omissions
+
+This project does not teach clinical dosage policy, distributed consensus, real payment processing, or production cloud administration. Those domains require specialist review and separate safety controls. The capstone models the engineering reasoning needed to make boundaries visible; it is not authorization to deploy a medical system.
+
+## References & Further Reading
+
+* [MIT 6.005 Software Construction](https://web.mit.edu/6.005/www/fa15/)
+* [MIT 6.033 Computer System Engineering](https://web.mit.edu/6.033/www/)
+* [ISO/IEC/IEEE 29148:2018 — Requirements engineering](https://www.iso.org/standard/72089.html)
+* [NIST SP 800-218 — Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final)

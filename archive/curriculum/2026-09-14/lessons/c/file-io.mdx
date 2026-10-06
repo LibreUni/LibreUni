@@ -1,0 +1,96 @@
+---
+title: "C Streams, Files, and Persistence Contracts"
+course: c
+description: "Use FILE streams with checked modes, bounded input, buffering, positions, and explicit binary/text assumptions."
+prerequisites:
+  - "Pointers, arrays, strings, and error handling"
+outcomes:
+  - "Open, read, write, and close a stream while handling every failure result"
+  - "Choose character, line, formatted, or block I/O for a stated representation"
+  - "Explain buffering, positions, and the limits of binary struct persistence"
+omissions:
+  - "POSIX file descriptors and durability guarantees are treated in systems programming."
+estimatedMinutes: 60
+assessment: "Review a file-loading function and list its checks for open, read, parse, and close failures."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# C Streams, Files, and Persistence Contracts
+
+The `FILE *` interface abstracts a stream of characters or bytes, not a durable transaction. Opening, reading, writing, seeking, flushing, and closing each have contracts and failure modes. A successful `fwrite` means data was accepted by the stream; it does not by itself prove power-loss durability.
+
+<Quiz client:load
+  title="Check the open"
+  question="What must be checked immediately after `fopen`?"
+  options={["Whether the pointer is NULL", "Whether the file has exactly one line", "Whether the disk is an SSD", "Whether fflush has already run"]}
+  correctIndex={0}
+  explanation="fopen returns NULL on failure. Do not pass a failed stream to input, output, or fclose-specific logic without following the documented contract."
+/>
+
+## Modes and ownership
+
+`r` requires an existing file; `w` truncates or creates; `a` appends. The `b` modifier requests binary mode where the implementation distinguishes text translation. Always state whether the stored format is a byte protocol or a platform-native representation.
+
+```c
+FILE *input = fopen(path, "rb");
+if (input == NULL) return IO_OPEN_FAILED;
+```
+
+The caller that successfully opens a stream owns the responsibility to close it on every path. `fclose` can report an output or flush failure; production code should decide whether that failure invalidates the operation.
+
+<CodeExercise client:load
+  title="Keep the stream guard"
+  code={`FILE *file = fopen(path, "r");
+if (file [!blank!] NULL) return IO_OPEN_FAILED;`}
+  answers={["=="]}
+  explanation="A null stream indicates that opening failed. The comparison must happen before any read or close operation that assumes a valid stream."
+/>
+
+## Input choices and bounded records
+
+Use `fgetc` for characters, `fgets` for bounded lines, `fread`/`fwrite` for blocks, and formatted functions only with a grammar and width policy. `fgets(buffer, capacity, file)` reads at most capacity-1 characters and may retain a newline; callers must handle a line longer than the buffer rather than treating truncation as a complete record.
+
+`fscanf` can leave malformed input unread and make recovery difficult. For external text, read a bounded line, parse it with an end pointer, and validate trailing characters.
+
+<CodeRunner client:load
+  title="Keep formatting separate from persistence"
+  language="c"
+  code={`#include <stdio.h>
+
+int main(void) {
+    const char *level = "WARN";
+    int code = 3;
+    fprintf(stdout, "level=%s code=%d\\n", level, code);
+    return 0;
+}`}
+  output="level=WARN code=3"
+/>
+
+## Positions, buffering, and binary records
+
+`fseek`, `ftell`, and `rewind` operate under stream and mode restrictions; text-stream positions should be treated as opaque values suitable for returning to a saved position, not necessarily byte counts. `fflush` flushes an output stream, but the path from a library buffer to stable storage is platform-specific.
+
+Writing a `struct` directly with `fwrite` can encode padding, alignment, endianness, and representation choices. A portable file format serializes fields explicitly with version and length information.
+
+## Transfer exercises
+
+1. State who owns a stream after `fopen` succeeds and what happens on a parse failure.
+2. Explain how `fgets` signals that a line may have been truncated.
+3. Give two reasons a raw struct dump is not a portable interchange format.
+4. Distinguish `fflush` from a power-loss durability guarantee.
+
+### Diagnostic solutions
+
+1. The caller or function that opened it owns it and must close it on all later paths; cleanup must preserve the first error if close also fails.
+2. If no newline appears before the buffer's terminator and EOF has not been reached, the record may continue. Consume the remainder or reject it according to the protocol.
+3. Padding/alignment and endianness can differ; integer and floating representations or pointer fields may not be portable. Versioned field serialization is safer.
+4. fflush transfers library-buffered bytes to the underlying stream according to its contract. Durable storage requires platform-specific synchronization and failure handling.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §7.21](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [cppreference: stdio](https://en.cppreference.com/w/c/io)
+* [SEI CERT C Coding Standard: FIO rules](https://wiki.sei.cmu.edu/confluence/display/c/SEI+CERT+C+Coding+Standard)

@@ -2,8 +2,30 @@
 title: "Assembly and Calling Conventions"
 course: "computer-architecture"
 description: "Stack frames, register allocation, calls, returns, and ABI contracts."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Trace calls, returns, stack frames, register classes, argument passing, and spills under an explicit ABI."
+  - "Design recursion, tail calls, unwinding, and reentrant code while preserving caller/callee and alignment invariants."
+  - "Diagnose an ABI or control-flow failure from machine state rather than source syntax."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 540
+assessment: "Given an ABI and an assembly trace, reconstruct stack/register state across nested calls, then repair the smallest sequence that corrupts a return address or callee-saved register."
 ---
 # Assembly and Calling Conventions
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+
+<Quiz client:load title="Trace the call"
+  question="What does a calling convention make explicit?"
+  options={["Only syntax rules that the source language applies to procedure declarations", "Which registers, stack locations, and return rules form the procedure interface", "Which cache lines the processor evicts while a nested call executes", "Which operating-system packages must exist before linking the executable"]}
+  correctIndex={1}
+  explanation="A calling convention is a binary interface contract. Without it, separately compiled code cannot agree on arguments, preserved state, return values, or stack ownership."
+/>
 
 Assembly language exposes the contract between source-level procedures and the instruction-set architecture. A compiler can hide register names and stack offsets in a high-level language, but it cannot avoid choosing where arguments live, how a return address survives a call, which registers a callee must preserve, or how an aggregate is laid out. These choices form an application binary interface (ABI). An ABI is not just a compiler preference: separately compiled modules, debuggers, profilers, operating-system signal handlers, foreign-function interfaces, and hand-written assembly all depend on it.
 
@@ -18,6 +40,39 @@ The compiler’s liveness analysis identifies values needed after each instructi
 A call transfers control to a target while recording a return address. One ISA may write the link into a dedicated register; another may push it on the stack; a compiler may synthesize either using ordinary instructions. A return loads the saved address into the PC. If the callee itself makes another call and uses the same link register, it must save the caller’s link first. Leaf functions that make no calls can sometimes leave it in the link register, but a function cannot assume it is a leaf if a later implementation introduces a call for profiling, allocation, or error handling.
 
 **Worked call trace.** Let `main` call `f`, and `f` call `g`. At the call from `main`, the link register holds the address after the call. On entry to `f`, that link is its return address, but `f` must save it before calling `g`. The call to `g` overwrites the link with the address after the nested call. After `g` returns, `f` restores its saved link and returns to `main`. If `f` omits the save, it returns to the instruction after the call to `g`, often looping or executing the wrong code. This failure is independent of whether the arithmetic inside `f` is correct.
+
+The sequence exposes the two distinct continuations. `M` means the instruction after `main`'s call; `F` means the instruction after `f`'s call. The stack slot is private to this invocation of `f`.
+
+<PlantUML code={`@startuml
+participant main as M
+participant f as F
+collections "f stack frame" as S
+participant g as G
+M -> F : call; link = M
+F -> S : save link M
+F -> G : nested call; link = F
+G --> F : return to F
+F -> S : restore link M
+F --> M : return to M
+@enduml`} />
+
+**Transfer check.** Suppose `g` itself calls `h`. Does `f` need an extra slot to preserve `g`'s return address?
+
+<details>
+<summary>Check the ownership argument</summary>
+
+No. `g` owns preservation of its incoming link before calling `h`; its invocation needs a separate save location. `f` preserves only its own continuation to `main`. A global shared return-address slot would fail under recursion or reentrancy because another invocation could overwrite it.
+
+</details>
+
+<CaseStudy client:load
+  title="The callee corrupted its caller"
+  scenario="A function stores a temporary value in a callee-saved register and returns without restoring it. Its own return value is correct, but the caller later computes with corrupted state."
+  question="Which trace demonstrates the ABI violation?"
+  options={["Register and stack state at call entry, before return, and after return", "Only the callee's return register because other registers are never observable", "Only source variable names because the ABI follows language-level scope", "Instruction count before and after linking because preservation is a performance rule"]}
+  correctIndex={0}
+  explanation="A calling convention is a boundary contract. Comparing preserved registers and stack state across the call shows whether the callee restored the state its caller is entitled to retain."
+/>
 
 ## Stack frames and alignment
 
@@ -86,7 +141,7 @@ ABI boundaries also define privilege transitions. A system-call stub places argu
 4. Each frame stores its own argument and continuation. The recursive call creates a distinct frame, returns a result, and the caller combines it with its saved argument. Keeping the argument in a caller-saved register lets the child overwrite it, violating the frame invariant.
 5. Tail-call reuse is invalid if the caller still needs a local, must run cleanup, or cannot establish the callee’s argument layout/alignment without preserving its continuation. All pending caller obligations must be discharged first.
 6. Connect values whose live ranges overlap. A value with the lowest spill cost—short range, cheap recomputation, or low use frequency—may be selected, but the answer must consider inserted memory operations and loop frequency.
-7. User code can race with itself, unmap or remap memory, exploit integer overflow, or simply be malicious. The kernel must validate address, length, permissions, and copying behavior in its own privilege context; a prior user check is not an authority boundary.
+7. User code can race with itself, unmap or remap memory, exploit integer overflow, or be malicious. The kernel must validate address, length, permissions, and copying behavior in its own privilege context; a prior user check is not an authority boundary.
 
 </details>
 

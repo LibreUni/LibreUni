@@ -1,0 +1,291 @@
+---
+title: "Locks, Atomics, and Memory Ordering"
+course: "operating-systems"
+description: "Mutual exclusion, acquire/release visibility, spin and blocking locks, interrupt context, and lock-invariant proofs."
+prerequisites:
+  - "Interleavings and atomicity"
+  - "C object and pointer semantics"
+  - "Caches and multicore coherence"
+outcomes:
+  - "Derive a lock's safety obligation from a protected invariant and prove that acquire/use/release preserves it."
+  - "Explain the distinct roles of atomicity, coherence, and acquire/release ordering in a publication protocol."
+  - "Choose between spinning, blocking, and finer-grained locking under explicit wait-time, context, fairness, and contention assumptions."
+  - "Diagnose interrupt, preemption, lock-order, and false-sharing failures from an execution trace."
+omissions:
+  - "Lock-free memory reclamation, full ISO C memory-model formalism, and architecture-specific litmus tooling require later specialist study."
+  - "Condition variables, semaphores, and deadlock protocols are developed in the following lessons."
+estimatedMinutes: 360
+assessment: "Given an unfamiliar kernel critical section and a weak-memory execution, state the protected invariant, identify missing atomicity or ordering edges, select a context-safe lock design, and give both a preservation argument and a contention counterexample."
+---
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+
+# Locks, Atomics, and Memory Ordering
+
+A driver appends a request to a queue, then sets `ready = 1`. Another core observes `ready == 1` but follows an old queue tail and submits the wrong descriptor to hardware. No two cores wrote the same queue field at the same instant; the publication still failed because the consumer observed the flag without an ordering guarantee for the data it announced.
+
+Mutual exclusion answers **who may mutate an invariant now**. Memory ordering answers **which earlier effects another observer must see**. An atomic instruction can contribute to both, but the words are not interchangeable.
+
+## Start from the invariant, not the lock variable
+
+<MathStatement id="def-lock-invariant" kind="definition" title="Protected invariant">
+For a lock $L$, the **protected invariant** $I_L$ is a predicate over shared state that may be temporarily false only while one thread owns $L$. Every acquisition may assume $I_L$; every release must publish a state satisfying $I_L$.
+</MathStatement>
+
+Consider a queue represented by `head`, `tail`, and `count` with capacity $N$:
+
+$$
+0 \le count \le N,
+\qquad tail \equiv head + count \pmod N.
+$$
+
+The mutex is not part of the abstract queue. It is a protocol granting temporary exclusive authority to violate and restore those equations. A field is “protected by L” only if **every** access that depends on the invariant follows that protocol. Locking writers while readers inspect fields unlocked is not protection.
+
+<PlantUML code={`
+@startuml
+state "outside critical section\nI_L must hold" as Outside
+state "L acquired\nexclusive authority" as Owned
+state "representation update\nI_L may be transiently false" as Updating
+state "restored representation\nI_L holds" as Restored
+Outside --> Owned : acquire(L)
+Owned --> Updating : first dependent mutation
+Updating --> Restored : final invariant-restoring mutation
+Restored --> Outside : release(L) publishes writes
+Updating --> Outside : release too early / exception
+note on link
+invalid transition:
+other acquirer observes broken state
+end note
+@enduml
+`} />
+
+**Retrieval.** Why is “only one thread executes this function” weaker than a queue correctness proof?
+
+<details>
+<summary>Answer</summary>
+
+The function may call another path that accesses the same fields under a different lock, readers may bypass the function, callbacks may re-enter it, and an early return may release before restoring the representation. The proof must identify all shared state covered by $I_L$, all access paths, acquisition and release boundaries, and preservation of the abstraction—not one function name.
+
+</details>
+
+### Preservation proof for one enqueue
+
+Assume the pre-state satisfies $0 \le count < N$ and `tail == (head + count) mod N`. Under exclusive ownership:
+
+1. write the item into slot `tail`;
+2. set `tail' = (tail + 1) mod N`;
+3. set `count' = count + 1`;
+4. release only after the item initialization and both metadata updates are complete.
+
+Then $0 < count' \le N$, and
+
+$$
+tail' \equiv tail+1 \equiv head+count+1 \equiv head+count' \pmod N.
+$$
+
+The arithmetic proof is incomplete without an ownership clause: the new slot must contain a fully initialized item before another thread may observe the increased count. That publication obligation leads directly to memory ordering.
+
+## A spin lock needs one indivisible winner
+
+Two threads cannot implement a lock with plain “check then set”:
+
+```text
+while locked == true:
+    wait
+locked = true
+```
+
+Both can read false before either store. A lock acquisition needs one atomic state transition that says, in effect, “change false to true and tell me whether I was the thread that changed it.” Compare-and-exchange, atomic exchange, load-reserved/store-conditional, and architecture-specific atomic memory operations can supply that transition.
+
+{/* Source tracking: C atomic flag operations and memory-order terminology synthesized from ISO C11 draft N1570 §§5.1.2.4 and 7.17. */}
+
+```c
+#include <stdatomic.h>
+#include <stdbool.h>
+
+typedef struct {
+    atomic_flag held;
+} spinlock;
+
+void spin_lock(spinlock *lock) {
+    while (atomic_flag_test_and_set_explicit(
+        &lock->held, memory_order_acquire)) {
+        /* architecture-specific pause/backoff may reduce contention */
+    }
+}
+
+void spin_unlock(spinlock *lock) {
+    atomic_flag_clear_explicit(&lock->held, memory_order_release);
+}
+```
+
+This fragment establishes one owner and acquire/release ordering under the C abstract machine when the flag is initialized correctly. It does **not** promise FIFO admission, bounded waiting, reentrancy, interrupt safety, adaptive backoff, or good performance. A production lock also needs an ownership policy, debug behavior, and architecture/runtime integration.
+
+**Application — kill a plausible wrong lock.** Replace `atomic_flag_test_and_set` with an atomic load followed by an atomic store. Construct a schedule with two owners.
+
+<details>
+<summary>Schedule</summary>
+
+The atomicity of each access is insufficient:
+
+1. A atomically loads `held == false`.
+2. B atomically loads `held == false`.
+3. A atomically stores true and enters.
+4. B atomically stores true and enters.
+
+The winner election must itself be one read-modify-write operation, or a compare-and-exchange loop whose failed contender retries from a fresh observation.
+
+</details>
+
+## Acquire and release publish a relation
+
+Coherence normally gives each atomic location a consistent modification order. It does not, by itself, require a core that observes a new flag to observe earlier writes to other locations. The language and ISA memory models define the required cross-location order.
+
+<PlantUML code={`
+@startuml
+hide footbox
+participant "producer core" as P
+participant "payload cache line" as D
+participant "ready atomic" as F
+participant "consumer core" as C
+P -> D : ordinary store payload = 42
+P -> F : release-store ready = 1
+F -> C : acquire-load reads 1
+D -> C : subsequent load must observe\\npayload publication under C rules
+note over P,C
+The release/acquire pair supplies an ordering edge.
+Atomicity of ready alone does not publish payload.
+end note
+@enduml
+`} />
+
+In ISO C, the standard publication idiom is:
+
+```c
+#include <assert.h>
+#include <stdatomic.h>
+
+static int payload;
+static atomic_int ready = 0;
+
+void publish(void) {
+    payload = 42;
+    atomic_store_explicit(&ready, 1, memory_order_release);
+}
+
+void consume(void) {
+    if (atomic_load_explicit(&ready, memory_order_acquire) == 1) {
+        assert(payload == 42);
+    }
+}
+```
+
+If the acquire load reads the value from the release sequence, the release synchronizes with it. The payload store is sequenced before the release; the payload load is sequenced after the acquire; transitivity places the store before the load in the happens-before relation. The plain `payload` accesses therefore do not form a data race in that successful branch.
+
+Replacing both operations on `ready` with `memory_order_relaxed` preserves atomic accesses to `ready` but removes the publication edge for `payload`. Relaxed order is suitable for a counter whose numeric value is independent, not for announcing that an object graph is initialized.
+
+**Transfer.** A statistics counter is incremented with relaxed atomics. A shutdown thread observes the expected count and then frees every worker's result object. Is the count observation enough to publish those objects?
+
+<details>
+<summary>Analysis</summary>
+
+No. A relaxed fetch-add makes the counter update atomic and gives that atomic object a modification order, but it does not make preceding ordinary writes to each result happen before the shutdown thread's reads or frees. Use a joining operation, a release/acquire completion protocol, a mutex/condition predicate, or another mechanism with the required lifetime and visibility guarantees. The exact repair depends on who owns each object and whether workers can still access it.
+
+</details>
+
+{/* Source tracking: RVWMO ordering claims synthesized from the ratified RISC-V unprivileged ISA memory-model chapter; xv6 lock behavior cross-checked against the current xv6 RISC-V book and source. */}
+
+RISC-V's RVWMO permits observers on different harts to see memory operations in orders not implied by source order unless preserved-program-order rules, dependencies, acquire/release annotations, atomics, or fences constrain them. The A extension provides atomic read-modify-write and load-reserved/store-conditional instructions. Kernel code should use the kernel's established primitives; hand-inserting `fence` instructions without connecting ISA semantics to compiler semantics is not a portable repair.
+
+## Spin, block, or redesign
+
+<MathStatement id="def-lock-cost" kind="definition" title="Lock acquisition cost model">
+Let $W$ be expected wait time, $S$ the cost to deschedule and later resume, $H$ the lock-hold time, and $P$ the number of runnable contenders. Spinning is plausible only when $W$ is reliably small, the owner can run, and consuming a CPU for $W$ does not violate a stronger objective. Blocking is plausible when $W$ may exceed $S$ or CPU time must be available to other work.
+</MathStatement>
+
+| Context | Candidate | Reason | Failure boundary |
+| --- | --- | --- | --- |
+| short non-sleeping kernel section on another running core | spin lock | avoids scheduler path | collapses under long hold or oversubscription |
+| user thread waiting on I/O-protected state | blocking mutex | yields CPU while owner/device progresses | sleep/wakeup and priority policy add cost |
+| read-mostly immutable snapshot | versioning, RCU, or copy-on-write | readers avoid a global owner | reclamation and update publication become harder |
+| high-contention counter | per-CPU/per-shard state | removes one shared cache line | aggregation may be approximate or delayed |
+
+**Worked cost comparison.** A critical section normally holds a lock for 200 ns but once per 10,000 entries blocks for a 2 ms device operation. The mean hold time is roughly $0.9999(200\text{ ns})+0.0001(2\text{ ms}) \approx 400\text{ ns}$, which looks small. A contender arriving during the rare device wait can still burn 2 ms of CPU. The bug is not the average; sleeping while holding a spin lock makes the tail unbounded relative to the intended mechanism. Move the blocking operation outside the section or change the synchronization design.
+
+Spin locks also generate coherence traffic. A naïve exchange loop writes the lock line on every failed attempt, invalidating peer copies. Test-and-test-and-set first spins on read-only loads and attempts the write only when the lock appears free; queue locks arrange local spinning. These designs change traffic and fairness, not the protected invariant.
+
+## Kernel context is part of the lock type
+
+<PlantUML code={`
+@startuml
+hide footbox
+participant "thread on hart 0" as T
+participant "interrupt controller" as C
+participant "handler on hart 0" as I
+T -> T : acquire L; enter critical section
+C -> I : preempt thread with interrupt
+I -> T : attempt acquire L
+T --> I : owner cannot resume to release L
+I -> I : spins forever on the same hart
+note over T,I
+Self-deadlock unless the interrupt is masked,
+deferred, or forbidden from acquiring L.
+end note
+@enduml
+`} />
+
+If an interrupt handler on one hart can acquire `L`, ordinary code on that hart cannot hold `L` while the handler is allowed to preempt it. The handler would spin waiting for an owner that cannot resume. One design disables the relevant local interrupts before acquisition and restores the previous interrupt state after release. Another ensures the handler never takes that lock and defers work to a context that may block.
+
+xv6's spin-lock path tracks interrupt-disable nesting for this reason. That is an xv6 mechanism under its own assumptions, not evidence that every lock acquisition should globally disable interrupts. Scope, nesting, non-maskable events, preemption, and architecture rules matter.
+
+**Counterexample: “one CPU means no race.”** A uniprocessor kernel can be preempted by an interrupt, fault, signal delivery path, or scheduler transition between shared-state operations. Disabling preemption may exclude thread interleavings on that CPU but not necessarily device DMA, non-maskable events, or another CPU. State exactly which actors the exclusion covers.
+
+## Granularity changes both proof and performance
+
+> **Example.** Splitting one buffer-cache lock into bucket locks removes false conflicts between independent buckets but creates a two-lock protocol for moves and resize. Parallelism and proof complexity change together.
+
+Suppose a buffer cache has 1,024 buckets. One global lock gives a simple invariant but serializes independent buckets. One lock per bucket permits parallel lookups, but moving an entry from bucket 3 to bucket 8 now touches two protected regions.
+
+**Worked two-lock update.** Impose the order `min(bucket_id)` before `max(bucket_id)`. To move 8→3, acquire 3 then 8 despite the source being 8. Revalidate that the entry is still in bucket 8 after both locks are held; another thread may have changed it between the initial lookup and acquisition. Unlink, relink, restore both bucket invariants, then release in either documented order.
+
+Fine-grained locks can introduce:
+
+- a larger proof surface and lock-order graph;
+- cross-region operations that need rollback or revalidation;
+- false sharing when distinct lock words occupy one cache line;
+- memory overhead and initialization/lifetime hazards; and
+- starvation if a hot region repeatedly admits local contenders.
+
+The right comparison measures throughput and tail latency against a named workload while retaining invariant checks. “More locks scales better” is not a theorem.
+
+## Review protocol
+
+Use this sequence in a kernel code review:
+
+1. Write $I_L$ and list every field it relates.
+2. Find every read and write whose meaning depends on $I_L$.
+3. Identify the event that elects one owner; reject split check/set protocols.
+4. Identify the visibility edge from the previous release to the next acquire.
+5. Audit every exit, error, callback, sleep, fault, and interrupt path while ownership is held.
+6. Draw the lock-order edges introduced by nested acquisition.
+7. Construct a contention workload and a rare long-hold workload.
+8. Separate correctness evidence from performance evidence.
+
+<details>
+<summary>Synthesis exercise and rubric</summary>
+
+A kernel table uses one spin lock. Lookup holds the lock while comparing a variable-length user-supplied key and may fault while copying that key. Inserts are rare; lookups dominate on 32 cores. Propose a repair.
+
+A defensible answer first moves untrusted copying and any faulting operation outside the spin-locked region, into owned kernel memory with checked length. It then states the table invariant and evaluates alternatives: a blocking mutex if faulting must remain; bucket locks with a total order for resize; an immutable/versioned read path with explicit reclamation; or per-CPU caching if staleness is acceptable. It names revalidation after reacquisition and tests a concurrent resize, duplicate insert, fault during copy, and hot-bucket contention.
+
+Rubric: invariant/access-path audit 25%; context-safe repair 25%; acquire/release and lifetime reasoning 20%; adversarial correctness tests 15%; workload and tail-latency evaluation 10%; explicit omissions 5%.
+
+</details>
+
+## References & Further Reading
+
+- ISO/IEC JTC1/SC22/WG14, [N1570: ISO C11 committee draft](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf), §§5.1.2.4 and 7.17.
+- RISC-V International, [RVWMO Memory Consistency Model, Version 2.0](https://docs.riscv.org/reference/isa/unpriv/rvwmo.html).
+- The Open Group, [POSIX.1-2024 `pthread_mutex_lock`, `pthread_mutex_trylock`, and `pthread_mutex_unlock`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_mutex_lock.html).
+- Linux kernel documentation, [Linux kernel memory barriers](https://docs.kernel.org/core-api/wrappers/memory-barriers.html).
+- MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*, locking chapter](https://pdos.csail.mit.edu/6.S081/2025/xv6/book-riscv-rev5.pdf).

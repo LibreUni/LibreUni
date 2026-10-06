@@ -2,8 +2,30 @@
 title: "Storage and Interconnects"
 course: "computer-architecture"
 description: "Buses, DMA, persistent storage, and the cost model of I/O."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Model bus/link transactions, DRAM timing, persistent writes, DMA ownership, and completion ordering."
+  - "Trace a descriptor and data buffer through cache coherence, interrupts, errors, and durability boundaries."
+  - "Choose an interconnect/storage policy from latency, bandwidth, fairness, reliability, and ordering evidence."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 480
+assessment: "Given a transaction timeline and crash/device failure, identify the first violated ownership or durability invariant and repair the protocol."
 ---
 # Storage and Interconnects
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+
+<Quiz client:load title="Trace the transaction"
+  question="Why must an interconnect protocol define ownership and completion separately?"
+  options={["All connected devices share one clock and finish work on the same edge", "A request can be accepted before the operation's data or response is complete", "Persistent storage has no latency after an interconnect accepts its request", "Completion is only a software concern and never changes hardware ownership"]}
+  correctIndex={1}
+  explanation="Pipelined or buffered interconnects decouple request acceptance from completion. The protocol needs IDs, ordering, backpressure, and error behavior."
+/>
 
 The processor is one participant in a system that includes DRAM, persistent storage, network devices, accelerators, and controllers. An interconnect transports requests and responses among them; a storage hierarchy determines where data resides and what latency, bandwidth, ordering, and durability guarantees apply. Architecture students must distinguish capacity from availability, visibility from persistence, and link bandwidth from end-to-end throughput. A device can accept a request quickly while the data remains queued, buffered, or volatile.
 
@@ -20,6 +42,15 @@ Ordering is a protocol property. A system may guarantee that requests from one s
 A shared bus arbitrates access among masters and broadcasts or routes transactions over common wires. It is simple but its bandwidth and arbitration latency degrade as participants increase. Point-to-point links scale better by providing independent lanes, switches, virtual channels, and flow control, but require more routing and protocol state. A crossbar offers multiple simultaneous paths at area cost; a mesh or ring trades diameter and bisection bandwidth against wiring.
 
 Topology determines contention and failure domains. A link with peak bandwidth $R$ does not imply every pair can communicate at $R$ if traffic shares a bottleneck. Bisection bandwidth bounds the total traffic crossing a partition of the network. Arbitration policy affects fairness, latency, and priority inversion. A high-priority control request can starve bulk traffic, while strict fairness can delay latency-sensitive interrupts.
+
+<CaseStudy client:load
+  title="Latency and bandwidth answer different questions"
+  scenario="A link needs 80 ns before the first byte arrives and then transfers 16 GB/s. A workload issues one dependent 64-byte request at a time."
+  question="Which quantity dominates this workload?"
+  options={["Per-request latency dominates because dependencies prevent concurrent transfers", "Peak bandwidth dominates because every request eventually moves sixty-four bytes", "Link width dominates because latency disappears for naturally aligned requests", "Capacity dominates because stored bytes determine the transfer completion time"]}
+  correctIndex={0}
+  explanation="A dependent request stream cannot overlap enough work to approach peak bandwidth, so first-byte and protocol latency dominate. Independent batched requests could expose a different bottleneck."
+/>
 
 ## DRAM behavior
 
@@ -40,6 +71,25 @@ Direct memory access (DMA) allows a device to transfer a buffer without a CPU in
 **Worked receive lifecycle.** For a 1 MiB network receive, the OS allocates or maps a buffer, establishes a device-visible address, records length and permissions, and publishes a descriptor with a memory-ordering barrier. The device writes bytes, marks completion, and raises an interrupt or updates a completion queue. The driver acknowledges the completion, invalidates or synchronizes CPU cache state if the platform is noncoherent, validates the reported length and packet metadata, transfers ownership to the network stack, and posts a replacement buffer. A stale cache line can make the CPU see old bytes; a missing bounds check can turn a malformed device length into a memory-safety bug.
 
 On an IOMMU-equipped system, device virtual addresses are translated and permission-checked, limiting a compromised device or driver from DMA-writing arbitrary physical memory. The IOMMU mapping has its own invalidation and lifetime protocol. Unmapping a buffer while the device still owns it creates a use-after-free at the hardware boundary.
+
+This diagram separates control-plane setup from the DMA request path. The driver supplies a device-visible address and length after establishing the mapping. The device issues requests through the IOMMU; the IOMMU translates and checks them before memory is accessed. A completion notification alone does not prove that teardown has quiesced all outstanding requests.
+
+<PlantUML code={`@startuml
+rectangle "CPU / driver" as CPU
+rectangle "DMA device" as DEV
+rectangle "IOMMU" as IOMMU
+database "Physical buffer" as BUF
+CPU --> IOMMU : install mapping / permissions
+CPU --> DEV : publish address + length; notify
+DEV --> IOMMU : device-addressed DMA request
+IOMMU --> BUF : permitted physical access
+DEV ..> CPU : completion notification
+note bottom of CPU
+Before reuse: establish device quiescence,
+synchronize caches as required,
+and revoke stale mappings.
+end note
+@enduml`} />
 
 ## Cache coherence and DMA
 

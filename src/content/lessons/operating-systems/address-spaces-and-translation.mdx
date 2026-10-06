@@ -1,0 +1,361 @@
+---
+title: "Address Spaces and Translation"
+course: "operating-systems"
+description: "Derive virtual-address translation from relocation and protection requirements, then use mappings to construct sparse, isolated, and intentionally shared address spaces."
+prerequisites:
+  - "C pointers, arrays, object lifetime, and hexadecimal arithmetic"
+  - "Physical memory, CPU privilege modes, and load/store execution"
+  - "Integer division, remainders, powers of two, and basic invariants"
+outcomes:
+  - "Distinguish a virtual address, a physical address, and the address-space context that gives a virtual address meaning."
+  - "Derive and execute base-and-bound and paged translations, including bounds, permissions, offsets, and fault conditions."
+  - "Construct an address-space layout that combines private, shared, sparse, and guard mappings without violating isolation."
+  - "Diagnose overflow, fragmentation, aliasing, and stale-authority failures from an unfamiliar translation trace."
+omissions:
+  - "Multilevel page-table encoding, TLB timing, replacement policy, NUMA placement, and speculative side channels require separate mechanism analyses."
+  - "Variable-sized segmentation and historical x86 segmentation modes are not surveyed."
+estimatedMinutes: 330
+assessment: "Given two processes, a finite physical-memory map, and an unseen translation scheme, derive the translation function, trace valid and invalid accesses, design one intentional shared mapping, quantify fragmentation, and defend the isolation invariant against an overflow or aliasing attack."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Address Spaces and Translation
+
+Two independently linked programs both place code at virtual address `0x1000`, grow a heap upward, and grow a stack downward. Loading both programs into one physical memory creates an immediate conflict if an address names a physical byte directly. Relocating every pointer when a process moves is not sufficient: pointers can be stored in files, registers, data structures, or generated while the program runs. A faulty process could also manufacture the physical address of another process's data.
+
+The missing mechanism is a controlled naming layer. A process issues a **virtual address**; the processor interprets that address through the process's current **address space**; translation either yields an authorized **physical address** or raises an exception before the access completes.
+
+> **Isolation invariant.** A user-mode memory access may affect or reveal a physical byte only if the active address space contains a mapping for the requested virtual address and that mapping authorizes the requested operation.
+
+The invariant contains three independent questions: *Which address-space context is active? Which physical storage does the name select? Which operations does the mapping permit?* Omitting any one turns translation into relocation without protection.
+
+## Names require a context
+
+A virtual address is not globally meaningful. Model an address space as a partial function
+
+$$
+T_A : (v, a) \mapsto
+\begin{cases}
+(p, \text{allow}) & \text{if address space } A \text{ maps }v\text{ and permits access }a,\\
+\text{fault} & \text{otherwise.}
+\end{cases}
+$$
+
+Here $v$ is a virtual byte address, $a \in \{\text{read},\text{write},\text{execute}\}$, and $p$ is a physical byte address. The same bit pattern can produce different results under different contexts:
+
+| Context and access | Mapping | Result |
+| --- | --- | --- |
+| process A reads `0x1800` | private data → frame 9, read/write | physical byte in frame 9 |
+| process B reads `0x1800` | private data → frame 27, read/write | a different physical byte |
+| process B executes `0x1800` | frame 27, read/write only | protection fault |
+| process C reads `0x1800` | no mapping | translation fault |
+
+Two virtual names may also intentionally denote one physical object. Shared libraries, shared-memory regions, and file-backed mappings rely on this aliasing. Isolation therefore does **not** require one-to-one translation. It requires that every alias be deliberate, authorized, and revoked safely.
+
+<PlantUML
+  code={`@startuml
+title "Virtual names, private frames, and an intentional alias"
+rectangle "Process A address space" as A
+rectangle "A: 0x1000–0x1fff\nread + execute" as AC
+rectangle "A: 0x4000–0x4fff\nread + write" as AD
+rectangle "Process B address space" as B
+rectangle "B: 0x7000–0x7fff\nread + execute" as BC
+rectangle "B: 0x4000–0x4fff\nread + write" as BD
+rectangle "Physical frame 12\nshared code" as F12
+rectangle "Physical frame 31\nA private data" as F31
+rectangle "Physical frame 44\nB private data" as F44
+A --> AC : owns mapping
+A --> AD : owns mapping
+B --> BC : owns mapping
+B --> BD : owns mapping
+AC --> F12 : translate
+BC --> F12 : translate
+AD --> F31 : translate
+BD --> F44 : translate
+@enduml`}
+/>
+
+**Retrieval — close the prose before answering.** Why is the pair `(virtual address, process identity)` still insufficient to decide whether a store may proceed?
+
+<details>
+<summary>Reveal the diagnostic answer</summary>
+
+Identity and virtual address select a candidate mapping, but authority is operation-specific. A read-only code mapping may authorize a load and instruction fetch while rejecting a store. An answer that mentions only different physical locations has recovered relocation but not protection.
+
+</details>
+
+## Relocation by base and bound
+
+The smallest useful translation mechanism assigns one contiguous physical region to a process. Let $B$ be the physical base and $L$ the length of the process's virtual region. For an unsigned virtual address $v$:
+
+$$
+T(v) =
+\begin{cases}
+B+v & 0 \le v < L,\\
+\text{fault} & \text{otherwise.}
+\end{cases}
+$$
+
+The bounds check must occur **before** the addition. If a fixed-width addition wraps, checking the physical result can authorize an address outside the allocated region.
+
+### Worked trace: a valid load and an overflow attack
+
+Assume 16-bit addresses, `B = 0x4000`, and `L = 0x1800`.
+
+1. A load from `v = 0x02F0` passes because `0x02F0 < 0x1800`.
+2. Translation yields `0x4000 + 0x02F0 = 0x42F0`.
+3. A load from `v = 0xF100` fails the virtual bound and must fault.
+
+An incorrect implementation first computes a 16-bit sum and then tests whether the result lies below `B + L`:
+
+```c
+// Incorrect: wrapped addition occurs before authority is established.
+uint16_t physical = base + virtual;
+if (physical < base + length)
+    return physical;
+```
+
+For `base = 0x4000` and `virtual = 0xF100`, the sum wraps to `0x3100`. A weak upper-bound-only test may accept the wrapped result. The safe form compares `virtual` with `length`, using an unsigned type whose width is part of the machine contract, and adds only after acceptance.
+
+### Worked trace: relocation without pointer rewriting
+
+Process P executes a load from virtual `0x0710` while `B = 0x2000`; the physical access is `0x2710`. The scheduler later runs P from a region beginning at `0x9000`. Updating the privileged base register changes the same instruction's physical access to `0x9710`. P's register and memory values remain virtual; no embedded pointer is rewritten.
+
+Base-and-bound provides cheap relocation, but it imposes one contiguous extent. A 1 MiB heap and a 1 MiB stack separated by 1 GiB of unused virtual space either reserve that physical hole or cannot be represented by one pair. Growing the region can require physical relocation. Sharing one read-only library while keeping data private also needs more than one extent.
+
+**Application — execute before revealing.** A 20-bit machine gives a process `B = 0x62000` and `L = 0x2A000`. Classify virtual accesses `0x01FFC`, `0x29FFF`, and `0x2A000`; compute every valid physical address.
+
+<details>
+<summary>Reveal the trace and error diagnoses</summary>
+
+- `0x01FFC < 0x2A000`, so it maps to `0x63FFC`.
+- `0x29FFF < 0x2A000`, so it maps to `0x8BFFF`, the final byte in the region.
+- `0x2A000` equals the length and is outside the half-open interval `[0, L)`; it faults.
+
+Accepting the last address indicates an inclusive-upper-bound error. Subtracting one from every physical result indicates confusion between a region length and its final index.
+
+</details>
+
+## Paging derives from sparse allocation
+
+Paging divides virtual memory and physical memory into equal-size units. Let page size $P=2^k$ bytes. For virtual address $v$,
+
+$$
+\operatorname{VPN}(v)=\left\lfloor \frac{v}{P}\right\rfloor,
+\qquad
+\operatorname{offset}(v)=v\bmod P.
+$$
+
+A page-table entry maps a virtual page number (VPN) to a physical frame number (PFN) and carries control state such as validity and permissions. If the entry is valid and authorizes the access,
+
+$$
+p=\operatorname{PFN}(\operatorname{VPN}(v))\cdot P+\operatorname{offset}(v).
+$$
+
+The offset is preserved because pages and frames have the same size. Translation changes the container, not the byte's position within that container.
+
+### Worked trace: noncontiguous physical placement
+
+Take a 16-bit virtual address, 1 KiB pages, and these entries:
+
+| VPN | PFN | Permission | Present |
+| ---: | ---: | --- | --- |
+| `0x00` | `0x12` | read + execute | yes |
+| `0x01` | `0x2B` | read + write | yes |
+| `0x02` | — | — | no |
+| `0x3F` | `0x07` | read + write | yes |
+
+Because $P=1024=2^{10}$, the low ten bits are the offset.
+
+- Virtual `0x0634` has VPN `1` and offset `0x234`. A read maps to `0x2B × 0x400 + 0x234 = 0xAE34`.
+- Executing `0x0634` reaches a present page but violates its `read + write` permission; the result is a protection fault, not a translation.
+- Reading `0x0A10` selects VPN `2`, whose entry is absent; the result is a not-present fault.
+- Writing `0xFE20` selects VPN `0x3F`, offset `0x220`, and maps to `0x1E20`.
+
+The final case demonstrates non-monotonic placement: a high virtual address can map to a low physical frame. Sorting virtual addresses does not sort physical addresses.
+
+### Fragmentation is relocated, not eliminated
+
+Paging removes **external fragmentation** from allocation of individual frames: any free frame can hold any virtual page. It introduces **internal fragmentation** in the partially used final page of an allocation. An object of $n$ bytes consumes
+
+$$
+\left\lceil\frac{n}{P}\right\rceil P
+$$
+
+bytes of mapped capacity, wasting that quantity minus $n$ when it cannot share the final page.
+
+A 10,500-byte isolated region with 4 KiB pages needs three pages: 12,288 bytes, of which 1,788 bytes are unused. The waste is a property of allocation granularity, not evidence that those physical frames are adjacent.
+
+**Transfer — change the granularity.** The same 10,500-byte region uses 2 KiB pages. Compute mapped capacity and waste, then state one cost that the smaller pages increase.
+
+<details>
+<summary>Reveal the calculation and trade-off</summary>
+
+Six 2 KiB pages provide 12,288 bytes, so this particular size still wastes 1,788 bytes. Smaller pages do not guarantee less waste for every object. They increase the number of mappings and therefore page-table memory and translation-cache pressure. A response that claims the waste must halve has treated an average tendency as a per-object theorem.
+
+</details>
+
+## Constructing a process address space
+
+An address space is a set of regions with different backing objects and authorities, not a promise that every address between the lowest and highest mapping is valid.
+
+| Region | Typical backing | Initial materialization | Common authority |
+| --- | --- | --- | --- |
+| executable text | executable file | file page on demand or at load | read + execute |
+| read-only data | executable file | file page | read |
+| writable data | private file image | file page, then private on write | read + write |
+| heap | anonymous memory | zero-filled page on first touch | read + write |
+| memory-mapped file | file object | file page on demand | mapping-dependent |
+| guard interval | none | never | no access |
+| user stack | anonymous memory | policy-bounded growth | read + write, non-execute |
+
+The address-space manager records region-level intent; page tables record the translations currently installed. A valid region need not have a resident page yet. Conversely, a page-table entry left behind after its region is removed is stale authority.
+
+{/* Source tracking: Region and mapping semantics synthesized from POSIX.1-2024 mmap() and fork(), and from xv6-riscv rev5 Chapters 3 and 4; the layout and traces are original LibreUni examples. */}
+
+<PlantUML
+  code={`@startuml
+title "Sparse process address space"
+rectangle "high virtual addresses" as HI
+rectangle "trampoline / controlled kernel entry\nnot user-writable" as TR
+rectangle "guard page\nno mapping" as GUARD1
+rectangle "user stack\nRW, non-executable\ngrows within policy" as STACK
+rectangle "unmapped interval" as HOLE
+rectangle "mapped file\nprivate or shared" as MMAP
+rectangle "heap\nRW anonymous" as HEAP
+rectangle "guard interval" as GUARD2
+rectangle "text + read-only data\nR-X / R--" as TEXT
+rectangle "low virtual addresses" as LO
+HI -down-> TR
+TR -down-> GUARD1
+GUARD1 -down-> STACK
+STACK -down-> HOLE
+HOLE -down-> MMAP
+MMAP -down-> HEAP
+HEAP -down-> GUARD2
+GUARD2 -down-> TEXT
+TEXT -down-> LO
+@enduml`}
+/>
+
+### Worked trace: stack growth or invalid access?
+
+Assume a stack region may grow into one designated unmapped page below its current lowest mapped page, down to a fixed maximum size. Its current mapped interval is `[0x7FFF_D000, 0x8000_0000)`; `[0x7FFF_C000, 0x7FFF_D000)` is the current growth page, and the page below that is a non-growable guard.
+
+1. A store at `0x7FFF_CFF8` lands eight bytes below the current mapping, in the permitted one-page growth interval. The kernel may allocate a zeroed frame, install a non-executable user mapping, and retry.
+2. A store at `0x7FFE_0000` is far below the growth frontier. Treating every lower address as stack growth would let a stray pointer consume arbitrary memory and collide with another region. The access must fail.
+3. An instruction fetch from `0x7FFF_E100` targets a stack page. Presence is not enough; non-execute authority causes a protection fault.
+
+The growth policy belongs to region metadata. A page-table miss alone cannot distinguish an intentional lazy page from an invalid pointer.
+
+**Application — design a map.** Two worker processes need private 64 KiB heaps, one 12 KiB read-only lookup table shared at different virtual addresses, and one writable 8 KiB communication ring shared at the same virtual address. Draw the VPN→PFN relations for 4 KiB pages and state the permission invariant for each object.
+
+<details>
+<summary>Reveal a grading model</summary>
+
+A complete design has sixteen distinct heap frames per process, three table frames mapped into both address spaces without write permission, and two ring frames mapped read/write into both address spaces. The virtual addresses of the table may differ because sharing is defined by common PFNs, not common VPNs. The ring's equal virtual address is a convenience, not a requirement. Full credit requires separate PTE permissions in each address space and an explicit rule that no private heap PFN appears in the other process's user mappings.
+
+Common defects:
+
+- allocating six table frames loses sharing;
+- mapping the table writable loses its integrity contract;
+- requiring equal VPNs confuses virtual naming with physical identity;
+- sharing page-table entries between processes without context separation can expose unrelated mappings.
+
+</details>
+
+## Boundary failures and adversarial cases
+
+### A pointer is not a physical address
+
+Passing a user pointer to a device for direct memory access without pinning and mapping its pages gives the device an address in the wrong namespace. A device may use a bus or I/O virtual address, and the process mapping may change while the operation is in flight. Translation must occur in the correct agent's context.
+
+### Presence does not imply authority
+
+Marking code present and user-accessible while accidentally retaining write permission defeats write-xor-execute policy. The access does not fault because the mapping itself grants the wrong authority. Fault-handler testing cannot detect every over-permissive mapping; mapping construction needs invariant checks.
+
+### Unmapping is a concurrent revocation
+
+Removing a page-table entry does not prove that no processor can use a cached translation. The kernel must invalidate stale translation state on every relevant processor before reusing the physical frame for a new security domain. Detailed invalidation mechanics are outside this scope, but the authority rule is immediate: frame reuse is forbidden until revocation is globally complete.
+
+### Aliases can disagree about policy
+
+Mapping one physical frame writable through one alias and executable through another can defeat a policy checked per mapping. A system that requires write-xor-execute must reason about all aliases to the frame, not each PTE in isolation.
+
+**Retrieval plus boundary check.** Classify each statement as invariant, common implementation choice, or false claim:
+
+1. Page translation preserves the offset within a page.
+2. Every process must map its shared library at the same virtual address.
+3. A valid PTE guarantees a user store may proceed.
+4. Any free physical frame can hold a virtual page of the same configured page size.
+
+<details>
+<summary>Reveal classifications</summary>
+
+1. **Invariant** for equal-size paging: the mapping substitutes the frame number and preserves the offset.
+2. **False claim:** different VPNs may map the same library frames; position-independent code makes this practical.
+3. **False claim:** user/supervisor and read/write/execute permissions still govern the operation.
+4. **Implementation property under the stated paging model:** equal-size frames eliminate the need for contiguous placement, although devices, huge pages, coloring, or physical constraints may narrow the eligible set.
+
+</details>
+
+## Synthesis assessment: a translation contract under attack
+
+A 24-bit machine uses 1 KiB pages. Process A has:
+
+- VPNs `0x000–0x003` mapped read/execute to PFNs `0x120–0x123`;
+- VPNs `0x010–0x012` mapped read/write to PFNs `0x2F0`, `0x080`, `0x191`;
+- VPN `0x03F` mapped read-only to shared PFN `0x055`;
+- no other user mappings.
+
+Process B maps shared PFN `0x055` read-only at VPN `0x008`; its private data uses other frames. Evaluate these operations and defend every result:
+
+1. A executes virtual `0x000C44`.
+2. A writes virtual `0x0043A0`.
+3. A reads virtual `0x00FE10`.
+4. B reads the byte in shared PFN `0x055` at offset `0x210`; construct a valid virtual address.
+5. A kernel optimization proposes reusing PFN `0x055` immediately after deleting A's PTE, without coordinating with B or cached translations. Identify both violated assumptions.
+
+Then redesign the map so B can update the shared object while A retains a read-only view. State whether this enforces object-level integrity against B.
+
+<details>
+<summary>Reveal reference solution and rubric</summary>
+
+With 1 KiB pages, the offset is ten bits.
+
+1. `0x000C44 / 0x400` gives VPN `0x003`, offset `0x044`. PFN `0x123` is executable, so the physical address is `0x123 × 0x400 + 0x044 = 0x48C44`.
+2. `0x0043A0` gives VPN `0x010`, offset `0x3A0`. PFN `0x2F0` is writable, so the physical address is `0xBC3A0`.
+3. `0x00FE10` gives VPN `0x03F`, offset `0x210`; A reads PFN `0x055`, physical `0x15610`.
+4. B uses VPN `0x008` with offset `0x210`: virtual `0x02210`.
+5. Deleting A's PTE does not remove B's live mapping, and neither deletion alone proves cached translations are gone. PFN reuse would violate both shared-object lifetime and translation-revocation requirements.
+
+B's PTE may grant write while A's remains read-only. This enforces access-specific authority for A, but it does not protect the shared object's contents from B: A will observe B's authorized updates. Object-level integrity would require a protocol, validation, immutability, or a private copy rather than PTE permissions alone.
+
+Rubric, 20 points:
+
+- 6 points: correct VPN/offset decomposition and all physical addresses;
+- 4 points: permission checks precede translation completion;
+- 3 points: valid B alias constructed from its own VPN;
+- 4 points: both lifetime and stale-translation defects identified;
+- 3 points: redesign separates per-mapping authority from trust in shared contents.
+
+An answer that gives only numeric addresses earns at most 8 points because the assessment target is the translation-and-authority contract.
+
+</details>
+
+## Deliberate boundary and source trail
+
+The analysis treats translation as architecturally precise and ignores speculative accesses that may leave microarchitectural traces after an architecturally denied operation. It also postpones multilevel page-table encoding, translation-cache timing, page replacement, NUMA placement, and device address spaces. Those mechanisms require additional state and cannot be compressed into the VPN→PFN function without hiding their failure modes.
+
+{/* Source tracking: The translation and protection model follows the RISC-V Privileged Architecture's supervisor address-translation rules; no specification text is copied. */}
+{/* Source tracking: Mapping, MAP_PRIVATE/MAP_SHARED, protection, and object-boundary claims were verified against POSIX.1-2024 mmap() and fork(). */}
+{/* Source tracking: The xv6-specific address-space examples were checked against the official xv6-riscv rev5 book and source at tag xv6-riscv-rev5. */}
+
+## References & Further Reading
+
+- [RISC-V Instruction Set Manual, Volume II: Privileged Architecture, supervisor address translation](https://docs.riscv.org/reference/isa/priv/supervisor.html)
+- [POSIX.1-2024 `mmap()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html)
+- [POSIX.1-2024 `fork()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fork.html)
+- [xv6: a simple, Unix-like teaching operating system, RISC-V revision 5](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf)
+- [xv6-riscv revision 5 source, commit `7d7adbb`](https://github.com/mit-pdos/xv6-riscv/tree/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa)

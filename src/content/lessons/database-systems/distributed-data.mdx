@@ -1,91 +1,112 @@
 ---
 title: "Distributed Data"
 course: "database-systems"
-description: "Latency, partial failure, consistency, and coordination across nodes."
+description: "Choose consistency and coordination contracts from a precise failure model instead of treating replication as a universal guarantee."
+prerequisites:
+  - "Transactions, isolation, logs, retries, and idempotent external effects"
+  - "Basic probability and set intersection"
+  - "Network partitions, crash failures, and the difference between latency and correctness"
+outcomes:
+  - "State the failure model and client-visible consistency requirement before choosing a distributed-data mechanism."
+  - "Derive when read and write quorums intersect and identify the assumptions the arithmetic does not supply."
+  - "Compare a single-writer transaction, distributed commit, and saga/compensation by atomicity, availability, and repair evidence."
+  - "Design a client response to timeout, stale read, and ambiguous commit without inventing a result."
+omissions:
+  - "Formal consensus proofs, Byzantine faults, geo-replication implementation, and CRDT design are deferred."
+  - "Vendor topology configuration is used only as an explicit example, not as a general distributed-systems model."
+estimatedMinutes: 420
+assessment: "Given a distributed order or authorization workflow under a partition, choose a consistency contract, trace the durable decision and client response, and defend the availability trade-off with a counterexample."
 ---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ReplicationQuorumPlayground from '../../../components/playgrounds/ReplicationQuorumPlayground';
+
 # Distributed Data
 
-Replication adds copies; distribution adds network delay and partial failure. A transaction spanning nodes needs a coordination protocol whose blocking, latency, and failure semantics are explicit. “Distributed” is not a consistency model.
+A client sends “transfer $100” and times out. The service cannot infer failure: the request may have reached a leader, committed on a quorum, committed locally but not replicated, or never left the client. Distribution adds uncertain communication to already difficult transaction boundaries. Start with the fact that must remain true and the failures the system promises to handle.
 
-An asynchronously replicated read may be stale after a successful write. That can be acceptable for search but not for a uniqueness check unless the system routes the check to an authoritative view.
+{/* Source tracking: Consensus/leader-replication terminology is synthesized from the Raft paper; quorum-intersection framing and distributed transaction trade-offs are synthesized from CMU 15-445/645 materials. The examples and decision framework are original. */}
 
-## Distributed system model
+## A consistency claim must name its observer and failure
 
-Distribution introduces network latency, reordering, duplication, packet loss, process crash, partition, clock skew, and independent storage failure. A node cannot distinguish a slow peer from a failed peer using finite timeouts alone. A design must state whether it prioritizes availability during partition, consistency of reads and writes, or a bounded form of both under an explicit failure model.
+> **Definition.** A consistency contract states what operation may observe relative to which completed operations, under an explicit failure and communication model. “Eventually consistent” without a convergence target, stale-read bound, or conflict rule is not a useful contract.
 
-Replication creates multiple copies of logical state. Synchronous replication waits for an acknowledgment from a required set before reporting commit; asynchronous replication acknowledges before all copies contain the write. Synchronous schemes can lose availability when the quorum is unavailable, while asynchronous schemes can serve stale data or lose acknowledged writes if the primary fails before propagation. “Replicated” is not a guarantee of durability or consistency without quorum and failure semantics.
+| Product fact | Unsafe observation | Plausible contract | Availability consequence |
+| --- | --- | --- | --- |
+| transfer never spends money twice | client sees two accepted debits | one ordered, durable decision plus idempotency | may reject/wait during leader loss |
+| product search catches up | new item missing briefly | asynchronous indexed projection | stale result is visible and repairable |
+| tenant authorization revocation | revoked user still reads data | strongly ordered or bounded-stale authorization path | read may wait/fail during partition |
+| analytics counter | dashboard lags by a minute | convergent aggregate with stated window | value may be temporarily approximate |
 
-## Consistency models
+A network partition does not prove which side contains the newest value. A timeout is an ambiguous outcome, so a client needs an operation ID and a status lookup or idempotent retry rather than a second independent request.
 
-Linearizability makes each operation appear to occur atomically between invocation and response and preserves real-time order. Sequential consistency requires a single order consistent with each process’s program order but need not preserve real-time order across clients. Causal consistency preserves the order of causally related operations while allowing concurrent operations to differ in visibility. Eventual consistency promises convergence if updates stop and communication continues, but says little about when a read becomes current.
+### Prediction — client action after timeout
 
-Choose the weakest model that preserves the business invariant, not the weakest model that benchmarks fastest. A social-media like count may tolerate stale reads; a payment authorization, uniqueness check, inventory reservation, or permission revocation may require an authoritative or serializable path. User-facing semantics should state whether a read-your-writes guarantee or monotonic reads are required.
+A payment request with idempotency key K times out. Which reply is safer: “failed,” “succeeded,” or “unknown; check K”?
 
-## Quorums and failure tolerance
+<ExerciseSolution>
+“Unknown; check K” is the honest reply until the durable system of record resolves it. Retrying with the same key can be safe if the server persists and deduplicates K; retrying with a new key can create a second charge. A false success misleads the client, while a false failure can trigger duplicate work.
+</ExerciseSolution>
 
-In a replicated system with N copies, choose read and write quorums R and W. If R+W greater than N, a read intersects the latest successful write under the assumptions of the protocol. If W greater than N/2, two successful writes cannot be disjoint, which helps prevent conflicting leaders. These arithmetic conditions are not sufficient when replicas can return stale, uncommitted, or conflicting versions; versioning, leader rules, and failure detection still matter.
+## Quorum arithmetic proves only intersection
 
-Quorum availability depends on the number of live and reachable replicas. A quorum that is mathematically present but split across a network partition must not permit two independent writers unless the system has conflict resolution and a semantics that allows it. Fencing tokens or epochs prevent an old leader from continuing to write after a new leader is elected.
+<MathStatement id="quorum-intersection" kind="proposition" title="Read/write quorum intersection">
+For N replicas, a read quorum R and write quorum W intersect when $R + W > N$. Two write quorums intersect when $2W > N$. These inequalities establish shared replica membership; they do not alone establish leader fencing, version ordering, durability of a particular implementation, or linearizability.
+</MathStatement>
 
-## Replication approaches
+<ReplicationQuorumPlayground client:load />
 
-Primary-backup replication sends writes to a leader and propagates an ordered log. Failover requires selecting a replica with a sufficiently complete log, fencing the old leader, and defining what happens to writes acknowledged by the old leader but absent from the promoted copy. Multi-leader replication permits writes in multiple regions but requires conflict detection and deterministic or application-specific resolution.
+Use the explorer to choose N, R, W, and failed replicas. Predict whether a read can obtain enough responses and whether its selected set must share a replica with a completed write. The model illustrates set intersection; a real protocol also needs a rule for choosing the newest valid version and for rejecting stale leaders.
 
-State-machine replication orders commands and applies them deterministically to replicas. Consensus protocols such as Raft or Paxos provide an agreement mechanism under stated failure assumptions, but consensus does not automatically provide application serializability, durable snapshots, or correct command semantics. The replicated state machine must be deterministic and its log truncation and snapshot installation must be safe.
+<PlantUML code={`@startuml
+participant "client" as C
+participant "leader" as L
+database "replica A" as A
+database "replica B" as B
+database "replica C" as D
+C -> L : write transfer K
+L -> A : replicate entry 44
+L -> B : replicate entry 44
+L -> C : acknowledge after quorum
+note right of C
+The client contract depends on
+what quorum acknowledgement means.
+end note
+@enduml`} />
 
-## Partitioning and data locality
+### Worked application — choose R and W
 
-Partitioning distributes rows by a key or range. Hash partitioning balances uniform workloads but makes range queries and rebalancing more expensive. Range partitioning supports ordered scans and time-based retention but can create hot partitions for monotone keys. A good partition key spreads writes, co-locates transactions that need atomicity, and supports common access paths.
+With N = 3 and W = 2, choose the smallest R that intersects every write quorum. Then state one thing the result still does not prove.
 
-Rebalancing moves data while reads and writes continue. Use epochs or ownership versions so a request does not write to both old and new owners without coordination. A migration needs dual-read or dual-write rules, checkpointing, idempotency, validation, and a cutover proof. Cross-partition transactions pay coordination latency and may block or abort under partial failure.
+<ExerciseSolution hint="Use R + W > N, then list a protocol property outside set arithmetic.">
+R = 2, because 2 + 2 > 3. A read of two replicas intersects a completed two-replica write, but it still needs version/term rules to distinguish a newest value from a stale or divergent response. It also says nothing about whether a client received an acknowledgement before the intended data-loss boundary.
+</ExerciseSolution>
 
-## Conflict resolution
+## Coordination has a blocking and repair cost
 
-Last-write-wins is simple but can lose updates and depends on clocks or logical timestamps. Vector clocks or version vectors can detect concurrent versions, while CRDTs provide merge operations for selected data types with algebraic properties such as commutativity, associativity, and idempotence. Application-level resolution may preserve business meaning but requires exposing conflicts rather than silently choosing one value.
+> **Example.** An order service and a warehouse service each own a database. “Create order and reserve stock” can be treated as one distributed atomic decision, or as local durable steps with a compensating cancellation path. The observable failure behavior differs.
 
-Deletes need tombstones or epochs so an old replica does not resurrect removed data. Tombstones can be garbage-collected only when every replica and delayed message is known to be past the deletion’s version. A repair process must compare versions, authenticate data, and avoid overwriting a newer value with an older snapshot.
+| Design | Success rule | Partition / participant failure | Repair obligation |
+| --- | --- | --- | --- |
+| single database transaction | one local commit | one local failure domain | normal recovery |
+| two-phase commit | coordinator collects prepare votes then decides | prepared participants can block awaiting decision | durable decision log and recovery protocol |
+| saga / outbox | local commits advance an explicit state machine | temporary partial business state is visible | compensations, retries, and reconciliation |
+| asynchronous projection | source event commits first | read model can lag | replay, watermark, and idempotent consumer |
 
-## Distributed transactions
+Two-phase commit is not “a transaction across anything”: participants must durably prepare, a coordinator records a decision, and failure can leave prepared participants unable to decide alone. A saga makes partial progress explicit. It is suitable only when domain-level compensation can restore an acceptable business state; reversing a shipment after delivery is not the same as undoing a row update.
 
-Two-phase commit separates prepare from commit. Participants record prepared state and promise to commit if the coordinator decides commit; the coordinator records the decision and informs participants. If the coordinator fails after participants prepare, they may block because they cannot safely decide alone. Three-phase variants add states under stronger timing assumptions, while consensus-based transaction coordinators can improve recovery but still require correct participant and log integration.
+### Transfer — avoid a fake atomicity claim
 
-Sagas decompose a long workflow into committed local transactions with compensating actions. Compensation is not always a true inverse: an email cannot be unsent, and a payment reversal may incur fees. Define observable intermediate states and idempotent steps. An outbox couples a local database commit with an event record; a relay publishes events and retries safely, avoiding the impossible atomicity of directly committing a database and an external broker without coordination.
+A system writes a financial ledger in region X and sends a warehouse reservation request to region Y. Region Y is unreachable after the ledger commit. Choose a design and state what the customer can see.
 
-## Observability and testing
-
-Record request IDs, transaction IDs, leader epochs, replica log positions, versions, quorum decisions, and retry causes without leaking data. Monitor replication lag, commit latency, rejected epochs, conflict rates, partition health, oldest unapplied log, and repair progress. A dashboard that shows only primary health can hide stale or divergent replicas.
-
-Test partitions, delayed messages, duplicate delivery, leader crash before and after acknowledgment, clock skew, replica restore, rebalancing, concurrent conflict, and tombstone garbage collection. Verify safety properties such as no two leaders accept writes in one epoch, no acknowledged durable write disappears under the contract, and no deleted object resurrects. Verify liveness separately under the assumptions that quorum and communication recover.
-
-## Exercises
-
-1. Classify three operations by required consistency and invariant.
-2. Derive a quorum intersection condition.
-3. Analyze primary failure before and after acknowledgment.
-4. Choose hash versus range partitioning for two workloads.
-5. Explain tombstones and delete resurrection.
-6. Compare two-phase commit with a saga.
-
-### Diagnostic solutions
-
-
-1. Search can use eventual consistency; payment authorization and uniqueness require an authoritative or strongly coordinated path; a profile read may require read-your-writes for the author but tolerate stale views for others.
-2. If N replicas, a successful write reaches W and a read consults R, require R+W greater than N for set intersection, then add version ordering and rules that select the latest valid write.
-3. If acknowledgment required durable quorum, a promoted leader must contain the write or the system violated its contract. If acknowledgment was asynchronous, the write may be lost; expose that risk and reconcile or notify.
-4. Hash partition balances uniform point operations; range partition supports time windows and ordered scans but needs hot-range mitigation and split/rebalance policy.
-5. A tombstone records deletion with a version so delayed old writes cannot recreate the object. Remove it only after all replicas and delayed messages are known to be past that version.
-6. Two-phase commit provides atomic decision but can block on coordinator failure. A saga commits local steps and runs compensations, improving availability but exposing intermediate states and requiring compensations that are idempotent and semantically adequate.
-
-
-
-## Design review gate
-
-Every distributed claim must name the failure model, consistency model, quorum or coordination rule, recovery behavior, and user-visible consequence of stale, rejected, duplicated, or lost work. A diagram of replicas without these semantics is not a distributed database design.
-
-**Exercise.** Classify profile reads, payment authorization, and analytics as strong- or eventual-consistency candidates. State the business invariant behind each choice.
+<ExerciseSolution>
+Use a durable outbox/state machine: record a pending reservation with the ledger transaction, retry the Y request idempotently, and expose “payment authorized, fulfillment pending” until the reservation succeeds or a defined compensation/refund occurs. Claiming an atomic cross-region success after X commits is false without a coordinating protocol and its availability cost. The visible intermediate state is a product decision, not a technical accident.
+</ExerciseSolution>
 
 ## References & Further Reading
 
-* [PostgreSQL Documentation](https://www.postgresql.org/docs/current/)
+* [In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf)
 * [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [Designing Data-Intensive Applications, author resources](https://dataintensive.net/)
+* [PostgreSQL: Synchronous Replication](https://www.postgresql.org/docs/current/warm-standby.html#SYNCHRONOUS-REPLICATION)

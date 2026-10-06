@@ -1,91 +1,141 @@
 ---
 title: "Storage Engines"
 course: "database-systems"
-description: "Pages, buffer pools, heap files, and the path from query to disk."
+description: "Trace how a durable record moves through pages, a buffer pool, and a recovery-safe write path."
+prerequisites:
+  - "Fixed-size arrays, trees, hashing, and asymptotic I/O reasoning"
+  - "Relational rows, keys, and the distinction between a logical identifier and a physical address"
+  - "Basic concurrency vocabulary: shared state, critical sections, and races"
+outcomes:
+  - "Trace an insert or update from a logical row through a slotted page, buffer frame, dirty state, and durable write boundary."
+  - "Distinguish a page pin, latch, and transaction lock and diagnose the failure caused by confusing them."
+  - "Choose row, column, or log-structured storage for a stated workload and defend the choice with I/O, update, and recovery costs."
+  - "State the write-ahead condition that makes a dirty-page flush recoverable."
+omissions:
+  - "Vendor file formats, operating-system page cache tuning, SSD firmware behavior, and implementation of lock-free buffer pools are outside scope."
+  - "Columnar execution and LSM compaction are compared as physical-design choices, not implemented in full."
+estimatedMinutes: 480
+assessment: "Given an unseen page trace and workload, identify the first violated storage invariant, repair the buffer/log protocol, and justify a layout choice under a changed workload."
 ---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Storage Engines
 
-A storage engine organizes records into pages and uses a buffer pool to cache pages in memory. Page identifiers, free-space management, tuple visibility, and latching are physical concerns exposed indirectly through performance.
+An order update changes `paid_at` from `NULL` to a timestamp. The SQL-level fact is tiny; the physical system must find a page, keep it resident while a worker changes it, preserve a stable reference from indexes, and survive a power loss between the write and the acknowledgement. A storage engine is the machinery that makes those obligations compatible.
 
-## Pages and records
+{/* Source tracking: Page headers, item identifiers, free space, and page LSNs are synthesized from PostgreSQL's documented on-disk page layout. Buffer-pool and storage-layout comparisons are synthesized from CMU 15-445/645 course materials; the wording and examples are original. */}
 
-Disk and SSD I/O operate in blocks or pages rather than individual attributes. A page has a fixed size chosen to balance transfer cost, internal fragmentation, cache residency, and update locality. A slotted-page layout stores a header, slot directory, and variable-length tuple payloads. A record identifier can be a page ID plus slot number; the indirection lets a tuple move within the page without changing every index entry. If records move between pages, the engine needs forwarding pointers or index maintenance.
+<details>
+  <summary>Readiness refresh: cost tools for page I/O</summary>
 
-The page header may contain checksum, free-space boundary, lower and upper offsets, log sequence number, and format version. A torn write can corrupt a page if the storage device loses only part of a sector, so checksums and WAL ordering matter. A page ID is not an application key: it identifies a physical location and can become invalid after compaction, vacuum, or table rewrite.
+  A page I/O is one page read or write; it is the model's unit of work. A scan over $N$ pages is $O(N)$ I/Os. A balanced tree with fan-out $B$ reaches a key in about $O(\log_B N)$ page reads. A hash table is useful for equality lookup under its distribution assumptions, not for ordered range traversal. Treat these as named approximations: each comparison states its page, cache, and workload assumptions.
+</details>
 
-Fixed-length tuples simplify offset arithmetic and scanning. Variable-length tuples need a null bitmap, type metadata or schema interpretation, alignment rules, and offsets for variable fields. Updates that enlarge a tuple may not fit in place. A heap file maintains pages containing records without ordering by a search key; insertion chooses a page with enough free space, often using a free-space map.
+## Pages preserve location while records move
 
-## Buffer pool manager
+> **Definition.** A **page** is the unit the engine reads, caches, writes, and recovers. A **record identifier** is usually `(page_id, slot_id)`, not an application key such as an order number.
 
-The buffer pool caches disk pages in frames. A page table maps page IDs to frames, a pin count records active users, and a dirty bit records changes not yet written. Fetching a page increments its pin count; unpinning decrements it and may mark it dirty. A frame with a positive pin count cannot be evicted because a caller may still hold a pointer or latch. The buffer pool must coordinate page replacement, I/O, and concurrent access without returning uninitialized or stale data.
+A slotted page grows its slot directory from one end and tuple payloads from the other. A slot points to a tuple's current offset. Moving a variable-length tuple *within the page* changes the slot, so an index entry that names the slot remains valid. Moving it to another page requires a forwarding record or index maintenance. The distinction explains why a physical identifier is unsuitable as a public business identifier.
 
-Replacement policies approximate future reuse. LRU evicts the page least recently referenced but can be harmed by scans; clock or LRU-K variants reduce metadata or incorporate history. A sequential scan should not evict a hot working set if the engine can identify scan behavior. Dirty pages require writeback before reuse unless recovery and a newer replacement copy make the old data safely discardable under the system’s logging rules.
+<PlantUML code={`@startuml
+rectangle "page 42 header\nLSN = 910" as H
+rectangle "slot 0 → offset 8060\nslot 1 → offset 7994" as S
+rectangle "free space" as F
+rectangle "tuple: order 17\npaid_at = NULL" as T0
+rectangle "tuple: order 18\npaid_at = 10:03" as T1
+H -down-> S
+S -down-> F
+F -down-> T0
+T0 -down-> T1
+note right of S
+An index can name
+(42, 1), even if T1
+moves inside page 42.
+end note
+@enduml`} />
 
-Pinning and latching are different. Pinning prevents eviction; a latch protects in-memory page structure for short critical sections. A transaction lock protects logical records or predicates over a longer period. Confusing them can cause use-after-eviction, races, deadlocks, or excessive contention. Define lock order and release rules explicitly.
+The header records structural facts such as free-space boundaries and, in a WAL-based engine, the most recent log sequence number reflected by the page. PostgreSQL's current format is a concrete example: it has a fixed page header, line pointers, free space, items, and special space. Other engines choose different fields; the indirection principle is the transferable idea.
 
-## I/O and concurrency
+### Prediction — a tuple grows
 
-A fetch may block on I/O, so holding a global latch during disk access can serialize the entire engine. The design should protect page-table metadata briefly, initiate or await I/O outside broad critical sections where safe, and coordinate concurrent fetches for the same page so only one read is issued. A page eviction must not race with a thread that is about to pin it; the page table, pin count, and replacement metadata need an atomic protocol.
+Page 42 has 40 bytes of free space. Slot 1 points to a 24-byte tuple. Updating the tuple makes it 56 bytes. Which action preserves an index entry `(42, 1)`: overwrite in place, change only the slot, or copy to page 43 without further work?
 
-Write ordering affects recovery. A dirty data page cannot be flushed before the log records describing its update are durable if the system uses write-ahead logging. A commit record must be durable before the engine acknowledges commit under a strict durability contract. The buffer pool therefore interacts with the log manager, not merely with a generic file API.
+<ExerciseSolution hint="Ask whether the record identifier names bytes or an indirection entry.">
+Overwriting is impossible: the tuple needs 32 more bytes. If another 56-byte region exists within page 42 after compaction, the engine can copy the tuple there and change slot 1's offset; `(42, 1)` still resolves. Copying it to page 43 without a forwarding record or index update leaves the old identifier dangling. The missing idea is stable indirection, not a larger page.
+</ExerciseSolution>
 
-## Row, column, and hybrid layouts
+## A buffer frame has three different protections
 
-A row store places attributes of one tuple together, which is good for point lookups and updates that touch most columns. A column store places values of one attribute together, which reduces I/O for analytical queries selecting a few columns and enables vectorized processing and compression. A hybrid or late-materialization engine may store columns in groups or keep compressed vectors until an operator needs full tuples.
+> **Invariant.** A worker may use a page only while its frame is pinned; a frame may be evicted only when its pin count is zero; a dirty update must have a recovery-safe path before the frame is reused.
 
-Compression exploits locality and value distribution. Dictionary encoding replaces repeated values with small codes; run-length encoding compresses sorted or repeated runs; bit packing stores small integers densely; delta encoding stores differences for ordered values. Compression can reduce I/O but adds CPU cost and complicates random updates. A workload with frequent point updates may prefer a row or log-structured delta layer over rewriting a large compressed column segment.
+The buffer pool maps page identifiers to memory frames. Fetching a page pins a frame, possibly waits for I/O, and returns a frame that is initialized. A short latch protects the in-memory page structure while the worker examines or changes slots. A transaction lock or MVCC rule governs which *logical* rows a transaction may observe or modify across statements. These scopes differ deliberately.
 
-## Heap files and free space
+| Mechanism | Protects | Typical lifetime | Failure if omitted |
+| --- | --- | --- | --- |
+| Pin | frame residency | until caller releases the page | eviction turns a live pointer into a stale reference |
+| Latch | bytes and metadata in one frame | a short critical section | concurrent slot edits corrupt page structure |
+| Transaction lock / version rule | logical row or predicate | until commit, abort, or validation | a correct page can still contain a lost update |
 
-An unordered heap supports insertion and record-ID lookup. A free-space map summarizes which pages have room for a tuple of a given size. Deletion may mark a slot dead rather than compacting immediately, especially under MVCC where old versions remain visible to snapshots. Vacuum or garbage collection later reclaims space after no transaction can see the obsolete tuple.
+### Worked trace — two fetches and one eviction
 
-Fragmentation affects sequential scans and cache behavior. A page with many dead tuples consumes I/O without returning rows. Compaction changes slot positions and must preserve or repair record identifiers. A forwarding pointer avoids immediate index updates but adds an extra lookup and can form chains if not controlled. Physical design is a set of invariants: every visible record is reachable, every index reference resolves or is handled as stale, and no page is modified without the required log ordering.
+1. Worker A fetches page 42; the page table installs frame 3 and A pins it.
+2. Worker B asks for page 42 while the read is in flight; B joins that in-flight fetch rather than issuing a second read.
+3. A latches frame 3, changes slot 1, marks it dirty, releases the latch, and later unpins it.
+4. Eviction may choose frame 3 only after **all** pins are gone. It first satisfies the log condition below, writes the dirty page if necessary, then removes the page-table mapping.
 
-## Log-structured storage
+<details>
+<summary>Why not hold one global latch during step 2?</summary>
+I/O can take orders of magnitude longer than metadata updates. A global latch held during I/O serializes unrelated page lookups. A correct design protects the page table briefly, represents the in-flight state, and lets other fetches wait on that page rather than on the entire pool.
+</details>
 
-A log-structured engine appends new versions sequentially and later compacts segments. Sequential writes can be efficient, and immutable segments simplify snapshots and replication. Reads need indexes or filters to locate the newest visible version, while compaction must preserve the latest value, tombstones, and snapshot visibility. A tombstone cannot be discarded until no reader or replica can interpret the deleted key’s older version.
+### Application — scan pollution
 
-Compaction creates write amplification: one logical update may be rewritten through several levels. Choose tiered or leveled policies according to read, write, space, and latency goals. Bloom filters can avoid reading segments that cannot contain a key, but false positives are allowed and false negatives are not. A filter must be tied to the exact key encoding and segment contents.
+A pool holds 100 pages. A hot OLTP working set uses pages 1–80 repeatedly. An analyst sequentially scans 10,000 distinct pages using naive LRU. Predict the result for the next OLTP burst.
 
-## Checksums and corruption
+<ExerciseSolution hint="A page referenced once by the scan looks recent to LRU.">
+The scan continually inserts one-time pages at the most-recent end and eventually evicts much of pages 1–80. The next OLTP burst faults those hot pages again. A scan-resistant policy can give sequential pages low retention priority or use a separate ring, but it cannot ignore the need to pin pages while a scan consumes them.
+</ExerciseSolution>
 
-A checksum detects accidental corruption with high probability under its model; it does not authenticate data against a malicious writer unless it uses a secret or is protected by a cryptographic integrity mechanism. Store checksums with page metadata, validate on read, and define what recovery does when a page fails. Redundant replicas or backups help availability only if their corruption independence and verification process are understood.
+## Layout is a workload hypothesis
 
-## Exercises
+> **Example.** A fraud screen fetches one order and its 25 attributes; a finance report sums two numeric columns over 200 million orders. The first benefits from row locality; the second from reading and compressing only the needed columns.
 
-1. Design a slotted page and explain how variable-length updates work.
-2. Distinguish a pin, latch, and transaction lock.
-3. Construct a buffer-pool eviction sequence showing why scans harm naïve LRU.
-4. Choose row, column, or hybrid storage for three workloads.
-5. Explain WAL ordering for a dirty page and commit.
-6. Analyze a log-structured tombstone and compaction rule.
+| Layout | Favors | Pays for | Boundary case |
+| --- | --- | --- | --- |
+| Row store | point reads, full-row writes, transactional updates | unnecessary bytes during narrow analytics | wide rows can waste cache and I/O |
+| Column store | scans of few attributes, aggregation, compression | rewriting or locating one full mutable row | late materialization must still reconstruct rows when needed |
+| Log-structured / LSM | sustained append-heavy writes and immutable segments | compaction, read amplification, tombstone retention | a point read needs an index/filter across levels |
 
-### Diagnostic solutions
+Compression changes the I/O/CPU balance. Dictionary, run-length, delta, and bit-packed encodings exploit repeated or ordered values; they are not free. A column segment that compresses well may be expensive to update one row at a time. An LSM engine writes new versions sequentially, then compacts segments; it must retain a delete tombstone until every relevant snapshot and replica can no longer interpret an older value.
 
+### Transfer — a changed workload
 
-1. Keep a header and slot offsets growing from one side and tuple payloads from the other. An update that does not fit can move the payload and update the slot; an external record ID remains stable because it names the slot.
-2. Pin prevents eviction while a caller uses a frame; a latch protects short in-memory structure access; a transaction lock controls logical concurrency across operations and may persist until commit.
-3. A scan touches every page once and evicts a hot page repeatedly if the pool is smaller than the scan. A scan-aware policy or priority can protect pages with repeated reuse.
-4. Point updates and full-record reads favor rows; large scans of a few columns favor columns; mixed workloads may use column groups, a row store with covering indexes, or a delta-plus-column architecture.
-5. Flush update log records before the data page they describe; flush the commit record before acknowledging commit. After a crash, redo or undo follows the durable log and page LSN rules.
-6. Keep a tombstone until no active snapshot or replica can see the deleted key’s older value. Compaction may then remove obsolete versions and tombstone while preserving the newest visible state.
+An event table receives 50,000 inserts/s, later serves a 90-day aggregate, and also supports one support-agent lookup by event ID. Choose a primary layout and name the auxiliary structure that prevents the lookup from becoming a full scan.
 
+<ExerciseSolution hint="Separate the write path, analytical path, and point-lookup path instead of seeking one universally best layout.">
+An append-friendly log/LSM or time-partitioned row store fits the ingest path; columnar segments or a columnar replica can serve the aggregate after data becomes stable. A B-tree or hash-like key directory on `event_id` supplies the support lookup. The decision is conditional: if support lookups become dominant and updates are frequent, a row-oriented primary store may become the simpler choice.
+</ExerciseSolution>
 
+## A log makes a dirty page recoverable
 
-## Storage-engine project checklist
+> **Theorem.** Under write-ahead logging, the log record describing a page change must be durable before the changed data page can be written to durable storage. A commit acknowledgement requires the commit record's durability under the stated failure model.
 
-An implementation project should expose page allocation, fetch and unpin, eviction, dirty-page flushing, record insertion and deletion, and crash or checksum behavior through tests. Instrument page reads, writes, evictions, pins, dirty transitions, and latch waits. Test empty pages, full pages, variable-length updates, concurrent fetches, pinned-allocation exhaustion, dirty eviction, process restart, and corrupted-page detection. A benchmark should separate cache hits from misses and report both throughput and tail latency.
+For the `paid_at` update, write a log record with LSN 911, change the in-memory page, mark its page LSN 911, then flush the log through 911 before flushing page 42. After a crash, recovery compares the durable log with page LSNs: a page missing a logged update can be redone; an uncommitted update can be undone or made invisible according to the system's recovery design. Writing the page first risks a durable change with no durable explanation.
 
-A correct buffer pool is not only fast: it preserves page identity, never evicts a pinned frame, never loses a dirty update without a recovery path, and never exposes a partially initialized page to a concurrent caller. State these invariants in the project report and connect each to a test.
+> **Warning.** A checksum detects accidental corruption probabilistically; it does not authenticate a page against a malicious writer. Backups and replicas help only when their integrity is independently verified.
+
+### Prediction — crash boundary
+
+The log is durable through LSN 910. Page 42 has been changed in memory to page LSN 911, but neither the log record 911 nor the page is flushed. The machine loses power. What may recovery expose?
+
+<ExerciseSolution>
+Nothing from LSN 911 may be exposed, because neither its log record nor its page image was durable. If the page had reached storage before the log record, recovery could find an unexplained update and could not rely on WAL redo/undo reasoning. The safe result follows from the ordering condition, not from hoping the device flushes in a convenient order.
+</ExerciseSolution>
 
 ## References & Further Reading
 
-Row stores favor retrieving complete records; column stores favor scanning a few attributes across many rows and compressing similar values. Neither dominates without a workload.
-
-**Exercise.** Choose row or column layout for point lookups, analytical aggregation, and mixed workload. Include compression, locality, and update behavior.
-
-## References & Further Reading
-
-* [PostgreSQL Storage Page Layout](https://www.postgresql.org/docs/current/storage-page-layout.html)
+* [PostgreSQL: Database Page Layout](https://www.postgresql.org/docs/current/storage-page-layout.html)
+* [PostgreSQL: Write-Ahead Logging](https://www.postgresql.org/docs/current/wal-intro.html)
 * [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [PostgreSQL Database File Layout](https://www.postgresql.org/docs/current/storage-file-layout.html)

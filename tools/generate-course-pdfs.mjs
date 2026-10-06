@@ -61,6 +61,19 @@ try {
     const page = await browser.newPage({ colorScheme: 'light' });
     await page.goto(`http://127.0.0.1:${port}/courses/${courseId}/pdf-source.html`, { waitUntil: 'load' });
     await page.evaluate(() => document.fonts?.ready);
+    // Probe at the A4 body width (210mm minus two 18mm margins). This catches
+    // overflowing figures that a successful PDF write can silently clip.
+    await page.setViewportSize({ width: Math.floor(174 * 96 / 25.4), height: 1123 });
+    await page.emulateMedia({ media: 'print' });
+    const overflow = await page.evaluate(() => [...document.querySelectorAll('.content-article figure, .content-article table, .content-article .diagram-frame')].flatMap(element => {
+      const bounds = element.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return [];
+      const article = element.closest('.content-article').getBoundingClientRect();
+      return bounds.left < article.left - 2 || bounds.right > article.right + 2
+        ? [{ text: element.textContent.trim().slice(0, 100), left: bounds.left, right: bounds.right, allowed: [article.left, article.right] }]
+        : [];
+    }));
+    if (overflow.length) throw new Error(`${courseId}: book content exceeds the print column: ${JSON.stringify(overflow)}`);
     await page.pdf({
       path: outputPath,
       format: 'A4',

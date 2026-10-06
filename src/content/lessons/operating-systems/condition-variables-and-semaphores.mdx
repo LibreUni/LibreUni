@@ -1,0 +1,252 @@
+---
+title: "Condition Variables and Semaphores"
+course: "operating-systems"
+description: "Predicate-based waiting, atomic sleep handoff, Mesa semantics, counting permits, and bounded-buffer protocols."
+prerequisites:
+  - "Interleavings and atomicity"
+  - "Locks, atomics, and memory ordering"
+  - "Processes, threads, and scheduler states"
+outcomes:
+  - "Derive a condition-variable wait loop from a shared predicate and explain why releasing the mutex and blocking must form one protocol."
+  - "Trace signal, broadcast, spurious wakeup, timeout, and competing-consumer executions under Mesa semantics."
+  - "Implement and verify a bounded-buffer protocol with counting semaphores, including permits reserved by in-flight operations."
+  - "Choose among a condition variable, semaphore, event counter, and direct handoff from the state that must persist."
+omissions:
+  - "Language-runtime async/await, distributed notifications, and real-time semaphore protocols require separate treatment."
+  - "This lesson specifies POSIX-style and xv6-style mechanisms; platform APIs with different contracts must be read from their own standards."
+estimatedMinutes: 360
+assessment: "Given an unseen wait protocol, identify its predicate and mutex, construct a lost-wakeup or stale-predicate schedule if one exists, repair it, and verify safety and progress for both condition-variable and semaphore formulations."
+---
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import ConditionVariablePlayground from '../../../components/playgrounds/ConditionVariablePlayground';
+
+# Condition Variables and Semaphores
+
+A consumer checks an empty queue, releases its mutex, and prepares to sleep. In that gap a producer enqueues work and sends a notification. No waiter is registered, so the notification changes nothing. The consumer then sleeps forever beside a non-empty queue.
+
+Mutual exclusion protected the queue while code was running. It did not solve **waiting until a state becomes true**. That requires an atomic handoff from “I hold the mutex and the predicate is false” to “I am registered as a waiter and no longer hold the mutex.”
+
+## A condition variable is not the condition
+
+<MathStatement id="def-condition-predicate" kind="definition" title="Condition predicate">
+A **condition predicate** $P(S)$ is a Boolean expression over shared state $S$, evaluated while holding the mutex that protects every field on which $P$ depends. A condition variable is a wait set used to block and make waiters eligible; it does not store the truth of $P$.
+</MathStatement>
+
+For a bounded queue, a consumer's predicate may be `count > 0`; a producer's may be `count < capacity`. The queue fields are durable program state. A notification is only a scheduling hint that some waiter should re-evaluate state.
+
+{/* Source tracking: POSIX wait atomicity, mutex reacquisition, timeout, and predicate recheck requirements synthesized from The Open Group Base Specifications Issue 8 condition-variable functions. */}
+
+```c
+int queue_take(queue *q, item *out) {
+    int rc = pthread_mutex_lock(&q->mutex);
+    if (rc != 0) return rc;
+
+    while (q->count == 0 && !q->closed) {
+        rc = pthread_cond_wait(&q->not_empty, &q->mutex);
+        if (rc != 0) {
+            pthread_mutex_unlock(&q->mutex);
+            return rc;
+        }
+    }
+
+    if (q->count == 0 && q->closed) {
+        pthread_mutex_unlock(&q->mutex);
+        return QUEUE_CLOSED;
+    }
+
+    *out = q->slots[q->head];
+    q->head = (q->head + 1) % q->capacity;
+    q->count -= 1;
+    pthread_cond_signal(&q->not_full);
+    return pthread_mutex_unlock(&q->mutex);
+}
+```
+
+The wait operation atomically releases the mutex and blocks with respect to another thread acquiring that mutex and signaling the condition. Before returning, it reacquires the mutex. The loop re-evaluates the predicate after reacquisition.
+
+**Retrieval.** Why does `pthread_cond_wait` require the caller to pass the mutex rather than asking the caller to unlock immediately before waiting?
+
+<details>
+<summary>Answer</summary>
+
+Separate unlock and wait operations create an observable gap. A producer can acquire the mutex, make the predicate true, signal when no waiter is registered, and finish before the consumer blocks. The combined wait protocol closes that gap: once another thread can acquire the predicate mutex, the waiter is treated as blocked for a subsequent signal.
+
+</details>
+
+## Wakeup means “compete again,” not “proceed”
+
+Most practical condition-variable APIs use **Mesa-style** semantics: signaling makes a waiter ready, but the signaler keeps running until it releases the mutex. By the time a waiter reacquires, another thread may have consumed the resource. Implementations may also permit wakeups even when no program-level event made the predicate true.
+
+<PlantUML code={`
+@startuml
+hide footbox
+participant "consumer A" as A
+participant "predicate mutex" as M
+participant "producer" as P
+participant "consumer B" as B
+A -> M : wait(not_empty)\\nrelease and block
+B -> M : wait(not_empty)\\nrelease and block
+P -> M : lock; enqueue X; broadcast
+P -> M : unlock
+M -> A : reacquire; predicate true
+A -> M : dequeue X; unlock
+M -> B : reacquire; predicate now false
+B -> M : wait again
+note over A,B
+The while-loop is required even though B was notified.
+end note
+@enduml
+`} />
+
+**Prediction — fix an invariant in writing before moving the trace.** In the broadcast schedule, which event makes an `if (count == 0) wait(...)` consumer unsafe: the broadcast, consumer A's dequeue, or consumer B's wakeup?
+
+<ConditionVariablePlayground client:load />
+
+**Transfer.** The queue can be closed. A close operation sets `closed = true` and no further producer may enqueue. Should close signal one waiter or broadcast? What predicates do waiting producers and consumers use?
+
+<details>
+<summary>Transfer solution</summary>
+
+Close changes a state relevant to every waiter, so it normally broadcasts on each condition wait set. A consumer waits while `count == 0 && !closed`; after wakeup, `count > 0` permits draining existing work, while `count == 0 && closed` returns end-of-stream. A producer waits while `count == capacity && !closed`; any observation of `closed` rejects the enqueue. Both predicates and the close transition use the same queue mutex.
+
+Consumer A's dequeue is the event that makes the predicate false before B reacquires. Broadcast is legal; B's wakeup is not permission to skip the predicate.
+
+</details>
+
+Signal one waiter when one unit of progress became possible. Broadcast when a transition can satisfy several different predicates, when all waiters must observe shutdown/configuration change, or when the implementation cannot identify the relevant waiter. Broadcast can create a **thundering herd**: many threads wake, contend for one mutex, discover false predicates, and sleep again. That is a performance failure, not permission to weaken the loop.
+
+## Predicate updates define the notification protocol
+
+> **Warning.** A notification cannot repair an update performed outside the predicate's synchronization protocol. First make the state transition visible under the mutex; then decide whom to wake.
+
+The safe sequence is derived from state ownership:
+
+1. lock the predicate mutex;
+2. change the fields on which the predicate depends;
+3. signal or broadcast as required by the transition;
+4. unlock, publishing the new state to a waiter that later acquires.
+
+POSIX does not make “signal only while holding the mutex” a universal syntactic law. Some programs can signal after unlocking without losing correctness because the predicate remains authoritative and all state transitions are synchronized. Holding the mutex through the state change and notification is easier to audit: the waiter cannot interleave between publication and notification, and the review can connect one transition to one wake decision.
+
+**Counterexample: notifications as remembered events.** A thread calls `signal` before any waiter exists. A later waiter does not consume a stored signal; condition variables do not generally count notifications. If the application requires one future operation to consume one earlier permit, represent that fact in state—a counter, queue entry, generation number, latch, or semaphore.
+
+**Application: generation wait.** A configuration service increments `generation` after each reload. A worker holds `seen`. Its predicate is `generation != seen || shutting_down`; after waking it copies the current generation to `seen`. A bare boolean `changed` can merge several reloads, which may be correct for “refresh to latest” but wrong if each reload requires one audit action. The state representation decides the semantics.
+
+Timeouts add another state transition. A timed wait returning does not establish that the predicate is false or true; reacquire the mutex and test it. When elapsed duration matters, use a monotonic clock-capable API so wall-clock adjustment does not change the deadline semantics.
+
+## Semaphores store permits
+
+<MathStatement id="def-counting-semaphore" kind="definition" title="Counting semaphore">
+A counting semaphore has a nonnegative logical permit count. `wait`/`P` consumes one permit or blocks until one can be consumed. `post`/`V` adds one permit and may wake a waiter. The operation that changes the count and chooses whether to block is atomic with respect to other semaphore operations.
+</MathStatement>
+
+A semaphore post before a wait is remembered as a permit. That makes a semaphore suitable for a pool of interchangeable resources or queued units of availability. A condition variable is suitable when a thread must re-evaluate an arbitrary predicate over separately protected state.
+
+| Mechanism | Persistent state | Ownership on release | Natural question |
+| --- | --- | --- | --- |
+| mutex | locked/unlocked plus owner | owner releases | who may mutate this invariant? |
+| condition variable | no application truth value | none | when should waiters recheck $P(S)$? |
+| counting semaphore | permit count | usually no mutex-style owner | how many units may proceed? |
+| event/generation counter | monotonically changing value | application-defined | has state advanced since my observation? |
+
+A binary semaphore can have values 0/1, but that does not automatically make it a mutex. Mutex ownership enables errors such as non-owner unlock to be rejected or defined; mutex protocols often carry priority inheritance and memory synchronization semantics. A semaphore can be posted by a different thread and often represents handoff rather than ownership.
+
+## Derive the bounded-buffer semaphore protocol
+
+Let capacity be $N$. Initialize:
+
+```text
+empty = N      // permits to reserve an empty slot
+full  = 0      // permits to reserve a filled slot
+mutex = 1      // exclusive queue metadata access
+```
+
+Producer:
+
+```text
+P(empty)
+P(mutex)
+enqueue(item)
+V(mutex)
+V(full)
+```
+
+Consumer:
+
+```text
+P(full)
+P(mutex)
+item = dequeue()
+V(mutex)
+V(empty)
+```
+
+Taking `empty` before `mutex` prevents a producer from sleeping for capacity while holding the metadata lock needed by a consumer. The consumer follows the symmetric order.
+
+At quiescent points, `empty + full == N`. During concurrent operations that equality omits reservations. A stronger accounting invariant is
+
+$$
+empty + full + R_p + R_c = N,
+$$
+
+where $R_p$ counts producers that consumed an empty permit but have not posted a full permit, and $R_c$ counts consumers that consumed a full permit but have not posted an empty permit. Queue occupancy and permit counts are related by the protocol phase, not by one unconditional two-variable equation.
+
+**Worked trace, $N=2$.** Start `empty=2, full=0`. Producers A and B each perform `P(empty)`, so `empty=0, R_p=2`. A acquires `mutex`, enqueues X, releases, and posts `full`: `full=1, R_p=1`. A consumer consumes that full permit (`full=0, R_c=1`) before B has enqueued. It may dequeue only after acquiring `mutex`; B's reserved slot does not count as a filled item. The mutex and phase ordering preserve representation safety while permits limit capacity.
+
+**Counterexample: take the mutex first.** With a full buffer, a producer acquires `mutex` then blocks in `P(empty)`. A consumer can consume a `full` permit but blocks trying to acquire `mutex`, so it cannot dequeue and post `empty`. The system deadlocks. This schedule is one reason resource-acquisition order belongs in the protocol proof.
+
+## xv6 sleep and wakeup expose the same handoff
+
+{/* Source tracking: xv6 sleep/wakeup lock handoff and lost-wakeup reasoning synthesized from the current xv6 RISC-V book, scheduling chapter. */}
+
+xv6 kernel code waits on a **channel**, an arbitrary identifier associated with a predicate. `sleep(chan, lock)` acquires the process lock before releasing the caller's condition lock, records the channel and sleeping state, and enters the scheduler. The overlapping lock ownership prevents a concurrent `wakeup(chan)` from passing between predicate inspection and visible sleep registration.
+
+The channel is not the predicate and wakeup is not a stored permit. Callers inspect their condition in a loop under the condition lock. `wakeup` makes matching sleepers runnable; by the time one runs, another process may have changed the condition.
+
+<PlantUML code={`
+@startuml
+start
+:caller holds condition lock C;
+:predicate is false;
+:sleep(channel, C) acquires process lock P;
+:sleep releases C;
+:record channel and SLEEPING under P;
+:scheduler releases P after switch;
+:wakeup checks matching sleepers under each P;
+:awakened caller reacquires C;
+:caller rechecks predicate;
+stop
+@enduml
+`} />
+
+Holding C while entering `sleep` forever would block the producer that needs C to make the predicate true. Releasing C before the sleep protocol owns P would reopen the lost-wakeup gap. The handoff must ensure the waiter owns one lock or the other across the vulnerable interval.
+
+## Synthesis studio: one queue, two formulations
+
+Design a capacity-4 work queue with multiple producers, multiple consumers, close semantics, and cancellation of waiting consumers. Submit:
+
+1. a condition-variable formulation with exact predicates and signal/broadcast decisions;
+2. a semaphore formulation that explains how close wakes waiters without inventing phantom jobs;
+3. one lost-wakeup trace that the correct condition formulation excludes;
+4. one deadlock trace caused by acquiring a queue mutex before waiting for a permit; and
+5. an invariant that accounts for queue entries, permits, and in-flight reservations.
+
+<details>
+<summary>Rubric and design boundary</summary>
+
+Condition formulation: protect `count`, `closed`, head/tail, and slots with one mutex; consumers wait while empty and open; producers wait while full and open; close broadcasts to both wait sets. Cancellation cleanup must leave the mutex and queue invariant in a specified state.
+
+A plain full-item semaphore does not naturally broadcast “closed” without either posting synthetic permits or adding a separately synchronized close event. A sound semaphore design can use a close flag plus a waiter registry/event mechanism, or represent queue messages as a tagged union including one shutdown token per consumer when that application policy is valid. The answer must state whether shutdown drains queued jobs and whether consumer count is stable. Posting one phantom `full` permit without a corresponding queue entry violates the representation.
+
+Rubric: predicates and protected fields 25%; atomic wait/handoff reasoning 20%; permit/reservation invariant 20%; close/cancellation semantics 15%; adversarial traces 15%; explicit assumptions 5%.
+
+</details>
+
+## References & Further Reading
+
+- The Open Group, [POSIX.1-2024 `pthread_cond_wait`, `pthread_cond_timedwait`, and `pthread_cond_clockwait`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_cond_clockwait.html).
+- The Open Group, [POSIX.1-2024 semaphore functions](https://pubs.opengroup.org/onlinepubs/9799919799/functions/sem_wait.html).
+- Butler Lampson and David Redell, [“Experience with Processes and Monitors in Mesa”](https://doi.org/10.1145/358818.358824), *Communications of the ACM*, 1980.
+- MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*, sleep and wakeup discussion](https://pdos.csail.mit.edu/6.S081/2025/xv6/book-riscv-rev5.pdf).
+- Remzi H. Arpaci-Dusseau and Andrea C. Arpaci-Dusseau, [*Operating Systems: Three Easy Pieces*, condition-variable and semaphore chapters](https://pages.cs.wisc.edu/~remzi/OSTEP/).

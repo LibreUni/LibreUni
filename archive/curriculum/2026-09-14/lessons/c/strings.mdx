@@ -1,0 +1,92 @@
+---
+title: "Strings, Encodings, and Buffer Contracts"
+course: c
+description: "Handle null-terminated byte strings with explicit capacity, encoding, comparison, and truncation policies."
+prerequisites:
+  - "Arrays, pointers, object lifetime, and character types"
+outcomes:
+  - "Distinguish a C string from a character array or byte buffer"
+  - "Prove that a destination has room for a terminator before writing"
+  - "Choose bounded input and formatting operations with a documented truncation policy"
+omissions:
+  - "Unicode normalization and locale-specific text processing require a separate course."
+estimatedMinutes: 60
+assessment: "Review a string-copy function and identify both its capacity and encoding assumptions."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Strings, Encodings, and Buffer Contracts
+
+C has no built-in string object. A C string is a contiguous sequence of characters terminated by a zero-valued byte. A character array may contain no terminator, and a byte buffer may contain arbitrary zero bytes; treating either as a string without a proof is a boundary error.
+
+<Quiz client:load
+  title="Count the terminator"
+  question="How many bytes are required for an empty C string?"
+  options={["0", "1, because the terminator is still stored", "The pointer size", "It depends only on the display font"]}
+  correctIndex={1}
+  explanation="An empty C string has length zero but still occupies one byte containing '\0'. A string with N nonzero bytes requires room for N+1 bytes."
+/>
+
+## Literals and writable arrays
+
+```c
+const char *literal = "hello"; /* points at a string literal */
+char copy[] = "hello";         /* six writable char objects */
+```
+
+Modifying a string literal has undefined behavior. The `const` qualifier communicates the safe access contract even though old C types permit some literal forms to be assigned to `char *`. Use a writable array or allocated storage when mutation is required.
+
+<CodeExercise client:load
+  title="Reserve the terminator"
+  code={`char name[[!blank!]] = "Ada";`}
+  answers={["4"]}
+  explanation="Three visible characters plus one terminating byte require an array of four char objects."
+/>
+
+## Capacity-aware operations
+
+`strlen` scans until a terminator and is safe only when its argument is a valid C string. `strcmp` returns zero for equality; a nonzero result is not a Boolean “true means equal”. `strcpy`, `strcat`, and similar functions require the caller to prove destination capacity before the call; their names do not perform a bounds check.
+
+For formatted output, `snprintf(destination, capacity, "%s", source)` writes at most `capacity` bytes including a terminator when `capacity > 0`. Its return value reports the length that would have been produced, so a return value at least `capacity` indicates truncation. Treat truncation as a policy decision, not as silent success.
+
+<CodeRunner client:load
+  title="Detect truncation"
+  language="c"
+  code={`#include <stdio.h>
+
+int main(void) {
+    char out[6];
+    int needed = snprintf(out, sizeof out, "%s", "abcdef");
+    printf("out=%s needed=%d truncated=%s\\n", out, needed,
+           needed >= (int)sizeof out ? "yes" : "no");
+    return 0;
+}`}
+  output="out=abcde needed=6 truncated=yes"
+/>
+
+## Input and encoding boundaries
+
+`fgets` accepts a capacity and retains a newline when one fits; callers must decide whether to strip it. A UTF-8 string is still a sequence of bytes to the C library unless a higher-level library interprets code points. `strlen` counts bytes, not user-perceived characters. Never split a multibyte encoding or normalize untrusted text by accident.
+
+## Transfer exercises
+
+1. Explain why `char bytes[4] = {'A', 'B', 'C', 0};` is a string but `char bytes[3] = {'A', 'B', 'C'};` is not.
+2. Specify the postcondition of a function that truncates a string into a destination buffer.
+3. Give two independent checks needed before calling `strlen(p)`.
+4. Explain why `strncpy` is not a complete safety policy.
+
+### Diagnostic solutions
+
+1. The first array has a zero terminator; the second has no terminator within its extent, so scanning it may read beyond the object.
+2. State that the destination is terminated when capacity is positive, contains the longest prefix that fits, and reports whether the source was truncated. Define behavior for capacity zero.
+3. `p` must be non-null or otherwise a valid pointer, and it must designate a live array containing a zero byte within its accessible extent.
+4. It may leave a destination unterminated when the source fills the bound, pads the entire destination unnecessarily, and still requires the caller to reason about overlap and source validity.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §7.24](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [SEI CERT C STR rules](https://wiki.sei.cmu.edu/confluence/display/c/STR31-C.+Guarantee+that+storage+for+strings+has+sufficient+space+for+character+data+and+the+null+terminator)
+* [cppreference: null-terminated byte strings](https://en.cppreference.com/w/c/string/byte)

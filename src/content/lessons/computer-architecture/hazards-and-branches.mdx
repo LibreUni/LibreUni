@@ -2,8 +2,30 @@
 title: "Hazards and Branches"
 course: "computer-architecture"
 description: "Data, structural, and control hazards in an overlapped pipeline."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Classify RAW, WAR, WAW, structural, and control hazards from dependence and resource graphs."
+  - "Choose forwarding, interlocks, renaming, prediction, and recovery actions for adversarial instruction traces."
+  - "Prove that wrong-path and replayed work cannot commit an architectural side effect."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 540
+assessment: "Given an unseen dependency graph and branch outcome, draw the schedule, identify every stall/flush/forwarding decision, and explain the first trace that breaks an incorrect detector."
 ---
 # Hazards and Branches
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PipelineHazardPlayground from '../../../components/playgrounds/PipelineHazardPlayground';
+
+<Quiz client:load title="Find the dependence"
+  question="What creates a read-after-write data hazard?"
+  options={["A later instruction reads a value before its earlier producer makes it available", "A later instruction writes a register that no earlier instruction reads again", "Two independent instructions execute in different stages during one cycle", "An instruction reads two operands that were both available before issue"]}
+  correctIndex={0}
+  explanation="The dependency is semantic: the consumer reads a value whose producer has not yet completed. Forwarding or a stall must preserve the program’s ordering."
+/>
 
 Pipelining creates overlap, and overlap creates situations in which an instruction cannot safely use a resource or value at the moment its ideal schedule requests it. These situations are *hazards*. A data hazard concerns dependence between values, a structural hazard concerns competition for hardware, and a control hazard concerns uncertainty about which instruction should execute next. Hazard handling is not an optimization layered on correctness; it is the mechanism that preserves the sequential architectural contract while internal work is concurrent.
 
@@ -38,6 +60,15 @@ the third instruction must receive the second instruction’s result, not the fi
 
 Forwarding is a form of dynamic bypass around the architectural register file. It does not change the ISA’s register semantics; it changes where the implementation obtains a value. The proof obligation is observational: the consumer’s ALU input must equal the value that a sequential execution would have read at that point.
 
+<CaseStudy client:load
+  title="Forward or stall?"
+  scenario="In a five-stage pipeline, ADD produces r3 in EX. The following SUB needs r3 in its own EX stage before ADD reaches writeback."
+  question="Which evidence establishes that issuing SUB is safe?"
+  options={["A forwarding path delivers ADD's result to SUB before its EX use", "The source program places both instructions on adjacent numbered lines", "The branch predictor selects the same path for both instructions", "The register file contains enough unused entries for another destination"]}
+  correctIndex={0}
+  explanation="A pipeline is a timed refinement of sequential semantics. The hazard rule is correct only when the consumer observes the producer's value and precise side effects remain ordered."
+/>
+
 ## The load-use hazard
 
 A load has a later availability point than an ALU instruction. In a basic five-stage pipeline, address calculation occurs in EX, memory returns data in MEM, and write-back occurs in WB. The instruction immediately after the load reaches EX before the data has returned:
@@ -61,13 +92,24 @@ Structural and data hazards can interact. A load-use stall may coincide with a m
 
 ## Control hazards
 
-A conditional branch determines the next PC from a comparison. Until the condition and target are known, fetch does not know whether the sequential instruction is correct. In a five-stage pipeline that resolves branches in EX, up to two or three younger instructions may have entered IF and ID. If the branch is taken, those instructions must be invalidated; if it is not taken, they may continue.
+A conditional branch determines the next PC from a comparison. Until the condition and target are known, fetch does not know whether the sequential instruction is correct. In the single-issue five-stage pipeline considered here, a branch in EX can have at most two younger instructions in IF and ID. If the branch is taken, those instructions must be invalidated; if it is not taken, they may continue. Wider machines or extra fetch buffers can contain more younger work, but that is a different model.
 
 The simplest policy stalls fetch until resolution. This avoids wrong-path work but costs cycles on every branch. Predict-not-taken fetches sequentially and flushes only taken branches. A static backward-taken/forward-not-taken rule exploits common loop behavior. A dynamic predictor records recent outcomes, perhaps with a branch-history table, two-bit saturating counters, a global history register, or a target buffer. The predictor is an implementation optimization, not part of the ordinary architectural state, unless the ISA exposes prediction hints.
 
 A two-bit saturating counter has states strongly-not-taken, weakly-not-taken, weakly-taken, and strongly-taken. A taken outcome increments toward strongly taken; a not-taken outcome decrements toward strongly not taken. The prediction changes only after crossing the middle boundary, so one anomalous outcome does not immediately reverse a stable loop prediction. This reduces oscillation on branches that are usually taken with one exit.
 
 Target prediction is separate from direction prediction. Knowing that a branch is likely taken is not enough if the target address is unavailable until decode or execute. A branch target buffer caches the target associated with a fetch PC; a return-address stack predicts procedure returns. Predictor structures trade storage and access latency for fewer front-end bubbles.
+
+Use the trace to predict when the dependent `add` reaches MEM and WB. Then toggle the branch outcome: which instruction disappears, and which older instructions must be unaffected? The stage model assumes forwarding into EX and separate instruction/data memories, so a load-use stall is its only data stall.
+
+<PipelineHazardPlayground client:load />
+
+<details>
+<summary>Check the stage and flush invariants</summary>
+
+The load occupies MEM at cycle 4 and WB at cycle 5. Its consumer is held in ID at cycle 4, reaches EX at cycle 5, MEM at cycle 6, and WB at cycle 7. The branch reaches EX at cycle 6 and resolves at that cycle's end. A taken branch removes the younger `or`, but must not remove or accelerate the older `add`. Advancing `add` directly from EX to WB is not a legal trace in this model.
+
+</details>
 
 ## Flushes, speculation, and side effects
 

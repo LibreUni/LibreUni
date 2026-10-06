@@ -1,99 +1,186 @@
 ---
-title: "Relational Algebra"
+title: "Relational algebra: derive a query before SQL"
 course: "database-systems"
-description: "Selection, projection, joins, and equivalence-preserving transformations."
+description: "Use selection, projection, joins, difference, and product to state precisely which tuples a query should return."
+prerequisites:
+  - "Relation schemas, instances, keys, and grain"
+  - "Sets, predicates, Cartesian products, and functions"
+outcomes:
+  - "Translate a scoped data question into relational-algebra operators with compatible schemas."
+  - "Trace an algebra expression over small relations and state the grain of every intermediate result."
+  - "Justify or reject a simple inner-join rewrite, including its semantic preconditions."
+omissions:
+  - "Full query-optimizer search, SQL window functions, recursion, and cost estimation are outside this lesson."
+estimatedMinutes: 420
+assessment: "Given a registration dataset and a requirement involving all required courses, derive an algebra expression, trace it, and identify one unsafe rewrite under outer-join or bag semantics."
 ---
-# Relational Algebra
 
-## Algebraic foundation
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import MathProof from '../../../components/MathProof.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import RelationalAlgebraPlayground from '../../../components/playgrounds/RelationalAlgebraPlayground';
 
-Relational algebra is a closed, compositional language: each operator consumes relations and returns a relation. Closure lets complex queries be built from smaller expressions and lets an optimizer reason about equivalent operator trees. Under classical set semantics, a relation has no duplicate tuples; SQL usually uses bags, so every algebraic rewrite must state whether duplicate elimination is present.
+# Relational algebra: derive a query before SQL
 
-Selection sigma-p(R) retains tuples satisfying predicate p. Projection pi_A(R) retains attributes A and removes duplicate tuples. Rename rho_(B less than -A)(R) changes attribute names to make schemas compatible or distinguish self-joins. Cartesian product R times S pairs every tuple, with schema consisting of both attributes; its cardinality is |R| times |S|. A theta join is product followed by selection, and an equijoin uses equality predicates.
+Relational algebra gives a compact way to answer “what rows?” before a SQL dialect, a query plan, or a UI obscures the question. Its greatest practical use is not memorizing symbols. It is exposing a missing condition, an incompatible difference, or a changed result grain early.
 
-## Joins and outer semantics
+> **Definition.** An algebra expression takes one or more relations as input and produces another relation. Name the output schema and grain after every nontrivial operator; this is how you notice an accidental duplication or lost attribute.
 
-Natural join matches all same-named attributes and removes duplicate copies of join columns. It is concise but fragile: adding an unrelated same-named attribute changes its meaning. Prefer explicit join predicates in schema and query design. Semijoin R semijoin S returns R tuples with at least one matching S tuple; antijoin returns R tuples with no match. In distributed systems, semijoins can reduce shipped data before a full join.
+{/* Source tracking: The operator-based relational query model is synthesized from Codd’s 1970 relational model paper and the relational-algebra treatment in Ramakrishnan and Gehrke’s *Database Management Systems*. */}
 
-Left outer join preserves every tuple from R and adds NULLs for unmatched S attributes. Right and full outer joins preserve the analogous sides. An outer join is not equivalent to an inner join plus a marker unless NULL and duplicate behavior are defined. Selection after an outer join can remove preserved rows if it tests nullable attributes; selection before or in the ON condition may preserve them. This placement is a semantic decision.
+## The operators we will use
 
-## Set operations
+<MathStatement id="ra-operators" kind="definition" title="Set-relational operators">
 
-Union, intersection, and difference require union-compatible schemas. Union is commutative and associative under set semantics; difference is neither generally commutative nor associative. SQL UNION removes duplicates, while UNION ALL preserves them. Set difference corresponds to EXCEPT and can be expressed using NOT EXISTS, but NULL comparison and duplicate multiplicity need analysis before claiming equivalence.
+For a relation $R$ and predicate $\theta$:
 
-Division expresses universal quantification. For R(X,Y) and S(Y), R divided by S contains x values such that every y in S appears paired with x in R. An equivalent expression is pi_X(R) minus pi_X((pi_X(R) times S) minus R), under compatible set semantics. The inner difference finds required pairs missing from R; the outer difference removes x with any missing pair. SQL commonly encodes the same idea with double NOT EXISTS.
+$$
+\sigma_{\theta}(R) = \{t \in R \mid \theta(t)\}
+$$
 
-## Algebraic laws
+- **Selection** $\sigma_{\theta}(R)$ keeps tuples satisfying $\theta$.
+- **Projection** $\pi_{A,B}(R)$ keeps named attributes and removes duplicate tuples under set semantics.
+- **Rename** $\rho_{new\_name \leftarrow old\_name}(R)$ changes a relation or attribute name so an expression is well-formed.
+- **Product** $R \times S$ pairs every tuple of $R$ with every tuple of $S$.
+- **Join** $R \bowtie_{R.a = S.a} S$ is a selected product with compatible joined attributes.
+- **Difference** $R - S$ keeps tuples in $R$ that are not in $S$; $R$ and $S$ must have compatible schemas.
+</MathStatement>
 
-Selection operations commute when their predicates are independent and can be combined with AND. A selection can be pushed below a join when its predicate references only the corresponding input and the join is inner. Projection can be pushed below an operator if all attributes needed later, including join and filter attributes, are retained. These laws reduce intermediate cardinality and width.
+## Trace a query, not just its notation
 
-Join is commutative and associative under inner equijoins in a compatible set model, but outer joins and non-equality predicates require care. Cartesian product distributes over union under appropriate schemas. Difference and projection do not freely commute: projecting away an attribute used to distinguish tuples or evaluate a predicate can change the result. SQL bags further restrict these laws because duplicate counts may change.
+Use these fixed relations for term `2026S`.
 
-## Relational calculus connection
+| `Student` |  |  | `Required` |  | `Enrollment` |  |  |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `sid` | `cohort` |  | `cid` |  | `sid` | `cid` | `term` |
+| Ada | first_year |  | C101 |  | Ada | C101 | 2026S |
+| Bo | second_year |  | C201 |  | Ada | C201 | 2026S |
+| Cy | first_year |  |  |  | Bo | C101 | 2026S |
+|  |  |  |  |  | Bo | C201 | 2025F |
+|  |  |  |  |  | Cy | C101 | 2026S |
 
-Tuple relational calculus describes which tuples satisfy a logical predicate, while relational algebra describes how to construct them. A safe calculus query has a finite domain of values drawn from the database or constants; unrestricted logic can express noncomputable or infinite results. Codd’s relational completeness result connects expressive query languages to relational algebra and safe calculus, but practical SQL adds aggregation, null, recursion, and updates with semantics beyond the classical model.
+> **Worked example.** “Which students are enrolled in C101 in 2026S?” starts with selection, then projection:
 
-## Query translation example
+$$
+\pi_{sid}\bigl(\sigma_{cid = \text{'C101'} \land term = \text{'2026S'}}(Enrollment)\bigr)
+= \{\text{Ada}, \text{Bo}, \text{Cy}\}.
+$$
 
-Given Student(sid,name), Course(cid,title), Enrollment(sid,cid,term), and Required(cid), find students who completed every required course. First form Completed = sigma_term='2026S'(Enrollment). Then CandidatePairs = Student times Required. Join CandidatePairs with Completed on sid and cid, project students who have missing pairs using difference, and subtract them from all students. The algebra makes the universal condition visible and exposes where duplicates or NULL values would alter an SQL translation.
+The selected relation still has grain “one enrollment.” The projected result has grain “one student who meets the condition.” That change is intentional.
 
-## Optimization reasoning
+### Predict the intermediate result
 
-An optimizer applies equivalent rewrites before choosing physical algorithms. Push selections toward base relations, project away unused attributes, choose join order that limits intermediate results, and use constraints to eliminate impossible branches. A key-foreign-key constraint can prove that an inner join preserves or filters a particular side; a contradiction with a check constraint can produce an empty result. Every rewrite must preserve the logical result under the DBMS’s actual semantics.
+What is the schema and tuple set of
 
-## Exercises
+$$
+\pi_{sid,cid}\bigl(\sigma_{term = \text{'2026S'}}(Enrollment)\bigr)?
+$$
 
-1. Translate a three-table SQL query into algebra.
-2. Prove or refute a selection-pushdown rule.
-3. Express “students in every required course” using division.
-4. Construct an outer-join example where predicate placement differs.
-5. Explain a bag-semantics counterexample to projection pushdown.
-6. Use a constraint to infer an empty or bounded result.
+<ExerciseSolution hint="Selection leaves all attributes in place; projection then drops only `term`.">
 
-### Diagnostic solutions
+Its schema is `(sid, cid)` and its tuples are `(Ada, C101)`, `(Ada, C201)`, `(Bo, C101)`, and `(Cy, C101)`. The result says that a student is enrolled in a course during the chosen term; it no longer states the term, so do not reuse it for a multi-term question without rebuilding the scope.
+</ExerciseSolution>
 
+### Make the same operations visible
 
-1. Start with a product or explicit join, apply selections, project required attributes, then grouping or duplicate elimination as SQL requires. Preserve every attribute needed by a later predicate.
-2. Push sigma_p below R join S only if p references R alone and the join is inner or the equivalence’s outer semantics are proven. A predicate on a nullable preserved side can invalidate the rule.
-3. Use pi_student(Enrollment join Required) minus pi_student((pi_student(Enrollment) times Required) minus Enrollment), adapting attributes and term predicate. The inner difference identifies missing required pairs.
-4. Put S.status='active' in ON of R LEFT JOIN S to retain R rows with no active S; put it in WHERE to remove NULL-extended rows. The results differ whenever R has no active match.
-5. If two projected tuples differ only in an attribute removed before a join, early projection can collapse duplicates or change join multiplicity under SQL bags. Retain join keys and distinguishers or use DISTINCT with proof.
-6. If a check constraint says amount  greater than  0 and the query asks amount  less than  0, the result is empty. A primary-key equality join bounds matches to at most one parent per child.
+The playground contains a separate fixed enrollment/course fixture. Use it to perform one selection, compare bag versus set projection, and inspect an equijoin. Before each step, say whether you expect its output grain to be one enrollment, one course, or a joined pair.
 
+<RelationalAlgebraPlayground client:load />
 
+> **Warning.** This visual model intentionally excludes `NULL`, outer joins, nonunique join keys, ordering, and optimizer behavior. It teaches a clean set-oriented core; SQL introduces those additional semantics later.
 
-## Equivalence-proof method
+## “All required courses” is a missing-pair problem
 
-To prove two relational expressions equivalent, show that an arbitrary tuple belongs to the left result exactly when it belongs to the right result. Unpack membership in each operator: selection supplies a predicate, projection supplies an originating tuple, join supplies a matching pair, and difference supplies membership in one relation and absence from another. This tuple-by-tuple method avoids relying on a visual similarity between operator trees.
+The word **all** often tempts people into a vague division operator. Derive it by enumerating what should exist and subtracting what is absent.
 
-For optimization, annotate each intermediate relation with schema, set or bag semantics, possible NULL values, cardinality bounds, and required ordering. Then test a rewrite against a fixture containing duplicate keys, unmatched outer rows, NULLs, and multiple join matches. A rewrite that is valid in the classical algebra may need DISTINCT, null-safe predicates, or an additional key under SQL semantics.
+> **Example.** Find students who are enrolled in every required course in `2026S`. First make every expected student/course pair. Then remove pairs that have no matching enrollment.
 
-## Practical exercise protocol
+$$
+\begin{aligned}
+Enrolled &= \pi_{sid,cid}\bigl(\sigma_{term = \text{'2026S'}}(Enrollment)\bigr) \\
+Expected &= \pi_{sid}(Student) \times Required \\
+Missing &= Expected - Enrolled \\
+Answer &= \pi_{sid}(Student) - \pi_{sid}(Missing)
+\end{aligned}
+$$
 
-Implement a tiny reference evaluator for selection, projection, join, difference, and grouping over finite Python-like tuples or a spreadsheet. Generate small random relations and compare candidate rewrite results exhaustively. When a mismatch appears, minimize the relations and identify the semantic condition that was omitted. The minimized counterexample becomes both a proof-debugging aid and an optimizer regression test.
+`Expected` and `Enrolled` both have schema `(sid, cid)`, so the difference is defined. For the data above, `Missing` contains `(Bo, C201)`, `(Cy, C201)`; `Answer` is `{Ada}`.
 
-## Tuple-calculus perspective
+> **Invariant.** Before taking a union, intersection, or difference, verify compatible schemas and attribute meanings. Two columns both named `id` are not automatically compatible if one is a student identifier and the other is an offering identifier.
 
-For a query such as “students with no enrollment,” the calculus form says select a student tuple s for which there does not exist an enrollment e with e.sid=s.sid. The algebra form uses antijoin or difference. The two descriptions should agree on empty relations, duplicate source rows, and NULL identifiers under the chosen model. Writing both forms is a useful exam check because it separates the logical predicate from one implementation plan.
+### Apply the derivation
 
-The optimizer may choose an index probe, hash anti-join, sort-based difference, or a materialized intermediate result. None changes the logical set or bag result when its operator contract and null behavior are correct. Performance analysis begins only after semantic equivalence is established.
+The dean asks for students who are enrolled in every required course **and** are in the `first_year` cohort. Where should the cohort condition go: in `Enrolled`, `Expected`, or the final answer?
 
-Record the model assumptions beside every rewrite.
+<ExerciseSolution hint="The cohort condition restricts who is required to satisfy all pairs, not what counts as a matching enrollment.">
 
-Test them with duplicates and NULLs.
+Restrict the candidate students before forming expected pairs:
 
-Then prove.
+$$
+Eligible = \sigma_{cohort = \text{first\_year}}(Student), \qquad
+Expected = \pi_{sid}(Eligible) \times Required.
+$$
 
-Again.
+Then use the same `Missing` and final subtraction pattern with `Eligible`. Filtering only the final answer can be correct for a simple output filter, but it unnecessarily constructs missing pairs for students who were never candidates and obscures the requirement.
+</ExerciseSolution>
 
-Selection filters tuples, projection chooses attributes, and join combines compatible tuples according to a predicate. Algebra gives a formal semantics for SQL and permits query rewrites that preserve results.
+## A rewrite needs stated assumptions
 
-Pushing a selective predicate below a join can reduce intermediate rows, but only when the predicate references attributes available at that point and null semantics remain equivalent.
+Algebra helps explain why an optimizer can sometimes move work earlier.
 
-**Exercise.** Express “names of students enrolled in databases” using selection, projection, and joins. Identify a safe predicate pushdown.
+<MathStatement id="ra-pushdown" kind="proposition" title="Safe inner-join selection pushdown">
 
-## References & Further Reading
+For set relations, an inner join, and a two-valued predicate $\theta_R$ that mentions only attributes of $R$:
 
-* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
-* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [PostgreSQL SQL Queries](https://www.postgresql.org/docs/current/queries.html)
+$$
+\sigma_{\theta_R}(R \bowtie_{R.a = S.a} S)
+= \sigma_{\theta_R}(R) \bowtie_{R.a = S.a} S.
+$$
+</MathStatement>
+
+<MathProof id="ra-pushdown-proof" for="ra-pushdown" collapsible>
+
+A joined tuple survives the left expression exactly when its `R` component satisfies $\theta_R$. Because the predicate reads no `S` attribute, filtering `R` first removes exactly those same joined tuples. The statement does not claim the two expressions have equal cost, nor does it cover outer joins or SQL's three-valued predicate behavior.
+</MathProof>
+
+> **Counterexample.** With a left outer join, moving a predicate about the right relation from `WHERE` into a pre-join filter can preserve unmatched left rows that the original `WHERE` condition removes. For example, if `R` has one row and `S` has none, `WHERE S.flag = 'Y'` removes the null-extended row after the join. The same condition inside the right input still lets the left outer join emit it. The expressions are not interchangeable.
+
+> **Warning.** SQL normally uses bag semantics and three-valued logic. An algebra law stated for sets and two-valued predicates is a reasoning aid, not permission to apply it blindly to a SQL query.
+
+### Check a proposed rewrite
+
+An engineer changes
+
+$$
+\sigma_{R.term = \text{'2026S'}}(R \bowtie_{R.sid = S.sid} S)
+$$
+
+to
+
+$$
+\sigma_{R.term = \text{'2026S'}}(R) \bowtie_{R.sid = S.sid} S.
+$$
+
+List the three facts you would check before accepting the rewrite.
+
+<ExerciseSolution hint="Match the proposition's assumptions one by one.">
+
+Check that the join is inner, the predicate reads only `R` attributes, and the intended semantics support the stated selection law (including how duplicate rows and `NULL` values are handled in the actual SQL dialect). Also confirm that `term` means the same thing at this point in the expression; an alias or prior rename can change that fact.
+</ExerciseSolution>
+
+## Transfer task: derive, then validate
+
+> **Remark.** A universal requirement becomes an ordinary difference once you make the expected pairs explicit. Keep the candidate population, required set, and time scope visible in the expression.
+
+Define `Student(sid)`, `Course(cid)`, `Taken(sid, cid, term)`, and `Core(cid)`. Derive an expression for students who took every core course in `2026S` but no non-core course in that term. State the schema of each difference operand. Then test your expression against a three-student, two-course dataset of your own.
+
+<ExerciseSolution hint="Reuse expected-minus-completed for the “every core” part. Build a second set of students with a non-core enrollment, then subtract it.">
+
+First project the current-term rows to the exact pair used by the expected relation: $Completed = \pi_{sid,cid}(\sigma_{term=\text{'2026S'}}(Taken))$. The projection is essential: `term` is a filter attribute, not part of the `(sid,cid)` difference schema. Then let $Expected = \pi_{sid}(Student) \times Core$, and $AllCore = \pi_{sid}(Student) - \pi_{sid}(Expected - Completed)$. For non-core courses, first make a course relation compatible with `Core`, such as $NonCore = \pi_{cid}(Course) - Core$, then compute $HasNonCore = \pi_{sid}(Completed \bowtie NonCore)$. The answer is $AllCore - HasNonCore$. In the two key differences, `(sid, cid)` is compatible with `(sid, cid)` and `(cid)` is compatible with `(cid)`.
+</ExerciseSolution>
+
+## References
+
+- [E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (IBM Research, 1970)](https://research.ibm.com/publications/a-relational-model-of-data-for-large-shared-data-banks)
+- [Ramakrishnan and Gehrke, *Database Management Systems*: open-access contents](https://pages.cs.wisc.edu/~dbbook/openAccess/secondEdition/dbbook.toc.html)
+- [PostgreSQL: `SELECT`](https://www.postgresql.org/docs/current/sql-select.html)

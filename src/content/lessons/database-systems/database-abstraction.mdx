@@ -1,97 +1,173 @@
 ---
-title: "Database Abstraction"
+title: "Database abstraction: stable contracts over changing storage"
 course: "database-systems"
-description: "Why a DBMS separates logical data from storage and access mechanisms."
+description: "Use external views, a logical relational schema, and physical design as separate contracts—and test what a change is allowed to affect."
+prerequisites:
+  - "Programming with records, collections, and tests"
+  - "Sets, predicates, and the idea of a key"
+outcomes:
+  - "Distinguish an external view, logical schema, and physical design for one application request."
+  - "Write a view contract that states grain, authority, duplicate, NULL, and ordering behavior."
+  - "Judge an index or layout change with separate correctness and performance evidence."
+omissions:
+  - "Storage-engine implementation, replication protocols, and vendor administration are deferred to later systems lessons."
+estimatedMinutes: 420
+assessment: "Given a reporting request and a proposed storage change, specify the unaffected contract, identify a boundary that can still change, and design a small equivalence check."
 ---
-# Database Abstraction
 
-A database management system provides a logical model, query language, transaction boundary, and physical storage layer. Data independence means changing physical layout need not change applications; the optimizer can choose a different plan under the same query semantics.
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import PlantUML from '../../../components/PlantUML.astro';
 
-The abstraction is not free: constraints, statistics, locks, logs, and indexes must be maintained. A useful design makes those costs visible.
+# Database abstraction: stable contracts over changing storage
 
-## Levels of abstraction
+An application asks, “Which students are enrolled in each offering?” It should not need to know whether the database found those rows through a heap scan, an index, or a partition. It *does* need to know what one output row means, which rows it may see, and whether its requested order is guaranteed.
 
-A DBMS separates external views, the logical schema, and physical storage. An external view exposes the subset and shape needed by an application. The logical schema describes relations, attributes, constraints, and relationships without specifying pages or indexes. The physical schema describes files, pages, tuple layout, indexes, compression, buffer policies, and replication. The separation lets a query remain semantically stable while physical implementation changes.
+> **Definition.** An abstraction contract states the meaning and permitted observations of data at one boundary. An external contract is what a client can request and observe; a logical contract is relations, attributes, and constraints; a physical contract is the layout and access methods that implement them.
 
-Data independence has two directions. Physical data independence means changing indexes, page layout, compression, partitioning, or storage location should not change the logical result of a query. Logical data independence means changing the logical schema or adding an abstraction layer can preserve external views and application contracts where the change is compatible. Neither means every change is invisible: performance, locking, NULL behavior, constraint timing, privileges, and operational failure can change.
+{/* Source tracking: The separation between user-visible data descriptions and internal representation is synthesized from E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (1970). */}
 
-## Declarative semantics and execution
+## One domain, three descriptions
 
-SQL declares a result, while the optimizer chooses an operator tree. The executor may use a sequential scan, index, hash join, sort, materialization, parallel worker, or remote partition. A query’s correctness follows from logical semantics and constraints; the plan’s cost depends on statistics, memory, cache state, data distribution, and concurrency. Applications should not depend on incidental row order, physical identifiers, insertion order, or a plan that happens to be chosen today.
+Start with a course-registration domain. The diagram is conceptual: it says a student can have many enrollment records and an offering can have many enrollment records. It deliberately says nothing about files or indexes.
 
-The optimizer is an abstraction boundary only if transformations preserve actual DBMS semantics. SQL bags, NULL, collations, volatile functions, outer joins, security policies, and transaction snapshots constrain rewrites. A physical change may preserve the mathematical relation but alter visibility timing or lock behavior. Treat performance and concurrency as documented contracts when applications rely on them.
+<PlantUML
+  code={String.raw`
+class Student {
+  student_id : UUID <<PK>>
+  display_name : text
+}
+class Enrollment {
+  student_id : UUID <<FK>>
+  offering_id : UUID <<FK>>
+  status : text
+}
+class Offering {
+  offering_id : UUID <<PK>>
+  course_code : text
+  term : text
+}
+Student "1" -- "0..*" Enrollment : has
+Offering "1" -- "0..*" Enrollment : records
+`}
+/>
 
-## Constraints as declarative programs
+The same domain acquires a different, sharper meaning at each layer.
 
-Keys, foreign keys, checks, unique constraints, generated columns, and exclusion constraints let the DBMS enforce invariants across all clients. They also provide information to the optimizer and recovery system. An application-only check can race: two transactions both observe available inventory and decrement it. A database constraint or atomic transaction establishes the conflict boundary centrally.
+| Layer | Example representation | Question it answers | Deliberately not promised |
+| --- | --- | --- | --- |
+| External | `CurrentEnrollment(student_name, course_code, term)` view | What may a reporting client read? | Base-table names or access path |
+| Logical | `Student`, `Offering`, `Enrollment` with keys and foreign keys | What facts exist and how are they related? | Page layout or index choice |
+| Physical | Heap, B-tree on `(student_id, offering_id)`, partitions by term | How are logical rows stored and found? | A different result for the same logical query |
 
-Constraints have timing semantics. An immediate constraint rejects a statement or transaction at the point specified; a deferred constraint can allow temporary inconsistency and check at commit. Cascades can update or delete many rows and interact with locks and triggers. A design should document error behavior, transaction scope, and whether clients can safely retry after a conflict.
+> **Worked example.** The relationship in the diagram becomes `Enrollment(student_id, offering_id, status)`. Its grain is **one student's enrollment in one offering**. Its primary key can be `(student_id, offering_id)` if a student has at most one current enrollment per offering. Both columns are foreign keys. A client-facing view may join the three relations and omit identifiers, but it must preserve that stated grain.
 
-## Transactions as an abstraction
+> **Invariant.** Physical data independence means that if only the physical design changes, every permitted logical query and constraint has the same meaning. Cost, lock timing, and an undocumented incidental row order may change; specified semantics may not.
 
-The transaction boundary hides intermediate writes from other transactions according to the chosen isolation level and exposes a commit or abort result. It does not hide external side effects automatically. Sending an email, charging a card, publishing a message, or calling an API inside a transaction can happen even if the transaction later aborts. Use an outbox, idempotency key, or post-commit dispatcher to connect database state to external effects.
+### Predict before reading the answer
 
-A connection pool can make session state surprising. Transaction isolation, temporary tables, role settings, prepared statements, and session variables may persist across borrowers unless reset. A tenant context used by row-level security must be set safely and cleared on release. The logical abstraction is a transaction or request, while the physical resource is a reusable connection; bridge them with explicit lifecycle rules.
+The registration office adds an index on `Enrollment(offering_id, student_id)`. A report asks for the count of enrolled students per offering but contains no `ORDER BY`.
 
-## Physical changes and proof obligations
+Which observations must be unchanged, and which observation must not be inferred from a successful test run?
 
-Adding an index should preserve query results but can change lock duration, write cost, vacuum behavior, and plan choice. Partitioning should preserve logical rows but can change uniqueness, foreign-key support, pruning, and cross-partition transactions. Compression should preserve values and ordering semantics but can change CPU and memory cost. Replication should preserve the specified consistency model but can expose lag and failover behavior.
+<ExerciseSolution hint="Separate the requested result from the way rows were found.">
 
-For each physical change, write a compatibility checklist: logical schema and constraints, query results, ordering, NULL and collation behavior, transaction anomalies, authorization policies, backup and recovery, monitoring, migration and rollback, and performance under representative data. Run differential query tests against old and new layouts. Compare plans and actual results, not only schema definitions.
+The count and the set of grouped offerings must be unchanged if the index is correct. The chosen plan, page reads, and emitted row sequence need not be unchanged. Because the query has no `ORDER BY`, a test must not treat the observed output order as part of its contract.
+</ExerciseSolution>
 
-## Catalog and statistics
+## A view is an interface, not decoration
 
-The system catalog describes tables, columns, constraints, indexes, privileges, functions, partitions, and statistics. It is metadata used by parser, optimizer, executor, access-control checks, and administration. Catalog changes need transactional and recovery semantics; a half-created index or table must not appear as a valid object to ordinary queries.
+Suppose a reporting client needs “one row per active enrollment.” This is an external contract; it needs more than a column list.
 
-Catalog correctness is part of the abstraction contract.
+| Contract field | Decision for `CurrentEnrollment` |
+| --- | --- |
+| Grain | One active enrollment for one student in one offering |
+| Authority | `Enrollment.status = 'enrolled'` is the source of truth for active |
+| Duplicates | Impossible if `(student_id, offering_id)` is unique; otherwise report them as a data error |
+| `NULL` | `display_name` may be absent; `student_id` and `offering_id` may not be absent |
+| Ordering | None unless the client explicitly requests `ORDER BY course_code, display_name` |
+| Freshness and access | Reads see the database's transaction visibility rules and the caller's permissions |
 
-Audit it.
+> **Warning.** A join does not choose the grain for you. Joining `Enrollment` to a table with one row per attendance event can turn one enrollment into many output rows. A correct-looking query can still violate the view's “one row per enrollment” promise.
 
-Statistics are summaries rather than truth. Row counts, histograms, distinct estimates, correlation, and most-common values guide cost-based planning. Stale statistics can choose a poor plan while preserving correctness. Statistics can also leak information about sensitive data distributions, so access to catalog views and monitoring output belongs in the security model.
+> **Counterexample.** Replacing `Offering.course_code` with a nullable free-text column may be a logical-schema change, not merely a physical one. A view that promised a non-null, validated course code now has a broken contract even if every query still parses.
 
-## Views and abstraction contracts
+### Work through a compatibility test
 
-A view defines a logical interface over base tables. It can hide columns, rename fields, present joins, or enforce some access policy. Views may be updatable only under conditions, and triggers or rules can create surprising write semantics. A view is not automatically a security boundary: owners, definer rights, underlying privileges, functions, and alternate tables require review.
+An existing view exposes `student_name`, `course_code`, and `term`. The team wants to split `Offering` into `Course(course_code, title)` and `Section(offering_id, course_code, term)`.
 
-An application-facing view should specify field meanings, NULL behavior, duplicate semantics, ordering guarantees, pagination, error behavior, and authorization. Version the contract when changing a column or interpretation. A view that hides a normalized schema can preserve application compatibility while allowing storage and decomposition to evolve.
+1. State a compatible view definition in words.
+2. Name one test case that catches a broken migration.
 
-## Cost of abstraction
+<ExerciseSolution hint="The client should still see the same grain and column meanings. Look for an offering whose course lookup is missing.">
 
-Abstraction reduces coupling but adds metadata, translation, validation, locks, logging, indexes, and sometimes network hops. An ORM may generate correct parameterized SQL but can create N+1 queries, accidental eager loads, or transactions with the wrong scope. A service API may hide a distributed transaction and make retries ambiguous. Inspect generated SQL, plans, transaction boundaries, and failure behavior rather than assuming a high-level abstraction is free.
+The compatible view still has one row per active enrollment and obtains `course_code` by joining `Section` to `Course` through the validated code. Test an enrollment whose section exists but whose course row is accidentally absent after migration: an inner join would silently drop the client row. Compare old and new view results, including this case, rather than comparing table counts alone.
+</ExerciseSolution>
 
-## Worked physical redesign
+## Declarative request, physical plan
 
-An orders application currently scans a heap table for tenant and time queries. Add a composite index on (tenant_id, created_at, order_id), refresh statistics, and measure plans. Then partition by tenant or time only if data volume, retention, and workload justify migration complexity. Preserve the unique order constraint, row-level policy, backup and restore, and key version metadata. Test that the same SQL returns identical rows under duplicates, NULLs, and concurrent writes, while separately measuring write amplification and failover.
+SQL describes a requested result. The DBMS can choose a sequential scan, an index scan, a hash join, a sort, or another operator tree to produce it. Those choices are cost decisions, not promises made by ordinary SQL text.
 
-## Exercises
+> **Definition.** The logical result is the rows, values, duplicates, and any explicitly requested ordering prescribed by the query semantics and the database constraints. A plan is one implementation of that result.
 
-1. Distinguish logical and physical data independence.
-2. List physical changes that can alter performance but not logical results.
-3. Explain why a transaction does not roll back an email automatically.
-4. Design a view contract for a reporting client.
-5. Identify connection-pool state leakage.
-6. Write a physical-migration proof checklist.
+> **Worked example.** For a tenant dashboard, the query predicate is `tenant_id = ? AND created_at >= ?`. A composite index on `(tenant_id, created_at, order_id)` may avoid scanning unrelated tenant rows. The proof obligation is two-part: compare query results and constraint outcomes before/after the index, then measure latency, writes, and plan behavior on representative data.
 
-### Diagnostic solutions
+{/* Source tracking: The distinction between declarative query specification and cost-based access-path selection is synthesized from Selinger et al., “Access Path Selection in a Relational Database Management System” (1979). */}
 
+Do not overstate the boundary. Adding an index can raise write cost. Partitioning can complicate uniqueness or cross-partition operations. A query rewrite that is safe for an inner join can be wrong for an outer join. A physical change preserves *logical* behavior only within the documented dialect, transaction, and authorization semantics.
 
-1. Physical independence hides storage and access-path changes behind the logical schema; logical independence hides compatible schema evolution behind views or interfaces. Both have performance, privilege, and operational caveats.
-2. Indexes, compression, page layout, buffer policy, partitioning, and replicas can change I/O, latency, locks, and failure behavior while preserving rows and constraints.
-3. The database transaction controls database state, while an email service observes an external effect immediately. Use an outbox or post-commit dispatcher with idempotency and retry rules.
-4. Specify columns and meanings, null and duplicate behavior, time zone, freshness, authorization, ordering or pagination, version compatibility, and whether the view is read-only.
-5. A tenant session variable, isolation mode, role, temporary table, prepared statement, or transaction can remain when a pooled connection is returned. Reset or scope every stateful setting.
-6. Compare logical results, constraints, security policies, query plans, transaction behavior, backups, restore, replication, monitoring, migration, rollback, and performance under representative and adversarial data.
+<details>
+  <summary>Why plans still matter</summary>
 
+  An abstraction is not a performance guarantee. Statistics, data skew, memory, concurrent load, and cache state affect the selected plan. Inspect a plan when performance matters, but make application correctness depend on the logical contract rather than on a particular operator tree.
+</details>
 
+## Constraints make the logical layer enforceable
 
-**Exercise.** List three facts an application should not need to know about a table’s physical layout, and one physical change that should improve a query without changing its result.
+Keys, foreign keys, `CHECK` constraints, and `UNIQUE` constraints place facts at the database boundary so every client is checked by the same rule.
 
-## Synthesis checkpoint
+> **Definition.** Referential integrity means that if `Enrollment.student_id` is non-null and refers to `Student(student_id)`, then a matching student row must exist when the foreign-key constraint is checked. A deferred foreign key postpones that check; it does not waive it at commit.
 
-When changing a physical choice, preserve the logical contract and rerun both correctness and performance evidence. A view can hide joins but not remove their cost; an ORM can generate SQL but not choose the right transaction boundary. Record the invariant, the abstraction boundary that protects it, and the observation that would reveal a violated assumption.
+> **Worked example.** Two web requests both see one open seat and both attempt to enroll a student. An application-side “count first, then insert” check can race. The schema can at least enforce uniqueness of a student's enrollment; a capacity rule requires an atomic transaction design, which is a later topic. The abstraction lesson's point is the boundary: a constraint is checked centrally, while a client-only observation is not.
 
-## References & Further Reading
+### Apply it to a new request
 
-* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
-* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [PostgreSQL System Catalog Information](https://www.postgresql.org/docs/current/catalogs.html)
+A mobile application wants a view called `MySchedule`. It must show each signed-in student only their enrolled offerings, omit dropped enrollments, and display a stable time order.
+
+Write the four contract clauses you would insist on before anyone optimizes it.
+
+<ExerciseSolution hint="Use grain, authority, access, and ordering; avoid naming an index.">
+
+One sound contract is: (1) one row per enrolled offering for the authenticated student; (2) `Enrollment.status = 'enrolled'` determines inclusion; (3) authorization binds the authenticated student to `Enrollment.student_id` and does not trust a client-supplied identifier; (4) rows are ordered by the documented meeting start time and then `offering_id`. An index might help later, but it is not part of this client contract.
+</ExerciseSolution>
+
+## Change evidence: preserve meaning, measure cost
+
+Use two separate checklists for a physical redesign.
+
+| Correctness evidence | Operational evidence |
+| --- | --- |
+| Representative query results, including duplicates and `NULL` cases | Latency and throughput under realistic read/write mix |
+| Keys, foreign keys, checks, and authorization still hold | Plan changes, memory use, and write amplification |
+| Required ordering and pagination remain explicit | Migration duration, rollback, backup, and recovery behavior |
+| Old and new views agree on a fixed test dataset | Lock waits and error rates during deployment |
+
+> **Warning.** A database rollback can undo rows it controls. It cannot automatically unsend an email or reverse an API call. Connect such effects through an explicit idempotent protocol, such as an outbox, when later transaction material introduces that pattern.
+
+### Transfer task
+
+Your team proposes partitioning `Enrollment` by `term` because reports usually filter by term. Produce a one-page design note with:
+
+1. the logical rows and constraints that must remain true;
+2. one query-result differential test and one authorization test;
+3. two operational measurements that could make the proposal a bad trade-off.
+
+<ExerciseSolution hint="A partition key is physical. Start from the enrollment relation's grain and foreign keys, then name costs that are not logical errors.">
+
+The note should preserve one enrollment per permitted `(student_id, offering_id)` pair and every checked foreign-key relationship. It can compare the old and new `CurrentEnrollment` view over boundary terms, plus test that a student cannot read another student's schedule. Useful operational measurements include cross-term query cost, insert/delete cost, lock or migration duration, and backup/restore behavior. A slower write path can reject the proposal even when every logical result matches.
+</ExerciseSolution>
+
+## References
+
+- [E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (IBM Research, 1970)](https://research.ibm.com/publications/a-relational-model-of-data-for-large-shared-data-banks)
+- [Selinger et al., “Access Path Selection in a Relational Database Management System” (IBM Research, 1979)](https://research.ibm.com/publications/access-path-selection-in-a-relational-database-management-system)
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)

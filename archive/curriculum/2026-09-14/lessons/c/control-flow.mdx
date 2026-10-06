@@ -1,0 +1,121 @@
+---
+title: "Control Flow and Branch Semantics"
+course: c
+description: "Make branch behavior explicit, handle switch fall-through safely, and separate language semantics from performance guesses."
+prerequisites:
+  - "C expressions, comparisons, and functions"
+outcomes:
+  - "Evaluate C conditions using the zero/nonzero rule"
+  - "Trace if, switch, and fall-through control flow without relying on indentation"
+  - "Explain why source-level branch structure does not imply a particular machine cost"
+omissions:
+  - "Detailed branch predictor microarchitecture belongs in computer architecture."
+estimatedMinutes: 45
+assessment: "Trace a nested conditional and rewrite it with an explicit, testable decision table."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Control Flow and Branch Semantics
+
+Control flow is a semantic choice: for each reachable state, which statement executes next? Performance is a later, measured question. A compiler may transform an `if`, use a jump table for a `switch`, or remove a branch entirely if its conditions are provably constant.
+
+<Quiz client:load
+  title="Read the condition"
+  question="Which values make a C `if (condition)` body execute?"
+  options={["Only the literal value 1", "Every value that compares unequal to zero after the expression is evaluated", "Only positive integers", "Only values of type _Bool"]}
+  correctIndex={1}
+  explanation="C uses zero as false and any nonzero scalar value as true. A negative integer is true; a pointer is tested against a null pointer value, not against a universal numeric address."
+/>
+
+## Selection and the dangling `else`
+
+An `else` binds to the nearest unmatched `if`. Braces make the intended structure visible and prevent a later insertion from changing control flow:
+
+```c
+if (authenticated) {
+    if (authorized) {
+        grant_access();
+    }
+} else {
+    deny_access();
+}
+```
+
+Do not use indentation as evidence. Construct a decision table for boundary inputs such as an empty string, a negative count, or an authorization failure.
+
+<CodeExercise client:load
+  title="Make the branch unambiguous"
+  code={`if (ready)
+    if (enabled)
+        start();
+    else
+        stop();
+// To bind the else to the outer if, add: [!blank!]`}
+  answers={["braces around the inner if"]}
+  explanation="The exact repair is to use braces around the intended inner or outer branch. The point is to make the association structural rather than relying on indentation."
+/>
+
+## `switch` and deliberate fall-through
+
+`switch` selects among integral or enumeration values. A `case` label does not create an implicit block and execution continues into later cases until a `break`, `return`, or other transfer occurs. Deliberate fall-through should be adjacent, documented, and tested:
+
+```c
+switch (command) {
+case 'q':
+case 'Q':
+    quit = 1;
+    break;
+case 'h':
+    help();
+    break;
+default:
+    report_unknown(command);
+    break;
+}
+```
+
+Compilers may implement dense cases with a jump table or sparse cases with comparisons. Neither choice is a portable O(1) guarantee; the number of cases, value distribution, target, and optimization settings matter.
+
+## Branch behavior is not a language guarantee
+
+Modern processors predict control flow, but a C author should first establish defined behavior and a correct invariant. A data-dependent branch can have timing implications, and a compiler can lower equivalent source forms differently. Measure with a controlled workload before making a performance claim, and do not use branch “hints” as a substitute for a clear contract.
+
+<CodeRunner client:load
+  title="Separate decision from presentation"
+  language="c"
+  code={`#include <stdio.h>
+
+const char *parity(int value) {
+    return value % 2 == 0 ? "even" : "odd";
+}
+
+int main(void) {
+    printf("-3 is %s\\n", parity(-3));
+    printf(" 4 is %s\\n", parity(4));
+    return 0;
+}`}
+  output="-3 is odd\n 4 is even"
+/>
+
+## Transfer exercises
+
+1. Enumerate the outputs of a three-way classifier for values `< 0`, `== 0`, and `> 0`, including the boundary value zero.
+2. Trace a `switch` with two missing `break` statements and state every assignment made.
+3. Rewrite a nested authorization branch with guard clauses. Explain why the rewrite preserves behavior.
+4. Give a reason a compiler might replace a `switch` with comparisons rather than a jump table.
+
+### Diagnostic solutions
+
+1. The cases are negative, zero, and positive; zero belongs only to the equality case. Test the boundaries `-1`, `0`, and `1`.
+2. Start at the matching label and continue line by line until a transfer; labels do not stop execution. A table of state after each statement catches accidental fall-through.
+3. For example, reject unauthenticated input first, then reject unauthorized input, then grant access. Each return removes one nesting level while preserving the mutually exclusive conditions.
+4. A sparse or large label range can make a table too large; code size, profile data, target architecture, and optimization policy all influence the lowering.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.8](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [CERT MSC07-C: Detect and remove unreachable code](https://wiki.sei.cmu.edu/confluence/display/c/MSC07-C.+Detect+and+remove+unreachable+code)
+* [cppreference: if statement](https://en.cppreference.com/w/c/language/if)

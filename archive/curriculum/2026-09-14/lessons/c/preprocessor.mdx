@@ -1,0 +1,110 @@
+---
+title: "The C Preprocessor and Translation Boundaries"
+course: c
+description: "Use includes, guards, macros, and conditional compilation while controlling substitution hazards and configuration drift."
+prerequisites:
+  - "C declarations, translation units, and functions"
+outcomes:
+  - "Explain what preprocessing changes before the compiler parses C"
+  - "Write hygienic include guards and parenthesized object-like macros"
+  - "Choose a function, enum, const object, or macro according to the required boundary"
+omissions:
+  - "Build-system generators and compiler plugins are deferred to software-engineering tooling."
+estimatedMinutes: 50
+assessment: "Expand a macro by hand, identify an argument-evaluation hazard, and replace it with a typed interface."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# The C Preprocessor and Translation Boundaries
+
+Preprocessing is a text-and-token transformation that runs before the compiler parses the resulting translation unit. It does not understand C types or function contracts. That power is useful for portability and repeated declarations, but it also makes source review and debugging harder.
+
+<Quiz client:load
+  title="Choose the boundary"
+  question="Why is a `static inline` function often safer than a function-like macro for a typed calculation?"
+  options={["It always executes faster", "It obeys C scope and type checking and evaluates arguments once", "It can inspect tokens that C cannot parse", "It prevents all integer overflow"]}
+  correctIndex={1}
+  explanation="A function has a type and normal evaluation rules. `inline` is a request about optimization, not a correctness guarantee, and it does not fix a bad arithmetic contract."
+/>
+
+## Inclusion and guards
+
+`#include "project.h"` and `#include <system.h>` select different search policies, but neither is a module system. A header should expose declarations and use a guard or a supported equivalent:
+
+```c
+#ifndef SENSOR_H
+#define SENSOR_H
+
+int sensor_read(void);
+
+#endif
+```
+
+The guard prevents repeated inclusion within a translation unit. It does not prevent two different headers from declaring incompatible interfaces, and it does not make definitions in a header safe to duplicate.
+
+<CodeExercise client:load
+  title="Complete the guard"
+  code={`#ifndef CONFIG_H
+[!blank!] CONFIG_H
+int config_load(void);
+#endif`}
+  answers={["#define"]}
+  explanation="The second directive defines the guard macro after the first inclusion test succeeds. Subsequent inclusions skip the body."
+/>
+
+## Macro expansion and hygiene
+
+Parenthesize both parameters and the whole replacement:
+
+```c
+#define SQUARE(x) ((x) * (x))
+```
+
+Even this macro evaluates `x` twice, so `SQUARE(i++)` is unsafe. A typed function avoids repeated side effects. Multi-statement macros require a `do { ... } while (0)` wrapper and careful temporary naming, but a function is usually clearer.
+
+Object-like macros are appropriate for conditional compilation or a compile-time token. Prefer an enumeration for related integral constants and a `const` object when a typed addressable value is needed.
+
+## Conditional compilation and evidence
+
+`#if`, `#ifdef`, and predefined macros can select platform code, but each branch is a separate program that needs compilation and tests. Do not treat an unbuilt platform branch as portable. Keep the platform-specific surface small behind a common interface.
+
+`#` stringifies a macro argument and `##` pastes tokens; use them only when the generated name is easier to audit than the explicit alternatives. Generated identifiers can hide spelling errors and make tooling less effective.
+
+<CodeRunner client:load
+  title="See a macro's duplicated argument"
+  language="c"
+  code={`#include <stdio.h>
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+
+int main(void) {
+    int x = 1;
+    int y = 2;
+    int result = MAX(x++, y++);
+    printf("result=%d x=%d y=%d\\n", result, x, y);
+    return 0;
+}`}
+  output="result=2 x=2 y=4"
+/>
+
+## Transfer exercises
+
+1. Expand `SQUARE(2 + 3)` for an unparenthesized macro and explain the result.
+2. Give a reason an include guard cannot cure a function definition duplicated across two translation units.
+3. Choose between a macro and an inline function for a bounds-checked min operation and state the evaluation policy.
+4. Explain why every conditional-compilation branch needs a build/test path.
+
+### Diagnostic solutions
+
+1. `2 + 3 * 2 + 3` evaluates to 11, not 25. Parenthesize the parameter and result.
+2. Guards act within one preprocessed translation unit. The linker still sees duplicate external definitions from different units.
+3. Choose a typed function when arguments may have side effects or types matter. Document conversions and evaluate each argument once.
+4. The preprocessor removes the other branch before parsing, so an unbuilt branch can contain syntax, type, or behavioral defects that no current build detects.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.10](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [CERT PRE00-C: Prefer inline or static functions to function-like macros](https://wiki.sei.cmu.edu/confluence/display/c/PRE00-C.+Prefer+inline+or+static+functions+to+function-like+macros)
+* [cppreference: preprocessor](https://en.cppreference.com/w/c/preprocessor)

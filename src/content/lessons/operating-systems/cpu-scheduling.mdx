@@ -1,0 +1,309 @@
+---
+title: "CPU Scheduling as Policy"
+course: "operating-systems"
+description: "Derive scheduling metrics and policy trade-offs from arrival/service traces, then falsify universal claims with adversarial workloads and context-switch cost."
+prerequisites:
+  - "Processes, runnable/running/blocked states, timer preemption, and context switching"
+  - "Arithmetic means, ratios, inequalities, and exchange arguments"
+  - "The distinction between mechanism, policy, and measured evidence"
+outcomes:
+  - "Compute response, turnaround, ready-waiting, throughput, and useful utilization from a preemptive schedule trace."
+  - "Derive FCFS, non-preemptive SJF, SRTF, and round-robin behavior under explicit arrival and burst assumptions."
+  - "Prove the simultaneous-arrival SJF interchange result and construct starvation and convoy counterexamples outside its assumptions."
+  - "Select and defend a scheduling policy for an unfamiliar workload using latency distributions, fairness constraints, overhead, and workload uncertainty."
+omissions:
+  - "Hard real-time feasibility, multiprocessor load balancing, NUMA affinity, energy-aware scheduling, gang scheduling, and priority inheritance require separate models."
+  - "The interactive model uses one CPU, fixed CPU bursts, no I/O re-entry, and exact SJF burst knowledge; its numbers are not production forecasts."
+  - "Linux EEVDF is included as a current mechanism comparison, not reimplemented or reduced to the teaching policies."
+estimatedMinutes: 330
+assessment: "Given an unseen arrival/service workload with a context-switch model and a fairness requirement, construct competing schedules, compute all metrics, expose one policy failure, and defend a policy or hybrid with falsifiable evidence."
+---
+
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import SchedulerPlayground from '../../../components/playgrounds/SchedulerPlayground';
+
+# CPU Scheduling as Policy
+
+Four jobs arrive at a single CPU. A long batch job arrives first; three short interactive jobs arrive immediately after it. First-come, first-served keeps the CPU busy and completes every job, yet users wait behind work that is irrelevant to their requests. “100% utilization” has concealed a latency failure.
+
+A scheduling policy chooses among runnable execution contexts. Timer interrupts, context save/restore, and run-queue operations are mechanisms. The choice is defensible only relative to a workload and objective.
+
+{/* Source tracking: POSIX.1-2024 General Information §2.8.4 supplies the conceptual runnable-thread-list model and FIFO/RR policy semantics. The xv6 scheduler scan, `RUNNABLE→RUNNING` cut, timer interrupt, and `yield()` mechanism were checked against `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`, in `kernel/proc.c` and `kernel/trap.c`. */}
+
+### Prediction — one trace, three objectives
+
+Jobs $A(0,8)$, $B(0,2)$, $C(1,1)$, and $D(2,2)$ are written as `(arrival, CPU service)`. With no preemption or switch cost, predict which first job minimizes each objective: completion time of A, mean response time, and maximum waiting time. One choice need not optimize all three.
+
+<ExerciseSolution hint="An objective about A is not an objective about the population.">
+Running A first minimizes A's completion time. Choosing a short ready job such as B improves mean response relative to A-first. Maximum waiting depends on the full order; among simultaneous known jobs, short-first tends to delay A substantially, while long-first delays every short job. The point is not a unique answer before constructing complete schedules: the objectives are different functions and cannot be replaced by “fast.”
+</ExerciseSolution>
+
+## Workload model and metrics
+
+For job $i$, define:
+
+> **Definition.** A scheduling metric is a function of explicit arrival, execution, blocking, and completion cuts; its name does not determine which intervals are charged.
+
+- arrival $a_i$;
+- first dispatch $f_i$;
+- completion $c_i$;
+- total required CPU service $b_i$; and
+- total blocked time $d_i$ during the observation.
+
+Then
+
+$$
+\begin{aligned}
+\text{response}_i &= f_i-a_i,\\
+\text{turnaround}_i &= c_i-a_i,\\
+\text{ready-wait}_i &= c_i-a_i-b_i-d_i.
+\end{aligned}
+$$
+
+In the teaching traces, $d_i=0$, so waiting is turnaround minus service. Under preemption, response counts only until the **first** dispatch; later ready intervals contribute waiting but not response.
+
+For an interval of length $L$:
+
+$$
+\text{throughput}=\frac{\text{completed jobs}}{L}, \qquad
+U_{useful}=\frac{\text{time executing job instructions}}{L}.
+$$
+
+Scheduler and switch work may keep the CPU physically busy while reducing $U_{useful}$. Report both if the distinction matters.
+
+### Metric reconstruction — a preempted job
+
+Job $P$ arrives at 2, runs on intervals $[4,6)$ and $[10,13)$, blocks on I/O during $[6,8)$, and completes at 13. Compute response, turnaround, service, blocked time, and ready-wait.
+
+<ExerciseSolution>
+Response is $4-2=2$. Turnaround is $13-2=11$. CPU service is $2+3=5$. Blocked time is 2. Ready-wait is $11-5-2=4$: two units before first dispatch and two from wakeup at 8 until redispatch at 10. Using turnaround minus service alone would report 6 and incorrectly charge blocked time to the CPU scheduler.
+</ExerciseSolution>
+
+## FCFS and the convoy effect
+
+First-come, first-served orders ready work by arrival, with an explicit tie rule. Under non-preemptive FCFS and tie order A, B, C, D, the motivating workload becomes:
+
+```text
+time  0        8  10 11  13
+CPU   |   A    | B |C| D |
+```
+
+| Job | First run | Completion | Response | Turnaround | Waiting |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A | 0 | 8 | 0 | 8 | 0 |
+| B | 8 | 10 | 8 | 10 | 8 |
+| C | 10 | 11 | 9 | 10 | 9 |
+| D | 11 | 13 | 9 | 11 | 9 |
+| **mean** | — | — | **6.50** | **9.75** | **6.50** |
+
+The CPU is usefully busy for all 13 units, but short jobs inherit the long job's service time. This is the convoy effect. FCFS remains valuable when order itself is the contract, overhead must be minimal, or jobs have similar service demands. A counterexample is not a universal rejection.
+
+{/* Source tracking: POSIX rationale for FIFO scheduling supports ready-list ordering. The numerical trace and convoy diagnosis are original calculations under the stated model. */}
+
+### Transfer — arrival order versus queue order
+
+At time 5, a running FCFS job blocks. Two jobs already wait; a third arrives while the CPU is selecting. What must the policy specify to remain deterministic, and why is “earliest PID” not FCFS?
+
+<ExerciseSolution>
+Specify the linearization of runnable insertion and the tie rule for equal logical arrival times. Existing waiters should precede the newly runnable/arriving job under FIFO semantics. PID is identity, not arrival order; reuse and allocation patterns can reorder service. A real concurrent queue needs synchronization around insertion/selection, but the policy contract must exist before implementation.
+</ExerciseSolution>
+
+## SJF: an optimum inside a narrow theorem
+
+Assume $n$ non-preemptive jobs all arrive at time zero, service times are known exactly, and the objective is mean waiting time. Consider adjacent jobs $i$ then $j$ after prefix duration $T$, with $b_i>b_j$. Their contribution to total waiting is
+
+$$
+T+(T+b_i)=2T+b_i.
+$$
+
+Swapping them contributes
+
+$$
+T+(T+b_j)=2T+b_j,
+$$
+
+which is smaller by $b_i-b_j>0$. Repeatedly removing every inversion yields nondecreasing service order. Therefore shortest-job-first minimizes total—and hence mean—waiting under these assumptions.
+
+This proof says nothing about unknown bursts, unequal arrivals, preemption, deadlines, weights, or maximum waiting.
+
+For the motivating workload, non-preemptive SJF can choose B at time 0; by time 2 C and D have arrived:
+
+```text
+time  0  2 3   5        13
+CPU   | B|C| D |    A    |
+```
+
+Responses are A=5, B=0, C=1, D=1; mean response and waiting are 1.75. Mean turnaround is $(13+2+2+3)/4=5.00$. The improvement is large because exact service times were supplied by the exercise.
+
+### Proof boundary — construct starvation
+
+One long job of service 100 waits from time 0. Starting at time 0, a service-1 job arrives just before every scheduling decision. What happens under non-preemptive SJF? Which theorem assumption did **not** fail?
+
+<ExerciseSolution>
+The long job can starve forever because a shorter ready job is always available. Service times may be known exactly and scheduling may be non-preemptive; those assumptions still hold. The failed theorem scope is the finite simultaneous-arrival batch. With an unbounded arrival stream, minimizing local short-job delay offers no bound for the long job. Aging or a maximum-wait constraint changes the policy objective.
+</ExerciseSolution>
+
+## SRTF and the value of preemption
+
+Shortest-remaining-time-first re-evaluates the runnable job with least remaining service whenever the eligible set changes. Let A arrive at 0 with service 10 and B arrive at 1 with service 1.
+
+> **Example.** New arrival information can make preemption reduce mean turnaround even when non-preemptive SJF made the best decision available at time zero.
+
+- Non-preemptive SJF starts A because it is the only job at time 0: A runs 0–10, B 10–11. Mean turnaround is $(10+10)/2=10$.
+- SRTF runs A 0–1, B 1–2, then A 2–11. Turnarounds are 11 and 1; mean is 6.
+
+Preemption improves this trace because new information arrives. It also adds context-switch cost and can starve large jobs under sustained short arrivals. Exact remaining time is usually unavailable; systems infer behavior from history or use application-provided classes under an authority policy.
+
+### Application — preemption is not free
+
+In the A/B trace, each change between jobs costs 0.75 time units and no useful work occurs during a switch. Recompute both completion times for SRTF if the scheduler charges A→B and B→A, but not initial dispatch.
+
+<ExerciseSolution>
+A runs 0–1; switch to B takes 1–1.75; B runs 1.75–2.75; switch to A takes 2.75–3.5; A's remaining 9 units finish at 12.5. Turnarounds are A=12.5 and B=1.75, mean 7.125. This still beats the modeled non-preemptive mean 10, but the benefit shrinks. If switch cost exceeded the latency saved, preemption would lose. The scheduler must charge overhead to the schedule rather than treating it as an annotation.
+</ExerciseSolution>
+
+## Round robin: bound service gaps, choose a quantum
+
+Round robin places runnable jobs in FIFO order and runs each for at most quantum $q$. A job that blocks or finishes early gives up the CPU; an unfinished job returns to the tail. With $m$ continuously runnable jobs, zero switch cost, and no higher-priority interference, a job waits at most roughly $(m-1)q$ between its quanta. That is a model bound, not a production latency guarantee.
+
+For the motivating workload with $q=2$ and zero switch cost:
+
+```text
+time  0  2  4 5  7  9  11 13
+CPU   | A| B|C| D| A| A | A |
+```
+
+The queue after A's first quantum is B, C, D, A. Responses are A=0, B=2, C=3, D=3; mean response is 2.00. Turnarounds are A=13, B=4, C=4, D=5; mean turnaround is 6.50. Mean waiting is 3.25.
+
+If every quantum causes a switch costing $s$, the saturated upper-bound overhead fraction is
+
+$$
+\frac{s}{q+s}.
+$$
+
+As $q\rightarrow\infty$, round robin approaches FCFS for finite jobs. As $q\rightarrow0$, response opportunities become frequent while switching consumes the machine. A quantum is therefore a workload-timescale decision.
+
+{/* Source tracking: POSIX.1-2024 specifies SCHED_RR as FIFO-with-time-quantum at each priority. The queue trace, service-gap bound, and overhead model are original derivations with their assumptions exposed. */}
+
+### Prediction before interaction
+
+For the convoy workload, predict the direction—not exact magnitude—of these changes:
+
+1. FCFS → RR with zero switch cost: mean response and mean turnaround;
+2. RR quantum 8 → quantum 1 with switch cost 2: response opportunity and useful utilization;
+3. convoy → staggered workload: idle time.
+
+<SchedulerPlayground client:load />
+
+The simulator charges switch cost only when the CPU changes jobs, assumes one CPU and CPU-only jobs, and gives SJF exact burst knowledge. It is a trace calculator for those assumptions. It does not model cache warming, I/O wakeups, priority, multicore migration, or production Linux.
+
+### Simulator investigation — falsify “smaller quantum is better”
+
+Use the convoy workload and RR. Record mean response, turnaround, and useful utilization for at least four `(quantum, switch cost)` pairs. Find one pair where a smaller quantum improves response but makes turnaround and utilization worse. Explain the causal sequence.
+
+<ExerciseSolution hint="Increase switch cost enough that extra boundaries become visible.">
+One valid investigation compares zero cost with cost 1 or 2 while lowering the quantum. Exact displayed means are the evidence. The causal claim must mention that more preemption points let short jobs begin earlier, while each inter-job boundary inserts non-service time and delays every completion. If the selected run has only one job remaining, consecutive quanta of that job do not incur inter-job switch cost in this model; count actual amber segments rather than multiplying all quanta blindly.
+</ExerciseSolution>
+
+## Unknown bursts and feedback policies
+
+Exact SJF is an oracle policy. A practical scheduler can estimate the next CPU burst using an exponentially weighted history
+
+> **Warning.** A burst predictor changes the information available to a policy; it does not turn a workload estimate into a service-time guarantee.
+
+$$
+\hat b_{k+1}=\alpha b_k+(1-\alpha)\hat b_k, \qquad 0\le\alpha\le1.
+$$
+
+Large $\alpha$ reacts quickly and forgets history; small $\alpha$ smooths noise and adapts slowly. This is a predictor, not a guarantee. Adversarial or phase-changing workloads defeat it.
+
+A multilevel feedback queue (MLFQ) can favor tasks that yield quickly and demote tasks consuming full quanta. To be a complete policy it must specify:
+
+- number of queues and quantum per queue;
+- insertion on creation and wakeup;
+- demotion/accounting across voluntary yields;
+- priority boost or aging rule;
+- preemption between queues; and
+- treatment of multiple threads or process weights.
+
+Without cumulative accounting, a CPU-bound job can yield just before each quantum expires and avoid demotion. Without aging, lower queues can starve.
+
+### Transfer — predictor phase change
+
+A task alternates 100 bursts of length 1 with 100 bursts of length 20. Compare qualitatively $\alpha=0.1$ and $\alpha=0.9$ at each phase boundary. Which is “better”?
+
+<ExerciseSolution>
+$\alpha=0.9$ moves the estimate near the new phase within a few samples but follows individual noise; $\alpha=0.1$ retains the old phase for many bursts and is stable within a stationary phase. Neither is universally better. If misclassifying a newly interactive phase causes severe response harm, rapid adaptation may matter; if burst measurements are noisy and classes drive costly migration, smoothing may win. Report prediction error by phase rather than one global mean.
+</ExerciseSolution>
+
+## Fairness, tails, and overload
+
+Mean latency can hide one victim. A policy evaluation should include:
+
+> **Warning.** An average can improve while one class starves; report a per-job or per-class bound whenever starvation freedom is part of the claim.
+
+- median and high-percentile response/turnaround;
+- maximum or bounded waiting under stated admission assumptions;
+- per-class service share versus assigned weight;
+- deadline-miss or service-level violation rate when relevant;
+- useful utilization and switch/migration overhead; and
+- starvation and gaming traces.
+
+For continuously runnable tasks with positive weights $w_i$, a proportional-share target over a long interval is
+
+$$
+\operatorname{share}_i \approx \frac{w_i}{\sum_j w_j}.
+$$
+
+Short intervals, wakeups, minimum granularity, and hierarchy create deviation. Fairness is always measured over a window and subject set.
+
+### Counterexample — the mean approves starvation
+
+One policy completes 99 one-unit jobs immediately and delays one 100-unit job for 10,000 units. Another delays every short job by 5 but begins the long job promptly. Why can mean response alone select the first policy, and what constraint repairs the objective?
+
+<ExerciseSolution>
+The 99 near-zero responses dominate the average, so one extreme victim contributes only 1% of samples. Add a maximum-wait or starvation-freedom constraint, report tail distribution, or optimize a weighted objective that reflects the long job's class. The repair is not to discard means; it is to prevent aggregation from erasing a required per-job guarantee.
+</ExerciseSolution>
+
+## Production comparison: virtual time and EEVDF
+
+Current Linux scheduler documentation describes a transition from the older CFS design toward Earliest Eligible Virtual Deadline First (EEVDF). The documented model tracks virtual runtime and lag: a task with nonnegative lag is eligible, and the eligible task with earliest virtual deadline is selected. Shorter requested slices can improve latency while lag accounts for fair service.
+
+This is not SJF: a virtual deadline is not an oracle for total job length. It is not the fixed-quantum RR simulator either: eligibility, weights, lag, wakeup behavior, and scheduler hierarchy matter. Production comparison should preserve those distinctions and cite the running kernel/version measured.
+
+{/* Source tracking: Linux EEVDF claims are limited to the official kernel EEVDF documentation. The page explicitly notes the transition from CFS and defines lag, eligibility, and virtual-deadline selection. */}
+
+### Synthesis — choose policy under an adversarial workload
+
+A single-CPU edge controller runs:
+
+- control task C: 0.5 ms CPU every 10 ms; missing 20 ms is unsafe;
+- interactive task I: bursts between 0.2 and 3 ms after unpredictable input;
+- batch task B: always runnable and benefits from cache residency;
+- switch cost: measured 0.08 ms plus cache effects not yet quantified.
+
+Construct and defend a policy. Your answer must specify admission assumptions, preemption points, queue/order rules, quantum or budget values, overload behavior, metrics, and one test that can falsify the design.
+
+<details>
+<summary>Reveal grading diagnostics</summary>
+
+A defensible answer isolates C with an explicit budget/deadline or fixed-priority policy only after checking feasibility and kernel/device interference; it does not claim RR alone guarantees safety. I may receive responsive service through a short slice or eligibility rule, while B consumes residual capacity with a larger granularity to preserve locality. Overload must preserve C's admitted budget and shed/defer lower-criticality work. Measure C response and misses, I response distribution, B throughput, switch count, and cache events. Inject synchronized I bursts near C release and a CPU-saturating B. Exact values require measured execution/interrupt costs; claiming a hard bound from the supplied average demands is insufficient.
+
+</details>
+
+**Rubric (20 points).** Correct schedules/metrics 5; assumptions and theorem boundaries 3; policy mechanism and complete rules 4; tail/fairness/overload analysis 3; overhead evidence 3; adversarial falsification 2.
+
+## Connections and deliberate omissions
+
+Timer traps make involuntary preemption possible; context-switch invariants keep it safe. Wait/wakeup changes the runnable set and therefore policy input. Synchronization affects priority inversion and run-queue scalability. Virtual memory and caches make migrations and short quanta costlier than the abstract model. The scheduler lab turns these claims into xv6 measurements rather than accepting simulator output as implementation evidence.
+
+> **Remark.** A scheduler extension earns a place only with a new workload model, invariant, and falsifying trace—not by adding policy names to a comparison list.
+
+Hard real-time response-time analysis, earliest-deadline-first feasibility, priority inheritance, multiprocessor affinity, work stealing, NUMA, energy, heterogeneous cores, gang scheduling, and scheduler security are omitted. Linux EEVDF is not reverse-engineered here. These subjects require event and resource models not present in the single-CPU fixed-burst simulator.
+
+## References & Further Reading
+
+1. The Open Group, [POSIX.1-2024 General Information §2.8.4: Process Scheduling](https://pubs.opengroup.org/onlinepubs/9799919799/functions/V2_chap02.html), FIFO/RR conceptual semantics.
+2. Linux kernel documentation, [EEVDF Scheduler](https://docs.kernel.org/scheduler/sched-eevdf.html) and [CFS Scheduler](https://docs.kernel.org/scheduler/sched-design-CFS.html), for current production virtual-time context.
+3. MIT PDOS, xv6 rev5 [`kernel/proc.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/proc.c) and [`kernel/trap.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/trap.c), for the teaching scheduler and timer-yield mechanism.
+4. MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf), Chapter 7.

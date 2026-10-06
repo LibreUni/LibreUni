@@ -1,521 +1,82 @@
 ---
-import { getCollection, getEntry } from 'astro:content';
+import { getCollection } from 'astro:content';
 import Layout from '../../layouts/Layout.astro';
-import { 
-    Calculator, 
-    LayoutIcon, 
-    BookOpen,
-    Code2,
-    Brain,
-    Cpu,
-    FlaskConical,
-    Shapes,
-    Binary,
-    ArrowRight,
-    Users,
-    GraduationCap,
-    Compass,
-    ChevronLeft,
-    ChevronRight,
-    Search,
-    Briefcase,
-    Activity,
-    Target,
-    Shield,
-    Bot,
-    TrendingUp,
-    Building2,
-    DollarSign
-} from 'lucide-react';
+import LearningPathEvidence from '../../components/LearningPathEvidence';
+import { getCourseLessons } from '../../utils/lessons';
 
 export async function getStaticPaths() {
-  const careers = await getCollection('careers');
-  return careers.map(career => ({
-    params: { careerId: career.id },
-  }));
+  return (await getCollection('careers')).map(career => ({ params: { careerId: career.id }, props: { career } }));
 }
-
-const { careerId } = Astro.params;
-const career = (await getCollection('careers')).find(c => c.id === careerId);
-
-if (!career) {
-    return Astro.redirect(`${import.meta.env.BASE_URL}index.html`);
-}
-
-const iconMap: Record<string, any> = {
-    calculator: Calculator,
-    layout: LayoutIcon,
-    code: Code2,
-    brain: Brain,
-    cpu: Cpu,
-    science: FlaskConical,
-    elements: Shapes,
-    binary: Binary,
-    book: BookOpen,
-    users: Users,
-    graduation: GraduationCap,
-    compass: Compass,
-    activity: Activity,
-    shield: Shield,
-    server: Binary // fallback
-};
-
-const Icon = iconMap[career.data.icon] || GraduationCap;
-const allLessons = await getCollection('lessons');
-
-// Get all internal course IDs used in this career
-const internalCourseIds = career.data.steps.flatMap(step => 
-    step.courses.filter(c => c.type === 'internal').map(c => c.id)
-);
-
-// Map lesson counts and slugs
-const lessonCounts: Record<string, number> = {};
-const courseSlugs: Record<string, string[]> = {};
-internalCourseIds.forEach(id => {
-    const courseLessons = allLessons.filter(l => l.data.course === id);
-    lessonCounts[id as string] = courseLessons.length;
-    courseSlugs[id as string] = courseLessons.map(l => l.id);
-});
-
-const details = career.data.details || {};
-
+const { career } = Astro.props;
+const base = import.meta.env.BASE_URL;
+const courseEntries = await getCollection('courses');
+const steps = await Promise.all(career.data.steps.map(async step => ({
+  ...step,
+  courses: await Promise.all(step.courses.map(async reference => {
+    const course = courseEntries.find(entry => entry.id === reference.id);
+    if (!course || course.data.status !== 'public') throw new Error(`Path ${career.id} references unavailable course ${reference.id}`);
+    const lessons = await getCourseLessons(course.id);
+    return { ...reference, title: course.data.title, firstLesson: lessons[0]?.id, count: lessons.length, hours: lessons.reduce((sum, lesson) => sum + (lesson.data.estimatedMinutes || 0), 0) / 60 };
+  })),
+})));
+const hours = steps.reduce((sum, step) => sum + step.courses.reduce((subtotal, course) => subtotal + course.hours, 0), 0);
+const gates = [...steps.map(step => ({ id: step.id, title: step.title })), { id: 'synthesis', title: career.data.synthesis.title }];
 ---
 
-<Layout title={`${career.data.title} - LibreUni Career Path`}>
-    <div class="w-full flex-1 overflow-x-hidden bg-light-bg dark:bg-dark-bg transition-colors duration-500 pb-32">
-        <!-- Header -->
-        <header class="relative py-32 px-8 overflow-hidden">
-            <div class={`absolute inset-0 bg-gradient-to-br ${career.data.color} opacity-10 dark:opacity-20`}></div>
-            <div class="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-light-border dark:via-dark-border to-transparent"></div>
-            
-            <div class="max-w-7xl mx-auto relative z-10">
-                <a href={`${import.meta.env.BASE_URL}#career-paths`} class="inline-flex min-h-11 items-center gap-2 px-4 py-2 rounded-xl bg-white/50 dark:bg-dark-surface/50 border border-light-border dark:border-dark-border text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted hover:text-primary transition-all mb-12">
-                    <ChevronLeft size={16} />
-                    Back to All Paths
-                </a>
+<Layout title={`${career.data.title} - LibreUni Learning Path`}>
+  <main class="mx-auto w-full min-w-0 max-w-5xl flex-1 px-5 py-10 sm:px-8 sm:py-16">
+    <header class="border-b border-light-border pb-10 dark:border-dark-border">
+      <a href={`${base}careers`} class="inline-flex min-h-11 items-center text-sm font-semibold text-primary">← All learning paths</a>
+      <p class="mt-6 text-xs font-bold uppercase tracking-widest text-primary">Learning path · systems foundations</p>
+      <h1 class="mt-3 text-4xl font-black leading-tight tracking-tight sm:text-5xl">{career.data.title}</h1>
+      <p class="mt-5 max-w-3xl text-lg leading-relaxed text-light-muted dark:text-dark-muted">{career.data.description}</p>
+      <p class="mt-4 text-sm font-semibold">{steps.length} courses · {hours.toLocaleString('en-US', { maximumFractionDigits: 1 })} planned course hours + {career.data.synthesis.estimatedHours} synthesis hours</p>
+      <p class="mt-3 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">{career.data.scope}</p>
+      <a href="#entry-checks" class="assessment-action-primary mt-6 inline-flex">Check your preparation</a>
+    </header>
 
-                <div class="flex flex-col md:flex-row md:items-center gap-10">
-                    <div class={`p-8 rounded-[2.5rem] bg-primary bg-gradient-to-br ${career.data.color} text-white shadow-2xl flex-shrink-0 animate-float`}>
-                        <Icon size={48} strokeWidth={2.5} />
-                    </div>
-                    <div>
-                        <div class="flex items-center gap-4 mb-4">
-                            <span class="px-4 py-1.5 rounded-full bg-light-surface text-primary dark:bg-dark-surface text-[10px] font-black uppercase tracking-[0.2em]">Career Path</span>
-                            <div class="flex items-center gap-2">
-                                <span class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">General Progress</span>
-                                <div class="w-24 h-2 bg-light-border dark:bg-dark-border rounded-full overflow-hidden">
-                                    <div id="general-progress-bar" class="h-full bg-primary transition-all duration-1000" style="width: 0%"></div>
-                                </div>
-                                <span id="general-progress-text" class="text-xs font-black tabular-nums">0%</span>
-                            </div>
-                        </div>
-                        <h1 class="text-5xl md:text-7xl font-black tracking-tighter text-light-text dark:text-dark-text uppercase leading-none mb-6">
-                            {career.data.title}
-                        </h1>
-                        <p class="max-w-2xl text-xl font-medium italic text-light-muted dark:text-dark-muted">
-                            {career.data.description}
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </header>
+    <section id="entry-checks" class="scroll-mt-24 py-10" aria-labelledby="entry-heading">
+      <h2 id="entry-heading" class="text-2xl font-bold">Before you begin</h2>
+      <p class="mt-3 leading-relaxed text-light-muted dark:text-dark-muted">Try these tasks unaided, then compare your reasoning with the criteria. They are a diagnostic sample, not a placement exam. If you cannot produce the evidence, use the preparation resources before attempting the course labs.</p>
+      <div class="mt-6 space-y-4">
+        {career.data.entryChecks.map(check => <div class="rounded-xl border border-light-border p-5 dark:border-dark-border">
+          <p class="leading-relaxed">{check.prompt}</p>
+          <details class="mt-4"><summary class="min-h-11 cursor-pointer py-2 font-semibold text-primary">Compare with the readiness criteria</summary><p class="mt-2 leading-relaxed text-light-muted dark:text-dark-muted">{check.criteria}</p></details>
+        </div>)}
+      </div>
+      <h3 class="mt-8 text-lg font-bold">Preparation resources</h3>
+      <ul class="mt-4 space-y-4">{career.data.preparation.map(resource => <li><a class="font-semibold text-primary underline underline-offset-4" href={resource.link} target="_blank" rel="noopener noreferrer">{resource.title} ↗</a><p class="mt-1 text-sm leading-relaxed text-light-muted dark:text-dark-muted">{resource.description}</p></li>)}</ul>
+    </section>
 
-        <!-- Main Content -->
-        <main class="max-w-7xl mx-auto py-16 px-8">
-            
-            {/* Career Insights Section */}
-            {Object.keys(details).length > 0 && (
-                <div class="mb-24 space-y-16">
-                    {/* The Role & AI */}
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        <div class="bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2.5rem] p-10 shadow-sm">
-                            <div class="flex items-center gap-4 mb-6">
-                                <div class="w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
-                                    <Target size={24} />
-                                </div>
-                                <h3 class="text-2xl font-black text-light-text dark:text-dark-text tracking-tight">The Role</h3>
-                            </div>
-                            <div class="space-y-6">
-                                {details.importance && (
-                                    <div>
-                                        <h4 class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted mb-2">Why it matters</h4>
-                                        <p class="text-light-text dark:text-dark-text">{details.importance}</p>
-                                    </div>
-                                )}
-                                {details.rolesAndResponsibilities && (
-                                    <div>
-                                        <h4 class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted mb-2">Day-to-day work</h4>
-                                        <p class="text-light-text dark:text-dark-text">{details.rolesAndResponsibilities}</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
+    <section aria-labelledby="sequence-heading" class="border-t border-light-border py-10 dark:border-dark-border">
+      <h2 id="sequence-heading" class="text-2xl font-bold">Study, produce evidence, seek review</h2>
+      <p class="mt-3 text-light-muted dark:text-dark-muted">Each course has its own exercises and capstone. The gates below name the evidence to defend before extending your model at the next layer. Reading completion remains separate from assessment.</p>
+      <ol class="mt-8 space-y-8">{steps.map((step, index) => <li id={step.id} class="scroll-mt-24 rounded-2xl border border-light-border bg-light-surface p-5 dark:border-dark-border dark:bg-dark-surface sm:p-8">
+        <p class="text-xs font-bold uppercase tracking-widest text-primary">Stage {index + 1}</p>
+        <h3 class="mt-2 text-2xl font-bold">{step.title}</h3>
+        <p class="mt-3 leading-relaxed">{step.outcome}</p>
+        {step.courses.map(course => <div class="my-5 flex flex-wrap items-center gap-3">
+          <a href={`${base}courses/${course.id}`} class="font-bold text-primary underline underline-offset-4">{course.title}</a>
+          <span class="text-sm text-light-muted dark:text-dark-muted">{course.count} lessons · {course.hours.toLocaleString('en-US', { maximumFractionDigits: 1 })} planned hours</span>
+          <a href={`${base}lessons/${course.firstLesson}`} class="assessment-action-secondary">Start course</a>
+        </div>)}
+        <h4 class="font-bold">Assessment gate</h4>
+        <p class="mt-2 text-sm leading-relaxed">{step.gate.prompt}</p>
+        <ul class="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed">{step.gate.criteria.map(criterion => <li>{criterion}</li>)}</ul>
+        <a href={`${base}lessons/${step.gate.lesson}`} class="mt-5 inline-flex min-h-11 items-center font-semibold text-primary underline underline-offset-4">Open the assignment and rubric →</a>
+      </li>)}</ol>
+    </section>
 
-                        <div class="bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2.5rem] p-10 shadow-sm">
-                            <div class="flex items-center gap-4 mb-6">
-                                <div class="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
-                                    <Bot size={24} />
-                                </div>
-                                <h3 class="text-2xl font-black text-light-text dark:text-dark-text tracking-tight">AI Factor</h3>
-                            </div>
-                            {details.aiImpact ? (
-                                <div>
-                                    <h4 class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted mb-2">Can it be replaced?</h4>
-                                    <p class="text-light-text dark:text-dark-text text-lg italic mt-4">{details.aiImpact}</p>
-                                </div>
-                            ) : (
-                                <p class="text-light-muted dark:text-dark-muted">No AI impact data available yet.</p>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Market Details: Salary & Demand */}
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-                        <div class="bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2.5rem] p-8 shadow-sm flex flex-col items-center text-center">
-                            <div class="w-12 h-12 mb-4 rounded-xl bg-green-500/10 text-green-600 dark:text-green-400 flex items-center justify-center">
-                                <DollarSign size={24} />
-                            </div>
-                            <h4 class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted mb-2">Salary Estimate</h4>
-                            {details.salary && details.salary.length > 0 ? (
-                                <div class="w-full mt-2 flex flex-col gap-3">
-                                    <div class="w-full px-2">
-                                        <select id={`salary-region-${careerId}`} class="w-full bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border text-xs font-bold rounded-lg px-3 py-2 outline-none text-light-text dark:text-dark-text focus:ring-2 focus:ring-primary/50 transition-all cursor-pointer">
-                                            {details.salary.map((s: any, i: number) => (
-                                                <option value={i}>{s.region} ({s.period})</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                    <div class="relative w-full min-h-[120px]">
-                                        {details.salary.map((s: any, i: number) => (
-                                            <div id={`salary-display-${careerId}-${i}`} class={`w-full space-y-2 text-left transition-all duration-300 absolute inset-0 ${i === 0 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-                                                <div class="flex justify-between items-center bg-light-bg dark:bg-dark-bg px-4 py-2 rounded-lg">
-                                                    <span class="text-xs font-bold text-light-muted dark:text-dark-muted uppercase">Junior</span>
-                                                    <span class="font-bold text-light-text dark:text-dark-text">{s.junior}</span>
-                                                </div>
-                                                <div class="flex justify-between items-center bg-light-bg dark:bg-dark-bg px-4 py-2 rounded-lg">
-                                                    <span class="text-xs font-bold text-light-muted dark:text-dark-muted uppercase">Mid</span>
-                                                    <span class="font-bold text-light-text dark:text-dark-text">{s.mid}</span>
-                                                </div>
-                                                <div class="flex justify-between items-center bg-light-bg dark:bg-dark-bg px-4 py-2 rounded-lg">
-                                                    <span class="text-xs font-bold text-light-muted dark:text-dark-muted uppercase">Senior</span>
-                                                    <span class="font-bold text-light-text dark:text-dark-text">{s.senior}</span>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            ) : (
-                                <span class="text-lg font-bold text-light-text dark:text-dark-text mt-4">Varied</span>
-                            )}
-                        </div>
-                        
-                        <div class="bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2.5rem] p-8 shadow-sm flex flex-col items-center text-center">
-                            <div class="w-12 h-12 mb-4 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 flex items-center justify-center">
-                                <TrendingUp size={24} />
-                            </div>
-                            <h4 class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted mb-2">Market Demand</h4>
-                            <p class="text-light-text dark:text-dark-text font-medium mt-4">{details.marketDemand || 'Constant growth'}</p>
-                        </div>
-
-                        <div class="bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2.5rem] p-8 shadow-sm flex flex-col items-center text-center">
-                            <div class="w-12 h-12 mb-4 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center">
-                                <Users size={24} />
-                            </div>
-                            <h4 class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted mb-2">Workforce Scale</h4>
-                            <p class="text-light-text dark:text-dark-text font-medium mt-4">{details.peopleCount || 'Millions worldwide'}</p>
-                        </div>
-                    </div>
-
-                    {/* Expectations Hierarchy */}
-                    {details.expectations && (
-                        <div class="bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-[2.5rem] p-10 shadow-sm relative overflow-hidden">
-                            <div class="absolute top-0 right-0 p-10 opacity-5">
-                                <Briefcase size={200} />
-                            </div>
-                            <div class="flex items-center gap-4 mb-8 relative z-10">
-                                <div class="w-12 h-12 rounded-2xl bg-secondary/10 text-secondary flex items-center justify-center">
-                                    <Briefcase size={24} />
-                                </div>
-                                <h3 class="text-2xl font-black text-light-text dark:text-dark-text tracking-tight">Career Evolution</h3>
-                            </div>
-                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
-                                <div class="bg-light-bg/80 dark:bg-dark-bg/80 p-6 rounded-2xl border-l-4 border-light-border dark:border-dark-border backdrop-blur-sm">
-                                    <h4 class="text-sm font-black uppercase tracking-widest text-light-text dark:text-dark-text mb-3">Junior Level</h4>
-                                    <p class="text-sm text-light-muted dark:text-dark-muted">{details.expectations.junior}</p>
-                                </div>
-                                <div class="bg-light-bg/80 dark:bg-dark-bg/80 p-6 rounded-2xl border-l-4 border-primary/50 backdrop-blur-sm">
-                                    <h4 class="text-sm font-black uppercase tracking-widest text-primary mb-3">Mid Level</h4>
-                                    <p class="text-sm text-light-muted dark:text-dark-muted">{details.expectations.mid}</p>
-                                </div>
-                                <div class="bg-light-bg/80 dark:bg-dark-bg/80 p-6 rounded-2xl border-l-4 border-secondary backdrop-blur-sm">
-                                    <h4 class="text-sm font-black uppercase tracking-widest text-secondary mb-3">Senior Level</h4>
-                                    <p class="text-sm text-light-muted dark:text-dark-muted">{details.expectations.senior}</p>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Ecosystem */}
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        {details.topCompanies && details.topCompanies.length > 0 && (
-                            <div class="bg-light-surface/50 dark:bg-dark-surface/50 border border-light-border dark:border-dark-border rounded-3xl p-8">
-                                <div class="flex items-center gap-3 mb-6">
-                                    <Building2 size={20} className="text-primary" />
-                                    <h3 class="text-lg font-black uppercase tracking-widest text-light-text dark:text-dark-text">Top Employers</h3>
-                                </div>
-                                <div class="flex flex-wrap gap-2">
-                                    {details.topCompanies.map((company: string) => (
-                                        <span class="px-3 py-1.5 bg-white dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-lg text-xs font-bold text-light-muted dark:text-dark-muted hover:border-primary/50 transition-colors cursor-default">
-                                            {company}
-                                        </span>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {details.prominentFigures && details.prominentFigures.length > 0 && (
-                            <div class="bg-light-surface/50 dark:bg-dark-surface/50 border border-light-border dark:border-dark-border rounded-3xl p-8">
-                                <div class="flex items-center gap-3 mb-6">
-                                    <Users size={20} className="text-secondary" />
-                                    <h3 class="text-lg font-black uppercase tracking-widest text-light-text dark:text-dark-text">Prominent Figures</h3>
-                                </div>
-                                <div class="flex flex-wrap gap-2">
-                                    {details.prominentFigures.map((figure: string) => (
-                                        <span class="px-3 py-1.5 bg-white dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-lg text-xs font-bold text-light-muted dark:text-dark-muted hover:border-secondary/50 transition-colors cursor-default">
-                                            {figure}
-                                        </span>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-
-            {/* Courses Roadmap Section */}
-            <div class="mt-32">
-                <div class="text-center mb-24">
-                    <span class="px-4 py-1.5 rounded-full bg-light-surface text-primary dark:bg-dark-surface text-[10px] font-black uppercase tracking-[0.2em] mb-4 inline-block">The Roadmap</span>
-                    <h2 class="text-4xl md:text-5xl font-black text-light-text dark:text-dark-text uppercase tracking-tight">Your Learning Path</h2>
-                    <p class="text-light-muted dark:text-dark-muted mt-4 max-w-xl mx-auto italic font-medium">Follow this carefully curated sequence combining internal coursework and essential external literature to achieve mastery.</p>
-                </div>
-
-                <div class="space-y-24 relative before:absolute before:top-0 before:bottom-0 before:left-[35px] before:w-px md:before:left-1/2 md:before:-translate-x-1/2 md:before:bg-gradient-to-b before:from-light-border dark:before:from-dark-border before:via-light-border/50 dark:before:via-dark-border/50 before:to-transparent">
-                    {career.data.steps.map((step, stepIdx) => (
-                        <section class="relative z-10">
-                            {/* Roadmap Node */}
-                            <div class="flex items-center justify-start md:justify-center mb-12">
-                                <div class="bg-white dark:bg-dark-bg border-[4px] border-primary text-primary font-black w-[70px] h-[70px] rounded-full flex items-center justify-center text-xl shadow-[0_0_20px_rgba(0,0,0,0.1)] dark:shadow-[0_0_20px_rgba(255,255,255,0.05)] z-10 shrink-0">
-                                    {stepIdx + 1}
-                                </div>
-                            </div>
-                            
-                            <div class="text-left md:text-center mb-12 max-w-2xl mx-auto pl-24 md:pl-0">
-                                <span class="text-[10px] font-black uppercase tracking-[0.3em] text-primary mb-2 block">Phase {stepIdx + 1}</span>
-                                <h3 class="text-4xl font-black tracking-tight text-light-text dark:text-dark-text uppercase">{step.title}</h3>
-                            </div>
-
-                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 pl-24 md:pl-0">
-                                {step.courses.map((course) => {
-                                    const isInternal = course.type === 'internal';
-                                    
-                                    return (
-                                        <div 
-                                            class={`group relative p-8 rounded-[2.5rem] border transition-all duration-500 flex flex-col h-full ${
-                                                isInternal 
-                                                ? 'bg-white dark:bg-dark-surface border-light-border dark:border-dark-border hover:-translate-y-2 hover:shadow-2xl'
-                                                : 'bg-light-surface/50 dark:bg-dark-bg/50 border-dashed border-light-border/50 dark:border-dark-border/50 hover:bg-light-surface dark:hover:bg-dark-surface hover:-translate-y-1'
-                                            }`}
-                                        >
-                                            <div class="flex justify-between items-start mb-8 flex-wrap gap-4">
-                                                <div class={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${
-                                                    isInternal 
-                                                    ? 'bg-light-surface text-primary dark:bg-dark-bg'
-                                                    : 'bg-light-surface text-secondary dark:bg-dark-bg'
-                                                }`}>
-                                                    {isInternal ? 'Internal Course' : 'External Rec'}
-                                                </div>
-                                                {isInternal ? (
-                                                    <div class="course-progress-tag flex items-center gap-2" data-course-id={course.id}>
-                                                        <span class="text-[10px] font-black uppercase text-light-muted dark:text-dark-muted hidden sm:block">Status</span>
-                                                        <span class="status-badge px-3 py-1 rounded-full bg-light-border text-white dark:bg-dark-border dark:text-dark-text text-[9px] font-black uppercase">Not Started</span>
-                                                    </div>
-                                                ) : (
-                                                    <label class="flex items-center gap-3 cursor-pointer group/check">
-                                                        <span class="text-[10px] font-black uppercase text-light-muted dark:text-dark-muted group-hover/check:text-secondary transition-colors hidden sm:block">Mark Done</span>
-                                                        <input 
-                                                            type="checkbox" 
-                                                            class="external-checkbox w-5 h-5 rounded-lg border-2 border-secondary/20 bg-transparent checked:bg-secondary checked:border-secondary transition-all appearance-none cursor-pointer"
-                                                            data-external-title={course.title}
-                                                        />
-                                                    </label>
-                                                )}
-                                            </div>
-
-                                            <h4 class="text-2xl font-black mb-4 tracking-tight text-light-text dark:text-dark-text leading-tight">{course.title}</h4>
-                                            
-                                            {course.description && (
-                                                <p class="text-light-muted dark:text-dark-muted font-medium text-sm mb-8 italic flex-grow">
-                                                    {course.description}
-                                                </p>
-                                            )}
-
-                                            <div class="mt-auto">
-                                                {isInternal ? (
-                                                    <div class="flex items-center justify-between pt-6 border-t border-light-border dark:border-dark-border">
-                                                        <span class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">
-                                                            {lessonCounts[course.id as string] || 0} Lessons
-                                                        </span>
-                                                        <a 
-                                                            href={`${import.meta.env.BASE_URL}courses/${course.id}.html`}
-                                                            class="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-primary hover:gap-4 transition-all"
-                                                        >
-                                                            Start Track
-                                                            <ArrowRight size={16} />
-                                                        </a>
-                                                    </div>
-                                                ) : course.link && (
-                                                    <div class="flex items-center justify-between pt-6 border-t border-light-border dark:border-dark-border">
-                                                        <span class="text-[10px] font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Read / Watch</span>
-                                                        <a 
-                                                            href={course.link}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            class="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-secondary hover:gap-4 transition-all"
-                                                        >
-                                                            Resource Link
-                                                            <ArrowRight size={16} />
-                                                        </a>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </section>
-                    ))}
-                </div>
-            </div>
-        </main>
-    </div>
+    <section id="synthesis" class="scroll-mt-24 border-t border-light-border py-10 dark:border-dark-border" aria-labelledby="synthesis-heading">
+      <p class="text-xs font-bold uppercase tracking-widest text-primary">Cross-course synthesis</p>
+      <h2 id="synthesis-heading" class="mt-2 text-2xl font-bold">{career.data.synthesis.title}</h2>
+      <p class="mt-4 leading-relaxed">{career.data.synthesis.brief}</p>
+      <h3 class="mt-6 text-lg font-bold">Required evidence</h3>
+      <ul class="mt-3 list-disc space-y-2 pl-5 leading-relaxed">{career.data.synthesis.deliverables.map(item => <li>{item}</li>)}</ul>
+      <h3 class="mt-6 text-lg font-bold">Review criteria</h3>
+      <ul class="mt-3 list-disc space-y-2 pl-5 leading-relaxed">{career.data.synthesis.criteria.map(item => <li>{item}</li>)}</ul>
+      <p class="mt-6 text-sm leading-relaxed text-light-muted dark:text-dark-muted">{career.data.synthesis.boundary}</p>
+    </section>
+    <LearningPathEvidence client:load pathId={career.id} gates={gates} />
+  </main>
 </Layout>
-
-<script is:inline define:vars={{ careerId, internalCourseIds, lessonCounts, courseSlugs, baseUrl: import.meta.env.BASE_URL }}>
-    // Salary Region Switcher
-    const salarySelect = document.getElementById(`salary-region-${careerId}`);
-    if (salarySelect) {
-        const updateSalaryDisplay = (index) => {
-            document.querySelectorAll(`[id^="salary-display-${careerId}-"]`).forEach((el, i) => {
-                if (i.toString() === index.toString()) {
-                    el.classList.remove('opacity-0', 'z-0', 'pointer-events-none');
-                    el.classList.add('opacity-100', 'z-10');
-                } else {
-                    el.classList.add('opacity-0', 'z-0', 'pointer-events-none');
-                    el.classList.remove('opacity-100', 'z-10');
-                }
-            });
-        };
-
-        const savedRegion = localStorage.getItem('preferred-salary-region');
-        if (savedRegion !== null && salarySelect.querySelector(`option[value="${savedRegion}"]`)) {
-            salarySelect.value = savedRegion;
-            updateSalaryDisplay(savedRegion);
-        }
-
-        salarySelect.addEventListener('change', (e) => {
-            const index = e.target.value;
-            localStorage.setItem('preferred-salary-region', index);
-            updateSalaryDisplay(index);
-        });
-    }
-
-    // Progress Tracking Logic
-    function updateProgress() {
-        let totalItems = 0;
-        let completedItems = 0;
-
-        // Internal Courses
-        internalCourseIds.forEach(id => {
-            const total = lessonCounts[id] || 0;
-            
-            if (total > 0) {
-                totalItems += total;
-            } else {
-                totalItems += 1;
-            }
-            
-            let completedCount = 0;
-            const slugs = courseSlugs[id] || [];
-            slugs.forEach(slug => {
-                if (localStorage.getItem(`completed-${slug}`) === 'true') {
-                    completedCount++;
-                }
-            });
-            
-            if (total > 0) {
-                completedItems += completedCount;
-            } else if (completedCount > 0) {
-                completedItems += 1;
-            }
-            
-            const badge = document.querySelector(`.course-progress-tag[data-course-id="${id}"] .status-badge`);
-            if (badge) {
-                if (total > 0 && completedCount >= total) {
-                    badge.innerText = 'Completed';
-                    badge.classList.remove('bg-light-border', 'dark:bg-dark-border', 'bg-primary/20', 'text-primary');
-                    badge.classList.add('bg-primary', 'text-white');
-                } else if (completedCount > 0) {
-                    badge.innerText = 'In Progress';
-                    badge.classList.remove('bg-light-border', 'dark:bg-dark-border', 'bg-primary', 'text-white');
-                    badge.classList.add('bg-primary/20', 'text-primary');
-                }
-            }
-        });
-
-        // External Recommendations
-        const checkboxes = document.querySelectorAll('.external-checkbox');
-        const externalWeight = 15; 
-        
-        checkboxes.forEach(cb => {
-            totalItems += externalWeight;
-            const title = cb.getAttribute('data-external-title');
-            const isCompleted = localStorage.getItem(`career-${careerId}-ext-${title}`) === 'true';
-            cb.checked = isCompleted === true;
-            if (isCompleted === true) completedItems += externalWeight;
-            
-            cb.onclick = (e) => {
-                localStorage.setItem(`career-${careerId}-ext-${title}`, e.target.checked);
-                updateProgress();
-            };
-        });
-
-        // Calculate Overall
-        const percent = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
-        
-        const progressBar = document.getElementById('general-progress-bar');
-        const progressText = document.getElementById('general-progress-text');
-        
-        if (progressBar) progressBar.style.width = `${percent}%`;
-        if (progressText) progressText.innerText = `${percent}%`;
-        
-        // Save overall career progress for the index page
-        localStorage.setItem(`career-progress-${careerId}`, percent);
-    }
-
-    // Initialize
-    updateProgress();
-    
-    // Listen for storage changes from other tabs
-    window.addEventListener('storage', updateProgress);
-</script>
-
-<style>
-    @keyframes float {
-        0%, 100% { transform: translateY(0); }
-        50% { transform: translateY(-10px); }
-    }
-    .animate-float {
-        animation: float 6s ease-in-out infinite;
-    }
-</style>

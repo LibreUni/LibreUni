@@ -1,0 +1,108 @@
+---
+title: "Objects, Encapsulation, and Composition"
+course: software-engineering
+description: "Use object-oriented concepts as tools for managing state and change, with explicit contracts and alternatives to inheritance."
+prerequisites:
+  - "Programming with functions, data structures, and tests"
+outcomes:
+  - "Separate identity, state, behavior, and invariant in an object model"
+  - "Use encapsulation to protect an invariant rather than to hide arbitrary fields"
+  - "Choose composition or inheritance from substitutability and change pressure"
+omissions:
+  - "Language-specific metaprogramming and framework object models are deferred."
+estimatedMinutes: 60
+assessment: "Model a small domain and defend one composition/inheritance decision with a counterexample."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Objects, Encapsulation, and Composition
+
+Object-oriented design is a way to organize state, behavior, and variation. An object is not valuable because it has getters and setters; it is valuable when a boundary protects an invariant or gives a change a controlled home.
+
+<Quiz client:load
+  title="Find the invariant"
+  question="What is the strongest reason to keep a bank-account balance private?"
+  options={["Private fields are always faster", "The account can enforce deposit, withdrawal, and overdraft rules at every state change", "Private fields remove the need for tests", "Encapsulation means no other object can ever use the account"]}
+  correctIndex={1}
+  explanation="Encapsulation centralizes a state transition contract. It does not eliminate collaboration or testing, and it is not justified by a blanket rule that every field must be private."
+/>
+
+## Identity, state, behavior
+
+An object model should answer: what has identity, what state may change, which operations are legal, and which invariant must always hold? A `Reservation` may have an identity independent of its current status; a value object such as `Money` may be defined entirely by value and currency. Confusing the two creates equality and lifecycle bugs.
+
+```python
+class Reservation:
+    def __init__(self, reservation_id, start, end):
+        if end <= start:
+            raise ValueError("end must be after start")
+        self._id = reservation_id
+        self._start = start
+        self._end = end
+        self._status = "active"
+
+    def cancel(self):
+        if self._status != "active":
+            raise ValueError("only active reservations can be cancelled")
+        self._status = "cancelled"
+```
+
+The constructor and transition enforce only local invariants. Conflict with another reservation belongs to a coordinator or repository that can observe the relevant set atomically.
+
+<CaseStudy client:load
+  title="Place the invariant"
+  scenario="A `Reservation` object validates that its end is after its start. Whether a room is already booked depends on all reservations for that room and a transaction boundary."
+  question="Where should the overlap rule primarily live?"
+  options={["Only in a UI form", "In a coordinator/repository boundary that can check competing reservations atomically, with domain-level examples", "Only in a string setter", "Nowhere; the database will infer intent"]}
+  correctIndex={1}
+  explanation="A local object can enforce its own interval invariant, but cross-object conflicts need a boundary that sees the relevant set and defines concurrency behavior."
+/>
+
+## Encapsulation and collaboration
+
+Expose operations that express intent, such as `cancel()` or `reserve()`, rather than making every caller manipulate status strings. Keep read-only views narrow and document whether returned collections are snapshots or live aliases. Encapsulation is broken when a “private” collection is returned for external mutation or when a public method allows an invalid transition indirectly.
+
+## Inheritance and composition
+
+Inheritance is appropriate when a subtype satisfies the base type's behavioral contract everywhere clients rely on it. Shared implementation is not enough. Composition is often safer when a component can be replaced, configured, or combined independently. A `Report` can compose a `Formatter`; it need not inherit from a formatter merely to reuse a method.
+
+<CodeRunner client:load
+  title="Compose a policy"
+  language="python"
+  code={`class FixedFee:
+    def price(self, subtotal):
+        return subtotal + 5
+
+class Checkout:
+    def __init__(self, pricing_policy):
+        self.pricing_policy = pricing_policy
+
+    def total(self, subtotal):
+        return self.pricing_policy.price(subtotal)
+
+print(Checkout(FixedFee()).total(20))`}
+  output="25"
+/>
+
+## Transfer exercises
+
+1. State a local invariant and a cross-object invariant for a shopping cart.
+2. Give a subtype that violates a base contract even though it shares method names.
+3. Identify an aliasing hazard in a method that returns a mutable internal list.
+4. Choose composition or inheritance for pluggable tax rules and defend it.
+
+### Diagnostic solutions
+
+1. Local: quantity is positive and item identity is valid. Cross-object: total equals the sum of line prices under one currency/rounding policy.
+2. A `ReadOnlyFile` subtype of a writable `File` that throws on `write` violates clients that rely on the writable contract.
+3. A caller can mutate the list and bypass validation; return an immutable view or copy when ownership is not transferred.
+4. Composition: tax policies vary independently and can be injected/tested without claiming that every policy is a subtype with identical behavior.
+
+## References & Further Reading
+
+* [MIT 6.005: specifications and abstraction functions](https://web.mit.edu/6.005/www/fa15/classes/06-specifications/)
+* Gamma et al., *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley, 1994.
+* [Liskov and Wing, A Behavioral Notion of Subtyping](https://doi.org/10.1145/197320.197383)

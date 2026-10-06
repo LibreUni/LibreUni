@@ -1,0 +1,94 @@
+---
+title: "Adapter and Bridge: Two Kinds of Decoupling"
+course: software-engineering
+description: "Distinguish repairing an existing interface mismatch from separating two dimensions of variation at design time."
+prerequisites:
+  - "Interfaces, composition, and dependency inversion"
+outcomes:
+  - "Choose an Adapter for a concrete compatibility mismatch"
+  - "Choose a Bridge when two variation dimensions must evolve independently"
+  - "Keep translation, ownership, and failure semantics explicit"
+omissions:
+  - "Foreign-function interfaces and binary ABI adapters are deferred to systems work."
+estimatedMinutes: 50
+assessment: "Classify a proposed wrapper by intent and identify the contract it must preserve."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Adapter and Bridge: Two Kinds of Decoupling
+
+An Adapter makes an existing component look like the interface a client already expects. A Bridge is an architectural split chosen so an abstraction and its implementation can vary independently. Both use composition often; their forces and timing differ.
+
+<Quiz client:load
+  title="Choose by intent"
+  question="Which situation calls for an Adapter?"
+  options={["A legacy weather API returns Fahrenheit but the application port promises Celsius", "A new UI abstraction must vary independently from three rendering backends", "A process needs one configuration instance", "A collection needs a cursor"]}
+  correctIndex={0}
+  explanation="The existing API is usable but incompatible, so an adapter translates it. The independently varying UI/backend dimensions describe a bridge."
+/>
+
+## Adapter translation
+
+An adapter must preserve or deliberately map semantics, not only rename methods. It needs a policy for units, missing values, timeouts, retries, ownership, and errors:
+
+```python
+class WeatherPort:
+    def temperature_celsius(self, city):
+        raise NotImplementedError
+
+class FahrenheitAdapter(WeatherPort):
+    def __init__(self, legacy): self.legacy = legacy
+    def temperature_celsius(self, city):
+        fahrenheit = self.legacy.read_temp_f(city)
+        return (fahrenheit - 32) * 5 / 9
+```
+
+<CaseStudy client:load
+  title="Translate the failure contract"
+  scenario="A legacy client returns `-999` for a missing sensor and raises a generic exception on timeout. The new port promises an optional reading and a retryable timeout category."
+  question="What belongs in the adapter?"
+  options={["Only the method name", "Mapping sentinel/error semantics into the new port's documented result categories", "A global catch that returns zero", "A UI label explaining the legacy API"]}
+  correctIndex={1}
+  explanation="Compatibility includes meaning. Returning zero for a missing reading would invent data; mapping timeout separately lets callers apply the correct retry policy."
+/>
+
+## Bridge dimensions
+
+Suppose a notification abstraction (`Reminder`, `Alert`) can use email, SMS, or push implementations. Inheriting every product/transport combination creates a Cartesian product. A bridge keeps the abstraction and implementation hierarchies separate, but the implementation port must still state guarantees common to every transport.
+
+<CodeRunner client:load
+  title="Compose the two dimensions"
+  language="python"
+  code={`class ConsoleTransport:
+    def send(self, message): print("console:", message)
+
+class Alert:
+    def __init__(self, transport): self.transport = transport
+    def deliver(self, message): self.transport.send("ALERT " + message)
+
+Alert(ConsoleTransport()).deliver("disk full")`}
+  output="console: ALERT disk full"
+/>
+
+## Transfer exercises
+
+1. List two semantic conversions an adapter may need beyond method names.
+2. Explain why a bridge reduces class multiplication but adds an interface contract.
+3. Give a case where an adapter should reject rather than silently translate.
+4. Identify the ownership rule for an adapter that wraps a legacy client.
+
+### Diagnostic solutions
+
+1. Units/time zones, error categories, nullability, retry/idempotency, and ownership are common examples.
+2. It separates variation axes but every implementation must satisfy the abstraction's behavior; otherwise clients cannot substitute transports.
+3. An unsupported currency, lossy precision conversion, or security guarantee the legacy API cannot provide should be rejected or surfaced explicitly.
+4. Document whether the adapter borrows or owns the wrapped client and when it closes it; never double-close an externally owned resource.
+
+## References & Further Reading
+
+* Gamma et al., *Design Patterns*. Addison-Wesley, 1994.
+* [MIT 6.005: modularity](https://web.mit.edu/6.005/www/fa15/classes/06-specifications/)
+* [Martin Fowler: Refactoring](https://martinfowler.com/books/refactoring.html)

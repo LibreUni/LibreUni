@@ -2,8 +2,30 @@
 title: "Sequential State"
 course: "computer-architecture"
 description: "Clocks, latches, flip-flops, registers, and finite-state machines."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Model registers and finite-state controllers as transition systems with explicit reset, timing, and illegal-state behavior."
+  - "Derive next-state logic for counters, handshakes, timers, and clock-domain crossings."
+  - "Test boundary-cycle behavior and defend a state invariant against missed events or off-by-one errors."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 540
+assessment: "Given a state machine and timing convention, produce its transition trace, prove the safety invariant, and repair one reset or timeout counterexample."
 ---
 # Sequential State
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+
+<Quiz client:load title="State the transition"
+  question="What is required to specify a synchronous state machine?"
+  options={["Only a list of outputs observed after selected input sequences", "A state space, next-state rule, output rule, and clock/reset assumptions", "A random seed used to choose one transition at each edge", "A cache-line size that fixes how many states can be stored"]}
+  correctIndex={1}
+  explanation="A transition system needs state and rules for how inputs change it. Clock and reset assumptions determine when the mathematical transition is applied."
+/>
 
 Combinational logic answers a question about the present inputs. A processor, however, must remember a program counter, register contents, outstanding requests, protocol phase, and architectural mode. That memory is *state*. Sequential logic is the disciplined combination of storage elements and combinational next-state logic. Its correctness depends on both a functional relation—what state should follow what inputs—and a temporal relation—when a new state is allowed to become visible.
 
@@ -23,6 +45,32 @@ The state set is an abstraction. A two-bit register physically has four encoding
 
 **Worked example: a request controller.** Let states be `IDLE`, `BUSY`, and `ERROR`. In `IDLE`, a request starts work and transitions to `BUSY`; no request keeps the machine in `IDLE`. In `BUSY`, completion transitions to `IDLE`, while a detected fault transitions to `ERROR`. In `ERROR`, reset returns to `IDLE` and all normal inputs are ignored. The safety invariant is that a request is accepted only in `IDLE`; the liveness assumption is that a `BUSY` operation eventually either completes or reports a fault. The hardware design is incomplete until the priority between simultaneous completion and fault is specified.
 
+The diagram completes that contract: reset has highest priority in every state, fault wins over completion in `BUSY`, and a request during `BUSY` is not queued. All ordinary transitions sample inputs on the active edge; the global reset rule is omitted from the arrows for legibility.
+
+<PlantUML code={`@startuml
+[*] --> IDLE : reset
+IDLE --> BUSY : request / accept pulse
+IDLE --> IDLE : no request
+BUSY --> ERROR : fault
+BUSY --> IDLE : completion AND NOT fault
+BUSY --> BUSY : neither completion nor fault
+ERROR --> ERROR : no reset
+ERROR --> IDLE : reset
+note right of BUSY
+No new acceptance while busy.
+Reset overrides all inputs.
+end note
+@enduml`} />
+
+**Trace challenge.** Starting in `IDLE`, sample `(request, completion, fault)` as `(1,0,0)`, `(1,1,1)`, then `(1,1,0)`, with reset absent. Predict the post-edge states and count accepted requests.
+
+<details>
+<summary>Check the state trace</summary>
+
+The states are `BUSY`, `ERROR`, `ERROR`. Exactly one request is accepted, at the first edge. Fault outranks completion at the second edge; the third request cannot escape `ERROR` without reset. Accepting another request while busy would violate the specified no-queue contract.
+
+</details>
+
 ## Latches, flip-flops, and registers
 
 A level-sensitive latch is transparent during an enable phase and holds its previous value otherwise. If enable is high, $Q$ follows $D$ after propagation delay; if enable is low, $Q$ is stable. A pair of latches driven by complementary phases can form an edge-triggered element. A flip-flop is commonly abstracted as sampling $D$ at a clock edge and retaining that sample until the next active edge:
@@ -36,6 +84,15 @@ where $t^+$ denotes the state just after the edge. A register is a bank of such 
 The abstraction has limits. A physical flip-flop needs its input stable for a setup interval before the edge and a hold interval after it. If the input changes too close to the edge, the internal feedback may take an unusually long time to resolve to 0 or 1: metastability. The output is not a third logical value in the final system, but it can violate downstream timing while resolving. No finite synchronizer can make metastability impossible; it reduces the probability that unresolved behavior reaches logic by giving the first stage time to settle.
 
 Two flip-flops in series are a common clock-domain crossing synchronizer for a single slowly changing control bit. The first may become metastable; the second samples it one cycle later. This is not safe for a multi-bit bus whose bits can settle on different cycles, nor does it preserve every pulse if the source toggles faster than the destination can observe. Multi-bit data requires a protocol such as a handshake, asynchronous FIFO, gray-coded pointer scheme, or a formally justified sampling method.
+
+<CaseStudy client:load
+  title="A correct truth table can still miss timing"
+  scenario="A register's input changes 50 ps before the clock edge, but its setup requirement is 90 ps. Simulation using only Boolean values reports the expected next state."
+  question="Which conclusion is justified?"
+  options={["Functional logic is insufficient; the setup violation can make capture unreliable", "The register must capture correctly because its combinational truth table is correct", "Only hold time matters before an active edge, so no violation occurred", "The clock period can be ignored whenever the next-state equation is deterministic"]}
+  correctIndex={0}
+  explanation="Sequential correctness includes timing constraints. Violating setup time can produce an incorrect or metastable capture even when the Boolean next-state function is correct."
+/>
 
 ## Timing constraints
 
@@ -69,7 +126,7 @@ State minimization is a behavioral question. If two states produce different out
 
 A counter is a register plus an increment, decrement, hold, or load function. For a $w$-bit modulo counter, $q_{t+1}=(q_t+1)\bmod2^w$. A timer that must represent a duration of $N$ cycles needs a clear convention: does zero mean “expired now,” does it count the current edge, and can reload occur on the expiration edge? Off-by-one errors are semantic errors in $\delta$, not merely coding mistakes.
 
-**Worked example: a three-cycle timeout.** If a request is accepted at edge $t_0$ and the specification says failure should be raised if completion has not arrived by the third subsequent edge, then the relevant checks occur at $t_1,t_2,t_3$. A counter loaded with 3 and decremented before checking reaches zero at $t_3$; a counter loaded with 2 and checked after decrement can express the same policy. Both are correct if the invariant and edge convention match. Testing only a long timeout misses the boundary; test 0, 1, 2, 3, and 4 cycles.
+**Worked example: a three-cycle timeout.** If a request is accepted at edge $t_0$ and the specification says failure should be raised if completion has not arrived by the third subsequent edge, then the relevant checks occur at $t_1,t_2,t_3$. Load 3 at $t_0$ and, at each later edge without completion, decrement then test the new value: it becomes 2, 1, 0 and expires at $t_3$. An equivalent convention loads 2 and tests the old value for zero before decrementing: old values at $t_1,t_2,t_3$ are 2, 1, 0. Loading 2 and testing after decrement instead expires at $t_2$, one edge too early. State whether completion wins over timeout at $t_3$, and test durations 0, 1, 2, 3, and 4 explicitly; duration zero needs its own acceptance-edge rule.
 
 Derived state should be minimized when it can be recomputed without ambiguity. Storing both a count and an `empty` flag creates a consistency invariant; if one updates and the other does not, the controller can accept or discard data incorrectly. Redundant state is justified when it improves timing or power, but then the equality and update invariants must be asserted.
 
@@ -107,7 +164,7 @@ Simulation explores traces; formal verification can quantify over all input comb
 3. Bits do not cross at the same instant. A source changing from `0111` to `1000` can be sampled as `1111`, a mixed value never held by the source. Use a gray-coded counter for pointer transfer when its one-bit transition property is proven, or transfer data with a request/acknowledge handshake or asynchronous FIFO.
 4. The buffer is empty when `valid=0`. Enqueue without dequeue stores data and sets valid; dequeue without enqueue clears valid; neither preserves state; both can replace data and preserve valid if the protocol permits throughput one per cycle. Fall-through requires an additional combinational path from input to output when empty and a different timing contract; a registered buffer does not fall through.
 5. In an empty state, only an accepted enqueue makes valid true. In a full state, only an accepted dequeue without enqueue makes it false. Neither handshake preserves it. Simultaneous handshake replaces the stored item and preserves occupancy. The proof must include the fact that the producer holds input data stable while `valid && !ready`.
-6. One-hot uses 12 state bits and often simple local decode, but has ten illegal encodings and more storage. Binary uses four bits and a decoder may create deeper logic; every encoding is potentially used, though some transitions may still be illegal. Physical fanout, power, synthesis technology, and fault model determine the choice.
+6. One-hot uses 12 state bits and often simple local decode. Of its $2^{12}=4096$ bit patterns, exactly 12 have one asserted bit, leaving 4084 illegal encodings, including all-zero and multi-hot values. Binary uses four bits: 12 encodings represent states and four of the 16 encodings remain unused. Binary decode may create deeper logic. Physical fanout, power, synthesis technology, and fault model determine the choice; both schemes need defined illegal-state behavior.
 7. Reset release should be synchronized independently in each clock domain. A single-bit interrupt request needs synchronization or an asynchronous capture circuit; a multi-bit event needs a handshake or FIFO. The producer and consumer need a defined reset interaction so neither treats stale valid/data as a new transfer.
 
 </details>

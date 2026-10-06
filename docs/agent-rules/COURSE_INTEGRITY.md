@@ -10,6 +10,7 @@
 - generic diagrams whose labels do not express domain concepts;
 - repeated diagram topology within a course;
 - quiz-only or case-study-only coverage, repeated question/scenario templates, weak vocabulary overlap between an artifact and its learning unit, missing paragraph-boundary coverage, and stateful components without meaningful controls or state changes.
+- answer-length leakage where the correct choice is conspicuously longer than every distractor, and generic assessment titles inherited from legacy templates.
 
 The audit reports findings rather than assigning a quality score. A finding is a review trigger; a clean report is not proof that the teaching is good. Findings marked `error` (filler, duplicate prose, or repeated diagram topology) make `--strict` fail. Findings marked `review` (generic artifacts or uncovered headings) require human/agent review and are reported without pretending that a threshold proves quality.
 

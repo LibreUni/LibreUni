@@ -1,0 +1,86 @@
+---
+title: "Integration Testing at Real Boundaries"
+course: software-engineering
+description: "Test contracts between components, persistence, and external systems with controlled environments and failure evidence."
+prerequisites:
+  - "Unit testing, interfaces, and architecture boundaries"
+outcomes:
+  - "Choose an integration boundary that a unit test cannot establish"
+  - "Build fixtures that exercise schema, transaction, protocol, and failure contracts"
+  - "Interpret the trade-off between environment fidelity, speed, and diagnosis"
+omissions:
+  - "Vendor-specific test-container administration and full production chaos programs are deferred."
+estimatedMinutes: 55
+assessment: "Design an integration test for a persistence or provider boundary and name its blind spots."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Integration Testing at Real Boundaries
+
+Integration tests establish behavior that depends on a boundary: a database's transaction/isolation semantics, a serialization format, an HTTP provider contract, a filesystem, or a queue. They are not automatically better than unit tests; they answer a different question and should be placed where the real risk lives.
+
+<Quiz client:load
+  title="Choose the boundary"
+  question="Which defect requires an integration test against a real or faithful database boundary?"
+  options={["A pure discount formula", "A query that passes unit mocks but violates a unique constraint under the database's transaction behavior", "A variable name typo", "A private helper's branch count"]}
+  correctIndex={1}
+  explanation="Mocks cannot establish SQL constraints, isolation, locking, planner behavior, or migration compatibility. A database integration test can expose those boundary semantics."
+/>
+
+## Fidelity and scope
+
+A test doubles the parts outside its boundary; the closer the environment is to production, the more realistic the evidence, but setup and diagnosis cost more. A fake database may be useful for a fast policy test and misleading for transaction semantics. A local container can test schema and protocol while still differing in scale, storage, credentials, or failover.
+
+## Database and provider contracts
+
+An integration test should declare fixture isolation, seed data, transaction scope, cleanup, clock/time zone, and failure injection. For a provider, test status mapping, timeout behavior, retries, idempotency, rate limits, and malformed responses. Do not assert only that “a request was made” when the contract is about the provider effect or data persisted.
+
+<CaseStudy client:load
+  title="A green mock is not enough"
+  scenario="A unit test mocks `save_order()` to return success. The production database rejects two concurrent orders because a uniqueness constraint fires after the application read."
+  question="Which test would expose the missing assumption?"
+  options={["Add an assertion that save_order was called once", "Run two real transactions against the schema and assert one commit/rejection plus the retry/error contract", "Rename the mock", "Increase unit-test count without concurrency"]}
+  correctIndex={1}
+  explanation="The defect is at the database concurrency boundary. A real transaction test can establish the constraint and application response; it still does not prove behavior at every production scale."
+/>
+
+<CodeRunner client:load
+  title="Treat fixtures as evidence"
+  language="python"
+  code={`def fixture_for_retry():
+    return {
+        "request_id": "r-1",
+        "provider_response": "timeout-after-accept",
+        "expected_effects": ["one local event", "at-most-one user-visible delivery"],
+    }
+
+print(fixture_for_retry()["expected_effects"])`}
+  output="['one local event', 'at-most-one user-visible delivery']"
+/>
+
+## Diagnosis and test portfolio
+
+Keep unit tests close to pure policy, integration tests at critical boundaries, and a small number of end-to-end tests for user goals and deployment wiring. A failing integration test should say whether schema, fixture, environment, or application contract failed. Make cleanup reliable; leaked state creates order-dependent evidence.
+
+## Transfer exercises
+
+1. Design an integration test for a migration that adds a non-null column.
+2. Name a limitation of an in-memory fake for a database.
+3. Explain why test data must include duplicate requests at an external boundary.
+4. Choose a test layer for a user-visible authorization guarantee.
+
+### Diagnostic solutions
+
+1. Run old/new application compatibility, migrate representative rows, write/read the new field, test rollback/repair and null/default semantics, then verify constraints.
+2. It may not model transactions, isolation, query parsing, constraints, indexes, or locking accurately.
+3. Retries and timeouts make duplicate requests normal; the effect must be idempotent or explicitly compensated.
+4. Include an API/integration test at the authorization/data boundary and an end-to-end scenario for the user goal; a unit policy test alone cannot prove wiring.
+
+## References & Further Reading
+
+* [MIT 6.005: testing](https://web.mit.edu/6.005/www/fa15/classes/03-testing/)
+* [Martin Fowler: Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
+* [NIST SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final)

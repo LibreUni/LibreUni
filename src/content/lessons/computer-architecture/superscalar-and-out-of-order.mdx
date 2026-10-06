@@ -2,8 +2,30 @@
 title: "Superscalar and Out-of-Order Execution"
 course: "computer-architecture"
 description: "Instruction-level parallelism, renaming, speculation, and retirement."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Explain how issue width, renaming, reservation stations, load/store ordering, speculation, and retirement expose ILP."
+  - "Trace physical-register, reorder-buffer, and exception state through out-of-order completion and in-order commit."
+  - "Evaluate an OoO optimization by IPC, energy, recovery, and precise-state invariants."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 540
+assessment: "Given an instruction window and dependencies, produce issue/retirement state and identify the first event that could violate precise exceptions or register liveness."
 ---
 # Superscalar and Out-of-Order Execution
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+
+<Quiz client:load title="Preserve the illusion"
+  question="What must an out-of-order processor preserve for software?"
+  options={["The order of every internal micro-operation", "The architectural behavior of the specified instruction stream", "The order of cache misses", "The exact pipeline depth"]}
+  correctIndex={1}
+  explanation="Internal execution may reorder independent work, but retirement and dependency control preserve the ISA-visible result and exception behavior."
+/>
 
 An in-order scalar pipeline issues at most one instruction per cycle and waits when the next instruction cannot proceed. Modern high-performance cores attempt to exploit *instruction-level parallelism* (ILP): independent instructions can execute simultaneously, even when they appear sequentially in the program. A superscalar processor has multiple issue slots or functional pipelines; an out-of-order processor allows a ready younger instruction to execute while an older instruction waits for a cache miss or long-latency operation. The implementation must nevertheless preserve the ISA’s ordered architectural observations.
 
@@ -13,7 +35,7 @@ The dependence graph determines the parallelism available in a finite instructio
 
 Superscalar width $W$ is an upper bound on issue per cycle, not a guarantee. If a workload has insufficient independent instructions, one functional unit is busy while others idle. The effective IPC is bounded by dependencies, front-end fetch/decode width, execution-unit availability, cache misses, and retirement bandwidth.
 
-**Worked dependency example.** For `A: r1=r2+r3`, `B: r4=r5+r6`, and `C: r7=r1+r4`, A and B can execute in parallel on two adders. C waits for both. With two-cycle add latency, A and B can issue in cycle 1, become ready in cycle 3, and C can issue in cycle 3. A scalar in-order machine needs at least four issue cycles for the same sequence; a two-wide out-of-order machine may complete it in three issue/execute cycles plus retirement overhead.
+**Worked dependency example.** For `A: r1=r2+r3`, `B: r4=r5+r6`, and `C: r7=r1+r4`, A and B can execute in parallel on two adders. C waits for both. Define two-cycle latency to mean that an instruction issued at the start of cycle $t$ has a usable result at the start of $t+2$. A and B issue at cycle 1, become ready at cycle 3, and C issues at cycle 3 with its result ready at cycle 5. A single-issue machine with a pipelined adder issues A at cycle 1 and B at cycle 2; C waits until cycle 4 and produces its result at cycle 6. Neither schedule includes fetch or retirement latency. Issue width reduces elapsed time here, but does not shorten the true dependence through C.
 
 ## Renaming and physical registers
 
@@ -30,6 +52,15 @@ Renaming does not remove RAW dependencies. If a later instruction reads the arch
 
 Physical registers need reclamation. When a new mapping replaces an old architectural mapping and no in-flight instruction can still read the old physical register, the old register can return to the free list. Reference tracking, retirement maps, or equivalent mechanisms prevent premature reuse. A physical-register leak eventually stalls dispatch even when execution units are idle.
 
+<CaseStudy client:load
+  title="Execute early, retire in order"
+  scenario="A younger independent instruction finishes before an older cache-missing load. A branch older than both is later found mispredicted."
+  question="Which structures preserve precise architectural state?"
+  options={["Rename dependencies, buffer results, squash younger work, and retire in order", "Write every completed result immediately and repair registers after each exception", "Delay all issue until every older memory operation has reached writeback", "Reuse architectural register names as physical destinations for speculative results"]}
+  correctIndex={0}
+  explanation="Register renaming removes false dependencies, while the reorder buffer keeps speculative results from becoming architectural state until in-order retirement. A misprediction can then discard all younger work precisely."
+/>
+
 ## Reservation stations and wakeup
 
 Out-of-order cores hold decoded instructions in issue queues or reservation stations. Each entry stores the operation, source physical-register identifiers, readiness bits or values, destination, and exception/speculation metadata. When a producer completes, a wakeup mechanism marks dependent operands ready. A select mechanism chooses ready instructions for available functional units.
@@ -45,6 +76,35 @@ Execution completes out of order, but retirement commits architectural effects i
 This design provides precise exceptions. If instruction 10 faults, instructions 0–9 may retire, instruction 10 records the fault, and instructions 11 onward are discarded even if they executed internally. Stores often enter a store buffer and become globally visible only at retirement or under a carefully defined memory-ordering protocol. Register results can be kept in physical registers while the committed map changes at retirement.
 
 **Worked exception trace.** Instruction A is an older load that faults; instruction B is a younger add that completes; instruction C is a younger store that completes. The ROB marks B and C done but cannot retire them because A is at the head and faulting. The machine discards B and C, leaves architectural registers and memory as though A had not committed, and enters the handler with A’s fault information. If C had written memory immediately at execute completion, precise exception semantics would be violated.
+
+A ROB entry is allocated in program order at dispatch, before execution completes. Otherwise a younger fast instruction could appear older than a stalled load. The graph separates allocation from completion reporting and from the permission to retire.
+
+<PlantUML code={`@startuml
+rectangle "Dispatch / rename" as D
+rectangle "Issue queue" as Q
+rectangle "Execution units" as E
+rectangle "ROB: program-order entries" as B
+rectangle "Retirement / committed map" as C
+D --> Q : physical operands + ROB id
+D --> B : allocate entry in order
+Q --> E : issue when operands ready
+E --> Q : wake dependents
+E --> B : report done or fault by id
+B --> C : only completed, nonfaulting head
+note bottom of B
+A fault at the head blocks
+all younger retirement.
+end note
+@enduml`} />
+
+**Transfer check.** The ROB contains older load A followed by independent add B. B completes while A waits; A then reports a page fault. Which entries were already allocated, and which result can become architectural?
+
+<details>
+<summary>Check the precise-exception boundary</summary>
+
+Both entries were allocated before their execution. B may hold a computed value, but cannot retire past A. At the fault boundary, A traps and B is discarded; neither instruction writes an architectural result. Older instructions before A may already have retired. Recording B only when it finishes would lose this ordering information.
+
+</details>
 
 ## Load/store ordering and memory disambiguation
 

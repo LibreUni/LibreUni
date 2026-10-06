@@ -1,7 +1,7 @@
 module.exports = {
   urls: [
     'http://127.0.0.1:4321/',
-    'http://127.0.0.1:4321/lessons/python/intro.html',
+    'http://127.0.0.1:4321/lessons/database-systems/relational-model.html',
   ],
   settings: {
     preset: 'desktop',

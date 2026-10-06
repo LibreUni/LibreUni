@@ -1,0 +1,91 @@
+---
+title: "Command and State: Requests and Lifecycles"
+course: software-engineering
+description: "Represent actions as commands and make state transitions explicit, legal, observable, and recoverable."
+prerequisites:
+  - "Object invariants, events, and responsibility assignment"
+outcomes:
+  - "Use Command when an action needs identity, queuing, undo, audit, or retry"
+  - "Model State transitions with guards and explicit invalid operations"
+  - "Separate command intent from the receiver's current lifecycle state"
+omissions:
+  - "Event sourcing and distributed workflow engines are deferred."
+estimatedMinutes: 55
+assessment: "Design a command/state trace including an invalid transition and a retry."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Command and State: Requests and Lifecycles
+
+Command turns an action into a value that can be queued, logged, retried, authorized, or undone. State makes a lifecycle explicit so behavior can vary by current state without scattered conditionals. Together they are useful for workflows, but they do not remove the need for idempotency or transition invariants.
+
+<Quiz client:load
+  title="Choose Command"
+  question="Why represent `CapturePayment` as a command object instead of calling a method directly?"
+  options={["To guarantee the provider never fails", "To give the request identity and a place for authorization, queueing, audit, retry, or undo policy", "To eliminate state", "To make every call synchronous"]}
+  correctIndex={1}
+  explanation="A command is a durable/request-level object. It still needs a receiver contract, idempotency key, and failure semantics at the effect boundary."
+/>
+
+## Commands and receivers
+
+A command should carry intent and validated data, not an arbitrary object graph. An invoker decides when to run it; a receiver owns the domain operation. If a command is persisted, version its schema and define how old commands are interpreted.
+
+## State transitions
+
+Write a transition table before creating state subclasses:
+
+| Current | Event | Next | Rejection |
+| --- | --- | --- | --- |
+| pending | approve | approved | unauthorized |
+| pending | cancel | cancelled | policy violation |
+| approved | ship | shipped | inventory unavailable |
+| cancelled | approve | — | illegal transition |
+
+The table makes illegal transitions testable and reveals whether an event is a command, a domain fact, or both. State objects can localize behavior, but a giant hierarchy can obscure the complete lifecycle.
+
+<CaseStudy client:load
+  title="Retry a command safely"
+  scenario="A worker processes `ShipOrder(order_id, command_id)`, times out after the carrier accepted the request, and retries. The order is already marked shipped locally, but the first response was lost."
+  question="What does the command contract need?"
+  options={["A new random command ID for every retry", "A stable command ID and an idempotent receiver/reconciliation rule", "No persisted command because timeouts mean failure", "A larger worker thread"]}
+  correctIndex={1}
+  explanation="Stable identity lets the receiver return the prior result or safely deduplicate. A timeout is ambiguous; treating it as definite failure can duplicate the shipment."
+/>
+
+<CodeRunner client:load
+  title="Make transitions executable"
+  language="python"
+  code={`def transition(state, event):
+    allowed = {("pending", "approve"): "approved",
+               ("pending", "cancel"): "cancelled"}
+    if (state, event) not in allowed:
+        raise ValueError("illegal transition")
+    return allowed[(state, event)]
+
+print(transition("pending", "approve"))`}
+  output="approved"
+/>
+
+## Transfer exercises
+
+1. Choose fields for an auditable refund command.
+2. Explain why an invalid state transition should be observable rather than silently ignored.
+3. Give an undo policy for a command with an external side effect.
+4. Distinguish an event fact from a command request.
+
+### Diagnostic solutions
+
+1. Command ID, actor/authorization context, target, amount/currency, reason, creation time, expected version, and idempotency policy.
+2. Silent ignore can make clients believe work happened and hides contract violations; return a typed result and audit the rejection where appropriate.
+3. External effects may be non-reversible; use a compensating command and document its limits rather than pretending to restore history.
+4. A command asks the system to act; an event records that something happened. Commands may fail or be retried; events need stable identity and consumer semantics.
+
+## References & Further Reading
+
+* Gamma et al., *Design Patterns*. Addison-Wesley, 1994.
+* [Martin Fowler: Event Sourcing](https://martinfowler.com/eaaDev/EventSourcing.html)
+* [MIT 6.005: specifications](https://web.mit.edu/6.005/www/fa15/classes/06-specifications/)

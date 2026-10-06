@@ -1,0 +1,92 @@
+---
+title: "Stacks, Queues, and Circular Buffers"
+course: c
+description: "Specify LIFO and FIFO interfaces, implement bounded representations, and reason about overflow and wraparound."
+prerequisites:
+  - "Arrays, modular arithmetic, structures, and error contracts"
+outcomes:
+  - "Separate an abstract data type from its representation"
+  - "Implement bounded stack and queue operations with explicit full/empty states"
+  - "Test wraparound and distinguish overflow from an empty result"
+omissions:
+  - "Concurrent queues and lock-free progress guarantees are outside this lesson."
+estimatedMinutes: 55
+assessment: "Give a representation invariant for a circular queue and trace a wraparound sequence."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Stacks, Queues, and Circular Buffers
+
+An abstract data type specifies observable operations and their laws. A stack exposes last-in, first-out behavior; a queue exposes first-in, first-out behavior. An array, linked list, or ring buffer is an implementation choice that must preserve those laws and report capacity failures explicitly.
+
+<Quiz client:load
+  title="Choose the representation state"
+  question="Why does a circular queue need more than head and tail positions when empty and full may coincide?"
+  options={["It does not; the states can never coincide", "It needs a count or an extra slot/state bit to distinguish empty from full", "Because a queue is always linked", "Because modulo arithmetic cannot wrap"]}
+  correctIndex={1}
+  explanation="After enough enqueues and dequeues, head and tail can be equal in both states. A count, a reserved slot, or an explicit full flag supplies the missing information."
+/>
+
+## Stack contract
+
+For a bounded stack, maintain `0 <= top <= capacity`; the next push writes at `items[top]` and increments `top`, while pop decrements first and reads the item. Returning `-1` as an empty sentinel is valid only when `-1` is excluded from the element domain; otherwise return a status and an output value.
+
+<CodeExercise client:load
+  title="Push at the next free slot"
+  code={`/* top is a count, initially zero */
+items[[!blank!]] = value;
+++top;`}
+  answers={["top"]}
+  explanation="With top representing the number of stored elements, index top is the first free slot. Check top < capacity before writing."
+/>
+
+## Queue contract and wraparound
+
+A ring buffer with `head`, `tail`, and `count` can use:
+
+```c
+items[tail] = value;
+tail = (tail + 1) % capacity;
+++count;
+```
+
+Enqueue requires `count < capacity`; dequeue requires `count > 0`. The modulo operation is safe only when `capacity > 0`, and the count update must occur exactly once on successful operations. Test the sequence that fills, drains, and refills the buffer.
+
+<CodeRunner client:load
+  title="Observe FIFO order across wraparound"
+  language="c"
+  code={`#include <stdio.h>
+
+int main(void) {
+    int items[3] = {10, 20, 30};
+    size_t head = 1, tail = 1, count = 2;
+    items[tail] = 40; tail = (tail + 1) % 3; ++count;
+    printf("head=%zu tail=%zu count=%zu values=%d,%d,%d\\n",
+           head, tail, count, items[head], items[(head + 1) % 3], items[(head + 2) % 3]);
+    return 0;
+}`}
+  output="head=1 tail=2 count=3 values=20,40,30"
+/>
+
+## Transfer exercises
+
+1. Trace head, tail, and count for capacity 4 through enqueue A, B, dequeue, enqueue C, D, E.
+2. State the invariant for an array stack and prove pop returns the last pushed value not yet removed.
+3. Give a safe API for popping values when every integer is valid.
+4. Compare a ring buffer with a linked queue for a fixed-capacity producer/consumer workload.
+
+### Diagnostic solutions
+
+1. Start `(0,0,0)`, then `(0,1,1)`, `(0,2,2)`, dequeue to `(1,2,1)`, enqueue C `(1,3,2)`, D `(1,0,3)`, E `(1,1,4)`; the final enqueue is valid only if capacity was four.
+2. `top` is the number of live elements in `items[0..top)`. Push extends the prefix; pop reads `items[top-1]` before shrinking it.
+3. `int stack_pop(struct stack *, int *out)` returning a status; write `*out` only on success.
+4. A ring buffer avoids allocation and has predictable bounded storage; a linked queue grows but adds allocation, pointer, and reclamation costs. Choose based on capacity and failure policy.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.5.6](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [Open Data Structures: queues and deques](https://opendatastructures.org/ods-cpp/3_Linked_Lists.html)
+* [CERT INT30-C: unsigned wraparound](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap)

@@ -1,96 +1,180 @@
 ---
-title: "Schema Review"
+title: "Schema review: turn requirements into constraints"
 course: "database-systems"
-description: "Review keys, dependencies, normalization, and intentional redundancy."
+description: "Review a concrete multi-tenant order schema for grain, identity, dependencies, integrity boundaries, and migration-safe choices."
+prerequisites:
+  - "Relational-model grain, keys, foreign keys, and NULL semantics"
+  - "Functional dependencies and normalization trade-offs"
+outcomes:
+  - "Review a relation by naming its grain, candidate key, foreign keys, and facts that must not be duplicated."
+  - "Detect a cross-tenant reference, mixed historical/current fact, or unsupported constraint in a proposed schema."
+  - "Write a focused schema-review note with test cases and migration questions."
+omissions:
+  - "Online migration tooling, query-plan tuning, and distributed consistency are treated in later courses."
+estimatedMinutes: 480
+assessment: "Given a proposed commerce schema and a business change, identify integrity risks, propose focused constraints or decompositions, and supply adversarial rows that test the design."
 ---
-# Schema Review
 
-Audit a schema for candidate keys, foreign keys, functional dependencies, null semantics, lossless decompositions, and indexes. For each denormalization, record the invariant and the write path that maintains it.
+import CodeExercise from '../../../components/CodeExercise';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import PlantUML from '../../../components/PlantUML.astro';
 
-## Review sequence
+# Schema review: turn requirements into constraints
 
-Begin by stating what one row in each table means. Ambiguous grain is the root of many schema defects: a row that simultaneously represents a customer, an order, and an order line will repeat facts with different determinants. List entities, relationships, events, and snapshots separately. Identify which facts may change, which history must remain stable, and which attributes are optional versus unknown.
+A schema review is a testable argument, not a naming review. For every relation, ask: what is one row? What identifies it? Which other row must exist? Which value is a historical fact rather than a lookup? Then write the smallest constraint or test that would catch a violation.
 
-For every relation, list candidate keys rather than only the chosen primary key. Compute closures under domain functional dependencies and test minimality. Record natural uniqueness rules even when a surrogate ID is used. Ask whether uniqueness is global, per tenant, per time period, case-sensitive, or collation-dependent. A declared key should match the business identity and the encoding used by queries and references.
+> **Definition.** A schema review maps domain rules to database-enforceable constraints, documents rules that cannot be enforced locally, and supplies adversarial examples for both. It reviews facts and failure modes before it reviews syntax.
 
-Inspect foreign keys and actions on update/delete. Every reference should have an intentional policy: restrict, cascade, set null, or a controlled transition. Test insertion of a dangling child, deletion of a parent with children, and concurrent creation or deletion. A nullable foreign key represents an optional relationship only if NULL has that meaning; it should not be a way to hide missing data.
+## Review one multi-tenant order design
 
-## Dependency and normal-form audit
+An online marketplace gives every seller a tenant. Product and order identifiers are tenant-scoped, so a foreign key must carry the tenant identity too.
 
-Write functional dependencies from domain rules and mark their scope. A rule may require tenant_id, term, version, or effective date. Compute partial and transitive dependencies and identify update, insertion, and deletion anomalies. Test whether each decomposition is lossless and dependency preserving. If BCNF is sacrificed for 3NF key or dependency preservation, state the trade-off.
+<PlantUML
+  code={String.raw`
+class Tenant {
+  tenant_id : UUID <<PK>>
+}
+class Product {
+  tenant_id : UUID <<PK>>
+  product_id : UUID <<PK>>
+  sku : text
+  list_price : money
+}
+class PurchaseOrder {
+  tenant_id : UUID <<PK>>
+  order_id : UUID <<PK>>
+  customer_id : UUID
+  placed_at : timestamp
+}
+class OrderLine {
+  tenant_id : UUID <<PK>>
+  order_id : UUID <<PK>>
+  line_no : integer <<PK>>
+  product_id : UUID <<FK>>
+  quantity : integer
+  unit_price : money
+}
+Tenant "1" -- "0..*" Product
+Tenant "1" -- "0..*" PurchaseOrder
+PurchaseOrder "1" -- "1..*" OrderLine
+Product "1" -- "0..*" OrderLine : selected product
+`}
+/>
 
-A normalized schema is not automatically correct. It can omit a constraint, misrepresent a many-to-many relationship, or lose historical facts. A denormalized relation can be correct if its redundancy has a clear owner, transactionally maintained invariant, repair process, and tests. Write the invariant as an equation or predicate, such as cached_count equals the number of committed child rows in the specified scope.
+| Relation | Grain | Key | Core reference or rule |
+| --- | --- | --- | --- |
+| `Product(tenant_id, product_id, sku, list_price)` | One catalog product for one tenant | `(tenant_id, product_id)` | `sku` may need `UNIQUE(tenant_id, sku)` if the business calls it a tenant-local identifier |
+| `PurchaseOrder(tenant_id, order_id, customer_id, placed_at)` | One placed order for one tenant | `(tenant_id, order_id)` | Tenant-scoped customer reference, if customers are tenant-scoped |
+| `OrderLine(tenant_id, order_id, line_no, product_id, quantity, unit_price)` | One product line in one order | `(tenant_id, order_id, line_no)` | Composite reference to its order and selected product; `quantity > 0` |
 
-## NULL, types, and temporal meaning
+> **Worked example.** `unit_price` belongs on `OrderLine` when it records the price actually agreed at purchase time. `Product.list_price` is a current catalog fact and may change tomorrow. Replacing `unit_price` with a lookup from `Product` changes historical orders retroactively; it is not a harmless normalization.
 
-For each nullable column, document whether NULL means unknown, not applicable, not yet measured, or absent relationship. Test predicates, aggregates, joins, unique constraints, and indexes with NULL. Choose types that preserve domain semantics: numeric amounts need scale and currency, timestamps need timezone policy, identifiers need canonical encoding, and free text should not be used as a hidden key.
+{/* Source tracking: The use of keys, composite foreign keys, check constraints, and their enforcement boundaries is synthesized from PostgreSQL’s current constraints documentation. */}
 
-If facts change over time, decide whether the table stores current state, event history, or a bitemporal record. A current instructor column cannot answer “who taught this course last term” unless history is stored elsewhere. Effective and recorded time differ when data arrives late or is corrected. Add version or validity constraints and test overlapping intervals.
+### Predict the tenant leak
 
-## Index and workload audit
+Tenant A has `product_id = p9`; tenant B also has `product_id = p9`. An order line for tenant A references only `product_id = p9`. What incorrect fact can the database accept if the foreign key is only `OrderLine.product_id → Product.product_id`?
 
-For every important query, state its grain, predicates, joins, ordering, expected cardinality, and freshness requirement. Map it to an index or justify a sequential scan. Composite index order must match equality, range, and ordering access. Check whether a partial or covering index is valid under the policy and NULL semantics. Count write amplification, storage, vacuum or compaction work, and replication cost.
+<ExerciseSolution hint="The identifier is scoped by tenant, so the product ID alone is ambiguous.">
 
-Do not add indexes solely because a column appears in WHERE. Low-selectivity predicates, skew, wide rows, and cache state may favor a scan. Test plans with representative and adversarial data. An index that helps one tenant may hurt a large tenant or create a hot write path.
+The order line can be associated with tenant B's product even though the order belongs to tenant A. The database sees a matching product ID but cannot prove tenant consistency. Make `(tenant_id, product_id)` a referenced key of `Product` and reference both columns from `OrderLine`.
+</ExerciseSolution>
 
-## Security and operations
+<CodeExercise
+  client:load
+  title="Keep the tenant in the product reference"
+  code={String.raw`FOREIGN KEY (tenant_id, product_id)
+  REFERENCES Product ([!blank!], [!blank!])`}
+  answers={["tenant_id", "product_id"]}
+  explanation="A composite foreign key must name a candidate key with the same tenant-scoped meaning in Product."
+/>
 
-Review tenant isolation in keys, foreign keys, views, row policies, functions, exports, and background jobs. Ensure application roles cannot bypass the intended views or call security-definer functions with attacker-controlled search paths or identifiers. Classify sensitive columns and trace them through backups, replicas, logs, analytics, and deletion.
+> **Invariant.** If identifiers are tenant-scoped, every relationship that uses one must establish tenant equality as part of its key or foreign key. Filtering by tenant in application code is not an equivalent integrity constraint.
 
-Review migration safety: backfill, constraint validation, index build, lock duration, dual-read or dual-write period, rollback, replication, and restore. A schema change is complete only when old clients, new clients, queries, plans, constraints, and recovery paths have been tested. Record owner, evidence, unresolved risks, and retest date.
+## Walk the review questions in order
 
-## Worked review
+| Review question | Evidence to request | A failure it catches |
+| --- | --- | --- |
+| What is one row? | A grain sentence for each relation | A line item table that also stores order-wide shipping state |
+| What identifies it? | Candidate keys and whether they are stable | A display label silently used as a primary key |
+| What must exist first? | Foreign keys and deletion/update policy | An order line with no order or wrong-tenant product |
+| Which values are derived or historical? | Source of truth and update rule | Repricing past orders by joining current catalog price |
+| Which rules span rows? | Transaction/procedure/test design | Two writes that independently pass an aggregate capacity rule |
+| How will it change? | Backfill, compatibility, rollback, and verification plan | A non-null column added before legacy rows are populated |
 
-A table OrderLine(order_id, product_id, product_name, unit_price, quantity, tenant_id) uses (order_id,product_id) as a key. Product name and current price are repeated, while the line’s historical sale price may need to remain stable. Move current product facts to Product(tenant_id,product_id,name,current_price) and keep unit_price in OrderLine as the transaction-time fact. Add tenant-aware foreign keys and a check quantity greater than 0, but decide how products are deleted after historical sales. Index OrderLine(tenant_id,order_id) for retrieval and Product(tenant_id,product_id) for lookup. Test cross-tenant IDs, price changes, duplicate lines, and order cancellation.
+> **Warning.** A `CHECK` constraint validates the row being written; it is not a general substitute for a rule involving arbitrary other rows. “An order total equals the sum of its lines” or “stock never drops below zero” needs a design that coordinates reads and writes, not a wish written as a local check.
 
-## Exercises
+### Review a mixed-grain proposal
 
-1. Find the grain and candidate keys of a mixed-fact table.
-2. Identify a functional dependency and anomaly.
-3. Decide whether a denormalized count is safe and state its invariant.
-4. Audit NULL meanings and a temporal attribute.
-5. Map queries to indexes and assess write cost.
-6. Write a migration and rollback checklist.
+A teammate proposes this shortcut:
 
-### Diagnostic solutions
+```text
+OrderLine(tenant_id, order_id, line_no, product_id, quantity,
+          order_status, placed_at, customer_email)
+```
 
+Name two facts with the wrong grain. Where should each live instead?
 
-1. State what one row records, compute closures under domain dependencies, and test every candidate for minimality. If a row mixes order and product facts, split the grains.
-2. If product_id determines current product_name, repeating it in order lines creates update and deletion anomalies. Preserve historical price separately and reference current product data through a key.
-3. It is safe only if a transactionally maintained invariant equates the count with the specified committed child set, with retry, repair, and crash handling. Otherwise it is a cache requiring reconciliation.
-4. State whether NULL is unknown, inapplicable, or absent; test comparisons and constraints. For temporal data, distinguish current, effective, and recorded time and prevent overlapping versions if required.
-5. Describe predicates, joins, ordering, cardinality, and skew; choose composite order and measure reads, size, build, update, and replication costs.
-6. Include compatibility, backfill, validation, lock and resource limits, index/constraint build, dual operation, monitoring, rollback, backup, replica, and restore testing.
+<ExerciseSolution hint="A line is one product occurrence; ask whether each value is the same for every line of an order.">
 
+`order_status` and `placed_at` are facts about the whole order, so they belong in `PurchaseOrder`. `customer_email` is normally a customer fact, so it belongs in a tenant-scoped customer relation or an explicitly justified immutable order-contact snapshot. Repeating order-level values on every line causes update anomalies and makes a changed line capable of contradicting its own order.
+</ExerciseSolution>
 
+## Turn dependencies into constraints and tests
 
-## Review artifact
+> **Definition.** A dependency hypothesis is useful in a review only when it names a business rule that can be enforced by a key, tested by adversarial rows, or explicitly owned by an application procedure.
 
-Submit a schema diagram with cardinalities and optionality, a table of candidate keys and dependencies, a normal-form decision, DDL with constraints, representative data fixtures, query and index matrix, authorization path, migration plan, and evidence of tests. For each finding state severity, affected asset or invariant, reproduction, minimal repair, owner, and retest. “Add an index” or “normalize this” is not a complete recommendation until the workload and correctness effect are stated.
+For this design, the following dependencies express useful review hypotheses:
 
-## Counterexample-driven review
+$$
+(tenant\_id, product\_id) \to (sku, list\_price)
+$$
 
-Create the smallest data set that could expose each suspected defect. Use two tenants with the same local identifier, two orders for one product, NULL and non-NULL alternatives, an empty parent or child set, duplicate timestamps, a late-arriving event, and concurrent updates. Execute queries and constraints against this fixture, then minimize any unexpected result. The counterexample should be preserved as a regression test.
+$$
+(tenant\_id, order\_id, line\_no) \to (product\_id, quantity, unit\_price).
+$$
 
-Review schemas under failure as well as normal operation. Ask what happens if a migration stops halfway, a replica lags, a worker retries, a key is rotated, a parent is deleted, or a backup is restored under an old policy. A schema is an operational contract whose constraints, identifiers, and history must remain interpretable across these states.
+They justify the relation keys only if the product and line identifiers really are stable in the business domain. A natural key such as SKU may also be unique per tenant, but only after spelling out capitalization, reuse, and retirement policy.
 
-## References & Further Reading
+> **Counterexample.** Adding `UNIQUE(sku)` globally because the current export has no duplicates can reject two independent sellers' legitimate use of the same SKU. The requirement is usually tenant-local uniqueness, which has a different key and different error behavior.
 
-**Exercise.** Find one update anomaly and one missing constraint, then propose a minimal repair.
+### Make an adversarial test set
 
-## Oral defense prompts
+Write four insert attempts that should not all succeed:
 
-Explain why every key is minimal, which dependency motivates every decomposition, and whether the join is lossless. Show a foreign-key violation and the database response. Demonstrate a NULL predicate that changes a query. Identify one physical index and its write cost. Describe which authorization path protects a tenant and what happens when the policy service is unavailable. Finally, state one intentional denormalization and the transaction or repair process that maintains it.
+1. a duplicate line number in one order;
+2. a zero or negative quantity;
+3. a line that names a missing order;
+4. a line for tenant A that names tenant B's product ID.
 
-These prompts test transfer rather than memorization: a student should be able to review a new schema by applying the same definitions and counterexample method.
+<ExerciseSolution hint="Map each attempt to a distinct constraint; the last one needs the composite key.">
 
-## Review report template
+The duplicate is rejected by `PRIMARY KEY (tenant_id, order_id, line_no)`. The invalid quantity is rejected by `CHECK (quantity > 0)`. The missing order is rejected by `FOREIGN KEY (tenant_id, order_id) REFERENCES PurchaseOrder`. The cross-tenant product is rejected only when the product foreign key is `(tenant_id, product_id) REFERENCES Product(tenant_id, product_id)`. These tests establish different invariants; one successful happy-path order proves none of them.
+</ExerciseSolution>
 
-Use sections for scope and data meaning, keys and constraints, dependencies and normal forms, NULL and temporal semantics, query/index workload, security and tenant boundaries, migrations and recovery, findings, evidence, owners, and retest. For each recommendation identify what becomes impossible, what remains possible, and which operational failure could reopen the defect. Include before-and-after fixtures and explain every changed result.
+## Review a change before the migration is written
 
-The strongest review reports distinguish logical correctness, performance, security, and operational resilience. A schema may be normalized but slow, indexed but unauthorized, constrained but unrecoverable, or fast but semantically lossy. Treat each dimension separately and then analyze their interactions.
+The product team wants to allow a line to have no catalog product after a product is retired, while preserving the original line description and price.
 
-## References & Further Reading
-* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
-* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [PostgreSQL Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)
+> **Worked example.** This is not just “make `product_id` nullable.” Decide first whether a line must retain a historical product snapshot, whether product deletion is forbidden, or whether retirement is represented by a status rather than deletion. If the relationship becomes optional, update the foreign-key nullability, the reporting contract, and tests for null product references together.
+
+<details>
+  <summary>Questions that are intentionally deferred to a migration plan</summary>
+
+  A schema review should identify, but not guess, the rollout method: how existing lines are backfilled, whether reads tolerate a temporary dual representation, what rollback preserves, and how a large index or constraint build affects live traffic. Those are operational choices requiring the actual database and workload.
+</details>
+
+### Transfer task
+
+Review a proposed `OrderDiscount(tenant_id, order_id, code, amount)` relation. Decide whether its grain is one applied discount, one discount code definition, or both. State a key, one foreign key, and one rule that cannot be justified until the business answers a question.
+
+<ExerciseSolution hint="A discount code definition and an applied discount are different facts. Ask whether a code may be applied twice to the same order.">
+
+Use `OrderDiscount` for one applied discount on one order, with a key such as `(tenant_id, order_id, code)` if a code may be applied at most once per order, and a foreign key from `(tenant_id, order_id)` to `PurchaseOrder`. Keep code definition/eligibility in a separate tenant-scoped `Discount` relation. You cannot choose the key until the business says whether the same code can be applied more than once, whether stacked codes are allowed, and whether `amount` is a snapshot or recomputed from a changing rule.
+</ExerciseSolution>
+
+## References
+
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)
+- [PostgreSQL: `CREATE TABLE`](https://www.postgresql.org/docs/current/sql-createtable.html)
+- [Ramakrishnan and Gehrke, *Database Management Systems*: schema-refinement chapters](https://pages.cs.wisc.edu/~dbbook/openAccess/secondEdition/dbbook.toc.html)

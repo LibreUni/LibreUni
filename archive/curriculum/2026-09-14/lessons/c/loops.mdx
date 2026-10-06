@@ -1,0 +1,111 @@
+---
+title: "Loops, Invariants, and Termination"
+course: c
+description: "Derive safe loop bounds, state invariants, and reason about break, continue, and integer termination."
+prerequisites:
+  - "C expressions, arrays, and control flow"
+outcomes:
+  - "Write a loop invariant that explains a computed result"
+  - "Audit initialization, condition, update, and termination for boundary cases"
+  - "Recognize undefined or nonterminating loops caused by integer semantics"
+omissions:
+  - "Vectorization and loop scheduling are deferred to architecture and compiler work."
+estimatedMinutes: 50
+assessment: "Annotate a loop with an invariant and prove its postcondition for an empty input."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Loops, Invariants, and Termination
+
+A loop is a proof obligation repeated over a changing state. The reliable design sequence is: choose the state that summarizes processed work, establish it before the first iteration, preserve it, and show that a variant moves toward termination.
+
+<Quiz client:load
+  title="Find the invariant"
+  question="For `sum += a[i]` while `i` advances from zero, which invariant is useful before each iteration?"
+  options={["sum equals the sum of all elements in the array", "sum equals the sum of a[0] through a[i-1]", "i is always the last valid index", "The loop has already terminated"]}
+  correctIndex={1}
+  explanation="Before processing index i, the accumulated sum should describe exactly the prefix [0, i). The empty prefix establishes the base case and the update extends it by a[i]."
+/>
+
+## `for`, `while`, and `do`
+
+The three loop forms differ in when their condition is evaluated, not in the existence of a magical performance property:
+
+```c
+for (size_t i = 0; i < length; ++i) consume(values[i]);
+
+size_t i = 0;
+while (i < length) consume(values[i++]);
+
+do {
+    prompt();
+} while (!valid_input());
+```
+
+Use `do` only when one execution is required before the test. Keep the update close to the condition it makes true; hidden mutation in a helper makes termination harder to audit.
+
+<CodeExercise client:load
+  title="Guard the empty input"
+  code={`size_t i = 0;
+while (i [!blank!] length) {
+    consume(values[i]);
+    ++i;
+}`}
+  answers={["<"]}
+  explanation="The half-open condition i < length performs zero iterations when length is zero and never reads the one-past position."
+/>
+
+## `break`, `continue`, and nested state
+
+`break` exits the nearest loop; `continue` jumps to the loop's next condition/update point. In nested loops, name the level explicitly with a flag or a helper function rather than relying on a reader to track which loop is nearest. A loop that searches for a match often has two postconditions: found with a valid index, or exhausted with no match.
+
+<CodeRunner client:load
+  title="Search with a postcondition"
+  language="c"
+  code={`#include <stdio.h>
+#include <stddef.h>
+
+int main(void) {
+    const int values[] = {4, 8, 15, 16};
+    const size_t length = sizeof values / sizeof values[0];
+    size_t index = 0;
+    for (; index < length && values[index] != 15; ++index) {}
+    if (index < length) printf("found at %zu\\n", index);
+    else printf("not found\\n");
+    return 0;
+}`}
+  output="found at 2"
+/>
+
+## Integer boundaries and termination
+
+Unsigned integers wrap modulo one more than their maximum value. That can make a descending loop nonterminating:
+
+```c
+for (unsigned i = count; i >= 0; --i) { /* never ends */ }
+```
+
+The condition is always true for an unsigned value. Use a half-open index, test before decrementing, or choose a signed type only when its range and overflow are controlled. Signed overflow is undefined behavior, so “it eventually wraps” is not a valid proof.
+
+## Transfer exercises
+
+1. State an invariant for a loop that copies `src[0..n)` into `dst[0..n)`.
+2. Repair the unsigned countdown above without reading outside the array.
+3. Give a variant that proves a binary-search loop terminates.
+4. Explain why a `continue` can accidentally skip an update and create a nonterminating loop.
+
+### Diagnostic solutions
+
+1. Before iteration i, `dst[j] == src[j]` for every `0 <= j < i`; the variant is `n - i`.
+2. Use `for (size_t i = count; i-- > 0;) process(values[i]);`; the post-decrement test stops before i would be used as an invalid index.
+3. The interval length `high - low` decreases whenever the loop continues, and the loop stops when the interval is empty.
+4. If the update occurs after the `continue`, that path skips it. Put the update in the loop header or ensure every path changes the variant.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.8.5](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [CERT INT30-C: Ensure that unsigned integer operations do not wrap](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap)
+* [cppreference: for statement](https://en.cppreference.com/w/c/language/for)

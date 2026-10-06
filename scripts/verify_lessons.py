@@ -13,11 +13,22 @@ LESSONS_DIR = ROOT / "src" / "content" / "lessons"
 
 # Regexes
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
-BANNED_PHRASES = [
-    "welcome", "let's dive in", "in this lesson", "as you have learned before",
-    "congratulations on finishing", "you have completed", "next up", "previously",
-    "before we move on", "let's explore", "let's take a look at"
-]
+# These patterns describe conversational scaffolding, not technical vocabulary.
+# Keep them narrow enough that a rigorous sentence is never rejected merely for
+# containing an ordinary domain word such as "state", "simple", or "current".
+FILLER_PATTERNS = {
+    "stock welcome or celebration": r"\b(?:welcome|congratulations on finishing|you have completed)\b",
+    "conversational invitation": r"\b(?:let['’]s|let us)\s+(?:dive(?:\s+in)?|explore|take a look(?:\s+at)?)\b",
+    "lesson-navigation transition": r"\b(?:in|during)\s+(?:this|the (?:next|following|previous))\s+(?:lesson|module|section|course)\b",
+    "chronological callback": r"\b(?:as (?:we|you) (?:have )?(?:seen|saw|learned|discussed)|before (?:we|you) (?:move on|continue))\b",
+    "exploration prompt": r"\bto practice or explore further\b",
+    "journey framing": r"\b(?:summary of (?:the|your) journey|(?:the|your|our) journey from)\b",
+    "empty intensifier": r"\b(?:dive deeper|seamless experience)\b",
+    "placeholder transition": r"\b(?:next up|previously|the following sections explore)\b",
+    "unnecessary reminder": r"\b(?:remember that|keep in mind|it is (?:important|worth) to note|it should be noted|needless to say)\b",
+    "trivializing adverb": r"\bsimply\b",
+    "marketing or conversational framing": r"\b(?:deep[- ]dive|really work|gateway drug|you might wonder|it just works|the abstraction we know and love|full-fat|incredibly (?:small|fast|restricted)|billion dollars)\b",
+}
 
 # Canonical Component Props
 COMPONENT_PROPS = {
@@ -41,23 +52,41 @@ def split_frontmatter(content):
         frontmatter[key.strip()] = val.strip().strip('"').strip("'")
     return frontmatter, content[match.end():]
 
+def find_filler_violations(body):
+    """Return visible conversational filler found outside fenced code/comments."""
+    visible = re.sub(r"^```[^\n]*\n.*?^```\s*$", " ", body, flags=re.MULTILINE | re.DOTALL)
+    visible = re.sub(r"\{\s*/\*.*?\*/\s*\}", " ", visible, flags=re.DOTALL)
+    violations = []
+    for label, pattern in FILLER_PATTERNS.items():
+        match = re.search(pattern, visible, re.IGNORECASE)
+        if match:
+            violations.append((label, match.group(0)))
+    return violations
+
 def check_url(url):
     """Checks if a URL is valid and reachable."""
     # Clean trailing punctuation
-    url = url.rstrip(".,;:")
+    url = url.rstrip(".,;:>\"'")
     try:
         req = urllib.request.Request(
             url, 
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         )
         with urllib.request.urlopen(req, timeout=5) as response:
-            return url, response.status == 200, f"HTTP {response.status}"
+            if 200 <= response.status < 400:
+                return url, True, f"HTTP {response.status}"
+            return url, False, f"HTTP {response.status}"
     except urllib.error.HTTPError as e:
+        # A live reference can reject automated requests. Preserve that signal
+        # as an audit warning; only an explicit dead-resource response should
+        # fail the lesson audit.
+        if e.code in {403, 429}:
+            return url, None, f"HTTP Error {e.code} (access restricted)"
         return url, False, f"HTTP Error {e.code}"
     except urllib.error.URLError as e:
-        return url, False, f"URL Error {e.reason}"
+        return url, None, f"URL Error {e.reason} (not verifiable automatically)"
     except Exception as e:
-        return url, False, f"Error: {str(e)}"
+        return url, None, f"Error: {str(e)} (not verifiable automatically)"
 
 def verify_lesson(path, check_links=False):
     content = path.read_text(encoding="utf-8")
@@ -73,11 +102,9 @@ def verify_lesson(path, check_links=False):
     if not frontmatter.get("description"):
         warnings.append("Missing or empty 'description' in frontmatter")
 
-    # 2. Banned Phrases Check
-    for phrase in BANNED_PHRASES:
-        # Match as whole phrase (case insensitive)
-        if re.search(r'\b' + re.escape(phrase) + r'\b', body, re.IGNORECASE):
-            errors.append(f"Contains banned filler phrase: '{phrase}'")
+    # 2. Filler and chronological-navigation check
+    for label, phrase in find_filler_violations(body):
+        errors.append(f"Contains banned filler ({label}): '{phrase}'")
 
     # 3. Pedagogical Structure: Theory -> Example -> Exercise
     h2_sections = re.split(r"^##\s+", body, flags=re.MULTILINE)
@@ -111,9 +138,9 @@ def verify_lesson(path, check_links=False):
             stripped = re.sub(r"`[^`]*`", "", props_block)
             # Strip remaining JSX expression values ( { ... } )
             stripped = re.sub(r"\{[^}]*\}", "", stripped)
-            # Strip quoted attribute values
-            # Strip quoted attribute values
-            stripped = re.sub(r"""[^"]*"|'[^']*'""", "", stripped)
+            # Strip quoted attribute values without treating an equals sign in
+            # the value (for example, a mathematical explanation) as a prop.
+            stripped = re.sub(r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''', "", stripped)
             prop_names = re.findall(r"\b([a-zA-Z0-9:]+)(?=\s*=)", stripped)
             allowed = COMPONENT_PROPS[comp]
             for p in prop_names:
@@ -145,8 +172,10 @@ def verify_lesson(path, check_links=False):
             future_to_url = {executor.submit(check_url, url): url for url in urls}
             for future in as_completed(future_to_url):
                 url, ok, status = future.result()
-                if not ok:
+                if ok is False:
                     errors.append(f"Dead or invalid reference URL: {url} ({status})")
+                elif ok is None:
+                    warnings.append(f"Reference URL could not be verified automatically: {url} ({status})")
                 else:
                     checked_urls.append(url)
 

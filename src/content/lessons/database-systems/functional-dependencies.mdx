@@ -1,97 +1,164 @@
 ---
-title: "Functional Dependencies"
+title: "Functional dependencies: state what determines a fact"
 course: "database-systems"
-description: "Reasoning about redundancy and candidate keys."
+description: "Use functional dependencies, closure, and minimal covers to expose keys and update anomalies from domain rules—not from a lucky sample."
+prerequisites:
+  - "Relation grain, candidate keys, and constraints"
+  - "Sets, subset reasoning, and proof by a short derivation"
+outcomes:
+  - "State a functional dependency as a claim about every legal instance and distinguish it from a sampled correlation."
+  - "Compute an attribute closure and use it to test whether an attribute set is a superkey or candidate key."
+  - "Simplify a small dependency set while preserving its implications."
+omissions:
+  - "Multivalued dependencies, join dependencies, and automated dependency discovery are outside this course foundation."
+estimatedMinutes: 480
+assessment: "Given a relation, business rules, and a proposed determinant, compute a closure, justify a candidate key, and repair one dependency claim that is unsupported by the domain."
 ---
-# Functional Dependencies
 
-A functional dependency $Xto Y$ says equal values on attributes $X$ imply equal values on $Y$. Attribute closure computes what a determinant implies under a dependency set. A candidate key is a minimal determinant of all attributes.
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import FunctionalDependencyPlayground from '../../../components/playgrounds/FunctionalDependencyPlayground';
+import MathProof from '../../../components/MathProof.astro';
+import MathStatement from '../../../components/MathStatement.astro';
 
-If `course_id → instructor` and a table key is `(student_id, course_id)`, repeating instructor per enrollment creates update anomalies.
+# Functional dependencies: state what determines a fact
 
-## Formal definitions
+A functional dependency is a design claim: once you know one fact, another fact is forced. It is not an observation that happened to hold in three rows of a spreadsheet. That distinction lets us ask whether a relation stores one fact once or repeats it under many keys.
 
-For relation schema R and attribute sets X,Y subset R, a functional dependency X - greater than  Y holds on an instance r if for every pair of tuples t and u in r, t[X]=u[X] implies t[Y]=u[Y]. It is a semantic constraint about all valid instances, not a pattern observed in one sample. A dependency can hold because of the application domain even when the current table contains no repeated determinant values. Conversely, a coincidental uniqueness in a small sample does not prove a dependency.
+<MathStatement id="fd-definition" kind="definition" title="Functional dependency">
 
-Trivial dependencies are those where Y is a subset of X; they hold in every relation. A nontrivial dependency has at least one attribute in Y outside X. A dependency set F implies another dependency f if every instance satisfying F also satisfies f. Reasoning about implication is central to keys, normalization, and schema review.
+For a relation schema $R$ and attribute sets $X, Y \subseteq R$, the functional dependency
 
-## Armstrong’s axioms
+$$
+X \to Y
+$$
 
-Armstrong’s axioms are sound and complete for functional-dependency implication. Reflexivity says if Y is a subset of X, then X - greater than  Y. Augmentation says X - greater than  Y implies XZ - greater than  YZ. Transitivity says X - greater than  Y and Y - greater than  Z imply X - greater than  Z. Derived rules include union, decomposition, and pseudotransitivity. Soundness means every derived dependency holds whenever the premises hold; completeness means every implied dependency can be derived.
+holds when every **legal** instance of $R$ has this property: any two tuples that agree on $X$ also agree on $Y$. $X$ is the determinant; $Y$ is determined by it.
+</MathStatement>
 
-Decomposition is useful when a dependency has multiple attributes on the right: X - greater than  YZ implies X - greater than  Y and X - greater than  Z. Union combines X - greater than  Y and X - greater than  Z into X - greater than  YZ. Pseudotransitivity combines X - greater than  Y and WY - greater than  Z to infer WX - greater than  Z. Do not use converse rules without proof; Y - greater than  X does not follow from X - greater than  Y, and a dependency’s determinant is not interchangeable with its dependent set.
+{/* Source tracking: Functional-dependency definitions, closure, and normal-form use are synthesized from the schema-refinement chapters of Ramakrishnan and Gehrke, *Database Management Systems*. */}
 
-## Attribute closure
+## Begin with a domain rule, not a table pattern
 
-The closure X+ under F is the set of attributes functionally determined by X. Compute it by starting with X and repeatedly adding every right-hand attribute of a dependency whose left side is already contained in the current set. Termination follows because the finite attribute universe can only grow. The result is independent of dependency application order because the algorithm reaches the least fixed point.
+> **Definition.** A domain rule describes which future instances are legal. It is the evidence for a functional dependency; a repeated pattern in a current export is not.
 
-To test whether X is a superkey for R, compute X+ and check whether it contains all attributes of R. To test whether X - greater than  Y follows from F, check whether Y is contained in X+. To test candidate-key minimality, remove each attribute of X and recompute closure; if any removal still determines R, X was not minimal. A key can contain attributes never appearing on dependency right sides, because those attributes cannot be derived from other attributes and may be necessary.
+Assume a university has exactly one instructor and one room for each scheduled section identified by `(course_code, section, term)`.
 
-For the exercise dependencies A- greater than B, B- greater than C, and CD- greater than E, the closure of ()A() is ()A,B,C(). It does not contain D, so A is not a determinant of E. Adding D gives ()A,D,B,C(), then CD- greater than E applies and the closure contains E. Thus AD determines A,B,C,D,E under the given universe, and no smaller subset of AD works if D cannot be derived from A.
+$$
+(course\_code, section, term) \to (instructor, room)
+$$
 
-## Minimal covers
+> **Worked example.** In `Section(course_code, section, term, instructor, room)`, the stated scheduling rule makes `(course_code, section, term)` determine `instructor` and `room`. It does **not** say that `room` determines `instructor`: different sections can use the same room with different instructors.
 
-A minimal or canonical cover is an equivalent dependency set with one attribute on each right-hand side, no extraneous attribute on any left-hand side, and no redundant dependency. First decompose right sides. To test whether an attribute a in X is extraneous in X - greater than  A, compute (X-()a())+ under the current dependency set; if A is included, remove a. To test whether a dependency is redundant, compute its right side from its left side using all other dependencies.
+> **Counterexample.** A sample in which every row has a different `student_email` does not prove $student\_email \to student\_id$. The address may be missing, reused, or changeable unless the institution declares and enforces it as a unique identifier. Dependencies come from the legal domain, ideally backed by a key or explicit policy.
 
-Minimal covers are not necessarily unique, although they represent the same implication closure. The order of removals can affect the syntactic result, so record the equivalence argument rather than claiming one canonical spelling. Minimal covers support the 3NF synthesis algorithm and make dependency preservation calculations manageable.
+### Prediction: spot the unsupported dependency
 
-## Keys and schema design
+The first three rows of a relation all show `term = '2026S'` and `instructor = 'Ng'`. May you infer $term \to instructor$? What extra domain rule would make it valid?
 
-Given F and relation R, attributes that never appear on a right side must occur in every candidate key unless they are already in the determinant used. Start with their set, compute closure, and add attributes until all R is reached. Then minimize. Multiple candidate keys create multiple prime attributes and affect 3NF and BCNF tests. A surrogate key does not erase dependencies involving natural attributes; it may hide a business uniqueness constraint if the schema omits it.
+<ExerciseSolution hint="A dependency must survive every future legal row, not merely the current sample.">
 
-Consider Registration(student, course, term, instructor, room). Dependencies may include (student,course,term)- greater than instructor, (course,term)- greater than instructor, and (course,term)- greater than room. The enrollment key is student,course,term, but course,term determines instructor and room, creating repeated facts across students. If instructors change, many rows require synchronized updates. The dependency analysis exposes the proper decomposition into CourseOffering(course,term,instructor,room) and Registration(student,course,term).
+No. Another course can be taught by another instructor in the same term. The dependency would be valid only under a much stronger rule such as “the institution has exactly one instructor for every course in every term,” which is not the intended domain.
+</ExerciseSolution>
 
-## Anomalies and dependency evidence
+## Compute closure as a trace
 
-Update anomaly occurs when one fact is repeated and only some copies change. Insertion anomaly occurs when a fact cannot be stored without an unrelated fact, such as a course offering requiring at least one enrollment. Deletion anomaly occurs when removing the last enrollment also removes course or instructor information. These are symptoms of a relation whose attributes mix multiple entity or relationship facts.
+Attribute closure answers: starting with attributes $X$, what attributes can the dependency set force? Let
 
-Dependencies should be justified by domain rules, constraints, or authoritative data—not inferred only from current rows. If an instructor can vary by section, course_id - greater than  instructor is false and the determinant must include section or term. If email uniqueness is conditional by tenant, the dependency includes tenant. If history matters, time or version belongs in the key and dependency statement.
+$$
+F = \{A \to B,\; B \to C,\; CD \to E\}.
+$$
 
-## Exercises
+To calculate $AD^+$, begin with $\{A,D\}$ and add only a right side whose left side is already present.
 
-1. Compute closures under a dependency set and identify candidate keys.
-2. Derive a dependency using Armstrong’s axioms.
-3. Find extraneous attributes in a left side.
-4. Construct a minimal cover.
-5. Explain why a surrogate key does not remove natural uniqueness.
-6. Diagnose an update, insertion, and deletion anomaly.
+| Step | Available attributes | Dependency enabled | New attribute |
+| --- | --- | --- | --- |
+| Start | $A,D$ | — | — |
+| 1 | $A,D$ | $A \to B$ | $B$ |
+| 2 | $A,B,D$ | $B \to C$ | $C$ |
+| 3 | $A,B,C,D$ | $CD \to E$ | $E$ |
 
-### Diagnostic solutions
+So $AD^+ = \{A,B,C,D,E\}$. The order of enabled steps can vary; the final closure cannot, provided you keep applying dependencies until none adds an attribute.
 
+<MathProof id="fd-closure-trace" for="fd-definition" title="Why the trace is justified" collapsible>
 
-1. Start with the determinant, repeatedly apply dependencies whose left sides are contained, and stop at a fixed point. A superkey closure contains all attributes; test each proper subset for minimality.
-2. From A- greater than B, augment with C to get AC- greater than BC; from BC- greater than D, use the B component with appropriate decomposition and transitivity only when the left side matches. Every step must name the axiom or derived rule.
-3. For a dependency XA- greater than B, compute X+ under F. If B is already present, A is extraneous; otherwise retain it. Recompute after other removals because extraneousness can change.
-4. Split right sides, remove left-side attributes whose deletion preserves implication, then remove dependencies implied by the others. Verify the resulting closure matches the original cover’s implication for each original dependency.
-5. A generated ID may uniquely identify rows while two rows still share the same email, course code, or external identifier. Declare the natural uniqueness constraint if the domain requires it.
-6. Repeated instructor data may require many updates; a course cannot be inserted without an enrollment; deleting the last enrollment may erase the only course information. Decompose facts with their determinants.
+Each step preserves equality on the starting attributes. If two tuples agree on `A`, $A \to B$ forces agreement on `B`; agreement on `B` forces `C`; agreement on both `C` and `D` forces `E`. Thus any two tuples agreeing on `A,D` agree on every attribute in the closure.
+</MathProof>
 
+### Try the closure tool
 
+Choose seed attributes, fire each dependency only when its determinant is available, and compare your trace to the displayed closure. Use `A,D` after trying a smaller seed such as `A`.
 
-## Dependency-analysis workflow
+<FunctionalDependencyPlayground client:load />
 
-When given a schema and dependencies, write the attribute universe first and make clear whether dependencies are stated for a current snapshot or for every legal instance. Normalize right sides, compute a minimal cover, find all candidate keys, and then test each dependency against the chosen normal form. Keep a record of closures rather than relying on intuition: a determinant that looks like an identifier may fail to determine an attribute because a time, tenant, or version dimension is missing.
+> **Invariant.** $X$ is a superkey for schema $R$ exactly when $X^+$ contains every attribute of $R$ under the assumed dependency set. It is a candidate key only if no proper subset of $X$ is also a superkey.
 
-Use counterinstances to challenge a claimed dependency. To show X - greater than  Y does not follow from F, construct two tuples agreeing on X but differing on Y while satisfying the dependencies, or prove the target attribute is absent from X+. To show a candidate decomposition is motivated, state which repeated fact each determinant represents and which anomalies disappear. Functional dependencies are a design reasoning tool, not merely a mechanical normalization exercise.
+### Apply closure to a real key question
 
-## Exam practice
+Let `Registration(student_id, course_code, term, instructor, room)` have the dependency
 
-For every closure, show each added attribute and the dependency that justified it. For every candidate key, show all attributes are determined and every single-attribute deletion fails. For every minimal cover, verify equivalence in both directions or at least that each original dependency is implied and each reduced dependency follows from the original. This evidence makes a solution auditable.
+$$
+(course\_code, term) \to (instructor, room).
+$$
 
-Test the resulting schema with duplicate, update, and deletion fixtures, including NULL and tenant or time boundaries where the dependency’s scope changes.
+Is `(student_id, course_code, term)` a candidate key under this dependency set? Show the closure and the minimality check.
 
-Record those fixtures as regression tests.
+<ExerciseSolution hint="The proposed attributes already include three columns; use the dependency to add the remaining two, then try removing one attribute at a time.">
 
-Review them after schema changes.
+Its closure starts with `student_id, course_code, term` and adds `instructor, room`, so it is a superkey. Removing `student_id` cannot identify which student's registration is meant. Removing `course_code` or `term` prevents the given dependency from identifying the scheduled section. Under the stated dependency set, it is a candidate key. A different domain rule, such as a separate registration ID, can produce an additional candidate key.
+</ExerciseSolution>
 
-Keep the proof with the migration.
+## Derive dependencies without hand-waving
 
-And rerun it.
+Three sound inference rules are enough for many small derivations.
 
-**Exercise.** Compute the closure of `()A()` under `A→B`, `B→C`, and `CD→E`. Which additional attribute is needed to determine `D`?
+| Rule | Form | Example |
+| --- | --- | --- |
+| Reflexivity | If $Y \subseteq X$, then $X \to Y$ | $AB \to A$ |
+| Augmentation | If $X \to Y$, then $XZ \to YZ$ | $A \to B$ implies $AD \to BD$ |
+| Transitivity | If $X \to Y$ and $Y \to Z$, then $X \to Z$ | $A \to B$, $B \to C$ implies $A \to C$ |
 
-## References & Further Reading
+> **Worked example.** From $A \to B$ and $B \to C$, derive $A \to C$ by transitivity. With $A \to B$, derive $AD \to BD$ by augmentation. In the earlier closure, these steps explain why `A,D` can eventually enable $CD \to E$—first it gains `B`, then `C`.
 
-* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
-* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [Database System Concepts, Functional Dependencies](https://pages.cs.wisc.edu/~dbbook/openAccess/thirdEdition/slides/slides3ed-english/Ch19-FDs-95.ppt)
+> **Warning.** Do not reverse a dependency. $course\_code \to title$ does not imply $title \to course\_code$ unless the domain makes titles unique. Direction records a claim about equality, not a visual arrow between columns.
+
+### Check a derivation
+
+Given $F = \{A \to B, B \to C, CD \to E\}$, can $D \to E$ be derived? Can $AD \to E$ be derived?
+
+<ExerciseSolution hint="Compute the two closures separately. A dependency can fire only when all determinant attributes are available.">
+
+$D^+ = \{D\}$, so $D \to E$ cannot be derived. $AD^+$ gains `B` from $A \to B$, then `C` from $B \to C$, so it contains `C,D` and gains `E` from $CD \to E$. Therefore $AD \to E$ is derivable.
+</ExerciseSolution>
+
+## Reduce a dependency set before using it
+
+A minimal cover gives a compact equivalent set of dependencies. It is a tool for reasoning, not a claim that the compact version is easier for every reader to understand.
+
+> **Example.** Start with
+
+$$
+F = \{A \to BC,\; B \to C,\; AB \to C\}.
+$$
+
+Split the right side: $A \to B$ and $A \to C$. Then $A \to C$ follows from $A \to B$ and $B \to C$, so remove it. `AB → C` follows from $B \to C$ because `B` is already part of `AB`, so remove it too. A minimal cover is $\{A \to B, B \to C\}$.
+
+### Transfer task
+
+The scheduling system adds multiple meeting times to a section. It currently claims
+
+$$
+(course\_code, section, term) \to room.
+$$
+
+Give a legal scenario that breaks this dependency. Then redesign the relation so one row has a clear grain and state one valid dependency for the revised design.
+
+<ExerciseSolution hint="A section can now meet in two rooms or at two times. Put the repeated meeting fact in its own relation.">
+
+One section can meet Monday in `R101` and Wednesday in `Lab3`; both rows share `(course_code, section, term)` but have different rooms, so the old dependency fails. Use `Meeting(course_code, section, term, meeting_time, room)` with grain “one scheduled meeting of one section.” If each meeting time for a section has exactly one room, then $(course\_code, section, term, meeting\_time) \to room$ is valid. Validate that rule with the scheduling policy, not just a sample export.
+</ExerciseSolution>
+
+## References
+
+- [Ramakrishnan and Gehrke, *Database Management Systems*: schema-refinement chapters in the open-access contents](https://pages.cs.wisc.edu/~dbbook/openAccess/secondEdition/dbbook.toc.html)
+- [Ramakrishnan and Gehrke: Functional Dependencies slides](https://pages.cs.wisc.edu/~dbbook/openAccess/thirdEdition/slides/slides3ed-english/Ch19_FDs-95.pdf)
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)

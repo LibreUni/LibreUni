@@ -1,0 +1,326 @@
+---
+title: "Comparative Kernel Design"
+course: "operating-systems"
+description: "Workload-driven comparison of xv6, Linux, XNU, and seL4 mechanisms across file access, IPC, driver faults, authority, and multicore state."
+prerequisites:
+  - "System calls, scheduling, synchronization, virtual memory, devices, filesystems, and protection"
+  - "Virtual-machine and container trust boundaries"
+  - "Ability to separate an analytical mechanism claim from a benchmark result"
+outcomes:
+  - "Compare concrete kernel configurations by control path, protection boundary, shared state, and failure semantics rather than by historical label."
+  - "Trace equivalent file, IPC, and device workloads through xv6, Linux, XNU, and seL4 mechanisms without inventing unsupported performance results."
+  - "Choose evidence capable of testing architecture-sensitive latency, isolation, and scalability claims."
+  - "Defend a kernel/system configuration for an unfamiliar workload and identify the assumptions that could reverse the decision."
+omissions:
+  - "Chronological operating-system history, product surveys, market-share comparisons, and unsupported 'microkernel versus monolithic' rankings are excluded."
+  - "Windows NT, BSD variants, real-time kernels, verified device stacks, and distributed operating systems require equally concrete source and workload treatment beyond this comparison set."
+estimatedMinutes: 300
+assessment: "Given a workload and threat model, produce mechanism-level traces for at least three concrete systems, identify trusted and measured paths, then defend a design choice against a changed requirement."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Comparative Kernel Design
+
+“Choose a microkernel for security” and “choose a monolithic kernel for speed” are not engineering decisions. Neither statement identifies a workload, deployed component boundary, authority path, device model, cache state, failure, or measurement. A Linux system with a user-space service can isolate that service from the kernel address space; a carelessly configured microkernel system can grant a driver DMA authority over all memory. Labels constrain possibilities but do not instantiate a design.
+
+The unit of comparison is a **concrete system configuration under an explicit workload**.
+
+{/* Source tracking: Structural claims are synthesized from official xv6 tag xv6-riscv-rev5 at commit 7d7adbb1b0acbd67c9766a20d0f9900fef2789fa and its book, Linux kernel VFS and RCU documentation, Apple's open XNU source README and tree, and the seL4 reference manual/capability/IPC documentation. Performance claims are deliberately withheld unless supported by a defined measurement. */}
+
+## Freeze four reference configurations
+
+The comparison uses these bounded configurations, not every possible build or extension:
+
+| configuration | privileged deployment boundary | service/authority mechanisms relevant here | stated purpose in comparison |
+| --- | --- | --- | --- |
+| xv6 RISC-V rev5 (`7d7adbb1…`) teaching baseline | compact kernel containing scheduler, VM, filesystem, pipes, and drivers | process page tables, simple Unix-style descriptors/permissions, one filesystem log | expose complete mechanism traces at inspectable scale |
+| Linux general-purpose build | one kernel address space containing core subsystems and selected drivers; user processes outside | VFS objects, namespaces/cgroups, credentials/LSMs, descriptors, RCU and many locking schemes | production mechanism and scalability evidence |
+| XNU open-source tree | Mach, BSD, IOKit, VM, and security subsystems composed in the XNU kernel source; user tasks outside | Mach ports/messages, BSD vnode/file interfaces, task/address-space mechanisms, IOKit driver framework | hybrid composition and dual Mach/BSD interfaces |
+| seL4-based component system | minimal seL4 kernel; selected services and drivers placed in separate user address spaces | kernel-object capabilities, synchronous IPC endpoints, explicit address spaces, IRQ objects | capability-mediated component isolation |
+
+“Hybrid,” “monolithic,” and “microkernel” are summaries of these deployed boundaries. They do not specify which optional driver runs where, whether an IOMMU exists, or how a user-level filesystem is built.
+
+The seL4 kernel does not itself supply a POSIX filesystem or full operating environment. A seL4 **system** must choose user-level servers and protocols. Comparing “Linux open” to “seL4 open” without defining those servers invents a path that the kernel does not prescribe.
+
+### Retrieval checkpoint: compare a kernel or a system?
+
+A report claims that seL4 has slower pathname lookup than Linux but gives only seL4 kernel IPC timings. Identify the category error and the missing configuration.
+
+<details>
+<summary>Reveal the missing causal path</summary>
+
+Pathname lookup is a whole-system service, not an seL4 kernel primitive. The report must define the user-level VFS/filesystem server, namespace and cache placement, client/server protocol, page sharing or copying, storage backend, scheduling, and cache state. Kernel IPC timing is one possible component cost, not pathname latency. Linux must also be pinned by filesystem, mount options, cache state, kernel build, and workload.
+
+</details>
+
+## A comparison protocol
+
+For every claim, fill this chain:
+
+<PlantUML code={`
+@startuml
+left to right direction
+rectangle "workload\ninput, operation mix, concurrency" as W
+rectangle "required contract\ncorrectness, latency, isolation" as C
+rectangle "mechanism path\ntransitions + shared state" as M
+rectangle "trusted boundary\nwho may violate the contract" as T
+rectangle "predicted events\nIPC, exits, locks, copies" as P
+rectangle "evidence\ntraces, counters, tests, measurements" as E
+rectangle "bounded decision\nfor this configuration" as D
+W --> C : makes priorities explicit
+C --> M : selects relevant path
+M --> T : identifies authority/failure
+M --> P : produces hypotheses
+P --> E : chooses discriminating data
+T --> E : chooses adversarial tests
+E --> D : supports or rejects claim
+@enduml
+`} />
+
+Skipping from system name to decision is a missing argument. Counting transitions without defining what each transition does is also weak: one IPC can batch a page, while one syscall can take several blocking device operations.
+
+## Workload A: open and read a hot 4 KiB file
+
+Assumptions:
+
+- one process opens `/data/x`, reads 4096 bytes, and closes it;
+- pathname metadata and file data are resident in memory;
+- permissions allow the operation;
+- no concurrent rename or write occurs;
+- no storage I/O or page fault is required; and
+- each configuration uses its normal cached path.
+
+These assumptions isolate naming, open-state creation, cache lookup, and copying. They do not represent cold-cache storage performance.
+
+### xv6 trace
+
+```text
+user ecall
+  -> syscall dispatch
+  -> namei walks fixed directory entries under inode locks
+  -> filealloc + process descriptor table
+  -> read resolves struct file -> inode
+  -> readi maps block and obtains buffer-cache block
+  -> copyout 4096 bytes
+  -> close drops file/inode references
+```
+
+The path is small enough to inspect completely. Linear directory scans, fixed cache capacities, coarse teaching choices, and copy behavior are not production baselines.
+
+### Linux trace at the stable abstraction level
+
+```text
+open-family syscall
+  -> VFS pathname walk through dentry/inode objects and filesystem methods
+  -> allocate/install struct file in descriptor table
+  -> read-family syscall resolves struct file
+  -> filesystem/page-cache read path supplies resident bytes
+  -> copy to user and advance open-file position
+```
+
+Linux's exact functions vary by filesystem, kernel version, flags, and I/O interface. The VFS documents dentries as in-memory pathname components, inodes as filesystem objects, and `struct file` as the open-file object. RCU-walk and lock/ref-walk can take different pathname paths. A responsible trace records which path occurred rather than treating “VFS” as one instruction.
+
+### XNU trace at the open-source boundary
+
+```text
+BSD syscall interface
+  -> pathname/vnode and file-descriptor mechanisms in BSD subsystem
+  -> filesystem vnode operations and resident-data path
+  -> VM/unified-buffer integration where configured
+  -> copy/result to user task
+```
+
+The XNU source tree composes BSD, Mach VM/IPC, IOKit, and security code in one kernel. “Mach-based” does not imply that a POSIX file read becomes a user-space filesystem IPC. A source-backed analysis must follow the selected XNU build and filesystem.
+
+### seL4 component-system trace
+
+No unique trace exists until the architecture is supplied. One candidate is:
+
+```text
+client invokes VFS endpoint capability
+  -> user-level VFS server resolves cached components
+  -> filesystem server or shared cache supplies page/bytes
+  -> reply carries data, mapped page, or shared-buffer completion
+```
+
+The seL4 kernel mediates endpoint capability and IPC, scheduling, and mappings. User-level servers define pathname, descriptor, cache, and storage semantics. Copy count and context switches depend on protocol, passive-server/scheduling design, shared-memory policy, and whether VFS and filesystem are one component.
+
+### Worked comparison: what can be concluded without timing?
+
+| property | source-backed conclusion | unsupported conclusion |
+| --- | --- | --- |
+| xv6 inspectability | the whole teaching path and fixed structures can be traced | xv6 is representative of production lookup scale |
+| Linux implementation | VFS and filesystem/page-cache paths are in the kernel configuration | one kernel crossing means a fixed latency |
+| XNU composition | BSD file mechanisms coexist with Mach/VM/IOKit in XNU | every file operation is a Mach message |
+| seL4 placement | file service semantics live in selected user components | microkernel structure determines exact copies or speed |
+
+### Application checkpoint: cold-cache reversal
+
+Change only one assumption: data requires storage I/O. Which new mechanisms must enter every comparison, and why can the hot-cache result no longer rank the systems?
+
+<details>
+<summary>Reveal the expanded path</summary>
+
+Add block mapping, request queueing, device driver placement, DMA, interrupts, scheduler blocking/wakeup, read-ahead, filesystem recovery state, and the storage medium. The I/O latency may dominate naming and IPC costs; batching and asynchronous interfaces can reverse a hot-path ranking. Each system's cache and driver architecture must be specified. A hot-cache measurement cannot estimate cold-device behavior by adding one constant unless that model is validated.
+
+</details>
+
+## Workload B: a malformed device request
+
+Assume a network or storage driver parses an adversarial descriptor and executes one out-of-bounds write. Compare the first protection boundary that can contain architectural memory corruption.
+
+| configuration | driver placement in bounded configuration | first-order result |
+| --- | --- | --- |
+| xv6 | kernel address space | kernel state can be corrupted; system integrity is lost |
+| Linux with in-kernel driver | kernel address space | corruption is within kernel TCB; process isolation does not contain it |
+| XNU with in-kernel IOKit driver | kernel address space | hybrid label supplies no memory boundary around that driver |
+| seL4 system with user driver | separate address space with bounded capabilities | process memory fault may be contained; service can fail; delegated authority still matters |
+
+The seL4 row depends on page mappings, endpoint capabilities, IRQ authority, and DMA. Without an IOMMU or a trusted device that respects bounded DMA, a user-space driver can program a device to overwrite memory outside its address space. Moving code to user space changes CPU page-table protection; it does not automatically constrain devices.
+
+Linux and XNU can also place selected device logic in user space. The right conclusion is that **placement and authority**, not kernel family name, determine this fault boundary.
+
+### Worked design: multi-tenant device gateway
+
+Requirements:
+
+- untrusted clients submit variable-length commands;
+- one parser crash must not corrupt the scheduler or other tenants;
+- device DMA must reach only per-request buffers;
+- restart within 100 ms is required;
+- steady-state p99 is important but not yet measured.
+
+A defensible initial architecture places parser and policy in an unprivileged component, gives it no direct DMA-programming authority, and uses a small broker/driver with IOMMU-enforced mappings and a restart protocol. seL4 capabilities can express endpoint, frame, and IRQ authority explicitly; a Linux design can use process isolation, descriptors, an IOMMU-aware kernel driver, seccomp/LSM, and a narrow broker protocol.
+
+The choice between them cannot be made from “microkernel” alone. Evidence must include malformed-message tests, component restart state, stale DMA mapping tests, broker TCB review, and p99 measurements under the actual protocol. If formal assurance of the kernel mechanism is a hard requirement and the target board lies in a verified seL4 configuration, that requirement can dominate. If a required production driver exists only in Linux, implementation and verification cost can dominate.
+
+### Transfer checkpoint: remove the IOMMU
+
+The same gateway runs on hardware with no IOMMU, and the device accepts arbitrary physical DMA addresses. What authority boundary remains credible?
+
+<details>
+<summary>Reveal the hardware dependency</summary>
+
+CPU page tables still isolate ordinary loads/stores by the user driver, but they do not constrain device DMA programmed with arbitrary physical addresses. The trusted driver or broker must validate every descriptor and be trusted not to program out-of-range DMA; physical bounce buffers or a device with its own enforced bounds may reduce authority. The user-space address-space boundary alone no longer establishes memory containment for device actions.
+
+</details>
+
+## Workload C: a 64-byte control message
+
+Assume two mutually distrustful services send a request and receive a response. No payload page transfer is needed. Required semantics are one request boundary, authenticated endpoint authority, bounded queueing, and cancellation on peer death.
+
+### Mechanism comparison
+
+| system | concrete primitive | semantic questions before timing |
+| --- | --- | --- |
+| xv6 | pipe byte stream | who frames messages, handles partial reads/writes, and detects peer close? |
+| Linux | Unix-domain socket or pipe | stream vs datagram/sequence packet, credential passing, descriptor transfer, buffer limits |
+| XNU | Mach port/message | send/receive rights, message structure, port death notification, queue limits |
+| seL4 | endpoint capability and IPC | synchronous rendezvous, capability transfer, badge/authority, scheduling-context behavior |
+
+A count of “two context switches” is not portable evidence. A blocked sender may donate or not donate scheduling context; a socket may buffer without scheduling the receiver immediately; a pipe requires application framing; a Mach or seL4 message can carry protected references with different semantics.
+
+### Worked protocol selection
+
+The server must never accept requests from a client lacking authority to one object. In a seL4 configuration, give each client an endpoint capability or badged derivation whose possession identifies the authorized channel; validate message length and object-specific protocol state. In Linux, accept over a protected Unix-domain socket, authenticate peer credentials where that policy is meaningful, and pass an already authorized object descriptor rather than a pathname. In XNU, bind authority to appropriate port rights and validate message descriptors. In xv6, the application must build framing and authority atop inherited pipe descriptors and the teaching kernel's limited policy.
+
+The protocols can implement equivalent high-level policy, but their trusted brokers, delegation semantics, revocation, and failure paths differ.
+
+### Boundary checkpoint: shortest path is not safest path
+
+One design removes a broker IPC by mapping the device command queue writable into every client. It measures lower median latency. Identify the authority change and the missing evidence.
+
+<details>
+<summary>Reveal the security/performance trade</summary>
+
+Every client now holds direct mutation authority over shared queue state and possibly device-visible descriptors. A malformed or malicious client can corrupt peers' requests, violate queue invariants, or program excess DMA unless hardware and layout enforce separation. Required evidence includes per-client ring isolation, descriptor validation, IOMMU mappings, memory-order proof, overload behavior, and adversarial tests. Lower median latency does not compensate for violating the stated authority contract.
+
+</details>
+
+## Workload D: read-mostly metadata on 64 cores
+
+Assume 99% lookups, 1% insertion/removal, a skewed key distribution, and a target of stable p99 latency through 64 cores.
+
+- xv6's small teaching caches and lock structure provide a readable baseline, not a scaling claim.
+- Linux uses several techniques, including RCU in pathname/dentry-related read-mostly paths, fine-grained locks, per-CPU state, and specialized caches; the actual path must be traced.
+- XNU's current source contains subsystem-specific locks and scalable-memory-reclamation structures; a claim requires tracing the selected path rather than extrapolating from “hybrid.”
+- a seL4 system chooses whether metadata is in one server, sharded servers, shared memory with capabilities, or another arrangement; the kernel does not decide the data structure.
+
+{/* Source tracking: Linux RCU and VFS behavior is supported by the official RCU and VFS documentation. XNU claims are limited to structures visible in Apple's source tree; no unmeasured comparative throughput is asserted. */}
+
+### Worked experiment design
+
+For each configuration:
+
+1. define identical abstract operations and key distribution;
+2. verify semantic equivalence, including update visibility and failure;
+3. pin core affinity, topology, memory placement, and interrupt handling;
+4. measure 1, 2, 4, 8, 16, 32, and 64 cores with repeated trials;
+5. report throughput, latency distribution, CPU time, migrations, cache/coherence indicators where valid, and IPC/lock traces;
+6. inspect the hottest serialized state; and
+7. run a controlled redesign or workload-shape change predicted to affect it.
+
+If one system batches 100 lookups per IPC while another issues one syscall per lookup, report both operation and transition counts. “IPC count” is not a workload-normalized metric.
+
+## Architecture labels fail as predictors
+
+Counterexamples:
+
+- a microkernel system can have one single-threaded user server that serializes all clients;
+- a monolithic kernel can use fine-grained per-CPU and RCU read paths with little shared writing;
+- an in-kernel fast path can be slower than a batched user-level path under a different cache or scheduling state;
+- a user-space driver with unrestricted DMA can exceed the authority of a carefully constrained in-kernel driver;
+- a formally verified kernel does not verify unverified user servers, device models, configuration, hardware, or availability policy; and
+- a large kernel does not imply that every bug is reachable from one constrained workload.
+
+The comparison target is always the end-to-end trusted and executed path.
+
+## Synthesis: select a mechanism configuration
+
+Choose a system configuration for one scenario:
+
+**Scenario 1 — safety controller.** Four isolated components, bounded synchronous messages, one device, strict authority review, modest throughput, and a requirement for high-assurance kernel isolation.
+
+**Scenario 2 — local build server.** Thousands of concurrent filesystem operations, broad hardware support, container and VM workloads, aggressive page cache, and deep production observability.
+
+**Scenario 3 — packet appliance.** Millions of small requests, untrusted control plane, trusted bounded data plane, recoverable driver process, and strict p99 budget.
+
+Submit a comparison across at least three reference configurations with:
+
+- exact workload and non-negotiable contract;
+- mechanism/control-flow trace;
+- authority and failure boundary;
+- predicted costs labeled as hypotheses;
+- implementation and verification burden;
+- discriminating measurements and adversarial tests;
+- one requirement change that reverses or weakens the decision; and
+- deliberate omissions.
+
+<details>
+<summary>Reveal the grading rubric</summary>
+
+- **Workload precision, 15%.** Fixes operation mix, state/cache assumptions, concurrency, data sizes, and failure model.
+- **Mechanism depth, 25%.** Traces actual primitives and component placement; does not use kernel-family labels as mechanisms.
+- **Authority/failure, 20%.** Identifies CPU and DMA boundaries, capability/descriptor flow, restart state, and trusted components.
+- **Evidence plan, 20%.** Selects correctness tests, failure injection, traces/counters, and reproducible measurements able to discriminate claims.
+- **Decision and reversal, 10%.** Ranks requirements and shows which changed assumption would alter the selection.
+- **Intellectual honesty, 10%.** Refuses unsupported timing, verification, or security generalizations and distinguishes kernel from whole system.
+
+There is no universally correct system choice. There are correct and incorrect arguments under a stated scenario.
+
+</details>
+
+## Deliberate boundary
+
+The comparison excludes chronology and product popularity because neither explains a mechanism. Windows NT, FreeBSD, QNX, Fuchsia, real-time kernels, unikernels, formally verified user stacks, and distributed operating systems deserve the same source-backed configuration treatment; adding one paragraph per name would reduce quality.
+
+## References & Further Reading
+
+- [MIT PDOS, xv6 RISC-V book](https://pdos.csail.mit.edu/6.1810/2025/xv6.html) and [immutable xv6-rev5 source tree](https://github.com/mit-pdos/xv6-riscv/tree/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa) — inspectable teaching-kernel mechanisms fixed for the comparison.
+- [Linux kernel documentation, Overview of the Virtual File System](https://docs.kernel.org/filesystems/vfs.html) — dentry, inode, file, superblock, and operation interfaces.
+- [Linux kernel documentation, RCU Concepts](https://docs.kernel.org/RCU/rcu.html) — read-mostly synchronization and reclamation.
+- [Apple open-source XNU README and source tree](https://github.com/apple-oss-distributions/xnu/blob/main/README.md) — official Mach/BSD/IOKit/security composition and build structure.
+- [seL4 Reference Manual](https://docs.sel4.systems/projects/sel4/manual.html) — kernel-object, address-space, scheduling, IRQ, IPC, and capability interfaces.
+- [seL4 capability tutorial](https://docs.sel4.systems/Tutorials/capabilities.html) and [IPC tutorial](https://docs.sel4.systems/Tutorials/ipc) — concrete authority and message mechanisms.
+- [Linux kernel documentation, Credentials in Linux](https://www.kernel.org/doc/html/latest/security/credentials.html) — Linux subject/object credential mechanisms used in the authority comparison.

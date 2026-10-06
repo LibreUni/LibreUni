@@ -2,8 +2,30 @@
 title: "Multicore and SIMD"
 course: "computer-architecture"
 description: "Parallel execution, shared memory, vectorization, and scalability limits."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Derive multicore speedup limits and distinguish SIMD lanes, threads, synchronization, and shared-memory semantics."
+  - "Trace coherence, false sharing, reductions, masks, scheduling imbalance, and bandwidth saturation."
+  - "Choose a parallel decomposition and defend correctness, determinism, and scaling evidence."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 540
+assessment: "Given a parallel kernel and machine limits, calculate a speedup ceiling, trace one race or false-sharing case, and propose a measurable repair."
 ---
 # Multicore and SIMD
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+
+<Quiz client:load title="Bound the speedup"
+  question="Why can doubling the number of cores fail to double application speed?"
+  options={["Additional cores cannot execute instructions from the same compiled program", "Serial work, synchronization, memory bandwidth, and imbalance limit speedup", "Parallel programs stop using shared memory after work is divided", "Processor clock frequency necessarily halves whenever another core becomes active"]}
+  correctIndex={1}
+  explanation="Amdahl-style limits and shared resources constrain the useful parallel fraction. Extra cores may add contention rather than throughput."
+/>
 
 When a single instruction stream cannot provide enough parallel work, architects add parallel execution resources. A multicore processor contains several cores, each with a program counter, registers, pipeline, and usually private upper-level caches, connected to shared memory or shared lower-level caches. SIMD (single instruction, multiple data) applies one instruction to multiple lanes of a vector register. Both approaches can increase throughput, but neither turns an inherently sequential algorithm into a parallel one. The limiting resources are serial dependencies, synchronization, memory bandwidth, communication, locality, and the cost of coordinating independent work.
 
@@ -29,6 +51,15 @@ Locks provide mutual exclusion if acquire and release operations impose the requ
 
 **Worked message-passing example.** The producer writes `payload=42`, then performs a release store `ready=1`. The consumer loops with an acquire load of `ready` and, after observing 1, reads `payload`. The synchronization creates a happens-before relation from the payload write to the consumer’s read. Replacing both with ordinary relaxed operations may permit the consumer to observe `ready=1` and an old payload under a weak memory model. Coherence of each individual location does not establish ordering between locations.
 
+<CaseStudy client:load
+  title="False sharing without shared variables"
+  scenario="Two threads update different counters placed on the same cache line. Performance collapses as cores increase even though no thread reads the other's counter."
+  question="Which mechanism best explains the slowdown?"
+  options={["Coherence repeatedly transfers ownership of the shared cache line", "SIMD lanes serialize because each counter has a different numeric value", "Branch prediction fails because threads execute the same loop body", "Virtual memory faults because each core needs a distinct address space"]}
+  correctIndex={0}
+  explanation="Coherence operates at cache-line granularity. Independent words on one line can therefore invalidate and transfer the line between cores, creating false sharing without a source-level data dependency."
+/>
+
 ## Cache coherence and false sharing
 
 Each core may cache a line, so a write requires a coherence action. An invalidation protocol makes other copies invalid before or as the writer obtains ownership; an update protocol sends new data to sharers. MESI-like protocols track modified, exclusive, shared, and invalid states. A line in modified state is the current copy and must be written back or transferred before another agent obtains it.
@@ -36,6 +67,28 @@ Each core may cache a line, so a write requires a coherence action. An invalidat
 Coherence granularity is a cache line. If thread A increments `counterA` and thread B increments `counterB`, but both fields share one line, each write can invalidate the other core’s copy. This is false sharing: logically independent variables generate physical contention. Padding or alignment can separate them, but increases memory footprint and may affect locality.
 
 Coherence traffic is not free even when a value is correctly synchronized. A lock that bounces between cores causes ownership transfers; a producer-consumer queue may repeatedly move lines between private caches. A scalable algorithm reduces shared writes, batches communication, uses per-core data, or chooses a topology-aware layout.
+
+The sequence uses a simplified two-core write-invalidate protocol. Both copies initially share the same clean line. A writer waits for the other copy to become invalid before modifying the line. `M` means unique modified ownership; `S` means shared; `I` means invalid. A line cannot simultaneously be `M` on one core and `S` on another in this model. Directory routing and transient states are omitted.
+
+<PlantUML code={`@startuml
+participant "Core 0: initially S" as C0
+participant "Core 1: initially S" as C1
+C0 -> C1 : request exclusive ownership / invalidate
+C1 --> C0 : acknowledgement; C1 becomes I
+note left of C0: C0 becomes M; writes counterA
+C1 -> C0 : request exclusive ownership for counterB
+C0 --> C1 : current line data; C0 becomes I
+note right of C1: C1 becomes M; writes counterB
+@enduml`} />
+
+**Transfer check.** The two counters are distinct variables with one writer each. Why do the writes still exchange the line, and what changes if the counters occupy different lines?
+
+<details>
+<summary>Separate language independence from line ownership</summary>
+
+The variables have independent writers, but a cache-line ownership request covers both words. On one shared line, each core must obtain the other core's latest copy before its own write. Separating the words onto different lines allows each core to retain ownership of its own line after warm-up. Padding changes physical sharing and footprint, not the synchronization rules of the programming language.
+
+</details>
 
 ## SIMD semantics
 

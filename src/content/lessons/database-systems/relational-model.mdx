@@ -1,85 +1,143 @@
 ---
-title: "The Relational Model"
+title: "Relational model: facts, keys, and constraints"
 course: "database-systems"
-description: "Relations, tuples, attributes, keys, and integrity constraints."
+description: "Model a small domain as relations with an explicit grain, keys, and checked relationships before writing SQL."
+prerequisites:
+  - "Database abstraction: external, logical, and physical contracts"
+  - "Sets, tuples, predicates, and basic functions"
+outcomes:
+  - "State the schema, grain, candidate keys, and legal instance of a relation."
+  - "Choose primary, unique, foreign-key, and check constraints for a registration domain."
+  - "Predict duplicate and NULL behavior that makes a SQL result differ from a pure set relation."
+omissions:
+  - "Functional-dependency inference and normal-form decomposition are developed in later lessons."
+estimatedMinutes: 420
+assessment: "Given a prose requirement and sample rows, define relations and constraints, identify an invalid row, and explain one query result affected by duplicates or NULL."
 ---
-# The Relational Model
 
-A relation is a set of tuples over named attributes; set semantics imply no duplicate tuples, though SQL’s default bag behavior must be handled deliberately. A candidate key uniquely identifies a tuple; foreign keys express references subject to integrity rules.
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
-Null is not an ordinary value: three-valued logic means `x = NULL` is unknown, not true. Schema constraints should make missingness explicit where possible.
+# Relational model: facts, keys, and constraints
 
-## Relations and instances
+“Store student registrations” is not a schema. First decide what one row is allowed to assert. Then make the database reject row combinations that would contradict that assertion.
 
-The relational model represents a relation schema as a name and a finite set of attributes with domains. A relation instance is a finite set of tuples, one value for each attribute, satisfying domain and constraint requirements. The set semantics matter: duplicate tuples are not part of the mathematical relation, although SQL’s default bag semantics can preserve duplicates in query results. A database state is valid only when every declared key, foreign-key, domain, and business constraint holds.
+> **Definition.** A relation schema names attributes and their domains, such as `Enrollment(student_id, offering_id, status)`. A relation instance is the current collection of tuples permitted by that schema and its constraints. The **grain** states what one tuple represents.
 
-An attribute name identifies a position semantically, not merely an array offset. Relational algebra is therefore most naturally defined on named attributes and compatible schemas. A tuple can be viewed as a partial function from attributes to values; projection restricts its domain, selection filters tuples, and join combines compatible tuples. Distinguish a relation schema from the current relation instance and from a physical table representation.
+{/* Source tracking: The relational vocabulary and separation of relations from their implementation are synthesized from E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (1970). */}
 
-## Keys and integrity
+## Build one small schema carefully
 
-A superkey is a set of attributes that functionally determines every attribute in the relation. A candidate key is a minimal superkey; a primary key is the chosen candidate key used as the principal identity. Minimality is set-theoretic: no proper subset may determine the whole tuple. A surrogate identifier may be a convenient primary key, but natural uniqueness constraints may still be required to prevent duplicate real-world entities.
+We will model a student enrolling in an offering of a course during a term.
 
-A foreign key in child relation C references a candidate or primary key in parent relation P. Referential integrity requires every non-null child reference to match an existing parent tuple, unless the schema explicitly uses deferred semantics. On delete or update, the system needs a policy: reject, cascade, set null, or set a default. Cascades can create large effects and should be audited; set null is valid only when the relationship is optional and the column permits null.
+| Relation | Grain | Candidate key | Required checks |
+| --- | --- | --- | --- |
+| `Student(student_id, display_name)` | One identified student | `student_id` | `student_id` is non-null and unique |
+| `Offering(offering_id, course_code, term, capacity)` | One scheduled offering | `offering_id` | `capacity >= 0` |
+| `Enrollment(student_id, offering_id, status)` | One student's current state in one offering | `(student_id, offering_id)` | Both IDs refer to existing rows; `status` is an allowed value |
 
-Constraints are part of the data model, not merely application validation. A check constraint, unique constraint, exclusion rule, or foreign key enforced by the database protects every client and transaction path. Application checks can improve messages and performance but may race under concurrency. If a condition spans multiple rows, it may require a transaction isolation guarantee, a lock, an exclusion constraint, or a materialized summary maintained atomically.
+> **Example.** The tuple `(s17, o3, 'enrolled')` in `Enrollment` says one fact: student `s17` is enrolled in offering `o3`. If a later requirement says that a student may drop and re-enroll multiple times, this relation no longer has the right grain. Add an event identifier or timestamped enrollment-history relation rather than quietly inserting duplicate current rows.
 
-## Null and three-valued logic
+### Prediction: what is illegal?
 
-SQL NULL represents an unknown or missing value, not an ordinary value equal to zero, empty string, or another NULL. Comparisons with NULL produce UNKNOWN. WHERE retains only TRUE, so a predicate such as salary  less than  greater than  0 excludes NULL rows because the comparison is UNKNOWN. IS NULL and IS NOT NULL test missingness explicitly. Boolean expressions use three-valued truth tables; NOT UNKNOWN remains UNKNOWN, while FALSE AND UNKNOWN is FALSE and TRUE OR UNKNOWN is TRUE.
+Assume `Enrollment` has primary key `(student_id, offering_id)`, and `student_id` and `offering_id` are non-null foreign keys.
 
-Aggregates and joins interact with NULL. COUNT(*) counts rows; COUNT(column) ignores NULL values. SUM over no qualifying non-null values may be NULL rather than zero. An outer join introduces NULL-extended rows, and placing a filter on the nullable side in WHERE can turn a left join into an inner join. Put a predicate in ON when it should restrict matching rows while preserving unmatched left rows.
+| `student_id` | `offering_id` | `status` |
+| --- | --- | --- |
+| `s17` | `o3` | `enrolled` |
+| `s17` | `o3` | `dropped` |
+| `s99` | `o3` | `enrolled` |
 
-## Relational algebra operations
+Which rows can coexist if only `s17` and `o3` exist?
 
-Selection sigma_p(R) keeps tuples of R satisfying predicate p. Projection pi_A(R) keeps attributes A and removes duplicate tuples under set semantics. Rename changes attribute names so relations can be joined without ambiguity. Cartesian product pairs every tuple from two relations and has multiplicative cardinality; it is usually followed by a selection or replaced by a join.
+<ExerciseSolution hint="Check the composite key first, then each foreign key.">
 
-Theta join combines product and a predicate. Equijoin uses equality predicates; natural join additionally matches same-named attributes and removes duplicate join columns, which can be dangerous when unrelated attributes happen to share a name. Outer joins preserve unmatched tuples with NULL extensions. Semijoin returns left tuples with a match but no right attributes and is useful in distributed query reduction; antijoin returns left tuples with no match.
+The first row can exist. The second conflicts with the same composite primary key, even though its `status` differs. The third violates the `student_id` foreign key because `s99` has no matching `Student` row. A history requirement needs a different key and grain; changing `status` alone does not create a new current-enrollment fact.
+</ExerciseSolution>
 
-Set union requires union-compatible schemas and uses duplicate elimination mathematically. Difference is not commutative. Division expresses “for all” queries: R divided by S returns values of X that pair with every value in S. SQL has no primitive division operator, so such queries often use NOT EXISTS or grouped counting. Prove a division translation by showing both directions of the universal condition.
+## Keys identify, foreign keys connect
 
-## SQL bags and equivalence
+> **Definition.** A superkey is a set of attributes that uniquely identifies a tuple in every legal instance. A candidate key is a minimal superkey: remove any one of its attributes and it no longer identifies tuples. A primary key is a chosen candidate key.
 
-SQL SELECT generally uses bags, so a join can multiply duplicates and projection may retain repeated rows unless DISTINCT is requested. Rewriting a query requires preserving multiplicities, NULL semantics, ordering requirements, and side effects of volatile functions. Relational algebra equivalence under set semantics does not automatically imply SQL equivalence under bags. An optimizer needs stronger rules or proof conditions.
+For `Enrollment`, `(student_id, offering_id)` is a candidate key under the stated rule. `(student_id, offering_id, status)` is a superkey but not a candidate key because `status` is unnecessary for identity.
 
-Selection pushdown is valid when a predicate references only one input and does not alter outer-join semantics. Projection pushdown is valid when all attributes needed by predicates, joins, grouping, ordering, and output are retained. Join reordering is usually associative for inner joins under matching semantics, but outer joins and NULL-producing operations constrain reorderings. Query optimization is a semantics-preserving transformation problem, not arbitrary rearrangement.
+> **Invariant.** A non-null child reference must match a referenced key value when the foreign-key constraint is checked. Deferring a constraint changes *when* the database checks it; it must still hold by the required check point, ordinarily commit.
 
-## Cardinality reasoning
+> **Counterexample.** `display_name` might look unique in a three-row sample, but two students can share it. An observed sample pattern is not a business rule. Declare a `UNIQUE` constraint only when the domain truly requires uniqueness.
 
-For a relation with N rows, a selection’s cardinality depends on predicate selectivity. An equality predicate on a uniformly distributed attribute with D distinct values is roughly N/D, but correlations and skew can make this estimate poor. An equijoin of R and S depends on value overlap and frequency distribution; a simple independence estimate can be badly wrong for correlated columns. The optimizer’s plan quality depends on statistics, histograms, distinct counts, and feedback.
+### Apply the constraint vocabulary
 
-Constraints improve reasoning. A primary-key equality join cannot produce more than one matching parent per child. A foreign key can imply that every non-null child matches some parent, subject to NULL and deferred constraints. A predicate contradictory with a check constraint has cardinality zero. Good schema design communicates invariants to both the executor and the human reviewer.
+For each rule, choose the narrowest database constraint that directly expresses it.
 
-## Schema design example
+1. An offering cannot have negative capacity.
+2. A student cannot appear twice in the same current offering.
+3. Every enrollment names an existing offering.
+4. A status must be `enrolled`, `waitlisted`, or `dropped`.
 
-For a course-registration system, define Student(student_id, email, name), Course(course_id, code, title), and Enrollment(student_id, course_id, term, grade). Candidate keys may include Student.email if policy guarantees uniqueness and Course.code with version or term as appropriate. Enrollment’s primary key might be (student_id, course_id, term), with foreign keys to Student and Course. A separate CourseOffering may be needed if instructors, rooms, and capacity vary by term; forcing all facts into Course creates update anomalies.
+<ExerciseSolution hint="Use a check for a predicate, a key for identity, and a foreign key for a cross-relation reference.">
 
-Ask what each row means and what historical facts must remain stable. A student email change should not rewrite an enrollment identity. A course code reuse policy should be explicit. A grade may be NULL because it is not yet assigned, not because the student scored zero. Constraints should prevent duplicate enrollment and invalid course references while transactions enforce capacity and waitlist rules.
+Use `CHECK (capacity >= 0)`, a primary or unique key on `(student_id, offering_id)`, a foreign key from `Enrollment.offering_id` to `Offering.offering_id`, and a check or controlled status domain. These constraints do not by themselves enforce capacity across many enrollment rows; that is an aggregate rule requiring a transaction-aware design.
+</ExerciseSolution>
 
-## Exercises
+{/* Source tracking: Constraint behavior, including primary keys, unique constraints, checks, and foreign keys, is summarized from PostgreSQL’s current constraints documentation. */}
 
-1. Distinguish schema, relation instance, and physical table.
-2. Find candidate keys for a relation and prove minimality.
-3. Explain how a WHERE predicate can change a left join’s meaning.
-4. Translate a “for every required course” query using NOT EXISTS.
-5. Give a case where a set-algebra rewrite is not bag-equivalent.
-6. Design keys and foreign keys for course registration.
+## Relation semantics versus everyday SQL tables
 
-### Diagnostic solutions
+The mathematical relational model treats a relation as a set of tuples. SQL is deliberately more complicated in practice.
 
+| Question | Pure set relation | Typical SQL behavior to account for |
+| --- | --- | --- |
+| Can equal tuples appear twice? | No | Tables and `SELECT` results can contain duplicate row values unless a constraint or `DISTINCT` removes them |
+| Is there a built-in row order? | No | No order is guaranteed without `ORDER BY` |
+| Can an attribute be missing? | Classical model has a value in its domain | SQL has `NULL`; predicates can evaluate to `UNKNOWN` |
 
-1. The schema names attributes and domains; the instance is the current set or bag of rows satisfying constraints; the physical table is the storage and index representation used by the DBMS.
-2. Compute attribute closures under the functional dependencies. A set whose closure is all attributes is a superkey; remove each attribute and recompute to prove minimality for a candidate key.
-3. A condition in WHERE applied to a nullable right attribute rejects NULL-extended unmatched rows, effectively making the outer join inner for that condition. Put a match restriction in ON when unmatched left rows must remain.
-4. Select students s such that NOT EXISTS a required course c for which NOT EXISTS an enrollment e matching s, c, and the intended term. The nested negations encode the universal condition.
-5. Joining a relation with duplicate keys can create multiple copies. Projection without DISTINCT preserves bag multiplicity in SQL, while mathematical projection removes duplicates; the results differ.
-6. Use stable student and offering identifiers, enforce unique email or code constraints as policy requires, make enrollment’s composite or surrogate key unique per term, and declare foreign keys with an explicit delete/update policy.
+> **Warning.** `NULL` is not an ordinary value. In a `WHERE` condition, only `TRUE` retains a row. `FALSE` and `UNKNOWN` both remove it. Therefore `WHERE advisor_id <> 7` does not retain a row whose `advisor_id` is `NULL`.
 
+> **Worked example.** Suppose two enrollment rows project to the same `course_code` after joining with offerings. `SELECT course_code ...` can return the code twice; `SELECT DISTINCT course_code ...` returns it once. Neither query is universally “more relational”—the right one depends on whether the client wants offerings or enrollment occurrences.
 
+### Compare two projection contracts
 
-**Exercise.** Design relations for students, courses, and enrollments. Identify candidate keys and a foreign-key violation that the DBMS should reject.
+Start with these two enrollment occurrences after a course join.
 
-Check all constraints.
+| Enrollment occurrence | `course_code` |
+| --- | --- |
+| Ada in DB101 | DB101 |
+| Bo in DB101 | DB101 |
 
-## References & Further Reading
+| Requested grain | Projection result |
+| --- | --- |
+| One enrollment occurrence | Two `DB101` occurrences are meaningful |
+| One course represented in the result | One `DB101` tuple is meaningful |
 
-* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
+The later algebra lesson makes this set/bag distinction interactive. Here, the point is schema review: decide the requested result grain before duplicate behavior chooses one for you.
+
+### Quick trace
+
+If an `Enrollment` relation contains two different students in `CS101`, what does projection to `course_code` produce under each interpretation?
+
+<ExerciseSolution hint="Projection removes attributes. Decide whether equal remaining tuples collapse.">
+
+With set semantics, the projection has one tuple `CS101`. With bag semantics, it has two occurrences of `CS101`. The source relation's grain was one enrollment; a result whose grain is one course should normally use distinctness deliberately rather than inherit duplicate behavior accidentally.
+</ExerciseSolution>
+
+## From requirements to a legal instance
+
+Schema review starts by separating facts from presentation.
+
+> **Example.** `StudentOffering(student_name, course_code, term, capacity, status)` mixes an offering fact (`capacity`) with an enrollment fact (`status`). If 30 students enroll, the same capacity appears 30 times and can disagree. Put capacity in `Offering`; put status in `Enrollment`; create a view when a screen needs both.
+
+> **Invariant.** Every constraint has a scope. A key constrains rows of one relation. A foreign key constrains a reference across relations. A view controls a presented shape. None automatically proves an aggregate policy such as “at most capacity enrolled.”
+
+### Transfer task
+
+A university now offers the same course code in two sections in the same term, and students may be waitlisted. Sketch a revised `Offering` and `Enrollment` schema. State the grain and candidate key of each relation, then give one row that your constraints must reject.
+
+<ExerciseSolution hint="Course code is no longer enough to identify an offering. Keep the enrollment fact separate from the offering fact.">
+
+One solution is `Offering(offering_id, course_code, term, section, capacity)` with candidate key `offering_id` and perhaps `UNIQUE(course_code, term, section)`, plus `Enrollment(student_id, offering_id, status)` with key `(student_id, offering_id)`. The schema should reject a duplicate enrollment for the same student and offering, an enrollment whose offering does not exist, and an invalid status. Whether two waitlist entries are allowed is a policy question; their ordering needs its own explicit attribute and rule.
+</ExerciseSolution>
+
+## References
+
+- [E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (IBM Research, 1970)](https://research.ibm.com/publications/a-relational-model-of-data-for-large-shared-data-banks)
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)
+- [PostgreSQL: Queries](https://www.postgresql.org/docs/current/queries.html)

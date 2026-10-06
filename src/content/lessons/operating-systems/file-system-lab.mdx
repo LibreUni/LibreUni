@@ -1,0 +1,430 @@
+---
+title: "Filesystem Lab: Recoverable Rename"
+course: "operating-systems"
+description: "An original xv6 RISC-V extension implementing recoverable regular-file rename with lock-order proofs, crash matrices, invariant checking, and adversarial tests."
+prerequisites:
+  - "C systems programming, Make, Git, GDB, and QEMU"
+  - "xv6 filesystem layers, inode and buffer-cache locking, and write-ahead logging"
+  - "Pathname, descriptor, hard-link, unlink, and rename semantics"
+  - "Ability to explain a failing concurrent or crash trace from evidence"
+outcomes:
+  - "Implement a bounded rename operation in a pinned xv6 RISC-V tree without copying an external assignment or solution."
+  - "Preserve namespace, link-count, allocation, cache, lock-order, and crash-recovery invariants across same- and cross-directory replacement."
+  - "Build public tests and deterministic crash cuts that kill named incorrect implementations."
+  - "Defend design choices, evidence, limitations, and residual risks without disclosing a complete repository patch as a solution."
+omissions:
+  - "Directory renaming, cross-filesystem rename, mount namespaces, symbolic links, ACLs, extended attributes, and production VFS semantics are excluded from the required implementation."
+  - "The published material provides contracts, traces, test oracles, and rubrics—not a full patch."
+estimatedMinutes: 720
+assessment: "A recoverable xv6 regular-file rename extension, invariant checker, crash matrix, adversarial tests, design memo, and live defense; automated tests provide evidence but do not certify authorship or engineering judgment."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Filesystem Lab: Recoverable Rename
+
+The naive implementation is four lines: locate `old`, add `new`, remove `old`, return success. It loses data when target insertion runs out of space, leaks the replaced inode when its link count is not decremented, deadlocks when opposite cross-directory renames acquire parents in argument order, and exposes a mixed namespace after a crash when either directory write bypasses the log.
+
+The project is complete only when tests distinguish those implementations from a correct one. A successful happy-path shell transcript is not evidence for atomicity or recovery.
+
+This brief is original to LibreUni. It uses official xv6 RISC-V tag `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`, as the licensed course root and does not reproduce another institution's lab text or private solution.
+
+{/* Source tracking: Baseline interfaces and locking behavior were verified against immutable MIT PDOS tag xv6-riscv-rev5, commit 7d7adbb1b0acbd67c9766a20d0f9900fef2789fa, especially kernel/sysfile.c, kernel/fs.c, kernel/log.c, kernel/fs.h, kernel/param.h, and LICENSE. */}
+
+## Freeze the experimental object
+
+Every submission has the same immutable **course root**:
+
+```text
+repository:  https://github.com/mit-pdos/xv6-riscv
+tag:         xv6-riscv-rev5
+course root: 7d7adbb1b0acbd67c9766a20d0f9900fef2789fa
+```
+
+Choose and declare one start mode:
+
+- **clean baseline:** branch directly from the course root and submit only the rename extension;
+- **cumulative checkpoint stack:** apply the learner's accepted course checkpoint patches in the documented course order on top of the same root, record every patch identifier and checksum, then branch the rename work from that stack tip.
+
+The cumulative stack does not create a second upstream baseline. It creates a reproducible pre-lab start point whose ancestry must include the exact course root. The lab-only treatment is the diff from that recorded start point. This separation permits a clean implementation for isolation or an integrated cumulative kernel without attributing earlier checkpoint effects to rename.
+
+Preserve upstream license and notices. Record, in `REPORT.md`:
+
+```text
+course-root URL:
+course-root tag and commit:
+start mode (`clean-rev5` or `cumulative-stack`):
+ordered checkpoint patch IDs and checksums (`none` for clean mode):
+pre-lab start-point commit or tree checksum:
+rename treatment commit or patch checksum:
+toolchain version:
+QEMU version:
+host architecture and OS:
+build command:
+upstream and checkpoint regression commands:
+rename test command:
+```
+
+Before modifying code, save evidence for:
+
+1. the tag resolving to the exact course-root hash;
+2. a clean course-root build and its upstream test result;
+3. a clean start-point boot plus upstream and applicable checkpoint regression results;
+4. `usertests` or the start point's equivalent result; and
+5. a filesystem image hash after a fresh start-point build.
+
+If either the course root or recorded start point does not build, implementation stops. Changing implementation, checkpoint stack, and toolchain simultaneously destroys the comparison.
+
+### Baseline checkpoint
+
+Explain why recording only `xv6-riscv-rev5` is insufficient for a cumulative submission even though the tag itself is immutable.
+
+<details>
+<summary>Reveal the required evidence</summary>
+
+The tag and hash fix only the course root. A cumulative start point also contains ordered checkpoint patches whose contents, order, conflict resolutions, and configuration can change behavior. Record their immutable identifiers/checksums and the resulting pre-lab tree, then express rename as a lab-only diff from that tree. Toolchain and QEMU versions fix major translation and emulation variables; commands make the build path inspectable. A container image without its source, digest, and build instructions merely packages the ambiguity.
+
+</details>
+
+### Rev5 compatibility audit
+
+The tag was chosen because the filesystem constants and paths used by the course are concrete: `BSIZE=1024`, `NDIRECT=12`, `DIRSIZ=14`, `MAXOPBLOCKS=10`, and `LOGBLOCKS=30`; `begin_op`, `end_op`, `log_write`, `dirlookup`, `dirlink`, `writei`, and recovery are present. Four integration deltas must remain visible:
+
+| rev5 boundary | consequence for the lab |
+| --- | --- |
+| no `rename` syscall or user ABI exists | adding the bounded syscall path is required work, not a missing setup patch |
+| `skipelem` accepts at least 14 bytes by retaining only `DIRSIZ` bytes | the lab's overlength-final-component rejection requires validation from the untruncated path, before aliasing can occur |
+| the filesystem has no general transaction abort; `bmap`/`writei` can allocate before a later ENOSPC result | all expected failures must precede publication, or a proved rollback/reservation mechanism must restore allocation and metadata exactly |
+| log admission reserves `MAXOPBLOCKS=10` unique blocks per operation | the worst-case rename dirty set must be proved `<= 10`; exceeding it requires an explicitly reviewed narrow log-capacity change, not a silent constant edit |
+
+Cumulative checkpoint patches may change a touched syscall table, inode path, lock order, log bound, disk format, or test ABI. Treat any failed patch application, changed invariant, expanded dirty set, or altered source line as an integration incompatibility: preserve the conflict, record it in `REPORT.md`, adapt the lab-only patch deliberately, and rerun every affected checkpoint test. Do not resolve a conflict by copying a clean-tree file over cumulative work.
+
+## Required interface and bounded semantics
+
+Add a user-visible call with this contract:
+
+```c
+int rename(const char *old_path, const char *new_path);
+```
+
+It returns `0` on success and `-1` on failure. The required domain is narrower than POSIX and must be documented as such:
+
+- `old_path` resolves to an existing regular file;
+- `new_path` has an existing directory parent on the same xv6 filesystem;
+- source and target parents may differ;
+- the target may be absent or may name a regular file;
+- replacing an existing target removes one link from the displaced target;
+- if both names already identify the same inode, the operation succeeds without changing either link count;
+- final components `.` and `..`, directory sources, directory targets, overlength final components, and invalid paths fail without namespace change; and
+- no symbolic-link behavior is required because the pinned teaching baseline has no required symbolic-link interface for this project.
+
+The success-state namespace is:
+
+```text
+before: old -> S, new -> D or absent
+after:  old absent, new -> S
+```
+
+If `D` existed and differed from `S`, its link count decreases by one. `S` keeps the same link count: one directory edge is moved, not created or destroyed. Open descriptors for `S` and `D` retain their inode references.
+
+> **No-change-on-error contract.** Every expected validation or capacity failure must leave the visible namespace and persistent link counts at their pre-call values. Kernel panic is not an accepted error path.
+
+### Worked trace: replacement with open descriptors
+
+Initial state:
+
+```text
+/a/old -> inode 20, nlink(20)=1, process P has fd 3 open on inode 20
+/b/new -> inode 44, nlink(44)=1, process Q has fd 5 open on inode 44
+```
+
+After successful `rename("/a/old", "/b/new")`:
+
+```text
+/a/old absent
+/b/new -> inode 20, nlink(20)=1
+inode 44 has nlink=0 but remains live while Q holds fd 5
+P's fd 3 and a fresh open of /b/new both reach inode 20
+Q's fd 5 still reaches inode 44
+```
+
+Closing Q's descriptor permits inode 44 reclamation. Redirecting Q's open descriptor to inode 20 would violate open-file identity; leaving `nlink(44)=1` would leak persistent ownership.
+
+### Contract checkpoint: two names, one inode
+
+`/a/old` and `/b/new` are hard links to inode 20, whose link count is 2. What must rename do?
+
+<details>
+<summary>Reveal the boundary result</summary>
+
+The operation succeeds as a no-op under the stated contract. Both names remain and `nlink(20)` remains 2. Treating `new` as a displaced different object and decrementing its link count corrupts the relationship between on-disk link count and directory references. This case must be detected by `(dev, inum)` identity, not pathname-string equality.
+
+</details>
+
+## Invariants to write before code
+
+Your design memo must state and use these invariants:
+
+**N1 — Directory validity.** Every nonzero directory entry names an allocated inode of the same filesystem.
+
+**N2 — Regular-file link accounting.** After recovery with no live process state, each regular inode's `nlink` equals the number of directory entries that name it.
+
+**N3 — Move conservation.** Renaming `S` from one name to another does not change `nlink(S)`.
+
+**N4 — Replacement accounting.** Replacing distinct `D` removes exactly one namespace edge to `D`; reclamation waits for both zero links and zero in-memory references.
+
+**N5 — Runtime namespace atomicity.** A lookup beginning after the operation's linearization point observes `new -> S` and no `old`; a lookup completed before that point may observe the pre-state. The implementation does not release a modified parent lock while the other parent still exposes an intermediate state.
+
+**N6 — Crash state set.** After log recovery, the pair of names and link counts is exactly the pre-state or exactly the post-state—not a mixture.
+
+**N7 — Lock-order acyclicity.** Every operation that simultaneously locks two parent inodes acquires distinct parents by ascending `(dev, inum)` order and releases them in reverse order.
+
+**N8 — Log boundedness.** One rename never dirties more unique blocks than the transaction reservation permits; repeated updates to one block count once.
+
+<PlantUML code={`
+@startuml
+state "pre-state\nold -> S\nnew -> D/absent" as PRE
+state "parents locked\nentries revalidated\ncapacity reserved" as READY
+state "volatile mutation\nnew -> S\nold cleared\nD link adjusted" as MUT
+state "log committed" as COMMIT
+state "post-state\nold absent\nnew -> S" as POST
+PRE --> READY : all fallible checks succeed
+READY --> PRE : validation or reservation fails
+READY --> MUT : mutate while both parents locked
+MUT --> COMMIT : end transaction / durable commit
+COMMIT --> POST : install or recovery replay
+PRE --> PRE : crash before valid commit
+MUT --> PRE : crash without valid commit
+COMMIT --> POST : crash at any home-write cut
+@enduml
+`} />
+
+The diagram is a proof skeleton. Your code may use different helper boundaries, but every failure and crash cut must map to one allowed edge.
+
+## Design the mutation in three phases
+
+Do not use the following as copyable implementation code; it is a review decomposition.
+
+### Resolve and retain identities
+
+Within one filesystem transaction:
+
+1. copy both user path strings into bounded kernel buffers;
+2. resolve and retain references to both parent inodes and final components;
+3. reject unrepresentable final names, `.` and `..`;
+4. acquire one or two parent inode locks in canonical `(dev, inum)` order; and
+5. re-run source and destination entry lookup while those locks are held.
+
+The second lookup is not redundant. Path traversal produced references before both parent locks were acquired; another namespace operation may have changed an entry. All decisions used for mutation must be based on state protected by the locks held during mutation.
+
+### Validate and reserve before publication
+
+While parent locks exclude entry changes:
+
+- obtain referenced source and optional destination inodes;
+- reject non-regular types;
+- detect same-inode no-op;
+- verify link counts are positive and within representable range; and
+- determine a writable destination entry slot.
+
+If inserting `new` requires extending the destination directory, perform every allocation that can fail before clearing `old`. Account for the destination directory data block, its bitmap block, its inode block, source directory block, optional displaced-inode block, and any overlaps. A harmless reserved empty slot is not permission to exceed log capacity; report its treatment explicitly.
+
+Compact xv6 does not offer general transaction abort. Once the first visible edge is changed, the remaining path should contain no expected recoverable failure. An implementation that calls an allocation routine after clearing `old` has already violated the no-change-on-error contract.
+
+### Publish under locks and log coverage
+
+With capacity secured and identities revalidated:
+
+1. install or replace the destination entry with source inode number;
+2. clear the source entry when it is a distinct slot;
+3. decrement and persist the displaced inode's link count when destination identity differs;
+4. keep source link count unchanged;
+5. keep both parent locks until all namespace mutations are complete; and
+6. route every modified buffer through the existing log rather than writing a home block directly.
+
+The order of steps 1 and 2 is not the crash protocol—the log supplies crash atomicity—but destination-first avoids losing the only name if an internal assertion reveals an unexpected failure. Runtime readers cannot observe the temporary duplicate because the relevant parent locks remain held.
+
+### Lock-order checkpoint
+
+Thread A renames `/x/a` to `/y/a`; thread B simultaneously renames `/y/b` to `/x/b`. Both acquire the source parent first. Construct the wait-for cycle, then remove it using canonical order.
+
+<details>
+<summary>Reveal the deadlock trace</summary>
+
+Argument-order acquisition permits:
+
+```text
+A holds inode(x), waits for inode(y)
+B holds inode(y), waits for inode(x)
+```
+
+The wait-for graph has a cycle. If both compare `(dev, inum)` and lock the lower identity first, they request the same first lock; one waits before holding the second resource, so the two-node cycle cannot form. The same-parent case locks once. A timeout only detects the bug; it does not establish acyclic acquisition.
+
+</details>
+
+## Crash matrix, not random hope
+
+Add deterministic failpoints around the existing log protocol. A test-only failpoint may halt QEMU or force reboot after a named event. It must be disabled in the submitted normal build and documented so it cannot trigger accidentally.
+
+At minimum, inject after:
+
+| cut | durable event | expected recovered state |
+| --- | --- | --- |
+| C0 | transaction admitted, no log record stable | pre-state |
+| C1 | some rename block images stable, no valid commit | pre-state |
+| C2 | all block images stable, no valid commit | pre-state |
+| C3 | commit record stable, no home block installed | post-state |
+| C4-k | commit stable, exactly `k` home blocks installed | post-state for every `k` |
+| C5 | all home blocks installed, log not released | post-state |
+| C6 | log released/checkpoint complete | post-state |
+
+Rebuild or restore an identical filesystem image before each cut, and make rename the only outstanding filesystem operation so rev5's group commit cannot fold unrelated mutations into the crash oracle. After boot, run both behavioral checks and an offline or boot-time invariant checker. A workload that keeps running after a failpoint is not testing power-loss semantics.
+
+### Crash-oracle checkpoint
+
+Why is checking only whether `/b/new` exists insufficient after C4-k?
+
+<details>
+<summary>Reveal the hidden states</summary>
+
+The name can exist while its inode is unallocated, its source name also remains, the displaced target's link count is wrong, or bitmap ownership is inconsistent. The oracle must inspect the complete pre/post tuple and global invariants: directory entries, inode types and link counts, block references, and bitmap ownership. Namespace appearance alone cannot detect a leaked or multiply owned object.
+
+</details>
+
+## Required invariant checker
+
+Write a separate checker or a bounded kernel diagnostic that operates on a quiescent image. It must report evidence rather than repair silently.
+
+Required checks:
+
+1. every nonzero directory entry has an in-range inode number whose on-disk type is allocated;
+2. counted regular-file directory references equal on-disk `nlink`;
+3. every direct and indirect data-block reference is in range and marked allocated;
+4. no data or indirect block has two owners in this no-sharing format;
+5. every allocated non-reserved block is reachable from exactly one inode metadata path;
+6. `old`/`new` states match exactly one row of the operation's pre/post oracle; and
+7. the log header is structurally valid under the pinned baseline's format.
+
+The checker must distinguish reserved filesystem blocks from leaked data blocks. It must not count `.` as a regular-file hard link or apply regular-file link rules blindly to directory parent links.
+
+## Public behavior matrix
+
+Implement deterministic tests for all rows. Each test starts from a fresh image or creates and removes its own fixtures without depending on test order.
+
+| ID | setup | required result |
+| --- | --- | --- |
+| P1 | same directory, target absent | old absent; new has source bytes and inode identity |
+| P2 | different directories, target absent | same post-state across parent boundary |
+| P3 | target is distinct regular file and remains open | new reaches source; old target descriptor still reads displaced bytes |
+| P4 | old and new are hard links to one inode | success no-op; both names and link count unchanged |
+| P5 | old missing | `-1`; target and all counts unchanged |
+| P6 | source or target is a directory | `-1`; entire tree unchanged |
+| P7 | final name is `.` or `..`, empty, or overlength | `-1`; no truncated alias created |
+| P8 | destination directory requires a new data block | success within measured log bound |
+| P9 | no free block for required directory growth | `-1`; old name preserved and no leak |
+| P10 | two opposite cross-directory renames repeated under watchdog | completion without deadlock; invariant checker clean |
+| P11 | concurrent lookup loops around successful rename | each lookup result belongs to allowed pre/post observation set |
+| P12 | every crash cut C0–C6 for absent and replacing targets | exact pre- or post-state; checker clean after recovery |
+
+Tests may expose inode numbers through a test-only `stat` field or checker; do not infer identity only from equal bytes.
+
+## Mutation tests against named wrong implementations
+
+Create temporary faulty branches or patch toggles. The correct test suite must kill each mutant for the stated reason:
+
+| mutant | defect | test that must fail |
+| --- | --- | --- |
+| M1 `clear-old-first` | removes source before target capacity is known | P9 observes lost source after ENOSPC |
+| M2 `home-write-directory` | bypasses `log_write` for one directory block | C1/C2 or C4-k produces mixed pre/post namespace |
+| M3 `keep-displaced-link` | never decrements replaced target | P3 checker reports link-count mismatch/leak |
+| M4 `source-parent-first` | locks parents in argument order | P10 watchdog captures ABBA wait-for cycle |
+| M5 `same-inode-is-replacement` | decrements link count when identities match | P4 reports two names but link count one |
+| M6 `trust-first-lookup` | does not revalidate under parent locks | targeted concurrent unlink/link schedule changes wrong entry |
+| M7 `allocate-after-clear` | destination growth can fail after publication begins | P9 leaves neither exact pre-state nor post-state |
+| M8 `count-log-calls` | confuses helper calls with unique dirty blocks | P8 either rejects a fitting transaction or overruns reservation under boundary layout |
+
+Do not keep faulty code in the final normal path. Preserve the mutation procedure and failing output as test evidence.
+
+### Worked test design: kill M6 deterministically
+
+A probabilistic loop may run thousands of times without hitting the race. Introduce a test-only barrier after the first source lookup but before acquiring/revalidating both parents. The test thread pauses there; a second thread replaces the source directory entry with a hard link to a different inode; the first resumes. A correct implementation either observes the changed identity during locked revalidation and applies the defined policy or fails without changing the wrong object. M6 mutates using stale identity and the checker exposes the mismatch.
+
+The barrier belongs at a named state transition and is compiled out of release code. A sleep delay is not a deterministic schedule.
+
+## Evidence package
+
+Submit this tree without generated binaries:
+
+```text
+README.md                 build, boot, and 10-minute evaluator path
+REPORT.md                 contract, invariants, design, limits, and results
+BASELINE.md               course root, start mode, ordered patch/checksum stack
+PATCH.diff                rename-only change relative to the recorded start point
+tests/                    public behavior, concurrency, and mutation drivers
+tools/fscheck-rename.*    invariant checker source
+scripts/crash-matrix.*    deterministic image restore and failpoint runner
+results/raw/              machine-readable logs for every P, C, and M case
+results/summary.md        compact table generated from named raw files
+LICENSES/                 retained upstream notices and added dependency notices
+```
+
+`README.md` must identify any command that can overwrite an image or terminate a virtual machine. The crash runner may operate only on an explicit lab image path; it must refuse a missing or root-like target.
+
+### Design memo questions
+
+Answer with code locations and traces:
+
+1. What is the runtime linearization interval, and which locks exclude partial lookup observations?
+2. How are two parents ordered? List every path that holds more than one inode lock.
+3. Which operations can still fail after the first directory entry mutation, and why?
+4. What is the worst-case unique dirty-block set for P8? Show overlaps and the log-capacity inequality.
+5. Why is source `nlink` unchanged? When does displaced storage become reclaimable?
+6. How does each crash cut map to log commit state?
+7. Which test kills each named mutant, and what wrong state does it observe?
+8. What behavior remains outside the contract?
+
+## Transparent rubric
+
+| dimension | weight | full-credit evidence |
+| --- | ---: | --- |
+| interface and namespace behavior | 15 | all P1–P9 results and exact no-change-on-error states |
+| locking and concurrency | 15 | canonical-order argument, deterministic stale-lookup schedule, P10–P11 traces |
+| crash consistency | 20 | complete C0–C6 matrix for absent and replacing targets; exact pre/post recovery |
+| persistent invariants | 15 | checker source and clean reports; deliberately corrupted image is detected |
+| adversarial test power | 15 | every M1–M8 mutant killed by the predicted oracle |
+| implementation quality | 10 | bounded helpers, checked errors, no bypass of log or license, readable diff |
+| reproducibility and evidence | 5 | pinned baseline, scripted clean run, raw data tied to summary |
+| defense | 5 | learner explains an unseen trace and one limitation without relying on the patch text |
+
+### Non-compensable failures
+
+The submission cannot pass if its start point does not descend reproducibly from the exact course root, its rename-only patch cannot be separated from the checkpoint stack, it fails applicable upstream/checkpoint tests, corrupts an unrelated filesystem image, lacks source attribution, includes a copied full solution, or permits a crash state outside the declared pre/post set. High scores in prose cannot compensate for those failures.
+
+## Defense prompts and diagnostic outcomes
+
+An evaluator selects two without advance disclosure:
+
+- Change destination from absent to a second hard link of the source. Predict every count before running code.
+- Move one `log_write` to a direct home write. Select the first crash cut that can expose it.
+- Reverse two parent inode numbers while preserving pathname order. Show that acquisition order remains unchanged.
+- Force destination directory growth from direct block 11 to indirect entry 0. Recompute the unique dirty set and its `MAXOPBLOCKS=10` inequality.
+- Hold an open descriptor on the displaced target through recovery. Separate on-disk recovery state from lost process state.
+- Remove the atomic-sector assumption for the commit header. State the additional mechanism required.
+
+The defense is diagnostic. Failure to explain the submitted lock order or crash oracle triggers focused re-review; the website does not infer mastery from test output.
+
+## Scope boundary and handoff
+
+Directory rename requires cycle prevention, `..` updates, parent link-count changes, ancestor locking, and a stronger namespace model. Cross-filesystem rename requires a copy/delete protocol rather than one atomic local transaction. Symbolic-link policy changes path resolution and attacker control. None is an optional bonus hidden inside this brief; each needs a separately reviewed contract.
+
+Before handoff, restore test hooks to disabled-by-default state, run the clean evaluator path from a new checkout, and have another person follow only `README.md`. Record every deviation. The final report must distinguish tests passed, claims argued from invariants, and claims left unproved.
+
+## References & Further Reading
+
+- [MIT PDOS, xv6 RISC-V source and book](https://pdos.csail.mit.edu/6.1810/2025/xv6.html) — official text and upstream entry point; the implementation target remains the immutable rev5 commit below.
+- [MIT PDOS, xv6-rev5 `kernel/sysfile.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/sysfile.c) — immutable link, unlink, create, and open transaction paths against which rename is integrated.
+- [MIT PDOS, xv6-rev5 `kernel/fs.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/fs.c) — immutable inode, directory, allocation, path, and ENOSPC helper contracts.
+- [MIT PDOS, xv6-rev5 `kernel/log.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/log.c) and [`kernel/param.h`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/param.h) — immutable log admission, capacity, commit, installation, and recovery behavior.
+- [MIT PDOS, xv6-rev5 license](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/LICENSE) — notice that must remain with upstream-derived work.
+- [The Open Group, POSIX.1-2024 `rename()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html) — production interface reference used to identify both adopted and deliberately excluded semantics.
+- [Linux kernel documentation, ext4 Journal (JBD2)](https://docs.kernel.org/filesystems/ext4/journal.html) — production contrast for commit records, replay, checksums, and checkpointing.

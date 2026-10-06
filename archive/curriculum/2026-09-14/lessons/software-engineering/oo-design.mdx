@@ -1,0 +1,94 @@
+---
+title: "Object-Oriented Design: Responsibilities and Collaborations"
+course: software-engineering
+description: "Assign responsibilities across objects, keep invariants local where possible, and verify collaborations with sequence and failure traces."
+prerequisites:
+  - "Object-oriented analysis, interfaces, and relationships"
+outcomes:
+  - "Assign a responsibility to the boundary with the information and authority to perform it"
+  - "Design collaborations that expose dependencies and failure behavior"
+  - "Use sequence-level evidence to test an object design"
+omissions:
+  - "Framework-specific dependency injection and distributed sagas are treated in later lessons."
+estimatedMinutes: 60
+assessment: "Design one use-case slice and justify each collaborator's information, authority, and failure contract."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Object-Oriented Design: Responsibilities and Collaborations
+
+Design turns an analyzed behavior into executable structure. The central question is not “which pattern is this?” but “which object has the information and authority to enforce this rule, and what does it need from collaborators?”
+
+<Quiz client:load
+  title="Assign the responsibility"
+  question="Where should a rule that depends on all reservations for a room be enforced?"
+  options={["On one Reservation object with no repository access", "At a coordinator/repository boundary that can observe and commit the competing set atomically", "In the calendar color renderer", "In every controller independently"]}
+  correctIndex={1}
+  explanation="The rule spans objects and concurrency. A local reservation can validate its interval, but a boundary with the right information and transaction authority must enforce non-overlap."
+/>
+
+## Information, authority, and cohesion
+
+Keep local invariants near the state they govern. A `Money` value can enforce currency/scale rules; a `Reservation` can enforce its own lifecycle; a `BookingService` can coordinate availability and authorization. A service that owns no state and only forwards calls may be a useful boundary, but a “god service” that knows every table and policy is a coupling hotspot.
+
+## Collaborations as traces
+
+For a use case, write a normal trace and failure traces before selecting classes:
+
+1. actor sends a request with identity and proposed interval;
+2. boundary authenticates and loads relevant policy;
+3. coordinator checks the invariant under the chosen concurrency boundary;
+4. repository commits the reservation and an audit event;
+5. notification is scheduled with a stable event identity.
+
+Ask what is visible if step 4 succeeds and step 5 times out. The answer determines idempotency and recovery, not just method names.
+
+<CaseStudy client:load
+  title="Keep side effects behind an explicit seam"
+  scenario="A controller calls `reservation.confirm()`, which writes to the database, sends an email, and updates a search index. A database transaction can roll back, but the email cannot be unsent."
+  question="Which redesign exposes the real failure boundary?"
+  options={["Add more private methods inside confirm", "Commit the domain state and durable outbox event in one boundary; process email/index work idempotently afterward", "Ignore email failure because confirmation succeeded", "Move all work into the UI"]}
+  correctIndex={1}
+  explanation="The outbox separates the atomic state change from retryable external effects. The event needs a stable identity and a reconciliation policy for delivery failure."
+/>
+
+<CodeRunner client:load
+  title="Model a collaboration as data"
+  language="python"
+  code={`events = []
+
+def confirm(reservation_id):
+    events.append({"type": "ReservationConfirmed",
+                   "id": reservation_id})
+
+confirm("r-17")
+print(events)`}
+  output="[{'type': 'ReservationConfirmed', 'id': 'r-17'}]"
+/>
+
+## Design review questions
+
+Review whether each dependency is necessary, whether a collaborator can be substituted, whether a failure is represented, and whether a mutable reference leaks an invariant. A sequence diagram should show meaningful messages and ownership boundaries, not every getter. A class diagram should show relationships that affect reasoning, not every field.
+
+## Transfer exercises
+
+1. Assign responsibilities for validating an interval, checking room conflicts, and sending a reminder.
+2. Give a failure trace for “database commit succeeds, worker crashes before email.”
+3. Explain why a controller that contains pricing rules is hard to test.
+4. Identify a dependency that should be injected and one that should remain internal.
+
+### Diagnostic solutions
+
+1. Interval value/reservation for local validity; repository/coordinator for competing availability; worker/provider boundary for delivery with idempotency.
+2. The durable event remains pending; a worker retries by event identity; an operator can inspect age and reconcile. No second reservation should be created.
+3. It couples policy to transport and makes tests construct HTTP details; extract a pure policy or domain boundary with a focused contract.
+4. Inject a clock/provider whose behavior is part of the test; keep a private helper internal when substituting it would not clarify a meaningful boundary.
+
+## References & Further Reading
+
+* [MIT 6.005: abstraction functions and rep invariants](https://web.mit.edu/6.005/www/fa15/classes/06-specifications/)
+* [Martin Fowler: Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html)
+* Gamma et al., *Design Patterns*. Addison-Wesley, 1994.

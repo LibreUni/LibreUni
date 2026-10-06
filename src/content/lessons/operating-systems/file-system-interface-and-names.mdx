@@ -1,0 +1,275 @@
+---
+title: "Filesystem Interface and Names"
+course: "operating-systems"
+description: "Path resolution, directory entries, open file descriptions, links, atomic namespace operations, and race-resistant file access."
+prerequisites:
+  - "C pointers, structs, arrays, and system-call error handling"
+  - "Processes, file descriptors, and virtual address spaces"
+  - "Kernel/user privilege boundaries"
+outcomes:
+  - "Distinguish pathnames, directory entries, filesystem objects, open file descriptions, and process-local descriptors."
+  - "Trace path resolution, descriptor duplication, unlink, link, and rename under precisely stated concurrency assumptions."
+  - "Design race-resistant and crash-aware file update protocols without confusing atomic visibility with durability."
+  - "Diagnose namespace bugs involving symbolic links, shared offsets, stale names, and open-but-unlinked objects."
+omissions:
+  - "Network filesystem cache coherence, distributed naming, mandatory access control, and implementation-specific extended attributes require separate treatment."
+  - "Crash recovery is bounded here to interface guarantees; on-disk recovery mechanisms are developed independently."
+estimatedMinutes: 300
+assessment: "Produce and defend traces for unfamiliar pathname and descriptor schedules, then specify a race-resistant update protocol with explicit atomicity, authority, and durability assumptions."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Filesystem Interface and Names
+
+A configuration daemon opens `/srv/app/config`, validates its contents, and keeps the returned descriptor. An administrator writes a replacement file and atomically renames it over `config`. New calls to `open("/srv/app/config", ...)` reach the replacement; the daemon's existing descriptor still reaches the old object. If the old name was its last directory entry, the old object has no pathname at all, yet the daemon can continue reading it.
+
+The apparent contradiction disappears when a pathname and an open file are modeled as different references. A pathname is a request to traverse a mutable namespace. A descriptor is a process-local handle to an already opened description. Treating both as “the file” causes stale-read bugs, authority races, and incorrect durability claims.
+
+{/* Source tracking: The pathname-resolution, open-file-description, and rename semantics below synthesize POSIX.1-2024 Base Definitions §§3–4 and the open(), rename(), link(), and unlink() interfaces published by The Open Group. */}
+
+## Five objects hidden behind one integer
+
+Assume a local POSIX-like filesystem, one mount namespace, no I/O error, and no concurrent namespace mutation until a trace explicitly introduces one. The model contains five distinct objects:
+
+| Object | Identity | Mutable state relevant here | Typical lifetime |
+| --- | --- | --- | --- |
+| pathname string | bytes supplied by a caller | components may be interpreted relative to a directory | one operation |
+| directory entry | pair `(name, object-id)` inside a directory | name and target mapping | until unlink or rename |
+| filesystem object | inode-like identity | type, size, link count, permissions, block map | while linked or referenced |
+| open file description | kernel record for an open instance | current offset and file-status flags | while any descriptor refers to it |
+| file descriptor | small integer in one process | descriptor flags such as close-on-exec | until close or table replacement |
+
+A symbolic link is itself a filesystem object whose payload is another pathname. A hard link is another directory entry for an existing object; it is not a pointer to another name. A process may have several descriptors for one open file description, and several independently opened descriptions may refer to one object.
+
+<PlantUML code={`
+@startuml
+left to right direction
+rectangle "process P\nfd 3" as P3
+rectangle "process P\nfd 7" as P7
+rectangle "process Q\nfd 4" as Q4
+rectangle "open description A\noffset = 8192\nstatus = O_RDWR" as OFA
+rectangle "open description B\noffset = 0\nstatus = O_RDONLY" as OFB
+rectangle "inode 41\nregular file\nlink count = 2" as I41
+rectangle "directory /srv/app\nconfig -> 41\nconfig.backup -> 41" as DIR
+P3 --> OFA : indexes
+P7 --> OFA : dup shares
+Q4 --> OFB : independent open
+OFA --> I41 : holds reference
+OFB --> I41 : holds reference
+DIR --> I41 : two names
+@enduml
+`} />
+
+The diagram separates two graphs. Directory entries form the **namespace graph**. Descriptors and open descriptions form the **open-reference graph**. Unlinking an edge in the first graph does not revoke edges in the second.
+
+> **Invariant.** A descriptor operation first resolves the descriptor to a live open file description; it does not resolve the original pathname again. The open description keeps the underlying object alive even when its link count becomes zero.
+
+### Retrieval checkpoint: what does `dup` copy?
+
+Without consulting the answer, record which state is shared after `b = dup(a)`: pathname, descriptor number, descriptor flags, current offset, file-status flags, and inode identity.
+
+<details>
+<summary>Reveal the state partition</summary>
+
+`a` and `b` are different descriptor numbers in one table. They refer to the same open file description, so they share its current offset and file-status flags; they consequently reach the same inode. Descriptor flags are per descriptor and are not thereby shared. No pathname is stored as the descriptor's operative identity. If the process calls `open` a second time instead of `dup`, the new descriptor normally receives a distinct open file description and therefore a distinct offset.
+
+A response that says “everything is copied” has collapsed three layers: descriptor entry, open description, and inode. A response that gives each descriptor an independent offset has confused `dup` with a second `open`.
+
+</details>
+
+## Worked trace: shared and independent offsets
+
+File `records` contains sixteen bytes `abcdefghijklmnop`. Reads below are successful and no signal interrupts them.
+
+```c
+int a = open("records", O_RDONLY);  // open description X, offset 0
+int b = dup(a);                     // also X
+int c = open("records", O_RDONLY);  // open description Y, offset 0
+```
+
+Execute `read(a, p, 4)`, `read(b, q, 3)`, `read(c, r, 2)`, then `lseek(a, 1, SEEK_SET)` and `read(b, s, 3)`.
+
+| Event | bytes returned | offset of X after event | offset of Y after event |
+| --- | --- | ---: | ---: |
+| initial state | — | 0 | 0 |
+| `read(a, ..., 4)` | `abcd` | 4 | 0 |
+| `read(b, ..., 3)` | `efg` | 7 | 0 |
+| `read(c, ..., 2)` | `ab` | 7 | 2 |
+| `lseek(a, 1, SEEK_SET)` | — | 1 | 2 |
+| `read(b, ..., 3)` | `bcd` | 4 | 2 |
+
+The descriptor used for an operation does not determine the offset object. `a` and `b` both mutate X. `c` reaches the same inode through Y but cannot observe X's offset changes.
+
+### Application checkpoint: inherited descriptors
+
+A parent opens an output file, calls `fork`, and both processes write fixed-size records through the inherited descriptor without seeking. State the property that descriptor sharing supplies and the property it does not supply.
+
+<details>
+<summary>Reveal the diagnostic answer</summary>
+
+The inherited descriptors refer to one open file description, so they share one current offset. POSIX specifies relevant descriptor operations atomically with respect to the effects on regular files, preventing both writes from independently using the same old offset under the specified interface semantics. This does **not** impose an application-level order between parent and child records, combine several writes into one transaction, make buffered library I/O safe after `fork`, or make either record durable. If record order is part of correctness, the processes need an explicit protocol.
+
+</details>
+
+## Path resolution is a stateful walk
+
+For an absolute pathname, resolution begins at the process's root directory. For a relative pathname, it begins at the current working directory or at a directory descriptor supplied to an `*at` interface. For each non-final component, the kernel must:
+
+1. verify that the current object is a directory and that search is authorized;
+2. look up the component in that directory;
+3. follow a symbolic link when the operation's rules require it, splicing the link payload into the unresolved suffix; and
+4. continue from the resulting directory, crossing a mount point if the namespace contains one.
+
+`.` selects the current directory. `..` selects its parent subject to root and mount semantics. The final component is operation-specific: `open` normally follows a final symbolic link, `lstat` examines the link itself, and `rename` renames a final link rather than its target. A create operation resolves the parent and leaves the absent final name for insertion.
+
+{/* Source tracking: POSIX.1-2024 Base Definitions §4.16 supplies the resolution algorithm and operation-specific final-component rules; Linux openat2(2) supplies the Linux-only resolution constraints discussed below. */}
+
+<PlantUML code={`
+@startuml
+start
+:choose root, cwd, or directory fd;
+while (unresolved component?) is (yes)
+  :select next component;
+  if (current object is searchable directory?) then (yes)
+    :lookup name under current directory;
+  else (no)
+    :fail with ENOTDIR or EACCES;
+    stop
+  endif
+  if (component is followed symbolic link?) then (yes)
+    :splice link payload before suffix;
+    if (resolution limit exceeded?) then (yes)
+      :fail with ELOOP;
+      stop
+    endif
+  endif
+endwhile (no)
+:apply final-component rule for operation;
+stop
+@enduml
+`} />
+
+### Worked trace: a symbolic-link pivot
+
+Assume this initial namespace and a process whose current directory is `/work`:
+
+```text
+/work/input        -> symlink payload "../safe/report"
+/safe/report       -> inode 80
+/attacker/report   -> inode 99
+```
+
+The process first calls `stat("input", ...)`, validates inode 80's owner, and later calls `open("input", O_RDONLY)`. Between the calls, an attacker who can modify `/work` replaces `input` with a symlink to `../attacker/report`. The validation and use are two independent pathname walks:
+
+| Time | operation | resolved object |
+| --- | --- | --- |
+| $t_0$ | `stat("input")` | inode 80 |
+| $t_1$ | attacker replaces directory entry | namespace now targets inode 99 |
+| $t_2$ | `open("input")` | inode 99 |
+
+No corruption of the kernel's lookup algorithm occurred. The application incorrectly treated a pathname result as a stable capability. Opening first and validating with `fstat` binds validation and subsequent I/O to the same open object. When policy requires confinement beneath a trusted directory on Linux, a trusted directory descriptor plus `openat2` resolution constraints can also reject symlink, mount, or escape behavior; those flags are Linux interfaces, not portable POSIX guarantees.
+
+### Transfer checkpoint: close the authority race
+
+A privileged image service must open a caller-supplied relative name beneath an already opened directory `tenant_dir`. The caller can concurrently rename entries and create symbolic links. Specify a safe ordering and state what remains unproved.
+
+<details>
+<summary>Reveal one defensible protocol</summary>
+
+Keep `tenant_dir` as an open directory descriptor acquired from trusted configuration. Resolve relative to that descriptor, not the process-wide current directory. On Linux, use `openat2` with a policy-appropriate combination such as `RESOLVE_BENEATH` or `RESOLVE_IN_ROOT`, plus restrictions on symbolic links or mount crossings when the service's contract forbids them. Open with the least required access, then inspect the returned descriptor with `fstat` and perform I/O through that descriptor.
+
+The protocol binds later I/O to the object actually opened. It does not prove that file contents are benign, that the trusted directory itself was acquired securely, that every filesystem implements identical remote semantics, or that a kernel vulnerability cannot violate the boundary. Listing flags without deriving them from the service's path policy is not a complete answer.
+
+</details>
+
+## Links, removal, and replacement
+
+For a regular file, the link count records directory entries that name the object. Open descriptions contribute references but not hard links. Storage may be reclaimed only after both the namespace link count and the relevant in-memory references reach zero.
+
+### Worked trace: unlink while open
+
+Initial state: `/tmp/job.out -> inode 17`, `nlink(17)=1`, and process A has descriptor 5 open on inode 17.
+
+| Step | namespace | link count | open references | result |
+| --- | --- | ---: | ---: | --- |
+| 0 | `job.out -> 17` | 1 | 1 | named and open |
+| 1: `unlink("/tmp/job.out")` | no entry | 0 | 1 | new lookup fails; fd 5 still works |
+| 2: A writes through fd 5 | no entry | 0 | 1 | inode 17 grows but remains unnamed |
+| 3: A closes fd 5 | no entry | 0 | 0 | object becomes reclaimable |
+
+Creating a new `/tmp/job.out` after step 1 creates or links some other object. It does not reattach the old descriptor by name.
+
+`rename(old, new)` changes namespace edges. Within the scope where the operation is supported, another thread must not observe `new` absent during replacement: it refers to either the prior target or the renamed object. If `new` existed and its last link is removed, open references to that displaced object still keep it alive. Cross-filesystem rename may fail with `EXDEV` because one atomic metadata transaction cannot generally span unrelated implementations.
+
+> **Boundary.** Namespace atomicity is not storage durability. A successful `rename` establishes an allowed concurrent-observation result. It does not by itself prove which names or file contents survive power loss.
+
+{/* Source tracking: The Open Group rename() specification supports atomic name replacement, open-reference survival after last-link removal, same-object no-op behavior, and EXDEV boundaries. The fsync()/fdatasync() interfaces and filesystem documentation must be consulted for persistence claims. */}
+
+### Application checkpoint: enumerate legal observations
+
+`old` names inode A and `new` names inode B. Process R repeatedly resolves `new` while process W executes successful `rename(old, new)`. No other namespace changes occur. Which inode identities may R obtain? What happens to an already open descriptor for B?
+
+<details>
+<summary>Reveal the observation set</summary>
+
+Each completed resolution of `new` may obtain B before the rename linearization point or A after it. The specified replacement does not expose an interval in which `new` is missing. A descriptor opened on B before replacement continues to refer to B; B's content is reclaimed only after its last link and open reference are gone. An answer claiming that R's existing descriptor switches from B to A has made descriptors resolve names repeatedly. An answer claiming that the result necessarily survives a crash has imported a durability guarantee that the premise does not provide.
+
+</details>
+
+## Deriving a crash-aware replacement protocol
+
+Consider a local filesystem whose documentation states that `fsync(file)` makes the file's required data and metadata persistent and `fsync(directory)` persists directory-entry updates. Under those explicit assumptions, an application replacing `config` can seek either of two recovery states: the complete old object or the complete new object.
+
+```text
+1. create a temporary file in the target directory without reusing an attacker-controlled name
+2. write the complete new representation
+3. fsync the temporary file and check the result
+4. rename the temporary name over config and check the result
+5. fsync the containing directory and check the result
+```
+
+Step 3 prevents a durable new name from exposing unwritten or stale content under the assumed interface. Step 4 provides atomic namespace replacement to concurrent readers. Step 5 requests persistence of the namespace update. Every failure path must preserve the old file or report that recovery is uncertain; ignoring an `fsync` error destroys the protocol's evidence.
+
+This recipe is not universal folklore. Filesystem, device-cache, network, and platform semantics can narrow or alter it. It does not make several files into one atomic transaction. It also does not update long-lived reader descriptors; readers that require fresh configuration must reopen or use an explicit version-notification protocol.
+
+### Synthesis task: specify before coding
+
+Design an API `publish(dirfd, final_name, bytes)` for a service that publishes one immutable object. Your specification must state:
+
+- the namespace and attacker model;
+- the success-state invariant for concurrent readers;
+- the post-crash state set;
+- how temporary names are acquired without a precreation race;
+- which errors are propagated; and
+- how a reader detects or requests a newer generation when it holds an old descriptor.
+
+<details>
+<summary>Reveal the grading criteria and a reference design</summary>
+
+A complete specification distinguishes three contracts:
+
+1. **Authority:** `dirfd` was opened from trusted configuration; `final_name` is one component; all creation and rename operations are relative to `dirfd`; temporary creation is exclusive or uses an unnamed temporary-object facility supported by the platform. No process-wide `chdir` participates.
+2. **Visibility:** before the rename point, readers opening `final_name` obtain the old object; after it, they obtain the complete new object. Existing descriptors remain on their original generation. The file format carries a generation identifier if clients need freshness detection.
+3. **Recovery:** after checked file synchronization, checked rename, and checked directory synchronization on a filesystem documenting those semantics, recovery exposes the complete old or complete new generation. An I/O error yields an indeterminate durability result and is not reported as success.
+
+A strong design also bounds input size, writes until all bytes are consumed, handles interrupted calls, sets permissions before publication, and removes an uncommitted temporary entry on a best-effort basis. It does not claim multi-file atomicity, remote-filesystem equivalence, automatic reader refresh, or immunity to a compromised kernel.
+
+Award full credit only when the response states assumptions and legal states. Deduct for a pathname-based validate-then-open sequence, `rename` presented as a durability primitive, unchecked partial writes, or silent `fsync` failure.
+
+</details>
+
+## Mechanism connections and deliberate boundary
+
+The interface model constrains implementation. Directory lookup needs a representation for `(name, object-id)` entries; open references need reference counts independent of link counts; duplicated descriptors need a shared offset object; rename needs exclusion and a recoverable multi-block update; path confinement needs an authority model at every traversal edge. These are not implementation details that can be selected independently of the API contract.
+
+The model deliberately omits directory-cache algorithms, inode/block layout, journaling, remote cache consistency, ACL evaluation, leases, and mandatory labels. Those mechanisms answer different questions. The interface established here is the contract their implementations must preserve.
+
+## References & Further Reading
+
+- [The Open Group, POSIX.1-2024 Base Definitions, Chapter 4: General Concepts](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html) — pathname resolution and filesystem-operation semantics.
+- [The Open Group, POSIX.1-2024 `open()` and `openat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html) — descriptor creation and final-component behavior.
+- [The Open Group, POSIX.1-2024 `rename()` and `renameat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html) — atomic namespace replacement and boundary conditions.
+- [Linux man-pages, `openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html) — Linux-specific resolution constraints for race-resistant path handling.
+- [Linux kernel documentation, Overview of the Virtual File System](https://docs.kernel.org/filesystems/vfs.html) — dentries, inodes, open file objects, and operation dispatch.
+- [MIT PDOS, xv6 RISC-V book](https://pdos.csail.mit.edu/6.1810/2025/xv6.html) and [immutable xv6-rev5 source tree](https://github.com/mit-pdos/xv6-riscv/tree/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa) — the compact descriptor, inode, directory, and pathname implementation used for teaching-kernel examples.

@@ -1,0 +1,288 @@
+---
+title: "Crash Consistency and Journaling"
+course: "operating-systems"
+description: "Crash-state reasoning, write ordering, write-ahead logs, checkpointing, recovery idempotence, and the boundary between model output and storage guarantees."
+prerequisites:
+  - "Filesystem inodes, directories, allocation bitmaps, and buffer caches"
+  - "State machines, invariants, and concurrent critical sections"
+  - "Block-device queues, DMA, caches, and completion semantics"
+outcomes:
+  - "Enumerate every crash-visible state of a multi-block filesystem update under explicit persistence assumptions."
+  - "Derive write-ahead logging order from namespace and allocation invariants."
+  - "Prove whether a recovery procedure is atomic and idempotent for a bounded transaction model."
+  - "Distinguish modeled crash outcomes, syscall visibility, acknowledged persistence, and measured device behavior."
+omissions:
+  - "Distributed consensus, database ARIES, persistent-memory ordering, RAID write holes, and full ext4/JBD2 implementation details are outside the bounded recovery model."
+  - "The simulator assumes atomic sector writes and an honest stable-storage acknowledgement; torn writes and lying devices require additional mechanisms."
+estimatedMinutes: 360
+assessment: "Given an unfamiliar metadata update and a stated device model, construct its crash matrix, identify illegal states, derive a recovery protocol, and defend the protocol's assumptions and omissions."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import CrashConsistencyPlayground from '../../../components/playgrounds/CrashConsistencyPlayground';
+
+# Crash Consistency and Journaling
+
+A file grows from one block to two. The kernel must initialize a new data block, mark it allocated, and publish its address and the new size in the inode. Power fails after the inode reaches stable storage but before the data and bitmap. After reboot, the inode exposes a block the allocator considers free; another file can receive the same block, and the first read may disclose stale bytes.
+
+Locks cannot repair this failure. They constrain live interleavings, but a crash erases lock state and volatile memory. Recovery correctness requires a protocol over **persistence order**: which subsets of writes may survive, which subset becomes authoritative, and how reboot code distinguishes complete from incomplete updates.
+
+{/* Source tracking: The teaching-kernel transaction and recovery mechanisms are synthesized from the MIT PDOS xv6 RISC-V book and kernel/log.c at official tag xv6-riscv-rev5, commit 7d7adbb1b0acbd67c9766a20d0f9900fef2789fa; the production comparison uses the Linux kernel's ext4/JBD2 journal documentation. */}
+
+## The crash model is part of the theorem
+
+Use a bounded block-device model unless a problem states otherwise:
+
+- a block write may be delayed or reordered before stable acknowledgement;
+- after an acknowledged flush or equivalent barrier, preceding writes in the specified domain are stable;
+- a sector write is atomic: recovery observes its old or new value, not a torn mixture;
+- volatile kernel and controller state disappears at the crash;
+- the device does not silently lose a write it acknowledged as stable; and
+- recovery itself may crash and run again.
+
+These are assumptions, not universal hardware facts. A controller without protected write-back power, a filesystem mounted with weaker barriers, or a device that violates flush semantics invalidates the proof. Checksums and duplicated headers can detect some torn writes; they cannot manufacture durability from a device that lies about persistence.
+
+Define four properties separately:
+
+| property | question |
+| --- | --- |
+| runtime atomicity | can another live operation observe an intermediate namespace state? |
+| crash atomicity | after recovery, is the update entirely absent or entirely present? |
+| durability | after the documented success/barrier point, must the update survive the modeled crash? |
+| recovery idempotence | does running recovery twice produce the same authoritative state as running it once? |
+
+A filesystem may provide one without all four. An atomic `rename` constrains concurrent name visibility; it does not, by itself, state that the renamed data or directory entry is durable.
+
+## Derive invariants before ordering writes
+
+Model one append with Boolean state $(D,B,I)$:
+
+- $D$: new block contains the intended bytes;
+- $B$: allocation bitmap marks the block owned;
+- $I$: inode size and block map expose the block.
+
+The minimum safety invariants are
+
+$$
+I \Rightarrow B
+\qquad\text{and}\qquad
+I \Rightarrow D.
+$$
+
+$B\land\neg I$ is unreachable allocated space: a leak, but not cross-file aliasing. $D\land\neg B\land\neg I$ is an unreachable overwrite of a free block and can destroy data if the allocator had concurrently assigned it; the single-operation model assumes the allocator reserved the block in volatile state while the operation ran. $I\land\neg B$ is dangerous because the same block can be reallocated. $I\land\neg D$ exposes stale or partial content.
+
+### Worked crash trace: metadata-first append
+
+Suppose home-location writes reach stable storage in this order: inode, bitmap, data. Crashes produce:
+
+| crash cut | durable tuple | diagnosis |
+| --- | --- | --- |
+| before any write | `(0,0,0)` | complete pre-state |
+| after inode | `(0,0,1)` | dangling reference and stale-data exposure |
+| after bitmap | `(0,1,1)` | inode exposes uninitialized content |
+| after data | `(1,1,1)` | complete post-state |
+
+Reversing the writes to data, bitmap, inode avoids an exposed uninitialized block in this one append:
+
+| crash cut | durable tuple | diagnosis |
+| --- | --- | --- |
+| after data | `(1,0,0)` | namespace remains old; new bytes unreachable |
+| after bitmap | `(1,1,0)` | leaked allocation |
+| after inode | `(1,1,1)` | complete post-state |
+
+Ordering reduces damage but does not give crash atomicity: the leak is neither the complete pre-state nor post-state. More complex operations have cyclic dependencies. Replacing a file can require the new directory edge before removing the old to avoid loss, while link counts and replacement targets require another order. A general mechanism needs a commit point separate from home locations.
+
+### Application checkpoint: derive, do not memorize
+
+A directory insertion requires a new directory data block. The operation changes bitmap bit $B$, directory-inode pointer $P$, directory size $S$, and entry bytes $E$. State necessary implications for a visible new name, then propose a data-before-metadata order and identify its remaining non-atomic state.
+
+<details>
+<summary>Reveal the dependency analysis</summary>
+
+If lookup can reach the new entry, then the directory's block pointer and size must expose the block, the block must be allocated, and the entry bytes must be initialized. One compact set is
+
+$$
+(P\land S)\Rightarrow B,
+\qquad (P\land S)\Rightarrow E.
+$$
+
+A conservative home-write order is initialize $E$, persist $B$, then publish $P$ and $S$ together if they occupy one atomically written inode block. Crashing after $B$ but before publication leaks the block. If $P$ and $S$ can tear or occupy different atomic units, more intermediate states exist. The correct diagnosis is “ordered but not atomic,” not “safe because metadata was last.”
+
+</details>
+
+## Prediction before the recovery model
+
+The journal contains a complete redo image for every block in transaction 9. Its commit record is stable. None of transaction 9's home-location writes is stable when power fails. Predict the recovered state and name the ordering rule your answer relies on.
+
+<CrashConsistencyPlayground client:load />
+
+The modeled answer is the complete post-state: recovery recognizes the durable commit and replays every logged block to its home location. The conclusion depends on all transaction records becoming stable before the commit record and on the commit record being atomically recognizable. Move the crash point to one step before commit; the same records are ignored because no authoritative commit exists.
+
+### Transfer after changing one assumption
+
+Replace the atomic-sector assumption with “a commit sector may tear into a mixture of old and new bytes.” What additional evidence must recovery require before replay?
+
+<details>
+<summary>Reveal the strengthened commit rule</summary>
+
+Recovery needs a commit representation whose validity can be distinguished from every relevant torn state—for example a checksummed, versioned record with redundancy or an atomic write unit guaranteed by the actual device. The checksum domain must cover transaction identity and the record set it commits; otherwise a valid old commit could be paired with unrelated new records. Recovery must reject an invalid or incomplete commit and preserve the pre-state.
+
+A checksum makes corruption detectable with a quantified residual collision risk; it does not force preceding records to stable storage. Ordering/barrier semantics and commit integrity solve different obligations.
+
+</details>
+
+## Write-ahead logging from three obligations
+
+A physical redo log stores intended new block images in a reserved region before installing them at home locations. Let $R(T)$ be all records for transaction $T$, and $C(T)$ its commit record. The protocol follows from three obligations:
+
+1. **Write ahead:** every member of $R(T)$ is stable before $C(T)$ may become stable.
+2. **Publish once:** $C(T)$ is the sole recovery-visible decision that $T$ is committed.
+3. **Do not overwrite evidence early:** log space for $T$ is reusable only after its committed records are installed at home and that checkpoint state is stable.
+
+<PlantUML code={`
+@startuml
+participant "filesystem operation" as FS
+participant "buffer/log manager" as LM
+participant "stable log" as LOG
+participant "home blocks" as HOME
+participant "recovery" as REC
+FS -> LM : begin transaction T
+FS -> LM : dirty blocks A, B, C
+LM -> LOG : write descriptor + redo A, B, C
+LOG --> LM : records stable
+LM -> LOG : write commit C(T)
+LOG --> LM : commit stable
+LM -> HOME : install A, B, C
+HOME --> LM : home writes stable
+LM -> LOG : release/checkpoint T
+... crash and reboot ...
+REC -> LOG : scan valid records and commits
+alt C(T) valid
+  REC -> HOME : replay all of R(T)
+else C(T) absent or invalid
+  REC -> REC : ignore R(T)
+end
+@enduml
+`} />
+
+The home installation may write A, B, and C in any order after commit because the log retains a complete post-state. If power fails midway, recovery replays all three. Replaying a physical block image twice is idempotent: writing the same final bytes again does not change the result.
+
+> **Recovery proof obligation.** For every crash cut, recovery returns a state observationally equivalent to the pre-state of every uncommitted transaction and the post-state of every committed transaction, while preserving filesystem invariants.
+
+This statement requires a transaction-serialization model. If two committed transactions update the same block, recovery must respect their log order or replay the latest committed image. If a log record is reused before all earlier home writes are stable, the only repair evidence may be destroyed.
+
+### Worked trace: atomic name replacement
+
+Transaction 12 replaces directory entry `config -> inode 40` with `config -> inode 71` and decrements inode 40's link count from 1 to 0. Its physical log contains new images for directory block D and inode block I.
+
+| durable log/home state at crash | recovery action | visible result |
+| --- | --- | --- |
+| D record stable, I record absent, no commit | ignore transaction 12 | old name and old link count |
+| both records stable, no commit | ignore transaction 12 | old name and old link count |
+| both records and commit stable, no home writes | replay D and I | new name; old inode unlinked |
+| commit stable, only home D installed | replay both | new name; old inode unlinked |
+| commit stable, both home blocks installed, log not cleared | replay both harmlessly | same complete post-state |
+
+Replaying only the missing-looking inode block would require recovery to infer which home bytes are current, a harder protocol. Whole-transaction redo keeps the decision local: valid commit means install every record.
+
+### Proof checkpoint: idempotence is not optional
+
+Recovery replays transaction 12's directory block, then power fails before it replays the inode block. Explain why restarting recovery must replay the directory block again and why an increment-style log record would be dangerous.
+
+<details>
+<summary>Reveal the proof step</summary>
+
+The commit is still present, so the restarted scan cannot assume that any subset reached home. A physical redo record says “set block D to these bytes”; applying it twice yields the same D. An operation record saying “decrement inode 40's link count” is not idempotent: replaying it twice decrements twice unless the protocol carries transaction identity and per-object application state. Logical logging can be correct, but it needs a stronger replay design than blind repetition.
+
+</details>
+
+## Concurrency changes transaction admission
+
+Compact xv6 brackets filesystem system calls with `begin_op` and `end_op`. It reserves enough log capacity for worst-case operations before admitting more work. Modified buffers are registered with `log_write`; repeated modifications to one block are absorbed into one transaction entry. A commit occurs only when no filesystem operations remain active, preventing a commit from installing a block that still contains another operation's uncommitted update.
+
+{/* Source tracking: These xv6-specific admission, absorption, commit, and recovery claims are supported by kernel/log.c at rev5 commit 7d7adbb1b0acbd67c9766a20d0f9900fef2789fa and Chapter 10 of the official xv6 book. */}
+
+This design is intentionally restrictive:
+
+- several system calls may share one log transaction;
+- long operations must fit the bounded log reservation model;
+- one outstanding commit simplifies ordering but limits throughput; and
+- a syscall joining other active operations may return before their shared transaction commits, depending on the exact implementation path and completion timing.
+
+Therefore a user-visible “write returned” claim must not be silently upgraded to “power-safe.” The documented synchronization interface and the implementation's actual commit semantics determine that boundary.
+
+### Application checkpoint: reservation arithmetic
+
+A log has 30 data slots. Each admitted operation reserves a worst-case 10 slots, although duplicate-block absorption often makes actual use smaller. Why may `begin_op` block the fourth concurrent operation even when the first three currently occupy only six unique slots?
+
+<details>
+<summary>Reveal the safety argument</summary>
+
+Admission must remain safe if every active operation reaches its worst case after the check. Three operations can require all 30 slots. Admitting a fourth based on current use can deadlock or overflow later, when none can surrender partial work without violating atomicity. Conservative reservation trades concurrency for a simple capacity proof. A more concurrent design needs finer-grained preclaims, multiple transactions, abort support, or dynamically extensible log space; observed average use is not a proof.
+
+</details>
+
+## Production contrast: ext4 modes are different contracts
+
+Linux ext4 uses JBD2 to journal metadata updates. The journal contains descriptors, logged blocks, and a commit record; replay applies transactions with valid commits. The documented data modes differ:
+
+| mode | journaled content | relevant promise boundary |
+| --- | --- | --- |
+| `data=journal` | file data and metadata | strongest of these modes, with additional write cost |
+| `data=ordered` | metadata; associated new data is ordered before metadata commit | default documented mode, avoiding some stale-data exposure |
+| `data=writeback` | metadata; data need not precede metadata | weaker post-crash file-content expectations |
+
+{/* Source tracking: The mode distinctions and JBD2 commit/replay structure are synthesized from the Linux kernel's ext4 journal documentation, not inferred from xv6. */}
+
+The table is not a complete ext4 guarantee. Delayed allocation, direct I/O, `fsync`, directory persistence, device flushes, fast commits, checksums, and kernel versions affect a real claim. A teaching log and JBD2 share write-ahead reasoning; their scale, concurrency, record formats, and user-visible contracts are not interchangeable.
+
+## Failure boundaries that invalidate easy proofs
+
+- **Torn sectors:** an apparently present header may be half old and half new.
+- **Reordered caches:** issuing records before commit is insufficient unless stable order is enforced.
+- **Lost acknowledgement:** a device claiming a flush completed but losing it violates the model.
+- **Log checksum omission:** recovery may replay corrupted or mismatched records.
+- **Log reuse before checkpoint:** a second transaction can overwrite the only redo image for the first.
+- **Recovery side effects:** a non-idempotent replay operation can corrupt more on each boot.
+- **Unbounded transaction:** a rename or allocation path that exceeds reserved log capacity cannot be made atomic by wishing it fit.
+- **Interface confusion:** runtime atomicity and a successful return are not equivalent to post-crash durability.
+
+### Synthesis task: build the crash matrix
+
+An operation allocates block X, writes data X, adds directory entry `n -> inode 8`, sets inode 8's size and pointer, and increments its link count. Design a redo transaction and submit:
+
+1. the pre-state and post-state invariants;
+2. the unique home blocks in the transaction;
+3. all crash cuts around record writes, commit, each home write, and log release;
+4. recovery action at each cut;
+5. a proof of replay idempotence; and
+6. one changed device assumption that breaks the proof.
+
+<details>
+<summary>Reveal the transparent grading rubric</summary>
+
+- **State model, 20%.** Names bitmap, data, inode, and directory state separately; states `directory reference => allocated initialized inode` and `inode block reference => allocated initialized data`.
+- **Transaction completeness, 20%.** Includes every distinct bitmap, data, inode, and directory block whose post-image is needed; duplicate writes to one block are one final redo image.
+- **Crash enumeration, 20%.** Uncommitted cuts recover to pre-state; every cut after a valid commit recovers to post-state, including crashes during recovery.
+- **Ordering proof, 15%.** Records stable before commit; home installation after commit; log reuse after checkpoint.
+- **Idempotence, 15%.** Replays set block images or supplies an equivalent transaction-identity mechanism; does not repeat arithmetic side effects blindly.
+- **Boundary honesty, 10%.** Identifies a concrete invalidating assumption such as torn commit writes, missing flush semantics, transaction overflow, or corruption outside the checksum domain.
+
+A diagram without the state set earns no crash-enumeration credit. A test that kills QEMU at one random instant is useful stress evidence but not an exhaustive crash matrix.
+
+</details>
+
+## Connections and deliberate boundary
+
+Filesystem layout determines the blocks one logical operation must update. The syscall interface determines what concurrent visibility and synchronization users may request. Device semantics determine whether barriers and acknowledgements support the persistence proof. Testing must inject failure at named state transitions; random power cuts alone rarely establish coverage.
+
+The bounded model deliberately omits distributed replicas, database physiological logging, persistent-memory cache-line flush protocols, checksummed copy-on-write trees, RAID parity recovery, and complete ext4 behavior. It teaches the invariant-to-protocol derivation needed to study those systems without treating their names as explanations.
+
+## References & Further Reading
+
+- [MIT PDOS, xv6 RISC-V source and book](https://pdos.csail.mit.edu/6.1810/2025/xv6.html) — official teaching-kernel source and Chapter 10 filesystem/log explanation.
+- [MIT PDOS, xv6-rev5 `kernel/log.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/log.c) — immutable transaction admission, log absorption, commit, install, and recovery implementation.
+- [MIT PDOS, xv6-rev5 `kernel/fs.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/fs.c) — immutable metadata-update paths protected by the log.
+- [Linux kernel documentation, ext4 Journal (JBD2)](https://docs.kernel.org/filesystems/ext4/journal.html) — transaction format, commits, replay, checkpoints, and data modes.
+- [The Open Group, POSIX.1-2024 `fsync()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fsync.html) — application-visible synchronization interface.
+- [The Open Group, POSIX.1-2024 `rename()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html) — runtime namespace atomicity that must not be confused with persistence.

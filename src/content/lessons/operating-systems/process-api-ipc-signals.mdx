@@ -1,0 +1,328 @@
+---
+title: "Process API, IPC, and Signals"
+course: "operating-systems"
+description: "Derive POSIX process construction, descriptor sharing, pipe lifetime, child reaping, and asynchronous signal handling from object and ownership traces."
+prerequisites:
+  - "Processes, threads, address spaces, and process state"
+  - "System-call entry, checked user memory, and blocking/wakeup semantics"
+  - "C file descriptors, function pointers, and error handling with `errno`"
+outcomes:
+  - "Trace `fork`, `exec`, `_exit`, and `waitpid` across process images, thread sets, descriptors, and lifecycle state."
+  - "Distinguish a file descriptor from an open file description and predict offset, pipe-end, and close-on-exec behavior after duplication."
+  - "Construct a deadlock-free pipeline by closing every unreachable pipe end and proving when EOF becomes observable."
+  - "Design a `sigaction`-based notification path that respects masks, pending state, coalescing, and async-signal-safety."
+omissions:
+  - "Sessions, job-control terminals, process groups, `posix_spawn`, shared memory, sockets, message queues, and full shell parsing are outside the core construction."
+  - "Linux-specific `clone`, `pidfd`, `signalfd`, namespaces, and subreapers are extension directions rather than portable POSIX guarantees."
+  - "The lesson specifies robust patterns but does not claim that signals provide lossless event counting."
+estimatedMinutes: 330
+assessment: "Design and defend a three-process POSIX pipeline with redirection, error reporting, cancellation, and child reaping; submit descriptor/process traces that prove EOF and show a safe asynchronous notification path."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
+# Process API, IPC, and Signals
+
+A shell runs `generate | compress`. Both programs finish their useful work, but `compress` waits forever for EOF. The parent retained one copy of the pipe's write descriptor. No process will write another byte, yet the kernel must treat writing as still possible while any write end remains open. The defect is not in `read`; it is an ownership leak created during process construction.
+
+Process APIs are easiest to reason about as transformations of four graphs:
+
+1. process and parent-child relationships;
+2. process images and threads;
+3. descriptor edges to kernel open-file objects; and
+4. asynchronous event state: mask, pending set, and disposition.
+
+{/* Source tracking: Process, descriptor, pipe, and signal claims are synthesized from POSIX.1-2024 `fork`, `exec`, `open`, `dup`, `pipe`, `read`, `wait`, `sigaction`, and General Information §2.4. */}
+
+### Prediction — who still owns the write end?
+
+Start with parent descriptors `r` and `w` from `pipe()`. The parent forks a producer and consumer. No close calls occur. The producer exits after writing; the consumer reads until EOF. List every process that retains `w` after both forks and explain why producer exit is insufficient.
+
+<ExerciseSolution hint="`fork` duplicates descriptor-table edges; it does not move them.">
+After both forks, parent, producer, and consumer each retain a descriptor referring to the pipe's write-end open file description. Producer exit closes only its copy. Parent and consumer still keep the write end open, so an empty-pipe read blocks instead of returning zero. The consumer must close its inherited write descriptor, the producer must close its read descriptor, and the parent must close both ends once it no longer needs them. The missed concept is reachability/lifetime, not byte buffering.
+</ExerciseSolution>
+
+## `fork`, `exec`, and `wait` form a constructor protocol
+
+The operations do not all “create a process.” Their state transformations differ.
+
+> **Definition.** Process construction is a protocol because identity creation, image replacement, descriptor transformation, and lifecycle observation occur in separate operations with separate failure cuts.
+
+| Operation | Process identity | Address space / image | Threads | Descriptor effect | Return behavior |
+| --- | --- | --- | --- | --- | --- |
+| `fork()` | creates a child with a new PID and parent link | child begins as a specified copy of parent state | child contains only the calling thread in a multi-threaded parent | copied descriptors refer to the same corresponding open file descriptions | returns child PID in parent, `0` in child, `-1` on failure |
+| `execve()` family | preserves process identity | replaces current process image | successful call leaves the initial thread of new image; other old threads end | descriptors normally survive unless close-on-exec applies | does not return on success |
+| `_exit(status)` | enters terminal lifecycle state | image no longer executes | no live execution remains | descriptors close as process resources are released | never returns |
+| `waitpid()` | parent selects eligible child status | does not replace parent image | caller may block | no descriptor transformation by itself | reports child/status or error; consumes waitable status as specified |
+
+The classic shell sequence is `fork` to create a distinct process identity, modify descriptors in the child, then `exec` to replace only that child's image. Performing descriptor redirection before `fork` would also redirect the parent. Calling `exec` without `fork` would replace the shell itself.
+
+{/* Source tracking: The table is a compact synthesis of POSIX.1-2024 `fork()`, `exec`, `_exit()`, and `wait()/waitpid()`. The multi-threaded-fork restriction and shared open-file-description semantics are explicit in `fork()`. */}
+
+### Retrieval — return paths are evidence
+
+Why must code after a successful `execve()` be treated as an error path, while code after `fork()` must branch on three outcomes?
+
+<ExerciseSolution>
+Successful `execve()` overlays the image and does not return to the old call site; reaching the following statement means failure and `errno` is meaningful. `fork()` returns in two processes with different values and can fail in the original process: negative for failure, zero in the child, positive child PID in the parent. A branch that handles only parent/child silently treats resource exhaustion as a child path or continues with an invalid PID.
+</ExerciseSolution>
+
+## Descriptor number is not open-file identity
+
+`open()` creates an **open file description** containing status flags and file offset, then creates a process-local **file descriptor** that refers to it. `dup2(old, new)` makes `new` refer to the same open file description as `old`; `fork()` creates child descriptors referring to the corresponding same descriptions. Descriptor flags such as close-on-exec belong to descriptor edges, while file status and offset belong to the shared open-file description.
+
+<PlantUML code={String.raw`
+rectangle "parent descriptor table" as P {
+  rectangle "fd 3" as P3
+  rectangle "fd 4" as P4
+}
+rectangle "child descriptor table" as C {
+  rectangle "fd 3" as C3
+  rectangle "fd 1 after dup2" as C1
+}
+rectangle "open file description\noffset = 128\nstatus = O_WRONLY" as OFD
+rectangle "pipe write-end description\nwriter references = 2" as PW
+database "regular file inode" as I
+queue "pipe buffer" as B
+
+P3 --> OFD : descriptor edge
+C3 --> OFD : inherited edge
+OFD --> I : open object
+P4 --> PW : write edge
+C1 --> PW : duplicated write edge
+PW --> B : endpoint
+
+note bottom of OFD
+  A read/write through either fd 3
+  observes one shared file offset.
+end note
+note bottom of PW
+  EOF requires every write edge closed,
+  not merely an empty buffer.
+end note
+`} />
+
+Closing a descriptor removes one edge. The kernel object remains alive while another edge or internal reference exists. Reusing the same small integer later does not resurrect the old object.
+
+### Application — shared offset trace
+
+Parent opens a regular file at offset 0, forks, then parent reads 4 bytes and child reads 4 bytes through the inherited descriptor. Assume the reads occur in that order and both succeed. What offsets can each operation use? How would reopening the pathname in the child change the answer?
+
+<ExerciseSolution>
+The inherited descriptors refer to one open file description. Parent consumes bytes at offsets 0–3 and advances the shared offset to 4; child then consumes offsets 4–7 and advances it to 8. If the child independently calls `open`, it receives a new open file description with its own initial offset, normally 0, so both may read bytes 0–3. A pathname identifies a file for lookup; it is not the runtime open-file object.
+</ExerciseSolution>
+
+## Worked construction: `sort < raw | uniq -c > counts`
+
+Let pipe ends be `p[0]` (read) and `p[1]` (write). Let `infd` and `outfd` denote opened files. The target post-`exec` descriptors are:
+
+| Process image | fd 0 | fd 1 | Descriptors that must be closed before `exec` |
+| --- | --- | --- | --- |
+| `sort` | `infd`'s open file description | pipe write end | `infd`, `outfd`, `p[0]`, original `p[1]` after `dup2` |
+| `uniq -c` | pipe read end | `outfd`'s open file description | `infd`, `outfd`, original `p[0]` after `dup2`, `p[1]` |
+| parent shell | unchanged | unchanged | `infd`, `outfd`, `p[0]`, `p[1]` after both children are created |
+
+One robust order is:
+
+1. create the pipe and open both redirection files using close-on-exec where available;
+2. fork the `sort` child; in it, atomically duplicate `infd→0` and `p[1]→1`, close all originals and unrelated ends, then `exec`;
+3. fork the `uniq` child; in it, duplicate `p[0]→0` and `outfd→1`, close all originals and unrelated ends, then `exec`;
+4. parent closes every pipeline descriptor and waits for both child PIDs, retrying waits interrupted before status is obtained as required by its policy.
+
+<PlantUML code={String.raw`
+participant "shell parent" as P
+participant "sort child" as S
+participant "pipe kernel object" as K
+participant "uniq child" as U
+
+P -> K : pipe() creates read/write descriptors
+P -> S : fork()
+S -> S : dup2(infd,0); dup2(pipe_w,1)
+S -> S : close inherited extras; exec sort
+P -> U : fork()
+U -> U : dup2(pipe_r,0); dup2(outfd,1)
+U -> U : close inherited extras; exec uniq
+P -> K : close parent pipe_r and pipe_w
+S -> K : write sorted bytes; close on exit
+K -> U : bytes in FIFO order
+K --> U : read returns 0 after final writer closes
+U --> P : exit status becomes waitable
+S --> P : exit status becomes waitable
+P -> P : waitpid each recorded PID
+`} />
+
+The construction must handle failures between forks. If the second fork fails, the parent still closes its pipe ends, terminates or drains policy-consistently, and reaps the first child. Error paths are part of descriptor ownership.
+
+### Failure injection — close one edge at a time
+
+Predict behavior for each mutation.
+
+1. consumer retains `p[1]`;
+2. parent closes `p[0]` before forking the consumer;
+3. producer forgets to close original `p[1]` after `dup2(p[1],1)`;
+4. parent waits for producer before creating consumer while producer writes more than pipe capacity.
+
+<ExerciseSolution>
+1. Consumer waits forever for EOF after draining data because it is itself a writer reference.
+2. The consumer cannot inherit the read end; `dup2` fails or an accidentally reused descriptor is redirected.
+3. This is usually harmless for EOF after producer exit because both edges close together, but it leaks a descriptor during the image lifetime and becomes harmful if fd 1 closes earlier while the extra remains. Tests must cover staged closes, not only process exit.
+4. Producer can block on a full pipe while parent waits for it; consumer does not yet exist to drain, producing a construction deadlock. Create all pipeline stages before waiting.
+</ExerciseSolution>
+
+## Pipe semantics are state-dependent
+
+For a blocking read on an empty pipe:
+
+> **Definition.** Pipe EOF means the buffer is empty and no write-end reference remains; emptiness alone is not EOF.
+
+| Writer references | Buffer | Result |
+| ---: | --- | --- |
+| at least one | empty | block until data, signal interruption, or all writers close |
+| zero | empty | return `0` (EOF) |
+| any | non-empty | return available bytes subject to interface rules |
+
+EOF is therefore a statement about future possibility, not a byte stored in the pipe. A leaked descriptor changes the kernel's proof about future writes.
+
+### Transfer — request/reply over two pipes
+
+Two processes use pipe A for requests and pipe B for replies. Each writes a request larger than pipe capacity before reading the reply. Construct the deadlock and give two redesigns with different trade-offs.
+
+<ExerciseSolution>
+If both large writes fill their outbound pipe and block waiting for readers, neither reaches its read. Redesign 1 uses an event loop with nonblocking descriptors and bounded output queues; it adds readiness and partial-write state. Redesign 2 assigns a reader thread or process per direction; it adds concurrency and synchronization. A protocol-level redesign can bound each frame below available capacity and enforce alternating request/reply, but that couples correctness to capacity and excludes streaming. “Pipes are full duplex” is also wrong here: each POSIX pipe is one directed channel in the model.
+</ExerciseSolution>
+
+## `waitpid` closes the lifecycle loop
+
+An exited child may retain minimal status and identity so its parent can observe termination. This zombie state is not runnable. `waitpid` selects status from an eligible child set; a parent that never waits can accumulate unreaped children until another system policy intervenes.
+
+> **Warning.** Completion order and pipeline-stage order are different; status must be attributed by returned PID rather than by wait-call position.
+
+Robust supervisors record PIDs and associate status with the correct stage. Waiting “for any child” without a mapping can attribute failure to the wrong pipeline command. A pipeline's overall exit policy—last stage, first failure, or aggregate—is an application decision, not a fact supplied by `waitpid`.
+
+### Application — status attribution
+
+Three children exit in order C, A, B with statuses 0, 7, 0. The parent calls `waitpid(-1, ...)` three times. What extra state is necessary to report “stage A failed with 7,” and what race does the negative PID argument **not** create?
+
+<ExerciseSolution>
+The parent needs a PID-to-stage mapping recorded at each successful fork and must decode each returned status. `waitpid(-1, ...)` can return any eligible child in completion order; it does not lose identity because it returns the PID. The race is in application bookkeeping if the mapping is missing or reused, not in the kernel confusing children. Waiting each specific PID simplifies attribution but may delay observing already-finished siblings.
+</ExerciseSolution>
+
+## Signals are asynchronous state transitions, not messages with queues by default
+
+Separate three moments:
+
+1. **generation:** an event targets a process or thread;
+2. **pending:** the signal has been generated but is blocked or not yet selected for delivery;
+3. **delivery/acceptance:** the kernel applies the current disposition to a selected thread or a waiting interface.
+
+A per-thread signal mask blocks delivery, not necessarily generation. A disposition can be default action, ignore, or a handler installed with `sigaction`. For ordinary non-realtime signals, repeated generation while already pending need not produce one delivery per occurrence; using a handler invocation as an event counter is therefore unsound. Realtime signals have different queuing rules and are deliberately outside this core pattern.
+
+{/* Source tracking: Generation, pending, selection, masks, default actions, and non-realtime coalescing are synthesized from POSIX.1-2024 General Information §2.4 and `sigaction()`. */}
+
+<PlantUML code={String.raw`
+state "not pending" as N
+state "pending + blocked" as PB
+state "pending + deliverable" as PD
+state "handler active with mask extended" as H
+state "default/ignore action" as D
+
+[*] --> N
+N --> PB : generate while blocked
+N --> PD : generate while unblocked
+PB --> PD : target thread unmasks
+PB --> PB : ordinary signal generated again; count not guaranteed
+PD --> H : select disposition = handler
+PD --> D : select default or ignore
+H --> N : handler returns; saved context restored
+D --> N : action completes if process survives
+
+note right of H
+  Only async-signal-safe operations are portable.
+  Save and restore errno when the handler may change it.
+end note
+`} />
+
+### Counterexample — `printf` in a handler
+
+The main thread is inside `printf`, holding an internal stdio lock, when a signal handler calls `printf` again. The handler can deadlock or corrupt library state. The same reasoning applies to `malloc` and arbitrary application data structures. `volatile` does not make a general library operation reentrant and is not thread synchronization.
+
+The safest handler often records the smallest possible notification through an async-signal-safe operation, then lets ordinary code perform work. A self-pipe pattern is one option:
+
+```c
+static int notify_fd;
+
+static void on_sigchld(int signo) {
+    int saved_errno = errno;
+    unsigned char byte = (unsigned char)signo;
+    (void)write(notify_fd, &byte, 1); /* write end configured nonblocking */
+    errno = saved_errno;
+}
+```
+
+The ordinary event loop drains the pipe and repeatedly calls `waitpid(-1, &status, WNOHANG)` until no more completed children are available. If the nonblocking pipe is full, dropping a notification byte is acceptable only because the loop treats it as a level-triggered prompt to reap **all** available children; signal counts are not inferred from bytes.
+
+{/* Source tracking: `sigaction()` recommends async-signal-safe operations and preserving `errno`; POSIX General Information lists `write()` and wait functions among the relevant safe interfaces and explains non-realtime pending semantics. The code is an original minimal pattern, not copied from a reference implementation. */}
+
+### Signal trace — two children, one pending `SIGCHLD`
+
+1. Parent blocks `SIGCHLD` while installing its handler and constructing the notification pipe.
+2. Child A exits; `SIGCHLD` becomes pending.
+3. Child B exits before the signal is delivered. The implementation need not queue a second ordinary `SIGCHLD` occurrence.
+4. Parent unblocks; handler runs once and writes one byte.
+5. Event loop drains the byte and loops `waitpid(..., WNOHANG)`, reaping A and B.
+
+The loop is correct because child status is the durable source of truth; signal delivery is only a wakeup hint.
+
+### Transfer — handler installation race
+
+A supervisor forks a fast child, then installs its `SIGCHLD` handler. Sometimes the child exits first. Give a race-free ordering and explain why installing the handler earlier may still be incomplete in a multi-threaded process.
+
+<ExerciseSolution>
+Block `SIGCHLD` in the constructing thread before creating the child, install the disposition and notification machinery, record the child's PID, then unblock or use a synchronous signal-wait design. In a multi-threaded process, masks are per-thread and another unblocked thread may receive the process-directed signal; establish the mask policy in all relevant threads, commonly by blocking before creating worker threads. Even with a lost notification, a supervisor can perform an initial nonblocking reap after registration, but that must be part of the protocol.
+</ExerciseSolution>
+
+## The multi-threaded `fork` boundary
+
+POSIX specifies that a child of a multi-threaded `fork()` contains only the calling thread but inherits an address-space image that may contain mutexes held by vanished threads. Until a successful `exec`, the child is sharply constrained; calling code that acquires such a lock can deadlock. The portable construction should use only permitted async-signal-safe operations in that interval, or use `posix_spawn` under a separately studied contract.
+
+### Synthesis — make failure paths own their resources
+
+Design a launcher for `decrypt | parse | index` with one diagnostic pipe per child for pre-`exec` failures. Requirements:
+
+- input/output redirection;
+- no descriptor leaks into executed programs;
+- concurrent startup before waiting;
+- cancellation of remaining stages after a chosen failure policy;
+- `SIGCHLD` notification without event-count assumptions;
+- exact attribution of `fork`, redirection, `exec`, signal, and exit failures.
+
+Your artifact must include a process graph, descriptor table at four cuts, close matrix, wait-state table, and two injected failures: second `fork` fails; middle-stage `exec` fails.
+
+<details>
+<summary>Reveal diagnostic design constraints</summary>
+
+Create all required pipes with close-on-exec atomically where the platform interface permits. Block `SIGCHLD` before construction. On each successful fork, record PID and stage before unblocking signals. A child closes diagnostic-pipe read ends, performs only the minimal descriptor transformations, and writes an `errno` record to its diagnostic pipe if redirection or `exec` fails, then calls `_exit`; successful `exec` closes that pipe so the parent observes EOF. Parent closes every data-pipe end it does not use immediately after the corresponding forks. If the second fork fails, close all data ends, apply the cancellation policy to the first child, and reap it. If the middle `exec` fails, its diagnostic record distinguishes construction from program exit; close propagation and cancellation must let neighbors leave blocked reads/writes. Reap in a loop and map each PID to a stage. A submission that sends `SIGKILL` without reaping, or waits before all consumers exist, fails lifecycle correctness.
+
+</details>
+
+**Rubric (20 points).** Process/image semantics 3; descriptor/open-description graph 4; complete close/EOF proof 4; failure ownership 3; signal safety and coalescing reasoning 3; PID/status attribution 2; explicit portability boundary 1.
+
+## Connections and deliberate omissions
+
+System-call validation turns descriptor integers and user pointers into kernel objects. Process/context machinery explains where `fork` constructs a new continuation and where `exec` replaces only the image. Scheduling determines when blocked pipe readers and waiting parents run; it does not define EOF or child status. Synchronization is required to implement pipes, process tables, and signal state, but application code must already respect their public predicates and lifetimes.
+
+The implementation spine is xv6 rev5, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`: its `proc.c`, `file.c`, and `pipe.c` provide compact process, shared-file-reference, pipe-lifetime, and wait/wakeup contrasts. They are not the authority for the POSIX API above—rev5 does not implement `sigaction`, POSIX thread semantics, or the complete `waitpid` interface. Keeping that boundary explicit prevents a source trace from being mistaken for a portability guarantee.
+
+{/* Source tracking: The xv6 contrast was checked against the rev5 hash in `kernel/proc.c`, `kernel/file.c`, and `kernel/pipe.c`; portable interface claims remain sourced to POSIX.1-2024. */}
+
+> **Remark.** Each omitted IPC or process-control interface changes at least one graph—authority, descriptors, lifecycle, or asynchronous delivery—and therefore needs a new ownership trace.
+
+The lesson omits process groups, sessions, controlling terminals, shell grammar, job control, daemonization, shared memory, semaphores, sockets, message queues, `posix_spawn`, Linux `clone`/`pidfd`/`signalfd`, and realtime-signal queueing. These are not “more IPC options” to memorize; each changes an authority, lifetime, or race contract and needs a dedicated construction trace.
+
+## References & Further Reading
+
+1. The Open Group, POSIX.1-2024 [`fork()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fork.html), [`exec`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/exec.html), and [`wait()/waitpid()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/wait.html).
+2. The Open Group, POSIX.1-2024 [`open()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html), [`dup()/dup2()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/dup.html), [`pipe()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pipe.html), and [`read()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html).
+3. The Open Group, POSIX.1-2024 [`sigaction()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/sigaction.html) and [General Information §2.4](https://pubs.opengroup.org/onlinepubs/9799919799/functions/V2_chap02.html), for signal generation, delivery, masks, and async-signal-safety.
+4. MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf), Chapters 1 and 7, plus rev5 [`kernel/proc.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/proc.c), [`kernel/file.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/file.c), and [`kernel/pipe.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/pipe.c), as a compact implementation contrast rather than a complete POSIX implementation.

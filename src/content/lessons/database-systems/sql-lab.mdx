@@ -1,98 +1,302 @@
 ---
-title: "SQL Lab"
+title: "SQL lab: build and verify a registration report"
 course: "database-systems"
-description: "Write queries while checking null, join, and grouping semantics."
+description: "Use a deterministic PostgreSQL fixture to derive, test, and explain joins, grouped reports, anti-joins, and schema constraints."
+prerequisites:
+  - "SQL querying: joins, clause order, grouping, NULL, and `NOT EXISTS`"
+  - "Schema review: grain, keys, foreign keys, and check constraints"
+outcomes:
+  - "Load or hand-trace a fixed registration fixture and state the expected result of a query before running it."
+  - "Build zero-safe grouped reports and NULL-safe anti-joins in PostgreSQL."
+  - "Use adversarial rows and optional `EXPLAIN` evidence to separate query correctness from a performance observation."
+omissions:
+  - "This lab does not provide arbitrary SQL execution, production deployment, transaction-concurrency testing, or vendor portability certification."
+estimatedMinutes: 720
+assessment: "Submit a query portfolio containing a result contract, SQL, predicted and observed edge-case rows, constraint tests, and a brief explanation of one plan observation."
 ---
-# SQL Lab
 
-Create a small schema with keys and constraints, populate edge cases, and write joins, aggregates, updates, and a transaction. Inspect the result of nulls, zero matches, duplicate rows, and a failed constraint.
+import CodeExercise from '../../../components/CodeExercise';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
-## Lab schema
+# SQL lab: build and verify a registration report
 
-Create Student(student_id, tenant_id, email, name), Course(course_id, code, title), Offering(course_id, term, instructor, capacity), and Enrollment(student_id, course_id, term, status, enrolled_at). Declare primary keys, foreign keys, unique constraints, checks for capacity and status, and a uniqueness rule preventing duplicate enrollment per term. Explain whether tenant_id belongs in every key and reference for a multi-tenant deployment. Use explicit types and a documented timezone policy.
+This is a paper-first lab with an optional PostgreSQL 18 run. Every task has a fixed fixture and expected edge cases, so you can complete the semantic work without a database server. If you do run it, use a disposable local database: the SQL below creates and inserts lab data.
 
-Populate fixtures with two tenants, a student with no enrollment, an offering with multiple students, an offering with zero students, a NULL optional field, duplicate-looking emails with different case, and an attempted dangling foreign key. Include a course whose code is reused in a different term if the schema permits it. Record which inserts the database rejects and why; do not silently remove edge cases to make a query pass.
+| Evidence path | What it establishes | What it does not establish |
+| --- | --- | --- |
+| PostgreSQL 18 fixture | PostgreSQL syntax, constraints, `FILTER`, and an observed `EXPLAIN` plan | behavior of other engines or every workload |
+| SQLite or hand trace | portable join, grouping, and `NOT EXISTS` result semantics for this fixture | PostgreSQL planner, MVCC, error text, or isolation behavior |
 
-## Query tasks
+Record the engine and version with every observed result. Do not submit SQLite output as evidence that a PostgreSQL-specific statement or plan executed.
 
-Write a query returning every course and its enrollment count for a term, including zero. Write a query finding students enrolled in every required course using NOT EXISTS. Write an antijoin for offerings with no enrollment. Write a report with total, average, and distinct student counts and explain NULL behavior. Write a window query ranking offerings by enrollment within term, with deterministic tie-breaking.
+> **Definition.** A lab result contract states the output grain, inclusion rules, ordering, and test rows before execution. A query is not complete because it returns plausible rows on a happy-path dataset.
 
-For each query state the grain of the result, expected cardinality, duplicate behavior, and authorization predicate. Compare an INNER JOIN and LEFT JOIN fixture. Move a term predicate between ON and WHERE and explain the changed result. Test NOT IN with a NULL-producing subquery and repair it with NOT EXISTS. Inspect EXPLAIN and identify whether indexes on tenant, course, term, and enrollment keys are used.
+## Lab brief and evidence checklist
 
-## Modification tasks
+| Deliverable | What to include | Evidence of success |
+| --- | --- | --- |
+| Zero-safe enrollment report | Contract, query, predicted table | Offerings with zero enrolled students remain |
+| Anti-join | Contract, query, predicted table | A student with only an old enrollment is correctly included |
+| Constraint probes | Four deliberately invalid writes | Each is rejected by the intended key, foreign key, or check |
+| Plan observation (optional) | `EXPLAIN` output and one cautious claim | A measured plan fact, not a promise that all data will use that plan |
 
-Implement enrollment with a transaction that checks offering capacity and inserts only if capacity remains. Run two concurrent enrollment attempts against the last seat and observe whether both can commit. Repair with an atomic conditional update, appropriate lock, serializable transaction, or a capacity-row design. Handle a serialization failure by restarting the whole transaction and using an idempotency key for the request.
+> **Warning.** Do not run these statements against a shared or production schema. The lesson has no arbitrary SQL executor; a local PostgreSQL instance is optional, and the supplied tables are enough to hand-trace each task.
 
-Implement a course-code change and decide whether historical enrollments should follow the code or stable offering ID. Attempt a parent deletion and inspect the foreign-key policy. Update a student email under a uniqueness constraint and test case normalization. Include a rollback path and verify that failed statements do not leave a partial enrollment or audit record.
+{/* Source tracking: SQL query semantics, `SELECT` clause behavior, `EXPLAIN`, and constraints in this lab are synthesized from PostgreSQL’s current documentation. */}
 
-## Plan and performance tasks
+## Create the fixed fixture
 
-Create uniform and skewed fixtures. Compare a sequential scan, index scan, and join strategy for enrollment counts and tenant-scoped lookups. Use EXPLAIN ANALYZE only in a safe transaction or read-only copy. Record estimated and actual rows, loops, buffers, memory, planning time, execution time, and tail latency. Add a composite index only after stating its query and write cost. Refresh statistics and repeat.
+If you have a disposable PostgreSQL database, load the schema and rows. Otherwise, use the tables as the authoritative fixture for hand tracing.
 
-## Security tasks
+```sql
+CREATE TABLE student (
+  student_id   integer PRIMARY KEY,
+  display_name text NOT NULL
+);
 
-Use separate application and migration roles. Attempt SQL injection through a value, an ORDER BY choice, and an identifier selector; parameterize values and allowlist identifiers. Attempt to read another tenant’s student and enrollment IDs. Enforce tenant context in every query or row policy and test bulk, search, export, and error paths. Verify that query logs and failed statements do not contain passwords or tokens.
+CREATE TABLE offering (
+  offering_id integer PRIMARY KEY,
+  code        text NOT NULL,
+  term        text NOT NULL,
+  capacity    integer NOT NULL CHECK (capacity >= 0)
+);
 
-## Recovery tasks
+CREATE TABLE enrollment (
+  student_id  integer NOT NULL REFERENCES student(student_id),
+  offering_id integer NOT NULL REFERENCES offering(offering_id),
+  status      text NOT NULL CHECK (status IN ('enrolled', 'waitlisted', 'dropped')),
+  grade       integer CHECK (grade IS NULL OR grade BETWEEN 0 AND 100),
+  PRIMARY KEY (student_id, offering_id)
+);
 
-Start a transaction, perform an enrollment and audit insert, crash or roll back at several points, and verify atomicity. Take a backup or test fixture, apply changes, and restore to a known point. Check that constraints, indexes, tenant policy, and application assumptions remain valid after restore. Record what happens if the KMS, identity provider, or audit sink is unavailable.
+INSERT INTO student (student_id, display_name) VALUES
+  (1, 'Ada'), (2, 'Bo'), (3, 'Cy'), (4, 'Dee');
 
-## Exercises
+INSERT INTO offering (offering_id, code, term, capacity) VALUES
+  (10, 'DB101', '2026S', 2),
+  (11, 'DB201', '2026S', 1),
+  (12, 'DB301', '2026S', 2),
+  (13, 'DB101', '2025F', 2);
 
-1. Write the zero-enrollment query and prove why LEFT JOIN is required.
-2. Construct a capacity race and repair it.
-3. Create a NULL fixture that changes a NOT IN result.
-4. Design indexes for tenant-term enrollment reports.
-5. Write a cross-tenant negative test.
-6. Trace rollback after a failed constraint.
+INSERT INTO enrollment (student_id, offering_id, status, grade) VALUES
+  (1, 10, 'enrolled', 87),
+  (2, 10, 'dropped', 40),
+  (3, 11, 'waitlisted', NULL),
+  (4, 13, 'enrolled', 93);
+```
 
-### Diagnostic solutions
+| Relation | Fixture facts |
+| --- | --- |
+| `student` | Ada, Bo, Cy, and Dee exist |
+| `offering` | DB101, DB201, DB301 are in 2026S; DB101 also has an older 2025F offering |
+| `enrollment` | Ada is enrolled in current DB101; Bo is dropped; Cy is waitlisted; Dee is enrolled only in the old term |
 
+> **Invariant.** `enrollment` has grain “one student's status in one offering.” Its composite primary key forbids two simultaneous rows for the same student/offering pair. The foreign keys forbid an enrollment for an unknown student or offering.
 
-1. Start from Offering and LEFT JOIN Enrollment with the term predicate in ON, group by offering, and COUNT(e.student_id). The preserved offering row remains when no enrollment matches.
-2. Both transactions read one remaining seat and insert. Use an atomic UPDATE with capacity predicate and check affected rows, lock the offering row, or use serializable isolation with full retry.
-3. Put a NULL in a subquery used by NOT IN. A nonmatching outer value compares UNKNOWN, so it is filtered. Use NOT EXISTS with an explicit equality and a non-null key.
-4. Use tenant_id, term, and course or offering ID in an order matching equality and grouping. Measure skew, selectivity, write overhead, and whether a covering index is worth its size.
-5. Authenticate as tenant A, request an object ID owned by tenant B through direct, list, search, export, and asynchronous paths, and assert no data or revealing error is returned.
-6. Verify the failed insert or update is absent, earlier statements in the same transaction are rolled back unless explicitly committed elsewhere, and any external effect uses an outbox or compensation rather than assuming database rollback.
+### Warm-up prediction
 
+Before writing SQL, list the 2026S offerings and the count of rows whose status is `enrolled`. Do not count `dropped` or `waitlisted` rows.
 
+<ExerciseSolution hint="Filter the enrollment rows by status first, then keep every current-term offering.">
 
-## Expected result analysis
+The desired report has DB101 with count 1, DB201 with count 0, and DB301 with count 0. The fixed fixture has no enrolled row for DB201 or DB301. This table is the oracle for the first task, not an optional afterthought.
+</ExerciseSolution>
 
-Before executing each query, write the expected rows for the fixture by hand. Mark the relation’s grain and count how many rows each join key can contribute. For a course-count query, there must be one result per offering, even when the enrollment side is empty. For a student-course query, duplicate enrollment records should be impossible because of a constraint; if the fixture permits them temporarily, explain whether the query should count rows or distinct students.
+## Task 1: keep offerings with zero enrolled students
 
-For NULLs, write the three-valued truth value of every predicate. A WHERE clause retains TRUE only; UNKNOWN is not accepted. For outer joins, mark the generated NULL-extended row separately from a stored NULL. For aggregates, compare COUNT(*) with COUNT(student_id), SUM over no rows, and AVG with missing grades. Include a test where a filter is moved from ON to WHERE and record the exact row that disappears.
+**Result contract:** one row per offering in `2026S`, including offerings with no enrolled students; columns are `code`, `enrolled_count`, and `is_full`; ordered by code then offering ID.
 
-## Transaction trace
+Start with this skeleton. Decide where the status condition belongs before running it.
 
-Use two database sessions and barriers. Session A reads capacity, session B reads capacity, then release both to attempt the last-seat update. Record snapshots, locks or versions, affected-row counts, commits, and errors. A correct design either serializes one transaction, causes one conditional update to affect zero rows, or aborts one transaction for retry. A test that merely observes the final capacity cannot show whether two users were both incorrectly told they succeeded.
+<CodeExercise
+  client:load
+  title="Match enrolled rows without deleting empty offerings"
+  code={String.raw`FROM offering AS o
+LEFT JOIN enrollment AS e
+  [!blank!] e.offering_id = o.offering_id
+ AND e.status = 'enrolled'`}
+  answers={["ON"]}
+  explanation="The status controls which right-side rows match. The report still requires every current-term offering from the left side."
+/>
 
-## SQL safety review
+```sql
+SELECT o.offering_id,
+       o.code,
+       COUNT(e.student_id) AS enrolled_count,
+       COUNT(e.student_id) >= o.capacity AS is_full
+FROM offering AS o
+LEFT JOIN enrollment AS e
+  ON e.offering_id = o.offering_id
+ AND e.status = 'enrolled'
+WHERE o.term = '2026S'
+GROUP BY o.offering_id, o.code, o.capacity
+ORDER BY o.code, o.offering_id;
+```
 
-Inspect generated SQL and parameters. Every user value must be bound, every identifier selected from an allowlist, and every privileged field assigned by the server. Test malformed Unicode, quotes, comments, large values, unexpected NULL, duplicate JSON keys, and a client attempting to set tenant_id or enrollment status. Review query logs and errors for sensitive values. The lab is complete only when semantic result, concurrency behavior, security policy, and operational evidence agree.
+> **Worked example.** The left join emits each 2026S offering even when no enrolled right row exists. `COUNT(e.student_id)` ignores the null-extended value, so it produces zero for DB201 and DB301; `COUNT(*)` would instead count the left row and be wrong for this contract.
 
-## Lab report
+| Expected `Task 1` result |  |  |  |
+| --- | --- | --- | --- |
+| `offering_id` | `code` | `enrolled_count` | `is_full` |
+| 10 | DB101 | 1 | false |
+| 11 | DB201 | 0 | false |
+| 12 | DB301 | 0 | false |
 
-Submit DDL, seed data, expected result tables, SQL statements, transaction schedules, EXPLAIN plans, timing and buffer measurements, negative security tests, and recovery observations. For every result explain the logical query phase that produces it. For every failed test state whether the defect was in schema, query, transaction boundary, authorization, configuration, or expectation. Include database version, isolation settings, index definitions, fixture generator, and commands so another student can reproduce the lab.
+### Break it on purpose
 
-## Extension: workload reasoning
+Move `e.status = 'enrolled'` into `WHERE`, then predict the result. Why is DB201 absent even though it has an enrollment row?
 
-Add enough rows to cross a planner threshold and introduce a skewed tenant. Observe whether a plan changes from index probes to a scan or from nested loop to hash join. Then add a composite index and measure both read benefit and insert cost. Do not report one fast run; report repeated distributions, cache condition, statistics state, and the logical result checksum.
+<ExerciseSolution hint="`WHERE` filters after NULL extension and after the right-side status is visible.">
 
-## Grading standard
+Only DB101 remains. DB201's only match has status `waitlisted`, so the `WHERE` predicate is false; DB301 has a null-extended status, so the predicate is `UNKNOWN`. Both are removed. The query has changed from “all offerings, count enrolled matches” to “offerings with at least one enrolled match.”
+</ExerciseSolution>
 
-Full credit requires a schema whose constraints match the stated domain, queries whose grain and NULL behavior are explained, a concurrency repair that is correct under the selected isolation level, parameterized and authorized access, and measurements that identify assumptions. A screenshot of a successful query is not evidence of correctness. Include an independently computed oracle for small fixtures and retain failing cases as regression tests. Record the DBMS version and configuration with the submission. Store the raw plans and result checksums as well. Keep them versioned and rerun them after every query, index, or configuration change so that performance conclusions remain reproducible rather than anecdotal.
+> **Counterexample.** A query can be syntactically valid, return a count, and still fail the report contract. A test dataset containing only offerings with enrolled students would not expose this `ON`/`WHERE` bug; zero and nonqualifying cases must be seeded deliberately.
 
-## References & Further Reading
+## Task 2: find students with no current enrollment
 
-* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
-* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [PostgreSQL SQL Queries](https://www.postgresql.org/docs/current/queries.html)
+**Result contract:** one row per student who has no `enrolled` registration in a 2026S offering; ordered by student ID.
 
-**Exercise.** Include one query whose result changes if an inner join is replaced with a left join, and explain why.
+Complete the absence test, then compare your result with the fixture.
 
-## References & Further Reading
-* [PostgreSQL Tutorial](https://www.postgresql.org/docs/current/tutorial.html)
-* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
-* [PostgreSQL SQL Queries](https://www.postgresql.org/docs/current/queries.html)
+<CodeExercise
+  client:load
+  title="Ask whether a matching row exists"
+  code={String.raw`SELECT s.student_id, s.display_name
+FROM student AS s
+WHERE [!blank!] (
+  SELECT 1
+  FROM enrollment AS e
+  JOIN offering AS o ON o.offering_id = e.offering_id
+  WHERE e.student_id = s.student_id
+    AND e.status = 'enrolled'
+    AND o.term = '2026S'
+);`}
+  answers={["NOT EXISTS"]}
+  explanation="The subquery is correlated to one student. The outer row survives exactly when it has no enrolled current-term row."
+/>
+
+```sql
+SELECT s.student_id, s.display_name
+FROM student AS s
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM enrollment AS e
+  JOIN offering AS o ON o.offering_id = e.offering_id
+  WHERE e.student_id = s.student_id
+    AND e.status = 'enrolled'
+    AND o.term = '2026S'
+)
+ORDER BY s.student_id;
+```
+
+> **Worked example.** Bo is included because dropped is not enrolled. Cy is included because waitlisted is not enrolled. Dee is included because the only enrolled row is in 2025F. Ada is excluded because the correlated subquery finds current DB101.
+
+| Expected `Task 2` result |  |
+| --- | --- |
+| `student_id` | `display_name` |
+| 2 | Bo |
+| 3 | Cy |
+| 4 | Dee |
+
+> **Warning.** Do not replace this query with `NOT IN (SELECT student_id FROM enrollment)` without a precise proof about NULL and the omitted term/status conditions. `NOT EXISTS` states the required correlated absence directly.
+
+### Change the requirement
+
+The registrar changes “no current enrollment” to “no current **or waitlisted** registration.” Which predicate changes, and which expected row disappears?
+
+<ExerciseSolution hint="The term boundary is unchanged. Only the accepted enrollment states change.">
+
+Change the correlated condition to `e.status IN ('enrolled', 'waitlisted')`. Cy disappears because Cy is waitlisted in DB201 for 2026S. Bo remains because dropped is still excluded; Dee remains because the only row is in 2025F.
+</ExerciseSolution>
+
+## Task 3: test the schema, not just the queries
+
+For each proposed write, predict the intended rejection. In a local PostgreSQL lab, issue each in its own transaction and roll it back after the expected error.
+
+| Proposed fact | Constraint that should reject it |
+| --- | --- |
+| Add a second `(1, 10, 'enrolled', 91)` row | Composite primary key on `(student_id, offering_id)` |
+| Add `(1, 999, 'enrolled', 91)` | Foreign key to `offering` |
+| Add `(1, 11, 'enrolled', -4)` | Grade check |
+| Add `(1, 11, 'enrolled', 101)` | Grade check |
+
+```sql
+BEGIN;
+INSERT INTO enrollment (student_id, offering_id, status, grade)
+VALUES (1, 999, 'enrolled', 91);
+-- PostgreSQL reports a foreign-key violation here.
+ROLLBACK;
+```
+
+> **Invariant.** Constraint tests are part of the schema's behavior specification. A successful `SELECT` cannot prove that invalid state is impossible; each rule needs at least one adversarial write that targets it.
+
+### Diagnose a missing rule
+
+The school now says “a full offering may not gain another enrolled student.” Can you express that correctly with the existing row-local `CHECK` constraints? State what is missing from the lab design.
+
+<ExerciseSolution hint="Capacity depends on multiple enrollment rows, but a CHECK sees its own row's values.">
+
+No. `capacity` and the count of enrolled rows live in different rows/relations, so an ordinary row-local check cannot safely compare them. The design needs a transaction-aware enrollment operation or another coordinated integrity mechanism, plus concurrency tests. This lab intentionally stops before transaction isolation and does not pretend a check constraint solves it.
+</ExerciseSolution>
+
+## Task 4: make a cautious plan observation (optional)
+
+Run the zero-safe report with PostgreSQL's read-only plan command:
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT o.offering_id,
+       o.code,
+       COUNT(e.student_id) AS enrolled_count
+FROM offering AS o
+LEFT JOIN enrollment AS e
+  ON e.offering_id = o.offering_id
+ AND e.status = 'enrolled'
+WHERE o.term = '2026S'
+GROUP BY o.offering_id, o.code
+ORDER BY o.code, o.offering_id;
+```
+
+Record exactly one observation that the output supports, such as “on this four-offering fixture, PostgreSQL chose a sequential scan.” Do **not** conclude that a sequential scan is always best or that the plan proves semantic correctness.
+
+<details>
+  <summary>Optional extension: test an index hypothesis</summary>
+
+  In a disposable lab only, add an index after recording the baseline, rerun the same `EXPLAIN`, and compare the actual rows as well as the plan. For a tiny fixture PostgreSQL may rationally keep a sequential scan. The experiment teaches that a physical change is a cost hypothesis, while the report contract is a correctness obligation.
+</details>
+
+## Portfolio transfer task
+
+Write and test a query for: “For every 2026S offering, show the code, the number of enrolled students, and the number of waitlisted students; include offerings with neither; order by code.” Submit:
+
+1. a one-sentence result contract;
+2. the SQL with a sentence for each `ON`, `WHERE`, and aggregate choice;
+3. a predicted result table for the fixed fixture;
+4. two extra seed rows that would catch a wrong answer.
+
+<ExerciseSolution hint="Keep the current-term condition on Offering. Preserve all offerings with a left join, then use conditional aggregation for the two status counts.">
+
+One correct core is:
+
+```sql
+SELECT o.code,
+       COUNT(*) FILTER (WHERE e.status = 'enrolled') AS enrolled_count,
+       COUNT(*) FILTER (WHERE e.status = 'waitlisted') AS waitlisted_count
+FROM offering AS o
+LEFT JOIN enrollment AS e
+  ON e.offering_id = o.offering_id
+WHERE o.term = '2026S'
+GROUP BY o.offering_id, o.code
+ORDER BY o.code, o.offering_id;
+```
+
+For the fixture, DB101 is `(1, 0)`, DB201 is `(0, 1)`, and DB301 is `(0, 0)`. Seed one offering with both an enrolled and waitlisted row, plus one offering with only a dropped row. Those cases catch accidental status filtering in `WHERE` and incorrect use of `COUNT(*)` without a filter.
+</ExerciseSolution>
+
+## References
+
+- [PostgreSQL 18: `SELECT`](https://www.postgresql.org/docs/18/sql-select.html)
+- [PostgreSQL 18: Constraints](https://www.postgresql.org/docs/18/ddl-constraints.html)
+- [PostgreSQL 18: `EXPLAIN`](https://www.postgresql.org/docs/18/sql-explain.html)
+- [PostgreSQL 18: Table Expressions and Joins](https://www.postgresql.org/docs/18/queries-table-expressions.html)

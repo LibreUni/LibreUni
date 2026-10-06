@@ -1,0 +1,87 @@
+---
+title: "Factories, Global State, and Lifetime"
+course: software-engineering
+description: "Distinguish factory creation from singleton lifetime control and evaluate the testing and concurrency costs of global access."
+prerequisites:
+  - "Interfaces, dependency inversion, and object lifecycles"
+outcomes:
+  - "Choose a factory when construction policy varies"
+  - "Explain why singleton access is a global-state decision, not merely a constructor trick"
+  - "Design lifetime and reset behavior that remain testable"
+omissions:
+  - "Language-specific module singletons and distributed leader election are outside this pattern lesson."
+estimatedMinutes: 50
+assessment: "Replace an unjustified singleton with an explicit lifetime boundary or defend the global invariant."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Factories, Global State, and Lifetime
+
+A factory hides construction choices; a singleton restricts or centralizes instance lifetime. They solve different problems. A factory can improve dependency inversion without creating global state. A singleton may be justified for a process-wide resource with one coherent owner, but “only one” is a requirement that must include tests, concurrency, shutdown, and configuration.
+
+<Quiz client:load
+  title="Choose the intent"
+  question="Which problem is a factory primarily solving?"
+  options={["Preventing all mutable state", "Choosing or encapsulating construction without coupling clients to concrete types", "Making every object globally accessible", "Guaranteeing thread safety"]}
+  correctIndex={1}
+  explanation="Factories centralize construction policy. They do not automatically make objects immutable, globally shared, or thread-safe."
+/>
+
+## Factory boundary
+
+Use a factory when the concrete type depends on configuration, input, platform, or a policy that should not leak into callers:
+
+```python
+def make_parser(format_name):
+    if format_name == "json": return JsonParser()
+    if format_name == "csv": return CsvParser()
+    raise ValueError("unsupported format")
+```
+
+The factory contract includes unsupported input and configuration errors. A factory that returns a common interface still needs the substitutability tests for each implementation.
+
+## Singleton costs
+
+Global access hides dependencies, makes test order matter, couples configuration to process lifetime, and creates contention or reentrancy risks. Lazy initialization also needs a thread-safety and failure policy. Prefer an application composition root that creates one instance and passes it to clients; the application can still have one database pool without every class reaching for a global.
+
+<CaseStudy client:load
+  title="One process is not one invariant"
+  scenario="A metrics registry is implemented as a singleton. Tests run in parallel and each expects an empty registry. A later requirement needs two registries for isolated tenants in one process."
+  question="What design pressure is exposed?"
+  options={["The singleton needs a prettier name", "Global lifetime and hidden state conflict with test isolation and a new scoped requirement", "Parallel tests prove registries are unnecessary", "Add more static methods"]}
+  correctIndex={1}
+  explanation="The singleton encoded an assumption about scope that the product no longer satisfies. Make lifetime explicit and inject the registry at the required scope."
+/>
+
+<CodeExercise client:load
+  title="Make lifetime explicit"
+  code={`def report(registry, event):
+    registry.record(event)
+
+# The registry is supplied by the [!blank!] that owns application lifetime.`}
+  answers={["composition root"]}
+  explanation="The composition root wires dependencies and lifetime. The reporting function declares what it needs without locating a global singleton."
+/>
+
+## Transfer exercises
+
+1. Give a valid singleton invariant and two tests it still requires.
+2. Compare a factory with a service locator.
+3. Design a shutdown policy for a process-wide resource.
+4. Identify a scope where “one instance” is correct but global access is not.
+
+### Diagnostic solutions
+
+1. Exactly one registry per process with synchronized registration, deterministic initialization, and defined shutdown; test concurrent initialization and reset/isolation behavior.
+2. A factory creates a requested dependency at a boundary; a service locator lets arbitrary code pull hidden dependencies, increasing coupling and making contracts less visible.
+3. Stop new work, drain/close users, record failures, and define behavior for calls after shutdown. Do not rely on process exit ordering.
+4. One repository per request or tenant can be correct while still being passed explicitly to handlers.
+
+## References & Further Reading
+
+* Gamma et al., *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley, 1994.
+* [MIT 6.005: specifications and modularity](https://web.mit.edu/6.005/www/fa15/classes/06-specifications/)
+* [Martin Fowler: Dependency Injection](https://martinfowler.com/articles/injection.html)

@@ -1,0 +1,269 @@
+---
+title: "Interleavings and Atomicity"
+course: "operating-systems"
+description: "Execution histories, races, invariants, linearization points, and systematic reasoning about concurrent state."
+prerequisites:
+  - "Processes, threads, and context switches"
+  - "C expressions, pointers, and object lifetime"
+  - "State-machine invariants"
+outcomes:
+  - "Represent a concurrent execution as events constrained by program order and enumerate its legal sequentially consistent interleavings."
+  - "Distinguish an atomicity violation, a logical race, and an ISO C data race by the evidence each claim requires."
+  - "State a shared-state invariant, locate a valid linearization point, and construct a schedule that kills an incorrect implementation."
+omissions:
+  - "Weak-memory executions, lock implementations, and acquire/release ordering are developed in the next lesson."
+  - "Distributed consistency and failure are outside this shared-memory model."
+estimatedMinutes: 330
+assessment: "Given an unseen two- or three-thread implementation, state the invariant, derive the event constraints, enumerate or bound reachable outcomes, identify the first violating event, and defend one repair with a schedule that distinguishes it from a named wrong repair."
+---
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import InterleavingPlayground from '../../../components/playgrounds/InterleavingPlayground';
+
+# Interleavings and Atomicity
+
+Two workers dequeue jobs from a shared ring. The queue contains one job. Each worker reads `count == 1`, each reads the same head slot, and each decrements `count`. Both return the same job; one real job is executed twice. No instruction failed. The failure exists only in the order formed by individually ordinary instructions.
+
+Concurrency turns **time** into program input. Correctness must therefore quantify over every execution the scheduler and hardware may permit, not only the order seen in one debugger run.
+
+## Freeze the execution model before tracing
+
+<MathStatement id="def-concurrent-history" kind="definition" title="History and program order">
+A **history** is a finite sequence of invocation, internal, and response events from one or more threads. For each thread $T$, **program order** $\prec_T$ orders that thread's events as the abstract machine requires. An **interleaving** is a total order of events that preserves every $\prec_T$.
+</MathStatement>
+
+This lesson begins with a deliberately strong machine model:
+
+- one processor instruction completes before the next event in the history;
+- every load sees the most recent preceding store to that location in the total order;
+- a context switch may occur between the primitive events shown in the trace; and
+- no compiler or processor reorders those events.
+
+That is a **sequentially consistent trace model**, not a claim about C or RISC-V execution. It isolates the scheduling problem. The next lesson adds language-level data-race rules and weak hardware ordering.
+
+<PlantUML code={`
+@startuml
+hide footbox
+participant "thread A" as A
+participant "shared counter" as M
+participant "thread B" as B
+A -> M : load counter → rA = 0
+M -> B : load counter → rB = 0
+A -> A : rA = rA + 1
+B -> B : rB = rB + 1
+A -> M : store rA → counter = 1
+B -> M : store rB → counter = 1
+note over A,B
+Program order is preserved inside each lifeline.
+The cross-thread order loses one update.
+end note
+@enduml
+`} />
+
+**Retrieval — answer before expanding.** If thread A has three ordered events and thread B has three ordered events, how many six-event interleavings preserve both threads' program order?
+
+<details>
+<summary>Derivation</summary>
+
+Choose which three of the six positions belong to A; B occupies the rest. The count is
+
+$$
+\binom{6}{3}=\frac{6!}{3!3!}=20.
+$$
+
+This counts schedules, not distinct final states. Several schedules may produce the same state, and synchronization can make many schedules observationally equivalent.
+
+</details>
+
+For event sequences of lengths $m$ and $n$, the same argument gives $\binom{m+n}{m}$. With three threads, the multinomial coefficient grows quickly. Exhaustive reasoning is still practical for a reduced state machine; it is not practical if every source statement is treated as one indivisible event without justification.
+
+## An increment is a protocol, not a glyph
+
+Suppose `counter` initially equals 0 and each thread evaluates `counter++`. In the trace model, expand the expression into load, local add, and store:
+
+| Event | Thread A state | Thread B state | Shared `counter` |
+| --- | ---: | ---: | ---: |
+| initial | `rA = —` | `rB = —` | 0 |
+| A loads | `rA = 0` | `rB = —` | 0 |
+| B loads | `rA = 0` | `rB = 0` | 0 |
+| A adds | `rA = 1` | `rB = 0` | 0 |
+| B adds | `rA = 1` | `rB = 1` | 0 |
+| A stores | `rA = 1` | `rB = 1` | 1 |
+| B stores | `rA = 1` | `rB = 1` | 1 |
+
+The intended postcondition is `counter == 2`. The first five events leave a recoverable state: a remaining store might still produce 2 only if it were derived from 1. The final store commits a stale value and makes the intended postcondition unreachable in this history. That store is the first event at which the completed-operation count and shared counter cannot be reconciled.
+
+**Prediction — do not move the slider yet.** In the lost-update schedule, after both loads and both local additions but before either store, is the invariant already false? State which invariant you are using.
+
+<InterleavingPlayground client:load />
+
+**Transfer.** Change the initial counter to 9 and replace A's increment with `counter += 2` while B still adds 1. Construct a legal six-event history ending in 10, one ending in 11, and the serialized history ending in 12.
+
+<details>
+<summary>Transfer trace</summary>
+
+- Final 10: A and B both load 9; A computes 11; B computes 10; A stores 11; B stores 10.
+- Final 11: use the same stale reads but let B store 10 before A stores 11.
+- Final 12: A completes load/add/store first, then B loads 11 and stores 12; or B completes first and A subsequently loads 10 and stores 12.
+
+The first answer to the prediction depends on the invariant. `counter == completed increments` still holds before either operation responds because neither increment has completed. A stronger implementation invariant such as “each local pending update was derived from a distinct logical version” is already violated when both loads observe version 0. State which layer of correctness the invariant describes.
+
+</details>
+
+## Name the failure precisely
+
+{/* Source tracking: ISO C data-race and volatile rules synthesized from ISO/IEC 9899:2011 committee draft N1570, especially §§5.1.2.4 and 6.7.3. */}
+
+| Term | Required evidence | What it does **not** imply |
+| --- | --- | --- |
+| **race condition** | correctness depends on relative timing or ordering | that two accesses target the same byte |
+| **atomicity violation** | a multi-event operation is observed in a state inconsistent with its required indivisible effect | that the implementation language declares undefined behavior |
+| **ISO C data race** | conflicting actions in different threads, at least one non-atomic, without a happens-before relation | that the only possible symptom is a lost update |
+| **determinism failure** | the specified observable result varies across allowed executions | that the result is incorrect; nondeterminism may be intentional |
+
+In ISO C, a data race has undefined behavior. The sequentially consistent lost-update table is therefore a useful abstract diagnosis, not a list of the only outcomes a real racy C program may exhibit. The compiler is not required to preserve an intuitive interleaving for a program outside the language contract.
+
+`volatile` does not repair the program. In C it constrains accesses to volatile objects for implementation-defined observable behavior such as device registers; it neither combines load/add/store into one atomic action nor creates inter-thread synchronization. A `volatile int counter` can still lose updates, and a C data race on it still has undefined behavior.
+
+**Application.** Classify each case and justify the minimum claim:
+
+1. Two threads use an atomic fetch-add; the final count is correct, but which thread receives ticket 0 varies.
+2. Two C threads write a plain `int flag` without synchronization, even though both write 1.
+3. A thread checks `access(path, W_OK)` and later opens the pathname after another process replaces the directory entry.
+
+<details>
+<summary>Classification</summary>
+
+1. The result may be nondeterministic without an atomicity violation or data race. Each fetch-add can still have one indivisible place in the order.
+2. The writes conflict, are non-atomic, and lack happens-before; this is an ISO C data race even if a particular machine appears to store the same value twice.
+3. This is a time-of-check/time-of-use race. The pathname can name a different object at use time. The relevant repair is an interface that binds checking and use to one kernel object or directory-relative handle—not a mutex private to one process.
+
+</details>
+
+## Invariants turn schedules into proof obligations
+
+An invariant is a predicate that must hold at designated observable states. It is stronger than “the test passed” and more useful than “the code is thread-safe.”
+
+For a bounded queue with capacity $N$, useful clauses include:
+
+$$
+0 \leq count \leq N,
+\qquad tail \equiv head + count \pmod N,
+$$
+
+plus ownership clauses stating which slots contain initialized jobs and when a returned job stops belonging to the queue. The arithmetic catches overflow and duplicate removal; the ownership clause catches returning a pointer whose slot another producer may overwrite.
+
+**Worked trace: duplicate dequeue.** Let `head = 4`, `count = 1`, and slot 4 contain job J. Workers A and B each perform `if (count > 0) { j = ring[head]; head++; count--; }` without synchronization.
+
+1. A and B both test `count > 0`.
+2. Both read slot 4 and obtain J.
+3. A updates `head = 5`, `count = 0`.
+4. B uses stale local values and also publishes `head = 5`, `count = 0`.
+
+The numeric invariant still holds. The abstraction invariant fails because one abstract queue element produced two successful dequeue responses. A correct invariant must connect representation state to operation history, not merely bound integers.
+
+<MathStatement id="def-linearizability" kind="definition" title="Linearizability">
+A concurrent history is **linearizable** when each completed operation can be assigned one point between its invocation and response so that the resulting sequential order (1) obeys the object's sequential specification and (2) preserves real-time order for non-overlapping operations.
+</MathStatement>
+
+{/* Source tracking: The definition and compositional use of linearizability are synthesized from Herlihy and Wing, “Linearizability: A Correctness Condition for Concurrent Objects,” 1990. */}
+
+The assigned point is a **linearization point**. For an atomic fetch-add, it is the successful atomic read-modify-write. For a lock-protected enqueue, it may be the pointer or count update that makes the new item reachable while the lock excludes observers. “Somewhere inside the function” is not enough: name an event and prove every allowed observer sees a history consistent with it.
+
+**Counterexample: the response is not always the point.** A queue operation may link a node, then spend time reclaiming metadata before returning. A concurrent dequeue can observe the node during that interval. Linearizing enqueue at its response would put dequeue before enqueue in the sequential order even though dequeue returned the new node. The publication store—not the later return—is the candidate point.
+
+## Reduce the state space without deleting behavior
+
+<PlantUML code={`
+@startuml
+start
+:Write the sequential specification;
+:Choose one shared-state invariant;
+:Split each operation at shared-memory or blocking events;
+:Add program-order constraints;
+if (Synchronization orders two events?) then (yes)
+  :Add the happens-before edge;
+else (no)
+  :Explore both legal relative orders;
+endif
+:Merge states only when future observations are equivalent;
+:Check invariant and operation responses;
+stop
+@enduml
+`} />
+
+Treat local arithmetic with no shared observation as one event. Split at loads, stores, atomic operations, lock operations, waits, wakeups, and externally visible responses. This reduction is valid only when the merged local steps cannot block, fault in a relevant way, call unknown code, or expose state through a signal or callback.
+
+**Worked search.** Two one-slot exchanger operations each execute `publish(value)` then `take(peer)`. If `publish` and `take` are atomic abstract events, there are six interleavings of two two-event threads. Four schedules let both publish before either take and can succeed. Two schedules attempt a take before the peer publication. Whether those block, fail, or read “empty” is part of the sequential specification; deleting that choice from the model would assume the result.
+
+Random stress can discover a violating schedule but cannot establish that no schedule exists. A useful concurrency test harness controls one uncertainty at a time:
+
+- barriers place threads at a chosen boundary;
+- a deterministic scheduler selects the next event;
+- an invariant checker runs after every event in the reduced model;
+- a history recorder captures invocation and response order; and
+- a test oracle checks whether the observed history admits a legal sequentialization.
+
+Dynamic race detectors answer a different question: whether an execution contains unsynchronized conflicting memory accesses under their model. They can miss unexecuted races and cannot prove a higher-level queue or filesystem protocol correct.
+
+## Synthesis studio: kill the check-then-act repair
+
+A proposed allocator repair changes this code:
+
+```text
+if free_list is not empty:
+    block = free_list.head
+    free_list.head = block.next
+    return block
+```
+
+to this:
+
+```text
+if atomic_load(free_list) is not null:
+    block = atomic_load(free_list)
+    atomic_store(free_list, block.next)
+    return block
+```
+
+Produce a review note with four parts:
+
+1. the abstract free-list invariant, including uniqueness of returned blocks;
+2. the shortest history in which two allocators return the same block;
+3. why making the individual loads and store atomic does not make the three-event protocol atomic; and
+4. one repair candidate and the event you would attempt to prove is its linearization point.
+
+<details>
+<summary>Review rubric and diagnostic schedule</summary>
+
+A complete invariant says every free block is reachable exactly once from the head, no allocated block is reachable, and each successful allocation removes and returns exactly one block that was reachable in the pre-state.
+
+With list `X → Y`, A loads non-null and loads X. B loads non-null and loads X. A stores Y and returns X. B stores Y and returns X. Each memory action can be atomic while the compound allocation is not.
+
+A lock around check, read, update, and ownership transfer is one repair. A compare-and-exchange loop is another: load head X, compute Y, then atomically replace X with Y only if head still equals X; retry on failure. The successful exchange is a candidate linearization point. A production lock-free design must also address memory reclamation and ABA; those concerns are intentionally outside this lesson.
+
+Score the note on invariant precision (30%), legal event trace (25%), distinction between atomic accesses and an atomic operation (20%), repair argument (20%), and explicit boundary such as ABA/reclamation (5%).
+
+</details>
+
+## Connections and limits
+
+> **Remark.** A concurrency mechanism is justified only by the bad histories it excludes and the progress histories it preserves. Naming a primitive is not a correctness argument.
+
+Interleaving reasoning supplies the problem statement for the rest of the course:
+
+- locks will exclude histories that violate an invariant;
+- acquire/release ordering will constrain which writes a reader may observe;
+- condition variables will make “wait until predicate” atomic with releasing a mutex;
+- deadlock analysis will ask whether those constraints leave any progress path;
+- page faults and interrupts will insert blocking and re-entry points into apparently local kernel code; and
+- crash consistency will replace thread events with durable writes and power-loss cuts.
+
+The method remains the same: define allowed events, state the invariant, enumerate adversarial orders, and show why the mechanism excludes every bad history without excluding required progress.
+
+## References & Further Reading
+
+- Maurice Herlihy and Jeannette Wing, [“Linearizability: A Correctness Condition for Concurrent Objects”](https://doi.org/10.1145/78969.78972), *ACM Transactions on Programming Languages and Systems*, 1990.
+- ISO/IEC JTC1/SC22/WG14, [N1570: ISO C11 committee draft](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf), especially §§5.1.2.4 and 6.7.3.
+- Remzi H. Arpaci-Dusseau and Andrea C. Arpaci-Dusseau, [*Operating Systems: Three Easy Pieces*, concurrency chapters](https://pages.cs.wisc.edu/~remzi/OSTEP/).
+- MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*, Chapter 6/7 “Locking” in the linked revision](https://pdos.csail.mit.edu/6.S081/2025/xv6/book-riscv-rev5.pdf).

@@ -21,9 +21,9 @@ test('monochrome dark code exercise tokens remain readable', async ({ page }) =>
     localStorage.setItem('theme', 'monochrome');
     localStorage.setItem('color-mode', 'dark');
   });
-  await page.goto('/lessons/algorithms/algorithm-engineering.html', { waitUntil: 'networkidle' });
+  await page.goto('/lessons/database-systems/sql-lab.html', { waitUntil: 'networkidle' });
 
-  const result = await page.locator('.code-exercise-codeframe').evaluate((frame) => {
+  const result = await page.locator('.code-exercise-codeframe').evaluateAll((frames) => frames.flatMap(frame => {
     const background = getComputedStyle(frame).backgroundColor;
     return [...frame.querySelectorAll('[class^="hl-"]')].map((token) => ({
       className: token.className,
@@ -32,7 +32,7 @@ test('monochrome dark code exercise tokens remain readable', async ({ page }) =>
       background,
       decoration: getComputedStyle(token).textDecorationLine,
     }));
-  });
+  }));
 
   expect(result.length).toBeGreaterThan(0);
   for (const token of result) {

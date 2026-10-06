@@ -1,47 +1,42 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 
-const root = path.resolve('src/content/lessons/data-structures');
-const visualTag = /<(?:StructureDiagram|PlantUML|TikZ|PythonDiagram|[A-Z][A-Za-z]+Playground)\b/g;
-const visualSectionTag = /^<(?:StructureDiagram|PlantUML|TikZ|PythonDiagram|[A-Z][A-Za-z]+Playground)\b/gm;
-const lessons = fs.readdirSync(root).filter((name) => name.endsWith('.mdx')).sort();
-const counts = lessons.map((name) => {
-  const source = fs.readFileSync(path.join(root, name), 'utf8');
-  const firstSection = source.indexOf('\n## ');
-  const firstVisual = source.search(/^<(?:StructureDiagram|StructureExercise|[A-Z][A-Za-z]+Playground)\b/m);
-  const exercise = source.indexOf('<StructureExercise');
-  const sectionStarts = [...source.matchAll(/^## (.+)$/gm)].map((match) => ({ index: match.index ?? 0, title: match[1] }));
-  const visualSections = new Set([...source.matchAll(visualSectionTag)].map((match) => {
-    const section = sectionStarts.filter((candidate) => candidate.index < (match.index ?? 0)).at(-1);
-    return section?.title;
-  }).filter(Boolean));
-  const bPlusIntroduction = source.indexOf('B+ trees store records in linked leaves');
-  const bPlusCaseStudy = source.indexOf('<CaseStudy client:load title="Range-query index"');
-  return {
-    name,
-    count: source.match(visualTag)?.length ?? 0,
-    layoutFailure: firstSection >= 0 && firstVisual >= 0 && firstVisual < firstSection,
-    exerciseFailure: exercise >= 0 && firstSection >= 0 && exercise < firstSection,
-    spreadFailure: visualSections.size < 3,
-    conceptOrderFailure: name === 'b-trees-and-external-memory.mdx'
-      && (bPlusIntroduction < 0 || bPlusCaseStudy < bPlusIntroduction),
-  };
-});
-const total = counts.reduce((sum, item) => sum + item.count, 0);
-const failures = counts.filter((item) => item.count < 3);
-const layoutFailures = counts.filter((item) => item.layoutFailure || item.exerciseFailure || item.spreadFailure || item.conceptOrderFailure);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const activeCourses = ['computer-architecture', 'operating-systems', 'database-systems'];
+const failures = [];
+const componentNames = new Set(['Quiz', 'CodeRunner', 'CodeExercise', 'CaseStudy', 'PlantUML', 'PythonDiagram', 'TikZ', 'Math', 'MathStatement', 'MathProof', 'ExerciseSolution', ...fs.readdirSync(path.join(root, 'src/components/playgrounds')).filter((name) => name.endsWith('.tsx')).map((name) => path.basename(name, '.tsx'))]);
 
-if (total < 70) {
-  console.error(`Expected at least 70 data-structures visual artifacts; found ${total}.`);
-  process.exit(1);
+for (const courseId of activeCourses) {
+  const manifest = parseYaml(fs.readFileSync(path.join(root, `src/data/course-manifests/${courseId}.yml`), 'utf8'));
+  const listed = new Set(manifest.modules.flatMap((module) => module.lessons));
+  const lessonDir = path.join(root, 'src/content/lessons', courseId);
+  const files = fs.readdirSync(lessonDir).filter((name) => /\.mdx?$/.test(name));
+  for (const fileName of files) {
+    const slug = fileName.replace(/\.mdx?$/, '');
+    const source = fs.readFileSync(path.join(lessonDir, fileName), 'utf8');
+    if (!listed.has(slug)) failures.push(`${courseId}/${fileName}: lesson is not listed by its manifest`);
+    if (!/^# .+/m.test(source)) failures.push(`${courseId}/${fileName}: missing lesson h1`);
+    for (const [, name, importPath] of source.matchAll(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g)) {
+      if (!importPath.includes('components/')) continue;
+      const target = path.resolve(lessonDir, importPath);
+      if (![target, ...['.astro', '.tsx', '.ts', '.jsx', '.js', '.mjs'].map(extension => target + extension)].some(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile())) {
+        failures.push(`${courseId}/${fileName}: imported component ${name} does not resolve at ${importPath}`);
+      }
+    }
+    for (const match of source.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)) {
+      const name = match[1];
+      if (componentNames.has(name) && /Playground$|^(Quiz|CodeRunner|CodeExercise|CaseStudy)$/.test(name)) {
+        const tail = source.slice(match.index, match.index + 500);
+        if (!/client:load\b/.test(tail)) failures.push(`${courseId}/${fileName}: interactive ${name} must use client:load`);
+      }
+    }
+    for (const block of source.matchAll(/<(?:PlantUML|PythonDiagram|TikZ)\b[\s\S]*?>/g)) {
+      if (!/\bcode\s*=/.test(block[0]) || /code\s*=\{?\s*['"]?\s*['"]?\s*\}?\s*>$/.test(block[0])) failures.push(`${courseId}/${fileName}: rendered diagram has no non-empty code prop`);
+    }
+  }
+  for (const slug of listed) if (!fs.existsSync(path.join(lessonDir, `${slug}.mdx`)) && !fs.existsSync(path.join(lessonDir, `${slug}.md`))) failures.push(`${courseId}/${slug}: manifest lesson source is missing`);
 }
-if (failures.length) {
-  console.error(`Every data-structures lesson needs at least 3 visual artifacts:\n${failures.map((item) => `${item.name}: ${item.count}`).join('\n')}`);
-  process.exit(1);
-}
-if (layoutFailures.length) {
-  console.error(`Visuals or exercises are front-loaded before their teaching sections:\n${layoutFailures.map((item) => item.name).join('\n')}`);
-  process.exit(1);
-}
-
-console.log(`Data-structures visual inventory passed: ${total} artifacts across ${lessons.length} lessons.`);
+if (failures.length) { console.error(failures.join('\n')); process.exit(1); }
+console.log(`Active course authoring validation passed for ${activeCourses.length} courses.`);

@@ -1,78 +1,146 @@
 ---
 title: "Transaction Trace Lab"
 course: "database-systems"
-description: "Trace concurrent transactions and recovery decisions."
+description: "Work adversarial schedules from reads through locks, commit, crash, retry, and externally visible effects."
+prerequisites:
+  - "SQL update predicates, keys, constraints, and aggregate invariants"
+  - "Transactions, isolation anomalies, precedence graphs, and deadlock reasoning"
+  - "Write-ahead logging and the distinction between commit and an external side effect"
+outcomes:
+  - "Annotate a schedule with reads, writes, locks or versions, conflicts, commit outcomes, and the first violated invariant."
+  - "Construct and repair lost-update, write-skew, and deadlock traces without conflating their causes."
+  - "Locate the durable and externally visible boundaries in an order, payment, and outbox trace."
+  - "Defend a retry policy using an idempotency key, a transaction outcome, and a failure model."
+omissions:
+  - "This lab does not implement a DBMS scheduler, lock manager, or payment provider."
+  - "Distributed consensus and multi-region failover are bounded to the trace assumptions; their protocols are studied separately."
+estimatedMinutes: 720
+assessment: "Given an unfamiliar interleaving with a crash or retry, produce a complete trace, classify its anomaly or recovery state, repair the invariant at the correct boundary, and explain what evidence a production test must retain."
 ---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
 # Transaction Trace Lab
 
-This lab turns transaction theory into a notation and debugging discipline. A transaction is not merely a list of SQL statements: it is a history of reads, predicate checks, writes, lock acquisitions, log records, waits, commits, and effects that may become visible to other sessions. Your job is to construct histories, determine which observations are possible, and state the smallest mechanism that prevents an unacceptable outcome. Always name the database engine and isolation implementation you are modelling. SQL isolation-level names are not enough because engines may implement the same label differently.
+A trace is a proof artifact. A final table can look plausible after a lost update, a write skew, a deadlock victim, or a crash replay; the trace retains the operations, visibility rules, and failure boundary that distinguish them. Use the notation below before proposing a lock level or an ORM setting.
 
-## 1. Trace notation and invariants
+{/* Source tracking: Schedule notation, serializability, strict locking, WAL commit boundaries, and retry reasoning are synthesized from CMU 15-445/645 materials and PostgreSQL transaction/recovery documentation. The lab traces and prompts are original. */}
 
-Use `r1[x]` for transaction 1 reading item `x`, `w1[x:=v]` for a write, `c1` for commit, and `a1` for abort. A predicate read is written `p1[balance  greater than  0]`; it may lock or version an entire matching set rather than one named row. Add `L1(X)` and `U1(X)` for lock and unlock, `WAL(lsn, page)` for a log flush, and `EXT1(payment)` for an external side effect. A schedule is legal only if each read observes a value allowed by the visibility rule and each write satisfies constraints at the point the engine checks it.
+## Record enough state to replay the decision
 
-For every history, maintain five columns: operation, session state, locks or snapshots, visible database state, and explanation. At a commit, distinguish logical commit from durable commit. A system using write-ahead logging must force enough log before claiming durability; it need not force every dirty data page. A replica acknowledgement is a third fact: it can provide a different durability boundary from local commit. Never silently treat these as interchangeable.
+> **Definition.** A useful transaction trace records each transaction's ordered reads and writes, lock/version state, commit or abort outcome, durable-log boundary, and any effect sent outside the database.
 
-The invariants to check are: primary and foreign-key constraints, application invariants such as `sum(accounts)=constant`, no dirty read if the level forbids it, no lost update if the operation promises it, serializability or a stated weaker guarantee, and recoverability after a crash. A history can be constraint-valid and still be wrong: two doctors may both see another doctor on call and independently go off call, violating a predicate invariant without any single row becoming invalid.
+| Notation | Meaning | Question it answers |
+| --- | --- | --- |
+| **r1(x=20)** | T1 read 20 from x | which version did T1 base its decision on? |
+| **w2(x=13)** | T2 wrote 13 | which operations conflict? |
+| **X1(x)** | T1 holds an exclusive lock on x | why is T2 waiting or allowed through? |
+| **C1** / **A1** | T1 commits / aborts | may its writes become visible? |
+| **L=911 durable** | log through LSN 911 is stable | what can recovery rely on after a crash? |
 
-## 2. Visibility models
+<PlantUML code={`@startuml
+participant "buyer request" as B
+participant "T1" as T1
+database "inventory" as I
+participant "outbox worker" as W
+participant "payment provider" as P
+B -> T1 : reserve 7 units
+T1 -> I : conditional update; insert outbox
+T1 -> I : COMMIT
+W -> I : claim committed outbox event
+W -> P : charge with idempotency key
+note right of P
+The external call follows a
+known commit, but may be retried.
+end note
+@enduml`} />
 
-Under read committed, each statement commonly receives a fresh snapshot. A second statement can therefore see a committed change that the first did not. Under repeatable read or snapshot isolation, a transaction generally keeps a snapshot, but concurrent writes can still create write skew unless conflicting predicates are protected. Serializable execution must be equivalent to some serial order; an implementation can obtain this with strict two-phase locking, predicate/index-range locks, or serializable snapshot isolation that detects dangerous structures and aborts.
+The first question is always semantic: what must remain true? The second is operational: at what read, write, commit, or recovery point is that truth enforced? A trace missing either cannot diagnose the system.
 
-A lock trace must record mode and compatibility. Shared locks protect reads, exclusive locks protect writes, and intention locks summarize locks held below a hierarchy. Two-phase locking requires that a transaction acquire locks during its growing phase and release them during shrinking; strict two-phase locking normally retains write locks through commit, which makes histories recoverable and avoids cascading aborts. A wait-for edge `T1 - greater than  T2` means T1 waits for a lock held by T2. A cycle is a deadlock, not a serialization cycle; the engine must abort a victim or use a timeout.
+### Prediction — insufficient evidence
 
-An MVCC trace instead records the version visible to each snapshot. If row `x` has versions `(x=10, committed before s1)` and `(x=12, committed after s1)`, a snapshot started before the second commit sees 10. A write may validate that the version it read is still current, or it may be overwritten depending on the API. Record the validation rule explicitly; “MVCC” alone does not answer whether a lost update is possible.
+A support log says “stock became 13 after two requests for 7.” It contains only final row values. Name two distinct explanations that remain possible.
 
-## 3. Trace A: lost update and repair
+<ExerciseSolution hint="Final values discard order and visibility.">
+A lost update can produce 13 from initial stock 20 when both transactions read 20 and overwrite each other. A correctly serialized system could also produce 13 after one request succeeds and a compensating restock changes the value. The missing data are the read versions, statement outcomes, commit order, and any intervening events; final state alone is not a concurrency proof.
+</ExerciseSolution>
 
-Initial state is `inventory(sku='A', stock=10)`. T1 and T2 each execute `SELECT stock`, compute `stock-7`, then issue an update based on the value read. A possible read-committed history is `r1[10], r2[10], w1[3], c1, w2[3], c2`. The final value is 3 even though 14 units were promised. Each individual write is valid, but the read-modify-write protocol lost T1's decrement.
+## Trace a lost update without smuggling in oversell
 
-Repair options have different semantics. `UPDATE inventory SET stock=stock-7 WHERE sku='A' AND stock at least 7` makes the arithmetic atomic and causes the second statement to affect zero rows; the caller must inspect the row count. A `SELECT ... FOR UPDATE` serializes the read-modify-write pair. An optimistic version column uses `WHERE sku='A' AND version=:old_version`; a zero row count means retry. A serializable transaction may abort one participant. Explain why a plain `SELECT` followed by a plain `UPDATE` is not equivalent to any of these.
+> **Example.** Start with **stock = 20**. Two buyers each request 7. The intended serial outcome after two accepted requests is 6; using 20 keeps lost update distinct from a separate insufficient-stock rule.
 
-## 4. Trace B: write skew and predicate protection
+| Step | T1 | T2 | Stored stock | Consequence |
+| --- | --- | --- | ---: | --- |
+| 1 | read 20 |  | 20 | T1 plans 13 |
+| 2 |  | read 20 | 20 | T2 also plans 13 |
+| 3 | write 13; commit |  | 13 | one decrement recorded |
+| 4 |  | write 13; commit | 13 | second decrement lost |
 
-Initial state has `on_call(Ada)=true` and `on_call(Bob)=true`; invariant: at least one doctor remains on call. Under snapshot isolation, T1 reads both rows, sees two, writes Ada false, and commits. T2 reads its snapshot with two, writes Bob false, and commits. The result violates the invariant even though the transactions updated different rows and no write-write conflict exists.
+A weak implementation reads stock in the application and executes an unconditional write. A row-local repair puts the condition and decrement in one SQL statement: **update stock only when stock is at least the requested amount**. The affected-row count distinguishes reservation from rejection. A lock or serializable protocol can also serialize the read-modify-write, but the conditional statement expresses the invariant directly.
 
-To repair it, lock the predicate or a stable summary row, use serializable isolation with retry handling, or redesign the invariant around a single counter updated atomically. A foreign key or `CHECK` on each row cannot express “at least one sibling row is true” in the ordinary row-local form. In your trace, state whether a predicate lock is available through an index range, whether a materialized count can become stale, and what happens if the serialization detector aborts T2.
+### Application — complete the repair trace
 
-## 5. Trace C: deadlock and victim selection
+Assume T1 performs the conditional decrement first and commits. T2 performs the same conditional decrement after T1. Fill in T2's affected-row outcome and final stock.
 
-Let T1 transfer from A to B and T2 transfer from B to A. If T1 locks A and T2 locks B, then T1 requests B while T2 requests A. The wait-for graph has a cycle. A correct trace shows both sessions waiting, not both “eventually” succeeding. The DBMS must detect the cycle or time out one transaction; it rolls back that victim and releases its locks, allowing the other to continue.
+<ExerciseSolution>
+T1 changes 20 to 13. T2 sees 13, and its condition **stock >= 7** remains true, so it changes 13 to 6 and affects one row. If the initial stock were 10, T1 would leave 3 and T2 would affect zero rows. Conflating the 10-unit case with a lost update hides whether the design lost a write or correctly rejected an oversell.
+</ExerciseSolution>
 
-Compare three prevention strategies. Global ordering—always lock the lower account identifier first—prevents this particular cycle but requires every code path to obey the order. Conservative two-phase locking acquires all required locks before doing work but reduces concurrency. Deadlock detection permits concurrency and chooses a victim using cost, age, or amount of work; application code must treat a deadlock error as retryable. Retrying must create a new transaction and re-read state, not resume after an arbitrary statement.
+## Trace write skew as a predicate failure
 
-## 6. Trace D: crash, WAL, and external effects
+> **Counterexample.** The invariant “at least one doctor remains on call” spans a set of rows. T1 changes doctor A; T2 changes doctor B. No row is written twice, yet both can jointly violate the predicate.
 
-Suppose T1 writes a page containing `balance=80`, appends a log record describing the old and new value, flushes the log, and reports commit. The data page is still only in the buffer when power fails. Recovery can redo the committed log record and make 80 durable. If T2 wrote `balance=70` but did not commit, recovery must undo or otherwise exclude its effect. The analysis depends on the recovery protocol, but the key ordering rule is that the log describing a dirty page must reach durable storage before that page is flushed.
+<PlantUML code={`@startuml
+participant "T1" as T1
+participant "T2" as T2
+database "on_call(A,B)" as D
+T1 -> D : read A=true, B=true
+T2 -> D : read A=true, B=true
+T1 -> D : set A=false; COMMIT
+T2 -> D : set B=false; COMMIT
+note right of D
+Final predicate:
+exists on_call = false
+end note
+@enduml`} />
 
-Now add `EXT1[charge card]`. A database rollback cannot un-charge a card automatically. Use an outbox or inbox pattern: commit a durable event in the same transaction, deliver it with an idempotency key, and record acknowledgement. If the worker crashes after charging but before recording success, the retry must be safe. A two-phase distributed transaction may coordinate participants but introduces blocking and operational cost; it does not remove the need to reason about participant failure.
+A row-level optimistic version check can accept both writes because their write sets are disjoint. Repairs include serializable validation, predicate/range protection, or a single summary row updated as part of the rule. The trade-off is expected aborts or contention at the shared boundary.
 
-## 7. Lab protocol
+### Prediction — identify the false repair
 
-For each assigned scenario, first write the serial specification and invariants. Then provide an interleaving with at least two sessions, annotate each operation, and identify the first point at which the observed outcome diverges from the specification. Repeat under two isolation levels. For each repair, state the lock/version/predicate it protects, the possible abort or wait, and the client behavior required. Include a minimal executable SQL script, but do not use the script as a substitute for the hand trace: scheduling nondeterminism can hide the history you intend.
+Which repair is insufficient by itself: lock A only, lock both currently on-call rows, serializable transaction, or update a protected on-call-count row?
 
-Collect evidence: transaction start times, isolation settings, transaction IDs if available, lock tables, query results, commit/rollback outcomes, and server logs. Run each race many times, but also construct a deterministic barrier-based test so a pass is not mistaken for proof. Explain which property is proved by reasoning and which is only empirically observed. A good report contains a counterexample for the unsafe version and a proof sketch for the repaired version.
+<ExerciseSolution>
+Locking A only is insufficient because T2 changes B. Locking both rows can work only if every transaction that could change membership follows the same discipline and range changes are also controlled; it is brittle. Serializable validation or a protected count/summary row gives a shared conflict boundary. The key gap is the predicate, not the absence of a row lock.
+</ExerciseSolution>
 
-## Exercises
+## Trace waiting, deadlock, and a chosen abort
 
-1. Give a history in which read committed permits a non-repeatable read but repeatable read prevents it. Name the exact snapshot or lock event that changes the second result.
-2. Construct a phantom example for `SELECT COUNT(*) FROM seats WHERE show_id=7 AND reserved=false`. Compare an index-range lock, serializable validation, and a redesign with a single capacity row.
-3. For a three-transaction history, draw the precedence graph and the wait-for graph. Explain why a cycle in one graph does not automatically imply a cycle in the other.
-4. Show an optimistic version-column update for the inventory example and specify the retry policy when the affected-row count is zero.
-5. Write a WAL sequence in which a committed transaction survives a crash and an uncommitted transaction disappears. State which log records must be flushed before each commit acknowledgement.
-6. Explain why a database transaction cannot by itself guarantee exactly-once email delivery. Design an outbox schema and a deduplication key.
-7. Find a write-skew history over two rows and repair it without serializing every transaction in the table. State the invariant and the protected resource.
-8. A transaction reads a row, performs a slow HTTP request, then updates it. Identify the lock-duration and failure hazards and redesign the workflow.
+> **Definition.** A waits-for edge T1 → T2 means T1 waits for a lock held by T2. A cycle is a deadlock; deadlock detection breaks it by aborting at least one transaction.
 
-### Diagnostic solutions
+| Step | T1 | T2 | Waits-for graph |
+| --- | --- | --- | --- |
+| 1 | holds X(order 7) |  | none |
+| 2 |  | holds X(stock 9) | none |
+| 3 | waits for X(stock 9) |  | T1 → T2 |
+| 4 |  | waits for X(order 7) | T1 ↔ T2 |
 
+<details>
+<summary>Victim selection is not a correctness proof.</summary>
+Aborting T2 releases stock 9 and lets T1 proceed, but the policy should consider rollback work and age. More importantly, the aborted transaction may need a retry protocol that avoids repeating a notification or payment that already escaped the database boundary.
+</details>
 
-For 1, T1 reads 5, T2 commits 9, and T1 reads again. A new read-committed statement may see 9; a repeatable snapshot continues to see 5, although an engine may expose a different implementation detail. For 2, two transactions can each observe one free seat and insert a reservation; a unique constraint on `(show_id, seat_id)` handles the same seat but not a capacity predicate. A capacity row or serializable predicate validation protects the aggregate. For 3, the precedence graph orders conflicting operations for serializability; the wait-for graph records current blocking and can change as locks release. A schedule can be non-serializable without a current deadlock, and a deadlock can be prevented by ordering even before a serialization violation occurs.
+### Transfer — order, crash, and webhook retry
 
-For 4, the update is `UPDATE inventory SET stock=stock-7, version=version+1 WHERE sku='A' AND version=:v AND stock at least 7`; zero rows means distinguish sold-out from conflict and retry only the latter. For 5, redo is justified by a durable commit record and WAL; undo or loser exclusion handles the uncommitted transaction. For 6, the outbox row is committed atomically with the business change, and the worker uses an idempotency key with a unique constraint. For 7, locking a summary row or using serializable isolation makes the two predicate decisions conflict. For 8, do not hold a database lock across an unbounded network request; reserve state with a short transaction, use an expiration/token, and reconcile late responses.
+Design the event order for: reserve stock, write an order, charge a provider, and send a confirmation. A crash can happen after any step; the provider can send the same webhook twice and out of order.
 
-
-**Exercise.** Give one schedule that is allowed under your isolation level and one that must be rejected to preserve serializability.
+<ExerciseSolution hint="Make the database state transition and the retry key durable before depending on external delivery.">
+In one transaction, insert the order in a pending state, reserve stock conditionally, store a unique provider-event/idempotency key, and insert an outbox record; then commit. A worker invokes the provider with that key and records only legal monotonic payment transitions in later transactions. Deduplicate webhook IDs with a unique constraint, and send confirmation from a committed outbox. Recovery can replay unclaimed outbox records; it must not infer a payment from a network timeout.
+</ExerciseSolution>
 
 ## References & Further Reading
-* [PostgreSQL Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+
+* [PostgreSQL: Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+* [PostgreSQL: Write-Ahead Logging](https://www.postgresql.org/docs/current/wal-intro.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

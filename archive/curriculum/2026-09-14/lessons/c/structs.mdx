@@ -1,0 +1,113 @@
+---
+title: "Structures, Unions, and Representation Invariants"
+course: c
+description: "Model related data with structs, understand padding and alignment, and use unions only with an explicit active-member invariant."
+prerequisites:
+  - "C types, pointers, arrays, and object representation"
+outcomes:
+  - "Define a struct invariant and access an object through the correct expression"
+  - "Predict why padding and alignment affect size without assuming a specific layout"
+  - "Use tagged unions and enums without reading an inactive member as a portable value"
+omissions:
+  - "ABI packing directives and serialization libraries are deferred to systems interfaces."
+estimatedMinutes: 60
+assessment: "Design a tagged union for two variants and state its representation and lifetime invariants."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# Structures, Unions, and Representation Invariants
+
+A `struct` groups member objects with a defined order; it does not promise that the bytes are packed with no gaps. A good structure lesson begins with the logical invariant—what values are meaningful together—and treats layout as a separate implementation/ABI question.
+
+<Quiz client:load
+  title="Choose the access operator"
+  question="Given `struct point p` and `struct point *q`, which expressions access the x member?"
+  options={["p->x and q.x", "p.x and q->x", "(*p).x and q.x only", "p[x] and q[x]"]}
+  correctIndex={1}
+  explanation="The dot operator accesses a struct object; the arrow operator follows a pointer to a struct. q->x is shorthand for (*q).x."
+/>
+
+## Structs and invariants
+
+```c
+struct interval {
+    int start;
+    int end;
+};
+```
+
+If the intended invariant is `start <= end`, the type declaration does not enforce it. Constructors, validators, or carefully documented update functions must establish it. A public struct with freely writable fields exposes the invariant to every caller; an opaque pointer can centralize validation.
+
+<CodeExercise client:load
+  title="Follow the pointer"
+  code={`struct point { int x; int y; };
+struct point point = {1, 2};
+struct point *ptr = &point;
+ptr[!blank!]x = 3;`}
+  answers={["->"]}
+  explanation="ptr is a pointer to struct point, so ptr->x accesses the member. The equivalent spelling is (*ptr).x."
+/>
+
+## Alignment and padding
+
+An implementation may insert padding between members or at the end so each object in an array meets alignment requirements. For example, a `char` followed by an `int` often has a gap, but the exact size is implementation-defined. Reordering fields can reduce size, yet that is an ABI and measurement decision, not a semantic rule. Use `sizeof`, `_Alignof`, and static assertions for a target-specific layout contract.
+
+## Unions need a tag
+
+A union gives several members the same storage. The program must track which variant is active:
+
+```c
+enum value_kind { VALUE_INT, VALUE_TEXT };
+struct value {
+    enum value_kind kind;
+    union {
+        int number;
+        const char *text;
+    } data;
+};
+```
+
+Read `data.number` only when `kind == VALUE_INT`, and define who owns `data.text`. Reading an inactive member to reinterpret representation is a specialized, implementation-sensitive technique; it is not a general serialization method.
+
+<CodeRunner client:load
+  title="Keep the tag and payload consistent"
+  language="c"
+  code={`#include <stdio.h>
+
+enum kind { NUMBER };
+struct value { enum kind kind; union { int number; } data; };
+
+int main(void) {
+    struct value v = {NUMBER, {.number = 42}};
+    if (v.kind == NUMBER) printf("%d\\n", v.data.number);
+    return 0;
+}`}
+  output="42"
+/>
+
+## Bit-fields and enums
+
+Bit-field allocation order, alignment, and addressability are implementation-defined; use them for a documented target ABI, not as a portable wire format. An enum provides named integer constants and improves intent, but its underlying representation and range should not be assumed for storage protocols without a specified format.
+
+## Transfer exercises
+
+1. State an invariant for a `struct fraction` and list the operations that must preserve it.
+2. Explain why `sizeof(struct mixed)` may exceed the sum of member sizes.
+3. Design a variant that stores either an owned string or an integer. What must cleanup inspect?
+4. Decide whether a bit-field is appropriate for a network packet and justify the decision.
+
+### Diagnostic solutions
+
+1. For example, denominator is nonzero and the sign is normalized. Construction and arithmetic must reject or normalize zero denominators.
+2. Padding may be inserted for member alignment and array-stride requirements; the standard does not require a packed sum.
+3. Cleanup checks the tag: free the string only for the owned-string variant, and do nothing for the integer variant. A borrow/ownership flag may be needed too.
+4. Usually no: bit-field order and padding are implementation-defined. Serialize fields explicitly with chosen widths and byte order.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.2.5, §6.7.2.1, and §6.7.9](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [cppreference: struct and union](https://en.cppreference.com/w/c/language/struct)
+* [SEI CERT C DCL rules](https://wiki.sei.cmu.edu/confluence/display/c/SEI+CERT+C+Coding+Standard)

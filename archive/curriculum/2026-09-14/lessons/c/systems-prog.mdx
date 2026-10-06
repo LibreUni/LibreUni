@@ -1,0 +1,98 @@
+---
+title: "C at the System Boundary"
+course: c
+description: "Relate C code to system calls, ABIs, MMIO, interrupts, and bit masks without confusing platform contracts with portable C."
+prerequisites:
+  - "C pointers, storage duration, qualifiers, and compilation"
+  - "Basic operating-system and computer-architecture vocabulary"
+outcomes:
+  - "Trace a library call to a platform-specific system boundary"
+  - "Explain the ABI obligations of a C function call"
+  - "Use volatile and MMIO only with a documented hardware contract"
+omissions:
+  - "The exact syscall ABI of a platform and kernel-driver synchronization require platform-specific follow-up."
+estimatedMinutes: 65
+assessment: "Label which parts of a hardware-facing example are portable C and which are target-specific assumptions."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# C at the System Boundary
+
+Portable C stops at several boundaries. The language defines object and function semantics; a hosted implementation supplies a library; an operating system defines system calls; a target ABI defines calling convention and binary layout; a device manual defines MMIO behavior. A correct systems lesson keeps those contracts separate.
+
+<Quiz client:load
+  title="Locate the contract"
+  question="What does an ABI add to the C language contract?"
+  options={["A guarantee that every pointer is valid", "Calling conventions, data layout, and binary interoperability rules for a target", "Automatic memory reclamation", "A portable definition of every device register"]}
+  correctIndex={1}
+  explanation="An ABI connects separately compiled code on a target. It does not make arbitrary pointers safe, define C ownership, or standardize hardware registers."
+/>
+
+## Library, system call, and kernel
+
+`printf` is a C library interface that may format and buffer before invoking platform services. A POSIX `write` is an operating-system interface, not a C language primitive. The actual transition instruction, argument registers, privilege level, and error convention belong to the target ABI and OS. Treat a code sample using them as conditional on those documents.
+
+## ABI obligations
+
+An ABI may specify which registers carry arguments, who preserves which registers, stack alignment, return-value representation, symbol naming, and struct layout. C source that calls a function through a mismatched declaration can violate the ABI even when the types “look close”. Use headers supplied by the platform and compile with compatible options.
+
+## MMIO and `volatile`
+
+A hardware register may be exposed at an address, but the address, width, access mode, required ordering, and acknowledgement sequence come from the device manual. `volatile` prevents the compiler from treating an access as an ordinary discardable load/store; it does not supply atomicity, memory barriers, or a correct device protocol.
+
+```c
+volatile uint32_t *status = (volatile uint32_t *)DEVICE_STATUS_ADDRESS;
+while ((*status & READY_BIT) == 0u) { }
+```
+
+The example is not portable C: the address and bit definitions are target facts. It also needs a timeout or failure policy in a real driver.
+
+<CodeExercise client:load
+  title="Mark an observable register"
+  code={`/* The device may change this location without ordinary C code writing it. */
+[!blank!] uint32_t *status = (uint32_t *)ADDRESS;`}
+  answers={["volatile"]}
+  explanation="volatile expresses that accesses are observable and may change outside the abstract execution. It does not make concurrent access atomic."
+/>
+
+## Interrupts and callbacks
+
+An interrupt handler runs under platform-specific constraints. Keep it bounded, acknowledge the device correctly, and communicate with normal code using the platform's atomic or synchronization primitives. Calling arbitrary application callbacks from interrupt context can block, allocate, or re-enter non-reentrant code; recording an event for later dispatch is often safer.
+
+<CodeRunner client:load
+  title="Keep a bit operation explicit"
+  language="c"
+  code={`#include <stdio.h>
+#include <stdint.h>
+
+int main(void) {
+    uint8_t flags = 0;
+    flags = (uint8_t)(flags | (1u << 3));
+    printf("enabled=%s value=0x%02x\\n", (flags & (1u << 3)) ? "yes" : "no", flags);
+    return 0;
+}`}
+  output="enabled=yes value=0x08"
+/>
+
+## Transfer exercises
+
+1. Classify a `fopen` call, an x86 `syscall` instruction, and a memory-mapped register as language/library/OS/device contracts.
+2. Explain why `inline` is not a portable promise that a function call disappears.
+3. List the missing facts needed before using an MMIO address from a datasheet.
+4. Design an ISR-to-main-loop handoff and state the shared-state ordering rule.
+
+### Diagnostic solutions
+
+1. `fopen` is a library interface; `syscall` is target ABI/OS machinery; the register address and protocol are device/target facts.
+2. `inline` permits an implementation to inline or not; observable semantics and ABI remain the contract. Measure performance under the target build.
+3. Address, width, read/write side effects, reset state, bit meanings, ordering, acknowledgment, timeout, and concurrency/interrupt rules.
+4. Write a bounded event into a ring or set an atomic flag in the ISR, then consume it in normal context under the platform's synchronization and memory-order rules.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §6.7.3](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [Linux kernel documentation: volatile considerations](https://docs.kernel.org/process/volatile-considered-harmful.html)
+* [System V AMD64 ABI](https://gitlab.com/x86-psABIs/x86-64-ABI)

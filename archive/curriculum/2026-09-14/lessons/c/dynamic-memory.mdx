@@ -1,0 +1,99 @@
+---
+title: "Dynamic Storage and Ownership"
+course: c
+description: "Build an ownership discipline around malloc, calloc, realloc, free, and the failure modes of manual memory management."
+prerequisites:
+  - "Pointers, arrays, functions, and object lifetime"
+outcomes:
+  - "State an allocation's owner, extent, and lifetime"
+  - "Use failure-safe allocation and reallocation patterns"
+  - "Diagnose leaks, use-after-free, double-free, and integer-size hazards"
+omissions:
+  - "Allocator implementation and concurrent reclamation are outside this first ownership model."
+estimatedMinutes: 65
+assessment: "Review an allocation sequence and produce a cleanup path for every failure edge."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+import AllocationFailurePlayground from '../../../components/playgrounds/AllocationFailurePlayground';
+
+# Dynamic Storage and Ownership
+
+Dynamic storage solves a lifetime problem: an object must outlive the block that created it, or its size is known only at run time. It does not solve ownership automatically. Every allocated block still needs one responsible owner, a valid extent, and exactly one eventual release.
+
+<Quiz client:load
+  title="Name the owner"
+  question="What must be true before calling `free(buffer)`?"
+  options={["It is the live allocation's original address and this owner has not released it", "It may point inside any live allocation if the remaining bytes are still accessible", "It may name a stack array once the function that created it has returned", "It may be any non-null address if the caller knows the allocation's size"]}
+  correctIndex={0}
+  explanation="free requires a pointer returned by the allocation API that has not already been released. It does not accept interior pointers, stack objects, or arbitrary addresses, and it does not make an ownership decision for you."
+/>
+
+## Allocation is a contract
+
+`malloc(bytes)` returns uninitialized storage or a null pointer. `calloc(count, size)` also has an integer-product overflow obligation: a wrapped product can allocate fewer bytes than the caller believes. Use checked multiplication when dimensions come from untrusted input. `free(NULL)` is a no-op, but that convenience is not a substitute for tracking ownership.
+
+```c
+int *values = malloc(count * sizeof *values);
+if (values == NULL) {
+    return OUT_OF_MEMORY;
+}
+```
+
+The `sizeof *values` form follows the pointed-to type if the declaration changes. The caller must still prove `count * sizeof *values` fits in `size_t` before multiplication.
+
+## Failure-safe `realloc`
+
+`realloc(p, new_size)` may return the same address, move the allocation, or return null while leaving the original allocation live. Assigning directly to the only owner leaks on failure:
+
+```c
+int *grown = realloc(values, new_count * sizeof *values);
+if (grown != NULL) {
+    values = grown;
+    count = new_count;
+} else {
+    /* values is still owned and can still be freed. */
+}
+```
+
+If `new_size` is zero, portability and implementation behavior require deliberate handling; do not use a zero-size request as an implicit ownership protocol.
+
+<AllocationFailurePlayground client:load />
+
+<CodeExercise client:load
+  title="Keep the original owner on failure"
+  code={`int *tmp = [!blank!](items, new_count * sizeof *items);
+if (tmp != NULL) items = tmp;`}
+  answers={["realloc"]}
+  explanation="The temporary preserves the original owner if realloc cannot provide a new block. Only after success should the owner be replaced."
+/>
+
+## Three failure modes, three proofs
+
+- A **leak** loses the only pointer before release; the resource remains allocated but unreachable.
+- A **use-after-free** accesses an object after its lifetime ends. The allocator may have reused the bytes for a different object.
+- A **double free** releases the same allocation twice; allocator metadata or another component may be corrupted.
+
+Set a local owner to `NULL` after transferring or releasing it, but nulling one copy does not invalidate aliases. A robust interface states whether a function borrows a pointer for the call, takes ownership, or returns ownership to the caller.
+
+## Transfer exercises
+
+1. Design a `vector_int` with pointer, length, and capacity fields. State the invariant for every valid instance.
+2. Identify the leak in a two-resource function that returns immediately after the second allocation fails. Write a single cleanup path.
+3. Explain why `free(p + 1)` is invalid even if the pointer lies within the allocated bytes.
+4. Give a checked condition for `count * sizeof *items` before allocation.
+
+### Diagnostic solutions
+
+1. For example, `data == NULL` iff `capacity == 0`, `length <= capacity`, and `data` points to at least `capacity` live `int` objects when non-null. Document who owns `data`.
+2. Release the first resource on the failure edge, or use a cleanup label whose guards record which resources were acquired. Each path must release exactly the resources it owns.
+3. The allocator returns the base pointer as the ownership token. An interior pointer does not identify the allocation and is not a valid argument to `free`.
+4. Check `count <= SIZE_MAX / sizeof *items` before multiplying; also check any later conversion to a narrower index type.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §7.22.3](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [SEI CERT C MEM rules](https://wiki.sei.cmu.edu/confluence/display/c/MEM00-C.+Allocate+and+free+memory+in+the+same+module,+at+the+same+level+of+abstraction)
+* [AddressSanitizer documentation](https://clang.llvm.org/docs/AddressSanitizer.html)

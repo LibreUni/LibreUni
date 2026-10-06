@@ -2,8 +2,30 @@
 title: "Cache Hierarchies"
 course: "computer-architecture"
 description: "Locality, mapping, replacement, and write policies."
+prerequisites:
+  - "Programming in a systems language"
+  - "Binary arithmetic and basic digital logic"
+outcomes:
+  - "Derive cache address fields, local/global miss-rate AMAT, and conflict/capacity/compulsory miss classifications."
+  - "Trace replacement, write-back, nonblocking, coherence, and locality behavior for an explicit address stream."
+  - "Select a hierarchy policy from workload evidence while stating coherence, ordering, security, and bandwidth limits."
+omissions:
+  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+estimatedMinutes: 600
+assessment: "Given cache geometry, rates, and an address trace, calculate AMAT, classify each miss, and defend a policy change with a countertrace."
 ---
 # Cache Hierarchies
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CacheHierarchyPlayground from '../../../components/playgrounds/CacheHierarchyPlayground';
+
+<Quiz client:load title="Predict locality"
+  question="Which access pattern is most likely to benefit from spatial locality?"
+  options={["Following random pointers", "Reading consecutive elements of an array", "Accessing one address once", "Changing the page table"]}
+  correctIndex={1}
+  explanation="A cache line brings neighboring bytes together. Consecutive array access reuses that fetched neighborhood, while random pointer chasing often does not."
+/>
 
 The processor can execute many arithmetic operations in the time required for one main-memory access. A cache hierarchy reduces the effective cost by keeping recently or nearby used data in smaller, faster storage close to the core. The hierarchy is not a magical “fast memory”; it is a carefully specified prediction mechanism. A cache contains copies of lower-level data, decides whether a request hits, chooses where a block may reside, and defines how writes propagate. Its performance depends on an access trace, its correctness depends on coherence and permission rules, and its cost includes area, energy, refill bandwidth, and miss handling.
 
@@ -25,7 +47,7 @@ $$
 
 The L2 miss rate is usually conditional on an L2 access, while a global miss rate is relative to all processor accesses. Confusing local and global rates is a frequent source of apparently impressive but incorrect performance calculations.
 
-**Worked AMAT example.** Suppose L1 hit time is 1 cycle and its miss rate is 5%. L2 takes 8 cycles on a hit and has a local miss rate of 20%; DRAM costs 80 cycles after an L2 miss. Then $AMAT=1+0.05(8+0.2\cdot80)=2.2$ cycles. The L2 contributes 0.08 cycles per processor access through the L1 miss path, while DRAM contributes 0.8 cycles. Improving L1 hit time from 1 to 0.8 cycles saves 0.2; halving the DRAM penalty saves only $0.05\cdot0.2\cdot40=0.4$ cycles under this workload. The bottleneck is identified by the product of frequency and cost, not by the largest raw latency alone.
+**Worked AMAT example.** Suppose L1 hit time is 1 cycle and its miss rate is 5%. L2 takes 8 cycles on a hit and has a local miss rate of 20%; DRAM costs 80 cycles after an L2 miss. Then $AMAT=1+0.05(8+0.2\cdot80)=2.2$ cycles. The L2 lookup contributes $0.05\cdot8=0.4$ cycles per processor access through the L1 miss path, while DRAM contributes $0.05\cdot0.2\cdot80=0.8$ cycles. Improving L1 hit time from 1 to 0.8 cycles saves 0.2; halving the DRAM penalty saves $0.05\cdot0.2\cdot40=0.4$ cycles under this workload. The bottleneck is identified by the product of frequency and cost, not by the largest raw latency alone.
 
 ## Address decomposition
 
@@ -35,6 +57,15 @@ For a cache with capacity $C$ bytes, line size $B$ bytes, and $A$ ways, the numb
 
 Alignment is part of this arithmetic. A word spanning two lines can require two tag lookups and two transfers, or the ISA may forbid the access. If a structure is aligned to a line boundary, its fields may still cross lines if its size and offsets are not chosen carefully. Performance analysis should use actual byte addresses and strides rather than assume every element maps independently.
 
+<CaseStudy client:load
+  title="Instruction count hides locality"
+  scenario="Two loops execute the same number of loads. One scans adjacent array elements; the other follows randomly scattered pointers through the same amount of data."
+  question="Which evidence explains their likely timing difference?"
+  options={["Address traces, cache-line reuse, miss rates, and memory-level parallelism", "Source-language types, variable names, loop indentation, and executable filename", "Instruction count alone, because every load has one fixed hardware latency", "Peak clock frequency alone, because locality cannot alter completed cycles"]}
+  correctIndex={0}
+  explanation="Instruction count does not expose the memory system. The address stream and hierarchy state explain cache lines, TLB behavior, bandwidth, and latency while the architectural result remains the same."
+/>
+
 ## Mapping organizations
 
 A direct-mapped cache has one possible line per set. It is inexpensive and fast to index, but two frequently alternating blocks mapping to one set cause conflict misses. A fully associative cache allows a block anywhere and minimizes conflict misses, but comparing its tag against every line is expensive. A set-associative cache is a compromise: each block maps to one set but can occupy one of $A$ ways.
@@ -42,6 +73,10 @@ A direct-mapped cache has one possible line per set. It is inexpensive and fast 
 Associativity does not eliminate capacity or compulsory misses. A compulsory miss occurs on the first access to a block. A capacity miss occurs because the working set exceeds the cache’s usable capacity. A conflict miss occurs because the mapping forces competing blocks into too few locations. The same trace can exhibit all three at different cache sizes and associativities.
 
 **Worked conflict trace.** A direct-mapped cache with four lines receives accesses to blocks 0, 4, 0, 4. Both block numbers map to set `block mod 4 = 0`. Every access misses, even though only two blocks are needed and the cache holds four. A 2-way cache with four total lines has two sets; blocks 0 and 4 map to set 0 but can occupy its two ways, so after warm-up the alternating trace hits. If a third block 8 is added, the two-way set again thrashes. Associativity is a targeted response to mapping conflicts, not a universal capacity increase.
+
+The explorer holds the number of sets at two and varies ways per set, so total capacity also varies. Its two-block trace still diagnoses a mapping conflict: a one-way two-set cache has capacity for both blocks, but both compete for set 0. Predict the first hit, then add a third competitor and inspect the most-recently-used to least-recently-used order after each access.
+
+<CacheHierarchyPlayground client:load />
 
 ## Replacement policy
 
@@ -88,7 +123,7 @@ The cache must also respect virtual memory permissions. A line fetched under one
 ## Independent practice
 
 1. Derive tag, index, and offset bits for a 64-bit address, 32 KiB, 8-way cache with 64-byte lines.
-2. Compute AMAT for a three-level hierarchy with explicit local miss rates and explain the difference between local and global L2 miss rate.
+2. A hierarchy has $t_1=1$ cycle, $t_2=5$ cycles, $t_3=30$ cycles, and main-memory penalty $t_m=100$ cycles. Its local miss rates are $m_1=0.08$, $m_2=0.25$, and $m_3=0.40$. Compute AMAT under the serial additive model, then report the global L2 and L3 miss rates and explain the difference between local and global L2 miss rate.
 3. Construct a trace that produces conflict misses in a direct-mapped cache but hits in a 2-way cache. Then add a third competing block.
 4. Compare write-through/no-write-allocate and write-back/write-allocate for a streaming store and a repeatedly updated small object.
 5. Explain why a dirty line must be written back before replacement and what state a write buffer must preserve.
@@ -99,7 +134,7 @@ The cache must also respect virtual memory permissions. A line fetched under one
 <summary>Diagnostic solutions</summary>
 
 1. A 64-byte line needs 6 offset bits. There are $32768/(64\cdot8)=64$ sets, requiring 6 index bits. The remaining $64-6-6=52$ bits are tag bits.
-2. Substitute the defined rates recursively, e.g. $t_1+m_1(t_2+m_2(t_3+m_3t_m))$. A local miss rate is conditional on reaching that level; a global rate counts misses per original processor reference and equals the product of preceding miss rates and the local rate.
+2. The serial model gives $1+0.08(5+0.25(30+0.40(100)))=1+0.08(5+17.5)=2.8$ cycles. The global L2 miss rate is $0.08\cdot0.25=0.02$ (2% of processor references), and the global L3 miss rate is $0.08\cdot0.25\cdot0.40=0.008$ (0.8%). The local L2 rate, 25%, is conditional on an L1 miss; treating it as 25% of all accesses would overstate lower-level traffic and cost.
 3. Blocks 0 and 4 alternate in a four-line direct-mapped cache and both map to set 0, so every access misses after each replacement. A 2-way cache can retain both; adding block 8 makes three blocks contend for two ways and can thrash under LRU.
 4. A streaming store may waste a read-for-ownership under write-allocate and benefit from write-through or no-write-allocate; a hot object benefits from write-back because repeated writes stay local. The answer changes with reuse, bandwidth, durability, and coherence assumptions.
 5. The dirty data is the only current copy. Replacement must preserve its address tag and bytes until lower-level acceptance; a write buffer must also preserve order relative to later loads, stores, fences, and device accesses.

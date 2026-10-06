@@ -1,0 +1,306 @@
+---
+title: "Traps, Interrupts, and System Calls"
+course: "operating-systems"
+description: "Derive RISC-V privilege transfer from architectural trap state to a validated xv6 system call, then test the same path against faults and asynchronous interrupts."
+prerequisites:
+  - "RISC-V integer registers, calling convention, and control-flow instructions"
+  - "User and supervisor privilege modes"
+  - "Virtual addresses, page tables, and the purpose of a kernel stack"
+outcomes:
+  - "Classify synchronous exceptions, environment calls, and asynchronous interrupts by cause and resumability."
+  - "Reconstruct the RISC-V supervisor trap transition from `sstatus`, `sepc`, `scause`, `stval`, and `stvec` without assuming hardware saves a complete context."
+  - "Trace xv6 from a user `ecall` through the trampoline, dispatcher, argument validation, service, and `sret`."
+  - "Design a system-call boundary that rejects malformed numbers, handles, lengths, and user pointers without corrupting kernel state."
+omissions:
+  - "Hypervisor traps, RISC-V vectored interrupt implementations, interrupt-controller programming, and nested-interrupt policy are bounded to explicit interfaces."
+  - "Page-fault resolution, copy-on-write, device-driver completion, and signal delivery are traced only far enough to distinguish their control paths."
+  - "Assembly listings are schematic; xv6 rev5 at the course hash remains the implementation authority."
+estimatedMinutes: 330
+assessment: "Given an unseen RISC-V trap snapshot and kernel entry sketch, classify the event, reconstruct saved and unsaved state, identify the first unsafe transition, and specify a validated return path with one failure test."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import SystemCallPathPlayground from '../../../components/playgrounds/SystemCallPathPlayground';
+
+# Traps, Interrupts, and System Calls
+
+A process calls `write(fd, user_buf, 4096)`. The descriptor is valid, but `user_buf + 4096` wraps around the machine word and the kernel checks only the starting address. A naive kernel then copies across an unintended mapping while executing with supervisor privilege. The trap instruction worked exactly as designed; the security failure occurred because privilege transfer is not argument validation.
+
+A controlled entry must solve three different problems:
+
+1. transfer control without trusting a user-supplied destination;
+2. preserve enough interrupted state to resume or terminate correctly; and
+3. convert untrusted register values into validated kernel objects.
+
+{/* Source tracking: RISC-V trap state and `ecall` semantics are synthesized from the official Privileged Architecture, Sections 3.3.1 and 12.1. xv6-specific entry and validation were checked against `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`, in `trampoline.S`, `trap.c`, `syscall.c`, `sysfile.c`, and the checked-copy paths. */}
+
+### Prediction — what must already be safe?
+
+At the first supervisor instruction after a user `ecall`, decide whether each item has already been established by hardware: kernel stack, kernel page table, complete general-register save, previous program counter, trap cause, interrupts disabled, trusted handler address.
+
+<ExerciseSolution hint="Separate architectural CSRs from conventions implemented by entry assembly.">
+Hardware has written the interrupted PC to `sepc`, written the cause to `scause`, recorded the previous privilege and interrupt-enable state in `sstatus`, disabled supervisor interrupts, and set the PC from the protected `stvec` configuration. It has not selected a kernel stack, switched `satp`, or saved all integer registers. xv6's first assembly instructions must preserve user registers while arranging those software-owned transitions. Treating a trap like a high-level function call misses the dangerous interval before a normal C environment exists.
+</ExerciseSolution>
+
+## Event taxonomy: source, timing, and restart point
+
+“Trap” is the umbrella term for a control transfer caused by an exception or interrupt. The exact vocabulary varies across architectures; the causal distinction does not.
+
+> **Definition.** Synchronous events are attributable to the current instruction; asynchronous interrupts are selected between architectural instruction effects and need not be caused by that instruction.
+
+| Event | Relation to current instruction | RISC-V example | Typical continuation |
+| --- | --- | --- | --- |
+| **Requested synchronous exception** | Caused deliberately by the current instruction | `ecall` from U-mode | Advance past `ecall` after servicing. |
+| **Fault-like synchronous exception** | Current instruction cannot complete as requested | load page fault | Repair cause and retry the same instruction, or terminate. |
+| **Terminal synchronous exception** | Current execution cannot safely continue | illegal instruction with no emulator | Report or terminate; retry is not useful. |
+| **Asynchronous interrupt** | Raised independently of the current instruction boundary | timer or external-device interrupt | Service event, then resume the interrupted instruction stream. |
+
+The classification determines the return PC. xv6 adds four bytes to its saved user PC for an `ecall`, because that instruction is four bytes and `sepc` points to it. A recoverable page fault leaves the PC unchanged so the load or store can retry. An interrupt resumes the interrupted stream without pretending the instruction requested the event.
+
+### Cause classification from raw state
+
+For each snapshot, state the event class and correct PC action. Assume RV64 and a direct trap vector.
+
+| Snapshot | `scause` | `sepc` | `stval` |
+| --- | ---: | ---: | ---: |
+| A | `8` | `0x1040` | `0` |
+| B | `13` | `0x2088` | `0x4000_1000` |
+| C | high interrupt bit + `5` | `0x30ac` | unspecified |
+
+<ExerciseSolution>
+A is an environment call from U-mode: dispatch it and, on normal return, resume at `0x1044`. B is a load page fault: `stval` supplies the faulting virtual address when the implementation reports it; resolve the mapping and retry at `0x2088`, or terminate. C is a supervisor timer interrupt: acknowledge/rearm it as required and resume at `0x30ac`, unless scheduling deliberately changes which saved context runs. Advancing every `sepc` by four would skip the faulting load and corrupt program semantics.
+</ExerciseSolution>
+
+## The architectural transition into supervisor mode
+
+For a trap delegated to S-mode, RISC-V supplies a small, protected landing contract:
+
+- `sepc` receives the address of the interrupted or exception-causing instruction;
+- `scause` records interrupt-versus-exception and a cause code;
+- `stval` may record cause-specific information such as a faulting address;
+- `sstatus.SPP` records the prior privilege, `SPIE` receives the old `SIE`, and `SIE` is cleared;
+- the PC is loaded from `stvec` according to its direct or vectored mode.
+
+The architecture intentionally does **not** prescribe a process structure, syscall ABI, kernel stack, page-table switch, or complete context frame. Software chooses those mechanisms.
+
+{/* Source tracking: Every CSR effect in this list is supported by the RISC-V Privileged Architecture, Sections 12.1.1–12.1.9. The statement that `ecall` performs no other operation is from Section 3.3.1. */}
+
+<PlantUML code={String.raw`
+participant "user code" as U
+participant "RISC-V hart" as H
+participant "xv6 uservec" as V
+participant "xv6 usertrap" as T
+participant "syscall dispatcher" as D
+participant "read handler" as R
+participant "VFS / device service" as S
+
+U -> H : ecall with number in a7 and arguments in a0..a5
+activate H
+H -> H : sepc/scause/sstatus updated; PC = stvec
+H -> V : first S-mode instruction, user page table still active
+deactivate H
+activate V
+V -> V : save registers in trapframe
+V -> V : load kernel stack, hart id, kernel satp
+V -> T : jump after page-table switch
+deactivate V
+activate T
+T -> D : classify scause = user ecall; save epc + 4
+D -> D : validate saved a7 names a defined syscall
+D -> R : invoke read handler with raw a0..a2
+R -> R : resolve fd; check count and copy contract
+R -> S : request bytes through open-file object
+S --> R : completed kernel data or error
+R -> R : checked copyout to user range
+R --> D : byte count or error
+D --> T : record result in saved a0
+T -> T : prepare stvec, sstatus, and sepc
+T -> V : pass user satp to return trampoline
+deactivate T
+activate V
+V -> V : switch satp; restore saved user registers
+V -> H : execute sret
+deactivate V
+H -> U : restore privilege and PC from sstatus/sepc
+
+note over H,V
+  Hardware changes privilege and CSRs.
+  Entry assembly constructs a C-safe context.
+end note
+`} />
+
+The two diagrams are intentionally not equivalent: the rendered sequence above names the ownership transfers and saved state. Any generic arrow chain that omits the user page table at first entry conceals xv6's hardest constraint.
+
+### Architectural boundary check
+
+Why can xv6 not set `stvec` directly to an ordinary C function compiled into the kernel text?
+
+<ExerciseSolution>
+On a trap from user space, RISC-V has not switched `satp`; the user page table remains active. The first instruction address must therefore be mapped there, and C additionally assumes a valid stack and calling-convention state that do not yet exist. xv6 maps trampoline code at the same virtual address in user and kernel page tables, saves registers to a per-process trapframe, installs the kernel stack and page table, then enters C. “C cannot run in supervisor mode” is wrong; C cannot run safely until its software conventions are established.
+</ExerciseSolution>
+
+## Scrub the complete request path
+
+Before moving the control, predict the first stage at which `fd`, byte count, and the user address can all be interpreted in the caller's process context. Then find the first stage that may block.
+
+<SystemCallPathPlayground client:load />
+
+The model fixes one `read` path and suppresses cache hits, short reads, signals, partial device completion, and concurrent descriptor mutation. Its point is control ownership. In particular, the library wrapper is not the privilege boundary, and trap entry is not proof that the request is legal.
+
+The eight-stage model deliberately combines two source-level cuts in “Dispatcher and read handler.” Generic syscall dispatch validates only that saved `a7` selects a defined handler. The `read` handler and lower file/copy helpers collectively decode and check the descriptor, byte count, and destination buffer in the caller's context. Attributing those object/range checks to the dispatcher alone hides where their authority and address-space information becomes available.
+
+The return occupies two stages. “Kernel completion” copies completed bytes to the checked destination, records the result in saved `a0`, and has C prepare `sepc`/`sstatus` for the chosen continuation. “Trampoline + sret” first uses assembly to switch mappings and restore the saved register file; the `sret` instruction then applies the prepared privilege and PC state. Hardware does not copy file bytes, choose the result, or restore registers from xv6's trapframe.
+
+### Reconstruct the hardware/trampoline handoff
+
+At the component's “RISC-V trap hardware” and “xv6 trampoline entry” stages, draw a table with rows for `a0`, `a7`, user SP, user PC, kernel SP, `satp`, `stvec`, and privilege. Fill columns “before `ecall`,” “after RISC-V trap hardware,” and “after xv6 trampoline entry.” Hardware changes privilege and protected trap CSRs; only trampoline software selects the kernel stack and `satp`.
+
+<ExerciseSolution hint="Hardware preserves some values by not changing them; that is different from copying them into durable storage.">
+
+| State | Before `ecall` | After RISC-V trap hardware | After xv6 trampoline entry |
+| --- | --- | --- | --- |
+| `a0` | first argument | still first argument, not yet durably saved | saved in trapframe; register reused/restored later |
+| `a7` | syscall number | unchanged | saved in trapframe |
+| user SP | in `sp` | still in `sp` | saved; `sp` is kernel-stack top |
+| user PC | current `ecall` | copied to `sepc`; PC is trap vector | copied into process trapframe by C path |
+| kernel SP | stored in trapframe metadata | not selected | loaded into `sp` |
+| `satp` | user page table | user page table | kernel page table |
+| `stvec` | trampoline address | source of new PC | changed to kernel vector before kernel traps are enabled |
+| privilege | U | S | S |
+
+The likely reasoning gap is confusing “register not overwritten yet” with “safe across arbitrary handler code.” The assembly must save it before reuse.
+</ExerciseSolution>
+
+## Dispatch and validation are separate proof steps
+
+An ABI converts source arguments into raw machine words. In rev5, the syscall number is in saved `a7`, six raw arguments are available from saved `a0`–`a5`, and the result is written to saved `a0`. `syscall()` verifies only that the number indexes a defined handler. For `read`, `sys_read` and lower file/copy routines collectively interpret the descriptor, count, and user address under type-, authority-, and process-specific contracts; pointer legality is established by checked copying, not by `argaddr()` alone. The interactive's combined stage reflects that collective proof without pretending all checks live in `syscall.c`.
+
+For a range `[u, u+n)`, a check such as `u < process_size` is insufficient. At minimum, reasoning must reject arithmetic overflow and every inaccessible page touched by the copy. A robust pattern either checks `n <= limit - u` after establishing `u <= limit`, or walks/copies in bounded chunks with explicit failure at each mapping.
+
+```c
+/* Schematic boundary logic, not an xv6 patch. */
+int copy_from_user_checked(void *dst, uint64 u, uint64 n, uint64 limit) {
+    if (u > limit || n > limit - u)
+        return -1;
+    return copy_mapped_chunks(dst, u, n);
+}
+```
+
+The subtraction form avoids constructing `u+n` before proving that addition is representable. It still delegates page permissions and mapping continuity to `copy_mapped_chunks`.
+
+{/* Source tracking: rev5 `kernel/syscall.c` supplies the register ABI, number dispatch, raw `argaddr`, and the two-part `fetchaddr` bound; rev5 `kernel/sysfile.c` resolves `fd`, while the file/device copy path establishes user-memory access. The schematic function is original and intentionally not a full implementation. */}
+
+### Application — kill four validators
+
+For `write(fd, u, n)`, give one input that defeats each implementation.
+
+1. checks only `u < size`;
+2. checks `u+n <= size` using wrapping unsigned addition;
+3. validates the user range, then passes `fd` as a direct pointer to a kernel file object;
+4. validates everything, but holds a spinlock while copying a page that may fault or block.
+
+<ExerciseSolution>
+1. Choose `u=size-1`, `n=2`; the start is legal and the range is not.
+2. Choose `u` near `UINT64_MAX` and `n` large enough that `u+n` wraps to a small value.
+3. Supply an integer whose bit pattern names arbitrary kernel memory; descriptors must be resolved through the caller's descriptor table, not cast.
+4. Arrange a missing or reclaim-contended user page. If copying can sleep, sleeping while holding a spinlock can deadlock or violate lock rules. If this particular kernel's copy path never faults, the design must state that invariant rather than rely on wishful behavior.
+
+The four defects concern range, arithmetic, authority, and execution context. One “validate inputs” slogan does not diagnose them.
+</ExerciseSolution>
+
+## Worked trace: a recoverable load page fault
+
+Assume a user load at PC `0x2088` reads virtual address `0x40001000`. The address lies in a lazily allocated region but has no present leaf mapping.
+
+> **Example.** Recovery keeps `sepc` at the faulting load because the repaired mapping makes retry—not instruction skipping—the semantics-preserving action.
+
+1. The load raises a synchronous exception. `sepc=0x2088`; `scause` identifies a load page fault; `stval` reports the attempted address on the modeled platform.
+2. Entry assembly preserves the process state exactly as for a syscall. The common mechanism does not imply a common policy.
+3. The handler verifies that the address belongs to a region eligible for lazy allocation and that the requested access is readable.
+4. It allocates and initializes a frame, installs a user-readable mapping, and performs required translation-cache synchronization.
+5. Return leaves the saved PC at `0x2088`. The load retries and may now complete.
+
+If allocation fails, the kernel must not loop forever retrying an impossible instruction. It reports or records a fatal process condition and returns control through a termination path.
+
+### Transfer — same cause number, different trust
+
+A load page fault occurs while supervisor code dereferences a kernel pointer. Why is “allocate a page and retry” generally unsafe even though that response was correct for the user fault?
+
+<ExerciseSolution>
+The faulting protection domain and address-space contract differ. An unexpected kernel fault can indicate a dangling pointer, corrupted page table, stack overflow, or violation of a no-fault region; allocating could hide corruption and continue with supervisor authority. A kernel may deliberately support recoverable faults during bounded user-copy routines, but that requires an explicit exception table or recovery protocol. Cause code alone does not determine policy; origin, expected region, and current lock/interrupt context matter.
+</ExerciseSolution>
+
+## Worked trace: a timer interrupt through a context switch
+
+Assume process $A$ runs in user mode when the timer fires.
+
+> **Example.** The timer path contains two suspended continuations: the user trapframe and the kernel handler's scheduler context.
+
+| Moment | Saved continuation | Active stack | Scheduling consequence |
+| --- | --- | --- | --- |
+| interrupt entry | $A$'s user PC in trap state | transition to $A$'s kernel stack | none yet |
+| kernel handler | $A$'s full trapframe plus kernel frames | $A$'s kernel stack | handler may call `yield()` |
+| scheduler switch | $A$'s kernel continuation saved in scheduler context | per-CPU scheduler stack/context | another runnable process $B$ may run |
+| eventual resume | switch returns inside $A$'s suspended handler | $A$'s kernel stack | handler restores trap CSRs |
+| `sret` | $A$'s user continuation restored | user stack | interrupted user execution resumes |
+
+There are two nested resumptions: scheduler-to-kernel-handler and kernel-handler-to-user. Saving only the user trapframe cannot resume the suspended C call chain; saving only the kernel context cannot reconstruct all user registers.
+
+{/* Source tracking: The timer/yield path and restoration of trap CSRs are derived from xv6 rev5 `kernel/trap.c`; context ownership is corroborated by the same commit's `kernel/proc.h` and `kernel/swtch.S`. */}
+
+### Counterexample — enabling interrupts too early
+
+Suppose `usertrap()` enables supervisor interrupts before changing `stvec` away from `uservec` and before installing a valid kernel stack. Construct the failure.
+
+<ExerciseSolution>
+A timer can arrive while supervisor code is running but `stvec` still names the user-entry trampoline. That entry assumes a user trapframe and transition context; it can overwrite saved user state or load stale process metadata while already on a kernel path. The safe design disables interrupts during the ambiguous interval, points kernel-origin traps at a handler that assumes a kernel page table and stack, and enables interrupts only after trap CSRs needed for classification have been consumed or saved.
+</ExerciseSolution>
+
+## Boundary design studio: `copy_digest`
+
+Design a syscall
+
+```text
+copy_digest(in_ptr, length, out_ptr, flags) -> bytes_consumed or -error
+```
+
+that hashes a user range into a fixed 32-byte user output. Address these cases: zero length, `in_ptr+length` overflow, input/output overlap, output crossing an unmapped page, interruption after partial input, unknown flags, and concurrent mutation of the input by another thread.
+
+Your submission must include:
+
+- a raw-argument decoding table;
+- a validation order with an explanation for every ordering dependency;
+- one copy strategy and its snapshot semantics;
+- a trap-return rule for success, recoverable interruption, and fatal process state;
+- tests that kill a start-only range check and a direct-user-pointer dereference.
+
+**Rubric (20 points).** Architectural trap reconstruction 4; validation completeness and overflow reasoning 5; snapshot/concurrency semantics 4; error and restart behavior 3; adversarial tests 3; explicit omissions 1.
+
+<details>
+<summary>Reveal diagnostic reference design</summary>
+
+Reject unknown flags first. Establish `length` and both raw addresses without dereferencing them. Accept zero-length input without reading `in_ptr`, but still require a writable 32-byte output if the interface promises a digest. Prove `in_ptr <= limit` and `length <= limit-in_ptr`; validate/copy the output through the caller's page table rather than writing it directly. Copy input into bounded kernel chunks and update kernel-owned digest state. This defines a sequential snapshot only per copied chunk; if whole-range snapshot semantics are required, pin pages and prevent writes or copy the complete range before hashing. Compute the digest in kernel memory, then perform one checked 32-byte copyout. Overlap is harmless under the bounded-copy design because output is written only after input consumption; document that ordering. On interruption, either return a documented restartable error before output commit or finish atomically from the interface perspective. Advancing past `ecall` is correct for every completed syscall return; retry policy belongs to the user ABI or signal machinery, not to blindly re-executing `ecall` with hidden partial state.
+
+A design that validates a range and later dereferences the user virtual address directly has not established that the kernel page table maps it. A design that copies the digest before all fallible work can expose partial output.
+
+</details>
+
+## Connections and boundaries
+
+- **Process state:** a trapframe captures user architectural state; a scheduler context captures a suspended kernel continuation. They are related but not interchangeable.
+- **Scheduling:** timer interrupts provide preemption points, while scheduling policy chooses the next runnable context.
+- **Virtual memory:** page faults reuse trap entry but require address-space policy and translation-cache correctness.
+- **Devices:** external interrupts report completion; a driver must validate device state just as a syscall path validates user state.
+- **Signals:** POSIX signal delivery modifies a saved user continuation; it is not “running a handler inside the interrupt controller.”
+
+Hypervisor delegation, interrupt priorities, direct versus vectored performance, user-level interrupt extensions, and formal verification of entry assembly are omitted. The lesson also does not claim all kernels switch page tables on entry; xv6 does, while other designs map kernel regions differently. These distinctions are deferred because the controlled-entry proof is already complete without surveying every architecture.
+
+> **Remark.** Reusing trap entry does not unify event policy: system calls advance, recoverable faults retry, and interrupts resume unless a scheduler selects another saved context.
+
+## References & Further Reading
+
+1. RISC-V International, [*The RISC-V Instruction Set Manual, Volume II: Privileged Architecture*](https://docs.riscv.org/reference/isa/_attachments/riscv-privileged.pdf), Sections 3.3.1 and 12.1.
+2. MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf), Chapter 4.
+3. MIT PDOS, xv6 rev5 [`kernel/trampoline.S`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/trampoline.S), [`kernel/trap.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/trap.c), [`kernel/syscall.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/syscall.c), [`kernel/sysfile.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/sysfile.c), [`kernel/file.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/file.c), and [`kernel/vm.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/vm.c).
+4. The Open Group, [POSIX.1-2024 `read()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html), for short-read, interruption, and user-visible I/O semantics used in the examples.

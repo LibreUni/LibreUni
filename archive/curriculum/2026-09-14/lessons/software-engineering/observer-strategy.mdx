@@ -1,0 +1,83 @@
+---
+title: "Observer and Strategy: Events and Variation"
+course: software-engineering
+description: "Use Observer for decoupled notification with lifecycle controls and Strategy for interchangeable algorithms with a shared contract."
+prerequisites:
+  - "Interfaces, dependency inversion, and failure modeling"
+outcomes:
+  - "Design observer registration, delivery, ordering, and unsubscription semantics"
+  - "Select a strategy from a stable variation axis and test its common contract"
+  - "Avoid hidden backpressure, reentrancy, and state-sharing failures"
+omissions:
+  - "Full reactive-streams semantics and distributed event brokers are deferred."
+estimatedMinutes: 55
+assessment: "Specify the event and strategy contracts, including failure and lifetime behavior."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Observer and Strategy: Events and Variation
+
+Observer separates a subject from interested listeners; Strategy separates an algorithm choice from its caller. Both reduce direct coupling, but Observer introduces delivery and lifecycle problems, while Strategy demands substitutable algorithms and comparable result semantics.
+
+<Quiz client:load
+  title="Do not hide event policy"
+  question="Which observer decision is essential for a production event source?"
+  options={["Only the listener class name", "Ordering, delivery failure, reentrancy, and unsubscription/lifetime semantics", "A guarantee that listeners never fail", "A global list accessible to every module"]}
+  correctIndex={1}
+  explanation="A notification contract must say what happens when a listener is slow, throws, unsubscribes, or is destroyed. Otherwise decoupling merely hides coupling."
+/>
+
+## Observer lifecycle
+
+An in-process subject can deliver synchronously, queue asynchronously, or persist an event for later consumers. Synchronous delivery preserves ordering but lets a slow listener block the publisher and can create reentrant mutation. Asynchronous delivery requires queue capacity, retry/idempotency, shutdown, and observability. Unsubscription must not race with an in-flight callback without a defined rule.
+
+<CaseStudy client:load
+  title="Choose the delivery boundary"
+  scenario="A payment service publishes `PaymentCaptured`. One listener updates a search index, another sends a receipt. The search index is slow and the receipt provider may retry. The payment commit must remain fast."
+  question="Which design is most defensible?"
+  options={["Call both listeners inside the payment transaction", "Persist an event/outbox with stable identity and process listeners asynchronously with idempotent effects", "Ignore slow listeners", "Let each listener query payment state until it changes"]}
+  correctIndex={1}
+  explanation="The durable event separates the core commit from external work. Each consumer needs its own retry, idempotency, and lag policy."
+/>
+
+## Strategy contract
+
+A Strategy should express one variation axis—sorting, pricing, retry, or routing—and expose a common contract. Document valid inputs, output equivalence, stability/tie behavior, complexity expectations, and failure modes. A strategy that silently uses different units or precision is not substitutable merely because its method signature matches.
+
+<CodeRunner client:load
+  title="Compare strategies under one contract"
+  language="python"
+  code={`def choose(prices, strategy):
+    return strategy(prices)
+
+lowest = lambda values: min(values)
+first = lambda values: values[0]
+print(choose([7, 3, 5], lowest))
+print(choose([7, 3, 5], first))`}
+  output="3\n7"
+/>
+
+The differing result is acceptable only if the caller's contract permits different policies. Strategy is not a way to hide a missing specification.
+
+## Transfer exercises
+
+1. State a queue/backpressure policy for asynchronous observers.
+2. Give a reentrancy failure caused by synchronous notification.
+3. Identify a shared invariant every tax strategy must preserve.
+4. Explain why a listener should receive an event identity.
+
+### Diagnostic solutions
+
+1. Bound the queue, reject or spill events, expose lag, retry by policy, and define shutdown/drain behavior.
+2. A listener mutates the subject while it is iterating listeners, causing invalidation, recursion, or an unexpected event order.
+3. Nonnegative tax, one currency/rounding contract, and no mutation of the source order; add jurisdiction/unsupported behavior.
+4. It enables deduplication, tracing, audit correlation, and safe retries.
+
+## References & Further Reading
+
+* Gamma et al., *Design Patterns*. Addison-Wesley, 1994.
+* [Martin Fowler: Event-Driven Architecture](https://martinfowler.com/articles/201701-event-driven.html)
+* [MIT 6.033 Computer System Engineering](https://web.mit.edu/6.033/www/)

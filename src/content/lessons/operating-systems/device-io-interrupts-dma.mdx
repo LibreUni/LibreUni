@@ -1,0 +1,335 @@
+---
+title: "Device I/O, Interrupts, and DMA"
+course: "operating-systems"
+description: "Derive the driver–device ownership protocol behind polling, interrupts, DMA, descriptor rings, memory ordering, and bounded recovery."
+prerequisites:
+  - "Privilege transitions, traps, locks, sleep/wakeup, and virtual memory"
+  - "Caches, memory ordering, MMIO, and hexadecimal register-level reasoning"
+  - "Rates, latency, utilization, and dimensional analysis"
+outcomes:
+  - "Specify a device contract in terms of registers, descriptor ownership, access widths, ordering, interrupts, and failure states."
+  - "Derive when polling, interrupt-driven programmed I/O, or DMA minimizes CPU occupancy under an explicit workload model."
+  - "Trace descriptor publication, device access, completion, synchronization, and reclamation without races or stale ownership."
+  - "Design failure-injection evidence for lost notification, duplicate completion, malformed status, timeout, and teardown during DMA."
+omissions:
+  - "PCIe transaction details, cache-coherence protocol internals, IOMMU programming, NAPI, MSI-X, and production power management are bounded extensions."
+  - "The numeric simulator is a single-operation teaching model; it does not model queueing, device parallelism, cache misses, or measured hardware constants."
+estimatedMinutes: 360
+assessment: "Given an unfamiliar MMIO device, event rate, transfer-size distribution, ring snapshot, and injected failure, derive the I/O mechanism and ordering protocol, calculate CPU occupancy, trace ownership to completion, and reject any recovery that reuses a buffer while the device can still access it."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+import DeviceIOPlayground from '../../../components/playgrounds/DeviceIOPlayground';
+
+# Device I/O, Interrupts, and DMA
+
+A driver fills a descriptor with a buffer address and length, advances a producer index, and rings a device doorbell. The CPU reordered the producer-index store before the descriptor stores. The device observes new work, reads the old length and address, and transfers data into a frame that has already been reassigned.
+
+The defect is not “DMA is unsafe.” The driver published ownership before the work description was complete. Device I/O is a concurrent protocol between agents with different clocks, caches, and failure modes. Correctness comes from explicit state transitions and ordering edges.
+
+> **Buffer-ownership invariant.** At every instant, the protocol identifies which agent may read or write each descriptor and data buffer. Ownership changes only after all prior writes required by the new owner are visible, and reclamation occurs only after the old owner can no longer access the object.
+
+## A device contract precedes driver code
+
+A driver needs more than register addresses. Its contract must define:
+
+| Contract field | Questions that must have one answer |
+| --- | --- |
+| register semantics | width, alignment, reset value, read/write side effects, reserved bits |
+| command publication | which fields are written first; what store or I/O barrier orders them |
+| device ownership | when the device may read descriptors or write buffers |
+| completion | status encoding, interrupt condition, acknowledgment sequence, batching |
+| queue capacity | full/empty test, wrap rule, maximum outstanding work |
+| failure | malformed status, timeout meaning, reset/quiescence, late completion |
+| concurrency | which locks protect software metadata; which fields the device changes independently |
+
+**Memory-mapped I/O (MMIO)** gives device registers addresses in a processor-visible range. Register access is not ordinary RAM access: reads and writes can have side effects, widths can be constrained, and the platform defines ordering and caching attributes. In C, `volatile` can stop the compiler from removing or merging an access, but it does not create a cross-CPU lock, a device memory barrier, or a DMA ownership protocol. Kernel code should use architecture/platform MMIO accessors and barriers whose contract matches the device.
+
+**Programmed I/O (PIO)** has the CPU copy data through registers or memory. **Direct memory access (DMA)** lets a device transfer between device-visible memory and itself after the CPU supplies descriptors. DMA removes a CPU copy loop from the data path; it adds another memory-accessing agent whose authority and lifetime must be controlled.
+
+**Retrieval — separate three guarantees.** For an MMIO command register, state what `volatile`, a spinlock, and a device write barrier each establish. None may be described as a substitute for the other two.
+
+<details>
+<summary>Reveal the diagnostic answer</summary>
+
+- `volatile` constrains compiler treatment of the access according to the C implementation; it does not by itself order another core or device.
+- A spinlock serializes participating CPU threads and usually carries CPU memory-ordering semantics; the device does not acquire it.
+- The architecture/platform's device barrier orders specified CPU memory operations with respect to device observation.
+
+Confusing these layers often produces code that passes on one machine because its memory model is stronger than the driver's stated assumptions.
+
+</details>
+
+## Polling and interrupts trade work for notification latency
+
+**Polling** repeatedly reads status. It can give bounded detection delay when a core polls at a controlled period, but consumes CPU work even when no event arrives. An **interrupt** transfers control when a device signals an event; it avoids idle polling but pays entry, dispatch, acknowledgment, and cache-disruption costs per notification.
+
+For a periodic poll every $P$ seconds, uniformly distributed event arrival gives expected detection delay $P/2$ and worst-case delay near $P$. If one poll costs $C_p$ CPU seconds, polling occupancy is approximately
+
+$$
+U_p = \frac{C_p}{P}.
+$$
+
+For event rate $\lambda$ and interrupt-handling CPU time $C_i$ per event,
+
+$$
+U_i = \lambda C_i,
+$$
+
+until queueing, coalescing, or saturation invalidates the independent-event model. Equating the two gives a first-order crossover $\lambda^*=C_p/(P C_i)$. The result is meaningful only if the latency constraint permits period $P$ and the measured costs match the platform.
+
+### Worked choice: sparse control events
+
+A device produces 200 events/s. One status poll costs 120 ns. The deadline requires detection within 50 µs, so choose $P=50$ µs for worst-case compliance. Polling consumes
+
+$$
+\frac{120\,\mathrm{ns}}{50\,\mu\mathrm{s}}=0.0024=0.24\%
+$$
+
+of one CPU. If one interrupt consumes 2.5 µs of CPU time, interrupts consume
+
+$$
+200\,\mathrm{s}^{-1}\times2.5\,\mu\mathrm{s}=0.0005=0.05\%.
+$$
+
+Interrupts use less CPU under these assumptions. Polling may still be chosen if its tighter jitter matters, if a dedicated core is available, or if event bursts would produce interrupt storms. The model does not decide the objective.
+
+### Coalescing changes the event unit
+
+If the device posts 64 completions and sends one interrupt, the fixed notification cost is amortized across the batch. Coalescing reduces interrupt rate but delays early completions. The control variable is a count or timer threshold; evaluate both CPU occupancy and tail completion latency.
+
+**Application — choose a coalescing bound.** Events arrive at 80,000/s. One interrupt costs 1.5 µs of CPU time. Batching 16 completions per interrupt adds at most 200 µs by policy. Calculate notification CPU occupancy without and with full batches; state why the latency claim still needs a burst/idle analysis.
+
+<details>
+<summary>Reveal the calculation</summary>
+
+Without batching, occupancy is `80,000 × 1.5 µs = 0.12`, or 12% of one CPU. With full batches of 16, interrupt rate is 5,000/s and occupancy is 0.75%. Full batches do not always form: after a sparse arrival, a timer must release a partial batch, and the first completion may wait near the timer limit. The 200 µs policy bound also excludes interrupt dispatch and scheduling delay unless those are included explicitly.
+
+</details>
+
+## DMA changes who moves bytes
+
+For a transfer of $n$ bytes, compare two CPU-busy models:
+
+$$
+C_{PIO}(n)=C_{setup}+C_{interrupt}+n c_{copy},
+$$
+
+$$
+C_{DMA}(n)=C_{dma\_setup}+C_{completion}.
+$$
+
+DMA is advantageous for CPU occupancy when its fixed setup cost is less than the avoided CPU copy cost. It does not make the device latency or bus transfer disappear. Small transfers can favor PIO because DMA setup dominates.
+
+### Worked crossover under the simulator's constants
+
+The investigation below uses a 3 GHz CPU, 500 setup cycles for programmed I/O, 1,800 for DMA, 1,200 per interrupt, two CPU cycles per copied byte, and 100 MB/s transfer rate. Equating interrupt-driven PIO and DMA CPU work:
+
+$$
+500+1200+2n=1800+1200
+\quad\Rightarrow\quad
+n=650\text{ bytes}.
+$$
+
+Under these invented constants, DMA has lower modeled CPU occupancy above 650 bytes; interrupt-driven PIO has lower fixed CPU work below it.
+
+For 4 KiB, 1 ms latency, and 100 operations/s:
+
+| Mechanism | CPU busy per operation | Elapsed per operation | CPU occupancy |
+| --- | ---: | ---: | ---: |
+| busy polling + PIO | 1.0439 ms | 1.0439 ms | 10.44% |
+| interrupt + CPU copy | 0.00330 ms | 1.0443 ms | 0.033% |
+| DMA + completion interrupt | 0.00100 ms | 1.0420 ms | 0.010% |
+
+DMA has both the lowest CPU occupancy and, by a small margin, the lowest elapsed time for this 4 KiB state: its larger setup is outweighed by eliminating the modeled CPU copy. That elapsed-time result can reverse for transfers below the 650-byte crossover. Latency and CPU demand remain different objectives.
+
+## Experiment: change bytes, events, and device latency
+
+The simulator assumes one independent operation, no queueing, a fixed 100 MB/s transfer rate, and the numeric constants listed above. Polling means continuous busy waiting for the modeled device latency, not periodic polling. CPU occupancy is capped at 100%; once offered work exceeds capacity, the widget does not model the resulting queue or latency growth.
+
+**Prediction — quantify before moving a slider.** At 64 bytes, 0.1 ms device latency, and 2,000 operations/s, which has lower modeled CPU occupancy: interrupt-driven copying or DMA? Use the fixed-cycle equations, then set the widget to that state.
+
+<DeviceIOPlayground client:load />
+
+Interrupt-driven copying consumes `(500 + 1200 + 128)/3 GHz = 0.609 µs` per operation, or about 0.122% of a CPU at 2,000/s. DMA consumes `3,000/3 GHz = 1 µs` per operation, or 0.200%. The small transfer favors CPU copy under this CPU-work model; device latency changes elapsed time but not these two modeled CPU-work equations.
+
+**Transfer — invalidate one assumption.** Replace the constant 100 MB/s device with a device that sustains four transfers concurrently but slows each transfer by 30% at queue depth four. State what additional state the model needs before it can predict throughput and tail latency.
+
+<details>
+<summary>Reveal the modeling requirements</summary>
+
+The model needs at least queue depth, arrival process, number of service lanes, service-time dependence on concurrency, completion order, and a latency distribution rather than one constant. CPU occupancy can still be computed per submission/completion, but end-to-end latency requires waiting time plus concurrency-dependent service. A single-operation bar cannot support a queueing claim.
+
+</details>
+
+## Descriptor rings encode ownership
+
+High-throughput devices use shared-memory descriptors. A descriptor typically contains a device-visible address, length, direction, command, and status. A split ring such as Virtio has driver-written available state and device-written used state.
+
+{/* Source tracking: Split-virtqueue descriptor/available/used structure and required publication barriers were verified against OASIS Virtio 1.3 Sections 2.7 and 5.2. */}
+
+<PlantUML
+  code={`@startuml
+title "One DMA request from construction to reclamation"
+participant "driver thread" as CPU
+participant "descriptor memory" as RING
+participant "device" as DEV
+participant "interrupt path" as IRQ
+CPU -> CPU : map/pin data buffer
+CPU -> RING : write command, address, length, direction
+CPU -> CPU : write barrier
+CPU -> RING : publish available index
+CPU -> DEV : MMIO doorbell / notification
+DEV -> RING : read descriptor and buffer
+DEV -> RING : DMA data and write completion status
+DEV -> IRQ : raise completion interrupt
+IRQ -> DEV : acknowledge according to device contract
+IRQ -> IRQ : read barrier / DMA synchronization
+IRQ -> RING : consume used entry and status
+IRQ -> CPU : mark complete and wake waiter
+CPU -> CPU : unmap, release buffer, recycle descriptor
+@enduml`}
+/>
+
+For ring capacity $N$ and monotonic producer/consumer counters, the software invariant is
+
+$$
+0\le producer-consumer\le N.
+$$
+
+Slots are indexed modulo $N$, but counters should retain enough generation information to distinguish full from empty after wrap. Publication follows a release pattern:
+
+```text
+write descriptor fields
+write barrier for device visibility
+write ring slot containing descriptor head
+write barrier required by transport
+advance published producer index
+notify device if required
+```
+
+The device may access the descriptor immediately after the publication point. Editing a submitted descriptor before completion violates ownership even if the CPU still has a pointer to it.
+
+### Worked wrap trace
+
+An eight-entry ring has monotonic `producer=14`, `consumer=10`, so occupancy is four. Published requests occupy logical sequence numbers 10–13 and physical slots 2–5. The producer's next physical slot is `14 mod 8 = 6`.
+
+Publishing three requests uses slots 6, 7, and 0, then advances producer to 17. Occupancy becomes seven. One slot remains. Comparing only `producer mod 8 = 1` with `consumer mod 8 = 2` does not directly reveal occupancy; generation-bearing counters do.
+
+**Application — kill publish-first.** A mutation advances `producer` before writing the descriptor's length. Construct an interleaving in which the device reads a valid old address and old length. State which single happens-before edge is missing.
+
+<details>
+<summary>Reveal the failing interleaving</summary>
+
+CPU publishes producer 15; device observes the new index and reads slot 6; slot 6 still contains the previous generation's descriptor; device begins DMA; CPU writes the new address and length too late. The missing edge is “all descriptor and ring-slot stores happen before the publication-index store as observed by the device.” A CPU-only lock does not create that edge unless the device participates in its memory-ordering protocol, which it does not.
+
+</details>
+
+## Coherence, synchronization, and IOMMU authority
+
+A coherent DMA allocation lets CPU and device observe each other's writes without explicit cache-line cleaning for coherence, but coherent memory still needs barriers to order fields. A streaming DMA mapping may require explicit synchronization when ownership passes between CPU and device. Linux's DMA API documents separate `dma_sync_*_for_device` and `dma_sync_*_for_cpu` operations for reused streaming mappings.
+
+{/* Source tracking: Coherent-versus-streaming DMA and the requirement that coherent mappings still use memory barriers were verified against the Linux kernel Dynamic DMA Mapping Guide. */}
+
+An IOMMU translates a device-visible I/O virtual address and enforces device permissions. It can restrict a device to the pages assigned to its DMA context, but it cannot repair a driver that reuses a still-owned buffer. Teardown requires both:
+
+1. stop or quiesce old device transactions; and
+2. revoke/invalidate device translations before the physical pages enter a new ownership domain.
+
+### Counterexample: timeout is not cancellation
+
+A request exceeds its deadline. The driver returns an error, unmaps the DMA address, and allocates the frame to another process. The device completes late and writes into the new process's memory. The timeout proved only that completion was not observed by a deadline. Safe recovery must retain the buffer or complete a documented cancel/reset/quiesce protocol before reuse.
+
+## Interrupt handling closes the protocol
+
+An interrupt handler must drain enough device state that the interrupt condition is understood and acknowledged according to the device contract. It must also preserve concurrency invariants:
+
+- validate completion IDs before indexing software arrays;
+- synchronize before reading device-written status or data;
+- transition each request to completed at most once;
+- detach ownership before waking a waiter that may free resources;
+- avoid blocking work that cannot run in interrupt context; and
+- handle more than one completion per interrupt when the device batches.
+
+### Worked race: wake before state
+
+Waiter code uses `while (req.state != DONE) sleep(req, lock)`. The interrupt handler calls `wakeup(req)` and then writes `req.state = DONE`. A waiter can wake, reacquire the lock before the state store, observe `IN_FLIGHT`, and sleep again after the one wakeup has passed. The fix is to update completion state while holding the protocol lock and wake after the state transition is visible. The loop remains necessary because wakeups can be spurious or another event can change scheduling.
+
+### Duplicate and malformed completions
+
+A duplicate completion must not decrement a reference twice or recycle a descriptor already assigned to another generation. Track request identity and lifecycle, validate `id < ring_size`, require `state == IN_FLIGHT`, and pair a reusable slot with a generation or sequence number when delayed events can cross reuse. A malformed status is a device/transport failure to report; treating every completion as success converts device error into silent data corruption.
+
+**Transfer — teardown defense.** A hot-unplug event arrives with four requests in flight. Write a state sequence that permits their buffers to be reused. “Wait 100 ms” is not an admissible transition.
+
+<details>
+<summary>Reveal a valid boundary sequence</summary>
+
+Stop admitting new submissions; mark the device stopping; mask or route interrupts according to the platform contract; request and verify device/queue reset or another specified quiescence mechanism; drain or fail completions while keeping buffers pinned; revoke DMA mappings and invalidate IOMMU state after quiescence; transition every request exactly once to completed/failed; wake waiters; then release descriptors and buffers. If the platform cannot prove quiescence, retaining/quarantining the memory is safer than reuse.
+
+</details>
+
+## Synthesis assessment: design from an unfamiliar data sheet
+
+A sensor device exposes five 32-bit MMIO registers:
+
+- `DESC_LO` and `DESC_HI`: 64-bit DMA descriptor address, low half written first;
+- `CONTROL.START`: writing 1 transfers one descriptor;
+- `STATUS`: bit 0 `DONE`, bit 1 `ERROR`; reading does not clear;
+- `ACK`: writing the observed status bits clears them.
+
+The descriptor is `{ uint64_t data_addr; uint32_t len; uint32_t generation; }`. The device reads the descriptor, writes `len` bytes into the named buffer, and raises an interrupt, but `STATUS` returns neither the descriptor address nor its generation. The platform is DMA-coherent but weakly ordered. The driver offers two host paths: a staged path points the descriptor at a persistent, pre-mapped 8 KiB bounce buffer and copies completed bytes to the destination; a direct-DMA path maps the destination itself. A 3 GHz CPU pays 900 staged-path setup cycles, 1,500 interrupt cycles, and two cycles per CPU-copied byte. Direct-DMA setup costs 2,400 cycles instead of 900 and performs no CPU copy. Events arrive at 20,000/s with sizes 64 bytes (90%) and 8 KiB (10%). Only one request is current in this bounded interface model.
+
+Produce:
+
+1. weighted CPU occupancy for interrupt-driven CPU copy and for DMA;
+2. a justified per-size mechanism or one uniform mechanism;
+3. exact publication and completion ordering;
+4. lifecycle states that detect a duplicate notification before reap, plus an explanation of why private generation cannot authenticate a completion after descriptor reuse; and
+5. tests for publish-first, wake-before-state, invalid length, nonzero error, duplicate-before-reap, and timeout followed by late DMA.
+
+<details>
+<summary>Reveal reference solution and rubric</summary>
+
+Expected size is `0.9×64 + 0.1×8192 = 876.8 bytes`.
+
+Interrupt-driven CPU copy work is `900 + 1500 + 2×876.8 = 4153.6 cycles/event`. At 20,000/s this is 83,072,000 cycles/s, or 2.77% of a 3 GHz CPU. DMA work is `2400 + 1500 = 3900 cycles/event`, or 2.60%. A uniform DMA policy barely wins CPU occupancy under the average model. A per-size policy uses CPU copy for 64-byte events (`2528` cycles versus `3900`) and DMA for 8 KiB (`18,784` versus `3900`), reducing expected work to `0.9×2528 + 0.1×3900 = 2665.2 cycles/event`, or 1.78% CPU. The conclusion excludes queueing and switching overhead between paths.
+
+Safe submission: reserve the persistent staging buffer or pin/map the direct destination → validate capacity and fill the descriptor, including the software generation → DMA/device write barrier → write descriptor address halves in documented order → barrier required before command → write `START`. Completion: read and retain the observed status bits → acknowledge those bits as specified → synchronize device-written data for CPU if the platform API requires it → require the one current request to be `IN_FLIGHT` and validate its recorded length and returned status → on the staged path, copy exactly that validated length from the bounce buffer to the destination → set terminal state under lock → wake → only then unmap/release and recycle after waiter ownership transfers.
+
+Lifecycle example: `FREE(g) → PREPARED(g) → IN_FLIGHT(g) → COMPLETED(g) → REAPED(g) → FREE(g+1)`. A second `DONE` notification while generation $g$ remains `COMPLETED` is a detectable pre-reap duplicate and must not cause a second transition or release. After reuse, however, the interface returns no identity that distinguishes a late completion for $g$ from a completion for $g+1$. The private generation supports software auditing; it does not authenticate `STATUS`. Reuse after an uncertain timeout therefore requires verified device quiescence/reset, or the buffer and descriptor must remain quarantined.
+
+Tests:
+
+- force `START` before descriptor visibility and require the harness to observe/reject stale fields;
+- schedule the waiter between wake and state in the mutant and require bounded completion in the correct build;
+- inject `len > buffer_capacity` and require no publication/DMA;
+- inject `STATUS.ERROR` and require an error, not success data;
+- inject a second `DONE` before reap and require duplicate-state detection with no second wake or release;
+- delay completion past the timeout and require that the buffer is not reused until quiescence/cancellation is proven.
+
+Rubric, 30 points:
+
+- 7 points: dimensional CPU calculations and workload weighting;
+- 4 points: mechanism choice tied to size distribution;
+- 7 points: publication/completion ordering with device-visible barriers;
+- 5 points: interface-aware lifecycle, pre-reap duplicate detection, and the post-reuse identity boundary;
+- 7 points: tests distinguish all six named wrong implementations or failure modes.
+
+Any design that frees a timed-out DMA buffer before quiescence violates the ownership invariant and cannot receive more than 15 points.
+
+</details>
+
+## Deliberate boundary and source trail
+
+The numerical model excludes queueing, cache misses, IOMMU costs, interrupt routing, power states, and device parallelism. The protocol model uses a generic ring plus Virtio as normative evidence; individual hardware requires its own data sheet. PCIe transaction layers, NAPI, MSI-X, IOMMU programming, and production reset flows remain bounded extensions.
+
+{/* Source tracking: xv6's interrupt-driven Virtio block path and PLIC dispatch were checked at revision 5 in kernel/virtio_disk.c and kernel/trap.c; no xv6 code or assignment text is reproduced. */}
+
+## References & Further Reading
+
+- [OASIS Virtual I/O Device (Virtio) Version 1.3](https://docs.oasis-open.org/virtio/virtio/v1.3/virtio-v1.3.html)
+- [Linux kernel: Dynamic DMA Mapping Guide](https://docs.kernel.org/core-api/dma-api-howto.html)
+- [RISC-V Privileged Architecture](https://docs.riscv.org/reference/isa/priv/supervisor.html)
+- [xv6-riscv revision 5 book, interrupts and device drivers](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf)
+- [xv6-riscv `kernel/virtio_disk.c` at revision 5](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/virtio_disk.c)
+- [xv6-riscv `kernel/trap.c` at revision 5](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/trap.c)

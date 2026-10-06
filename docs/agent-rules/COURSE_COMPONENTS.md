@@ -19,6 +19,8 @@ Import from `src/components/` with a relative MDX import and add `client:load` t
 | `CodeExercise` | Fill-in-the-blank code practice | `code`, `answers`, `explanation`, `title` |
 | `CaseStudy` | A contextual decision or scenario with an analyzable trade-off | `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title` |
 
+`Quiz` uses a retrieval-first flow: the learner states an answer before seeing claims, then classifies each claim independently. This prevents relative answer length or position from acting as a shortcut. The review treats identification of every supported claim as mandatory; rejecting all claims never appears as a near-passing aggregate score. `CaseStudy` is open-response first: alternatives and the reference decision remain hidden until the learner records a justified decision. Authors must still keep choices concise, balance their specificity, and write plausible misconception-based alternatives; interaction design does not excuse cueing or weak distractors.
+
 `Quiz` also accepts `questions` for a sequence of questions. `title` is optional. `CaseStudy` can reveal analysis without options, but it still needs a meaningful `scenario`, `question`, and `explanation`.
 
 ### Quiz
@@ -84,6 +86,26 @@ import CaseStudy from '../../../components/CaseStudy';
   explanation="Correctness is the hard constraint because ..."
 />
 ```
+
+### Named interactive investigations
+
+Use a named playground when the outcome requires manipulating a quantitative variable, stepping through state, injecting failure, or comparing a model with an observation. Compose it with `InteractivePlayground`; do not import that frame directly from MDX. The named component owns its domain model, controls, accessible status, responsive SVG or state view, and static book representation.
+
+The current CS/SWE investigations include growth-rate comparison, allocation-failure ownership, DFA prefix tracing, Amdahl speedup, queue saturation, nonce-collision budgets, hash probe costs, transaction schedules, round-robin scheduling, and reliability budgets under `src/components/playgrounds/`. Each is intentionally attached to a lesson that derives the displayed model. Reuse one only when the exact variables and learning outcome match; a renamed title is not reuse.
+
+```mdx
+import AmdahlPlayground from '../../../components/playgrounds/AmdahlPlayground';
+
+<AmdahlPlayground client:load />
+```
+
+Every playground must provide:
+
+- a bounded control with an explicit label and current value;
+- a visible state, curve, trace, or counterexample that changes with the control;
+- adjacent prose that derives or justifies the model and states its omissions;
+- a deterministic static representation and caption for the course PDF; and
+- keyboard-operable controls, meaningful image labels, and live status where appropriate.
 
 ## Rendered visual components
 

@@ -1,0 +1,98 @@
+---
+title: "The C Standard Library as a Contract"
+course: c
+description: "Use qsort, bsearch, conversion, termination, and limits APIs while respecting callback and error contracts."
+prerequisites:
+  - "Functions, pointers, arrays, and error handling"
+outcomes:
+  - "Read a standard-library signature and identify its preconditions"
+  - "Write a comparison callback with a total ordering and no overflow bug"
+  - "Parse numeric input with end-pointer and range checks"
+omissions:
+  - "Cryptographic randomness and operating-system-specific process APIs are deferred to security and systems courses."
+estimatedMinutes: 55
+assessment: "Repair a qsort comparator and specify how malformed numeric input is reported."
+---
+
+import Quiz from '../../../components/Quiz';
+import CodeRunner from '../../../components/CodeRunner';
+import CodeExercise from '../../../components/CodeExercise';
+
+# The C Standard Library as a Contract
+
+The standard library is portable only when its preconditions are respected. A function name such as `qsort` or `strtol` hides a protocol: element size, callback ordering, buffer extent, locale, conversion range, or termination behavior. Read the signature together with its documentation.
+
+<Quiz client:load
+  title="Comparator correctness"
+  question="Why is `return *(int *)a - *(int *)b` a poor qsort comparator?"
+  options={["qsort does not accept function pointers", "The subtraction can overflow and violate the required ordering", "The callback must return a pointer", "It sorts only strings"]}
+  correctIndex={1}
+  explanation="A comparator should return negative, zero, or positive consistently. Subtracting extreme ints can overflow, producing the wrong sign; compare with relational operators instead."
+/>
+
+## Sorting and searching
+
+`qsort` receives a base pointer, element count, element size, and comparator. A safe integer comparator is:
+
+```c
+int compare_ints(const void *left, const void *right) {
+    int a = *(const int *)left;
+    int b = *(const int *)right;
+    return (a > b) - (a < b);
+}
+```
+
+`bsearch` requires the array already be sorted under a compatible comparator. Its result is a pointer into the caller's array, not an owned copy; its lifetime ends when the array is modified or destroyed.
+
+<CodeExercise client:load
+  title="Pass the comparator"
+  code={`qsort(values, length, sizeof values[0], [!blank!]);`}
+  answers={["compare_ints"]}
+  explanation="The final argument is the function pointer whose ordering defines the sorted array. Its contract must match the later bsearch comparator."
+/>
+
+## Numeric conversion
+
+`atoi` cannot report malformed input or range failure. `strtol`/`strtoul` return a converted value and an end pointer; set `errno = 0`, check that at least one digit was consumed, and check `errno == ERANGE` and the target type's bounds before narrowing.
+
+## Termination and randomness
+
+`exit` runs registered exit handlers and flushes standard streams; `abort` signals abnormal termination and is not a cleanup strategy. `atexit` callbacks should be small and must not assume resources that have already been destroyed. `rand` is a portable pseudo-random generator with weak and implementation-dependent statistical/security properties; never use it for keys, tokens, or passwords.
+
+<CodeRunner client:load
+  title="A checked comparator"
+  language="c"
+  code={`#include <stdio.h>
+
+static int compare_ints(const void *left, const void *right) {
+    int a = *(const int *)left, b = *(const int *)right;
+    return (a > b) - (a < b);
+}
+
+int main(void) {
+    printf("%d %d %d\\n", compare_ints(&(int){-1}, &(int){2}),
+           compare_ints(&(int){2}, &(int){2}), compare_ints(&(int){3}, &(int){2}));
+    return 0;
+}`}
+  output="-1 0 1"
+/>
+
+## Transfer exercises
+
+1. Write the `strtol` checks for input that contains no digits.
+2. Explain why a comparator that returns only `-1` or `1` still needs to return zero for equal values.
+3. State the lifetime of a pointer returned by `bsearch`.
+4. Identify why `rand() % 6` is not a cryptographic die.
+
+### Diagnostic solutions
+
+1. Initialize `end = input`, call `strtol`, and reject when `end == input`; also check range and trailing characters according to the grammar.
+2. Sorting requires an equivalence relation; if equal elements compare as unequal, the comparator can be inconsistent and violate the ordering qsort relies on.
+3. It designates an element in the original array. It is borrowed and becomes invalid when that storage ceases to be valid or a modifying operation invalidates the reference.
+4. The generator is predictable if its state is known, and modulo can bias outcomes unless the range is handled carefully. Security requires an OS or library CSPRNG.
+
+## References & Further Reading
+
+* [ISO C11 draft N1570, §7.22 and §7.22.8](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+* [cppreference: qsort](https://en.cppreference.com/w/c/algorithm/qsort)
+* [SEI CERT C MSC30-C: Do not use rand for security](https://wiki.sei.cmu.edu/confluence/display/c/MSC30-C.+Do+not+use+the+rand%28%29+function+for+generating+pseudorandom+numbers)

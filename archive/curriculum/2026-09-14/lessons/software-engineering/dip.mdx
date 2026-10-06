@@ -1,0 +1,94 @@
+---
+title: "Dependency Inversion and Stable Boundaries"
+course: software-engineering
+description: "Place abstractions at policy boundaries, inject volatile details, and keep dependency direction aligned with change and ownership."
+prerequisites:
+  - "Responsibility, interfaces, substitutability, and test design"
+outcomes:
+  - "Distinguish high-level policy from volatile mechanisms"
+  - "Define an abstraction owned by the policy client rather than mirroring a vendor API"
+  - "Use injection to make time, storage, and external effects testable"
+omissions:
+  - "Container frameworks and compile-time dependency injection are implementation variants, not prerequisites."
+estimatedMinutes: 55
+assessment: "Invert one volatile dependency while preserving a testable policy contract."
+---
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeRunner from '../../../components/CodeRunner';
+
+# Dependency Inversion and Stable Boundaries
+
+The dependency-inversion principle has two parts: high-level policy should not depend directly on low-level details, and both should depend on abstractions; abstractions should belong to the policy's language rather than being a thin copy of a vendor API. The goal is control of change and testability, not indirection for its own sake.
+
+<Quiz client:load
+  title="Choose the owner of the abstraction"
+  question="Who should usually define the interface used by an application policy to send a notification?"
+  options={["The provider SDK, unchanged", "The application policy, in terms of the behavior it needs", "The database schema", "The test framework"]}
+  correctIndex={1}
+  explanation="The policy owns the required behavior. An adapter translates provider details into that interface, so the policy is not shaped by a vendor's accidental API."
+/>
+
+## Policy and detail
+
+Suppose a reminder policy needs `send(recipient, message, idempotency_key)` and a provider SDK offers `post_message(template_id, payload, headers)`. Define the application port around the policy's guarantee, then adapt the SDK. The port should state retryability, duplicate effects, error categories, and data handling.
+
+```python
+class Notifier:
+    def send(self, recipient, message, key):
+        raise NotImplementedError
+
+class ReminderService:
+    def __init__(self, notifier):
+        self.notifier = notifier
+
+    def remind(self, reminder):
+        return self.notifier.send(reminder.recipient,
+                                  reminder.message,
+                                  reminder.occurrence_id)
+```
+
+<CaseStudy client:load
+  title="Do not inject the whole world"
+  scenario="A service constructor receives a cloud SDK client, database connection, clock, logger, feature-flag client, and configuration object. A unit test must build all six to test a pure eligibility rule."
+  question="What is the first improvement?"
+  options={["Add a dependency-injection container", "Extract a small policy boundary and inject only the behavior the rule needs, such as a clock or repository query", "Make every field global", "Mock every method on the cloud SDK"]}
+  correctIndex={1}
+  explanation="Injection is useful when it exposes a meaningful change or test boundary. A container can wire dependencies, but it cannot repair a policy that depends on an oversized detail interface."
+/>
+
+<CodeRunner client:load
+  title="Inject a deterministic clock"
+  language="python"
+  code={`def is_due(now, due_at):
+    return now >= due_at
+
+print(is_due(120, 120))
+print(is_due(119, 120))`}
+  output="True\nFalse"
+/>
+
+## Adapter and ownership
+
+The adapter owns translation and provider-specific failure mapping. It should not silently strengthen guarantees: if the provider lacks idempotency, the application port must say so or add a durable deduplication boundary. An abstraction is useful only when its semantics are stable enough for policy clients to rely on.
+
+## Transfer exercises
+
+1. Define a port for storing an audit event.
+2. Explain how a vendor-shaped interface leaks low-level change.
+3. Choose constructor, parameter, or environment injection for a clock and justify it.
+4. Name a case where dependency inversion adds unnecessary complexity.
+
+### Diagnostic solutions
+
+1. Include event identity, payload/visibility, append-only behavior, durability result, and failure categories; do not expose arbitrary SQL methods to policy.
+2. Provider renames, pagination, retries, or error types force policy changes even when the application's behavior is unchanged.
+3. Constructor injection makes the dependency explicit and stable for an object; parameter injection suits one operation; environment lookup hides the dependency and harms determinism.
+4. A tiny stable pure calculation with no volatile dependency may be clearer as a direct function; an interface adds no test or change value.
+
+## References & Further Reading
+
+* [MIT 6.005: abstraction and modularity](https://web.mit.edu/6.005/www/fa15/classes/06-specifications/)
+* Martin, Robert C. *Agile Software Development, Principles, Patterns, and Practices*. Prentice Hall, 2002.
+* [Martin Fowler: Inversion of Control](https://martinfowler.com/articles/injection.html)

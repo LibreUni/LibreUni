@@ -10,6 +10,7 @@ does not assign a pedagogical quality score.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -22,9 +23,10 @@ LESSONS_DIR = ROOT / "src" / "content" / "lessons"
 
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 ARTIFACT_RE = re.compile(
-    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|StructureDiagram|StructureExercise|details)\b|^```|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Example|Warning|Remark|Proof)\.",
+    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|StructureDiagram|StructureExercise|[A-Z][A-Za-z0-9]+Playground|details)\b|^```|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Example|Warning|Remark|Proof)\.",
     re.MULTILINE,
 )
+ASSESSMENT_RE = re.compile(r"<(Quiz|CaseStudy|StructureExercise)\b(.*?)/>", re.DOTALL)
 PLANTUML_RE = re.compile(r"<PlantUML\b.*?code=\{`(.*?)`\}\s*/>", re.DOTALL)
 FENCE_RE = re.compile(r"^```.*?^```\s*$", re.MULTILINE | re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>|\{[^{}]*\}", re.DOTALL)
@@ -44,6 +46,7 @@ GENERIC_DIAGRAM_LABELS = {
     "claim", "evidence", "consequence", "workload", "resource model", "measurement",
     "actor", "state", "event", "outcome", "representation", "operation", "result",
 }
+GENERIC_ASSESSMENT_TITLES = {"midpoint application"}
 
 
 def normalize_text(text: str) -> str:
@@ -93,6 +96,67 @@ def diagram_labels(code: str) -> set[str]:
     return {normalize_text(label) for label in re.findall(r'"([^"]+)"', code)}
 
 
+def extract_array_prop(block: str, prop: str = "options") -> str | None:
+    """Extract a JavaScript array prop while respecting quoted brackets."""
+    marker = re.search(rf"\b{re.escape(prop)}\s*=\s*\{{\s*\[", block)
+    if not marker:
+        return None
+    start = block.find("[", marker.start())
+    depth = 0
+    quote = None
+    escaped = False
+    for index in range(start, len(block)):
+        character = block[index]
+        if escaped:
+            escaped = False
+            continue
+        if quote:
+            if character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in {'"', "'", "`"}:
+            quote = character
+        elif character == "[":
+            depth += 1
+        elif character == "]":
+            depth -= 1
+            if depth == 0:
+                return block[start:index + 1]
+    return None
+
+
+def assessment_length_cues(body: str) -> list[dict]:
+    """Find assessments whose correct choice is conspicuously longest."""
+    cues = []
+    for component in ASSESSMENT_RE.finditer(body):
+        kind, block = component.groups()
+        source = extract_array_prop(block)
+        index_match = re.search(r"\b(?:correctIndex|answer)\s*=\s*\{(\d+)\}", block)
+        if not source or not index_match or "`" in source:
+            continue
+        try:
+            options = ast.literal_eval(source)
+        except (SyntaxError, ValueError):
+            continue
+        if not isinstance(options, list) or not all(isinstance(option, str) for option in options):
+            continue
+        correct_index = int(index_match.group(1))
+        if correct_index >= len(options) or len(options) < 2:
+            continue
+        lengths = [len(WORD_RE.findall(option)) for option in options]
+        distractor_max = max(length for index, length in enumerate(lengths) if index != correct_index)
+        correct_length = lengths[correct_index]
+        if correct_length >= distractor_max * 1.5 and correct_length - distractor_max >= 3:
+            cues.append({
+                "component": kind,
+                "correctWords": correct_length,
+                "distractorMaxWords": distractor_max,
+            })
+    return cues
+
+
 def analyze_lesson(path: Path) -> dict:
     content = path.read_text(encoding="utf-8")
     body = re.sub(r"^---.*?^---\s*", "", content, flags=re.MULTILINE | re.DOTALL)
@@ -103,6 +167,24 @@ def analyze_lesson(path: Path) -> dict:
     for phrase in FILLER_PHRASES:
         if phrase in lowered:
             findings.append({"kind": "filler-phrase", "severity": "error", "message": f"contains '{phrase}'"})
+
+    for cue in assessment_length_cues(body):
+        findings.append({
+            "kind": "answer-length-cue",
+            "severity": "review",
+            "message": f"{cue['component']} correct choice has {cue['correctWords']} words; longest distractor has {cue['distractorMaxWords']}",
+        })
+
+    generic_titles = [
+        title for title in re.findall(r"\btitle\s*=\s*['\"]([^'\"]+)['\"]", body)
+        if normalize_text(title) in GENERIC_ASSESSMENT_TITLES
+    ]
+    if generic_titles:
+        findings.append({
+            "kind": "generic-assessment-template",
+            "severity": "review",
+            "message": f"contains {len(generic_titles)} generic assessment title(s): {', '.join(sorted(set(generic_titles)))}",
+        })
 
     paragraphs = paragraph_blocks(body)
     paragraph_hashes = Counter(hashlib.sha256(normalize_text(p).encode()).hexdigest() for p in paragraphs)

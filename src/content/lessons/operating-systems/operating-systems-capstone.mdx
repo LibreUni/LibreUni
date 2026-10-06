@@ -1,0 +1,641 @@
+---
+title: "Operating Systems Capstone"
+course: "operating-systems"
+description: "A defended operating-system change with explicit invariants, adversarial tests, reproducible measurement, failure analysis, and an independently usable handoff."
+prerequisites:
+  - "System-call boundaries, scheduling, synchronization, virtual memory, device I/O, filesystems, protection, and multicore observability"
+  - "C systems programming, Git, Make, GDB, QEMU, and official xv6-riscv-rev5 course root 7d7adbb1b0acbd67c9766a20d0f9900fef2789fa"
+  - "Ability to distinguish a mechanism model, a test observation, and a measured performance result"
+outcomes:
+  - "Bound an operating-system change by contract, failure model, invariants, workload, and explicit exclusions before implementation."
+  - "Implement one substantial kernel mechanism while preserving the approved start-point contract and killing named incorrect designs with adversarial tests."
+  - "Evaluate the change against a pinned baseline using reproducible trials, raw evidence, uncertainty, and threats to validity."
+  - "Defend authorship and engineering judgment to a human reviewer, then deliver a handoff another engineer can build, test, inspect, and extend."
+omissions:
+  - "A production kernel, formal verification, novel systems research, real-time certification, and universal performance claims are outside the required scope."
+  - "The course publishes project contracts, evidence requirements, diagnostic examples, and rubrics—not complete capstone patches or hidden-test inputs."
+estimatedMinutes: 1260
+assessment: "A human-approved proposal, bounded kernel change, invariant-driven public tests, disclosed hidden-test categories, reproducible baseline comparison, design memo, demo and defense, and maintainable handoff; automated checks are evidence rather than proof of mastery or authorship."
+---
+
+import PlantUML from '../../../components/PlantUML.astro';
+
+# Operating Systems Capstone
+
+A patch passes the upstream tests and reports “18% faster.” The claim still fails review. The author changed the benchmark while changing the scheduler, retained only five favorable runs, did not record the baseline commit, and never tested a blocking workload. Under memory pressure, one error path leaves a process runnable on two queues. The benchmark result is neither reproducible nor relevant to the broken invariant.
+
+The capstone is a bounded engineering argument:
+
+> Under a stated workload and failure model, this mechanism preserves these invariants and changes this observable relative to this pinned baseline; these tests and measurements support the claim, subject to these limitations.
+
+Every noun in that sentence must resolve to an artifact. A build log is not a correctness argument. A passing test is not proof that no bug exists. A simulation is not a measurement. A fast median does not excuse corruption, deadlock, authority expansion, or an unexplained tail.
+
+{/* Source tracking: The implementation substrate is immutable MIT PDOS tag xv6-riscv-rev5, commit 7d7adbb1b0acbd67c9766a20d0f9900fef2789fa, with its book and license. Artifact and measurement requirements are informed by the USENIX ATC artifact-evaluation guidance and Kalibera and Jones's primary paper on rigorous systems benchmarking. The project structure and wording are original to LibreUni. */}
+
+## The project contract
+
+Select exactly one option from the bounded set below. A project may extend an earlier checkpoint only when it introduces a new mechanism, invariant, adversarial failure, and evaluation question. Resubmitting a lab patch with more prose does not satisfy the contract.
+
+All work descends from official xv6 RISC-V tag `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`. Use either a clean rev5 tree or the course's ordered cumulative checkpoint patch stack rooted at rev5. Record the chosen start point and keep the capstone treatment separable from every earlier patch. The project must remain small enough that one engineer can explain every changed control path during the defense.
+
+### Definitions that make the claim testable
+
+| term | operational meaning |
+| --- | --- |
+| **course root** | official xv6-riscv-rev5 commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`; every allowed project history descends from this object |
+| **start point** | either the clean course root or a reproducible, ordered cumulative checkpoint stack applied to that root |
+| **baseline** | the immutable chosen start point plus configuration, toolchain, emulator or hardware target, and command sequence against which the capstone treatment is compared |
+| **treatment** | the baseline plus only the submitted capstone change; earlier checkpoints, upgrades, and unrelated refactors are not treatment |
+| **contract** | externally visible allowed behavior, error behavior, and explicitly unsupported behavior |
+| **invariant** | a property required after every relevant transition, not merely at function return |
+| **failure model** | the faults, interleavings, resource limits, crashes, and adversarial inputs the design claims to handle |
+| **oracle** | a rule that maps an observation to pass, fail, or inconclusive without consulting the implementation's intended answer |
+| **workload** | operations, input distribution, concurrency, machine state, duration, and units that generate an observation |
+| **trial** | one independently identified execution with recorded configuration, seed, order, and raw result |
+| **claim** | a falsifiable relation among mechanism, workload, observable, and baseline |
+| **threat** | a plausible reason the evidence could support the claim even though the claim is false, or reject it even though it is true |
+
+Assume failures can occur at any documented injection point, CPUs can interleave at every synchronization boundary, allocations can fail where the kernel permits failure, and user inputs can take every contract-valid boundary value. Do not assume sequential consistency for unsynchronized shared memory, a particular disk write order without an enforced persistence mechanism, or FIFO device completion unless the device contract provides it.
+
+### Retrieval checkpoint: what is missing?
+
+The statement “the new lock-free table is correct because it completed one million lookups without crashing” contains an observation. Name four missing parts of an engineering claim.
+
+<details>
+<summary>Reveal the diagnosis</summary>
+
+At minimum it lacks:
+
+1. a contract defining which lookup results are legal under concurrent insert or delete;
+2. invariants covering publication, object lifetime, and reclamation;
+3. a pinned baseline and treatment boundary;
+4. a workload and failure model, including CPU count and interleavings;
+5. an independent result oracle; and
+6. adversarial evidence capable of exposing stale references or forbidden results.
+
+Completion without a crash demonstrates only that one execution reached its end. It cannot establish linearizability, memory safety, progress, or superiority to a baseline.
+
+</details>
+
+## Choose one bounded option
+
+The hard exclusions are part of each option. A proposal that silently absorbs an excluded production feature is too broad.
+
+| option | required mechanism and contract | mandatory adversarial evidence | hard exclusions |
+| --- | --- | --- | --- |
+| **A — scheduler policy and accounting** | add one policy or one bounded accounting mechanism; define runnable-state ownership, queue membership, wakeup, migration, and idle behavior | CPU-bound plus sleeping tasks, multicore migration, repeated wakeups, starvation probe, and accounting conservation | hard real-time guarantees, energy policy, full priority inheritance, and claims about every workload |
+| **B — virtual-memory state transition** | implement either copy-on-write fork or a bounded anonymous/file-backed mapping subset; define PTE permissions, frame reference counts, fault outcomes, and teardown | parent/child writes, fork trees, memory exhaustion, concurrent exit, invalid addresses, and stale-translation probe | complete POSIX `mmap`, swapping, NUMA placement, huge pages, and production-grade overcommit |
+| **C — interrupt-driven device queue** | implement a bounded queue for one emulated device or teaching device; define descriptor ownership, publication, completion, retry, and shutdown | wraparound, full and empty queues, duplicate/spurious completion, delayed interrupt, malformed length, and injected allocation failure | universal driver framework, real-device certification, DMA isolation proof, and unmodeled hardware claims |
+| **D — recoverable filesystem mutation** | add one persistent operation distinct from the rename lab, such as atomic temporary-file publication or a bounded durability call; define namespace and recovery semantics | transaction exhaustion, allocation failure, every named crash cut, recovery idempotence, and concurrent conflicting operations | full POSIX durability, directory trees, cross-filesystem operations, ACLs, and storage-device firmware guarantees |
+| **E — multicore kernel-state redesign** | shard or redesign one contended kernel table while preserving its lookup/update contract; define lock order, object lifetime, and progress | skewed keys, CPU-count sweep, create/delete races, exhaustion, hotplug exclusion, and contention tracing | a general RCU library, universal scalability, lock-freedom claims without proof, and production NUMA tuning |
+
+Combining two options usually weakens the evidence. A queue plus a new scheduler creates two treatments and makes a causal result difficult to interpret. The reviewer may require the smaller mechanism.
+
+### Scope budget: 1,260 minutes
+
+| phase | minutes | exit evidence |
+| --- | ---: | --- |
+| proposal, source audit, invariants, and threat model | 120 | approved proposal identifier and review notes |
+| pinned baseline and experimental harness | 180 | reproducible clean build, upstream tests, calibration data |
+| mechanism implementation and design record | 420 | reviewable commits or patch series, transition traces, invariant assertions |
+| adversarial, concurrency, and fault tests | 240 | public test suite, wrong-implementation kill matrix, minimized failures |
+| evaluation and threats-to-validity analysis | 180 | raw trials, analysis script, figures/tables, bounded interpretation |
+| design memo, demo/defense, and handoff | 120 | final package usable from a fresh checkout |
+| **total** | **1,260** | **21 hours** |
+
+The time box bounds scope, not rigor. If the chosen mechanism cannot be made safe within it, preserve the failing evidence, reduce the contract with reviewer approval, and explain the residual gap. Do not hide an unsafe path to make the project appear complete.
+
+## Human proposal gate
+
+Implementation begins only after a human reviewer marks the proposal **approved**, **approved with named conditions**, or **revise**. A disposable feasibility probe is allowed when declared, but none of its code enters the treatment until the proposal is approved and its provenance is clear.
+
+<PlantUML code={`
+@startuml
+top to bottom direction
+rectangle "proposal\nclaim + contract + invariants" as P
+rectangle "human gate\napproved?" as G
+rectangle "revise scope or evidence plan" as R
+rectangle "pin and measure baseline" as B
+rectangle "implement one mechanism" as I
+rectangle "adversarial correctness gate" as C
+rectangle "repair mechanism; retain failure" as F
+rectangle "measure treatment" as M
+rectangle "analyze threats and limits" as T
+rectangle "demo + human defense" as D
+rectangle "reproducible handoff" as H
+P --> G
+G --> R : no / conditional gap
+R --> P : resubmit
+G --> B : approved
+B --> I
+I --> C
+C --> F : invariant or oracle fails
+F --> C : rerun all correctness tests
+C --> M : passes stated contract
+M --> T
+T --> D
+D --> H : reviewer accepts evidence
+D --> F : unresolved mechanism defect
+@enduml
+`} />
+
+The gate rejects proposals that promise “better performance,” “more security,” or “POSIX support” without an observable, adversary, and boundary.
+
+### Proposal packet
+
+Keep the packet short enough to review but precise enough to falsify. It must contain:
+
+1. **Claim.** One sentence naming workload, treatment, baseline, preserved contract, observable, expected direction, mechanism, and limitation.
+2. **Pinned object.** Course-root tag/hash, clean or cumulative start mode, ordered checkpoint patch checksums, resulting start-point identity, license, configuration, compiler, emulator or hardware, host facts, and commands.
+3. **Contract and exclusions.** Inputs, outputs, error behavior, concurrency semantics, persistence point if relevant, and non-goals.
+4. **State model.** State variables, initial state, legal transitions, invariant after each transition, and ownership or authority.
+5. **Failure model.** Relevant crashes, races, exhaustion, malformed inputs, interrupt behavior, and explicitly unhandled faults.
+6. **Mechanism sketch.** A control-path diagram plus a lock/authority/resource-order table. No implementation listing is required.
+7. **Evidence map.** At least four named wrong implementations and a test or observation that should kill each one.
+8. **Evaluation plan.** Baseline, workloads, units, trial order, repetitions, raw-data format, analysis rule, and stop conditions.
+9. **Threat preview.** One plausible construct, internal, external, and conclusion-validity threat.
+10. **Provenance plan.** Primary sources, borrowed interfaces or code, licenses, collaborators, tools, and assistance-disclosure method.
+
+Use this claim grammar when the scope drifts:
+
+```text
+Under [workload W and failure model F], treatment [T] relative to pinned
+baseline [B] preserves [contract/invariants C] and changes [observable M]
+in [direction or bounded relation D] because [mechanism Z]. Evidence [E]
+can reject the claim; the result does not cover [limitation L].
+```
+
+### Worked trace 1: repair an unreviewable scheduler proposal
+
+Initial proposal:
+
+> Make xv6 scheduling fairer and faster.
+
+The terms “fairer” and “faster” have no units; the workload is absent; simultaneous improvement may be impossible; no invariant prevents a lost runnable process; and the claim could not be rejected by a specific result.
+
+A bounded replacement:
+
+```text
+Under a two-CPU QEMU workload containing three CPU-bound processes and one
+process that sleeps for 10 ms after each 1 ms burst, weighted round-robin T
+relative to rev5-rooted start point B preserves single-queue membership and eventual
+dispatch for continuously runnable positive-weight processes. T is expected
+to reduce the interactive process's p99 runnable-to-running delay, while
+reporting aggregate completed bursts and CPU time as possible trade-offs.
+Queue-transition assertions, deterministic wakeup tests, randomized stress,
+and paired trials E can reject the claim. The result does not establish a
+hard latency bound or superiority for other workload mixes.
+```
+
+The revised proposal names a fairness proxy instead of treating fairness as a mood. It permits throughput to fall and makes that trade-off visible rather than defining success as “every metric improved.”
+
+### Application checkpoint: gate two claims
+
+Classify each claim as **approve**, **revise**, or **reject**, and give the smallest repair.
+
+1. “COW fork uses less memory than eager copying.” The plan pins a commit, measures resident frames after a 64-page fork tree, tests write faults and OOM, records raw trials, and excludes page cache effects. It does not define when a shared frame may be freed.
+2. “My driver works on all VirtIO devices.” The implementation targets xv6's emulated block device, tests one QEMU version, and assumes completions arrive in descriptor order although the proposed contract does not guarantee that order.
+
+<details>
+<summary>Reveal the gate decisions</summary>
+
+1. **Revise.** The performance/memory observable is bounded, but correctness lacks a frame-lifetime invariant. Add: the frame reference count includes mapping references and temporary pins; at least one such reference remains while any valid or stale translation, copy, or in-flight fault can access the frame. The allocator may reclaim the frame only when the final reference is dropped after PTE removal and required TLB invalidation complete. Define atomicity/locking for those transitions and add a concurrent exit/write test that can expose premature reuse.
+2. **Reject as written.** Evidence from one emulated device cannot support “all VirtIO devices,” and the completion-order assumption can corrupt descriptor ownership. Repair the claim to the pinned QEMU device/configuration, identify the normative queue contract, key completions by descriptor identity rather than assumed order, and inject reordered completions if the model permits them.
+
+</details>
+
+## Freeze a reproducible baseline
+
+The baseline is experimental data, not a nostalgic description of upstream behavior.
+
+Create `REPRODUCE.md` with values rather than placeholders:
+
+```text
+course-root URL, tag, hash, and license:
+start mode (`clean-rev5` or `cumulative-stack`):
+ordered checkpoint patch IDs/checksums (`none` for clean mode):
+baseline start-point commit or tree checksum:
+treatment commit or patch checksum:
+submodules/dependencies and checksums:
+compiler, assembler, linker, and make versions:
+QEMU or hardware model and version:
+host OS, architecture, CPU allocation, and memory allocation:
+kernel/build configuration:
+build command:
+upstream test command:
+project correctness-test command:
+measurement command:
+trial seeds and randomized execution order:
+raw-data path and schema:
+analysis command and expected output checksums:
+known nondeterminism and unsupported environments:
+```
+
+{/* Source tracking: The reproducibility fields follow the inspectability and repeatability goals in the USENIX ATC artifact-evaluation process, adapted to a compact teaching-kernel project. They do not claim an official USENIX badge. */}
+
+### Baseline procedure
+
+1. Verify that tag `xv6-riscv-rev5` resolves to the exact course-root hash; never substitute a moving branch.
+2. Choose clean mode or reconstruct the cumulative checkpoint stack in course order, recording every patch/checksum and conflict resolution.
+3. Record license and notices before importing or adapting any code.
+4. Build the clean course root, then build the chosen start point with the exact documented commands from fresh trees.
+5. Run the upstream suite on both; run every applicable checkpoint regression on a cumulative start point; preserve complete output plus exit status.
+6. Run the proposed harness against the **unchanged start point**. A harness that fails only because the capstone feature is absent must distinguish “unsupported” from “baseline defect.”
+7. Execute a no-change calibration: baseline A versus an independently rebuilt baseline A. Large apparent differences expose harness or host noise before they are mistaken for a treatment effect.
+8. Save the machine-readable environment, raw data, and checksums in the submission.
+
+The clean mode isolates the capstone mechanism. The cumulative mode tests integration with accepted checkpoint work. Results from the two modes are not interchangeable: an earlier scheduler, VM, driver, or filesystem patch can change both correctness paths and performance. If the capstone applies only to one mode, state that boundary rather than merging results.
+
+### Integration incompatibilities
+
+Any cumulative patch conflict, changed syscall number, altered disk format, different lock order, expanded log bound, test-hook collision, or failed checkpoint regression is an incompatibility requiring a recorded resolution and reviewer review. Preserve the conflicting patch and explain which invariant or measurement it affects. Do not replace a cumulative file with its clean rev5 version or fold earlier changes into the capstone diff.
+
+Rev5 does not already implement most option mechanisms: it has no COW fork, production mapping interface, general device framework, or scalable shared-table abstraction. Those absences define implementation work, not permission to import a later branch. A later upstream fix may be evaluated only as a separately labeled sensitivity comparison.
+
+A container image can help but is not sufficient by itself. Record its source definition and immutable digest; otherwise the opaque image merely packages the missing provenance.
+
+### Transfer checkpoint: the baseline moved
+
+Upstream fixes a wakeup bug after proposal approval. The fix seems relevant to the scheduler project. Should the treatment silently rebase?
+
+<details>
+<summary>Reveal the controlled response</summary>
+
+No. Preserve the rev5-rooted approved baseline so the course comparison remains interpretable. If the fix matters, create a separate sensitivity branch, document the source delta, and rerun both its no-capstone and capstone variants as a new labeled pair. It cannot replace the course root or be mixed with rev5 measurements: source change and proposed mechanism would be confounded.
+
+</details>
+
+## Derive the mechanism from invariants
+
+Do not organize the design memo around files changed. Organize it around state and transitions.
+
+For every mutable object, provide a table with this shape:
+
+| state or resource | owner / protecting mechanism | legal writers | invariant after publication | reclamation or persistence rule |
+| --- | --- | --- | --- | --- |
+| example: run-queue node | one queue lock | enqueue, dequeue, migration | runnable process appears in exactly one queue | remove under source lock before reuse |
+
+Then trace each operation through five questions:
+
+1. What state is read before validation?
+2. Which transition establishes ownership?
+3. At what point can another CPU, interrupt, process, or recovery pass observe it?
+4. Which failure can occur after each visible transition?
+5. What restores or completes the invariant on every exit path?
+
+Assertions should encode cheap local consequences of invariants. They supplement adversarial tests; an assertion that repeats the same mistaken model as the implementation is not an independent oracle.
+
+### Worked trace 2: copy-on-write frame lifetime
+
+Assume parent `P` maps virtual page `v` to frame `F`, and `fork` creates child `C`. Both PTEs become read-only COW mappings. The reference count is protected by `ref_lock`.
+
+Initial post-fork state:
+
+| object | state |
+| --- | --- |
+| `P[v]` | `F`, valid, user, read-only, COW |
+| `C[v]` | `F`, valid, user, read-only, COW |
+| `ref[F]` | 2 mapping references, no temporary pin |
+
+`P` writes `v` while `C` exits on another CPU:
+
+| step | CPU 0: parent fault | CPU 1: child exit | required invariant |
+| ---: | --- | --- | --- |
+| 1 | under page-table/ref synchronization, revalidate `P[v] = F` and acquire a temporary pin; `ref[F]: 2 → 3` | read `C[v] = F` | mapping references plus temporary pins keep every accessible frame non-allocatable |
+| 2 | allocate private frame `G` with one fault-owned temporary reference, `ref[G]=1` | clear `C[v]`; complete the required child TLB invalidation; drop C's mapping reference, `ref[F]: 3 → 2` | P's mapping reference and the fault pin still protect `F`; G cannot return to the allocator during the copy |
+| 3 | copy bytes `F → G` while holding the temporary pin | finish child teardown | an in-flight copy owns a counted reference even if another mapping disappears |
+| 4 | under page-table/ref synchronization, replace `P[v]` with writable `G`, convert G's temporary reference into its mapping reference (`ref[G]` remains 1), and drop P's old mapping reference; `ref[F]: 2 → 1` | — | the F pin substitutes for the removed mapping while a stale P translation may remain; G has exactly one published owner |
+| 5 | complete P's local invalidation and any required remote shootdown; then drop the temporary pin, `ref[F]: 1 → 0`, and return `F` to the allocator | — | transition to zero occurs only after no PTE, stale translation, or in-flight copy can access `F` |
+
+A wrong implementation omits the temporary pin and drops P's mapping reference before copying. Child exit can then reduce `ref[F]` to zero, the allocator fills `F` with another page, and the parent copies unrelated bytes into `G`. A second wrong implementation takes the pin but drops it immediately after PTE replacement, before P's stale TLB entry is invalidated; a stale write can then target allocator-owned `F`. Killing tests pause at each boundary, force reuse with a known poison page, and check both copied bytes and post-shootdown allocator ownership. A loop that merely forks and exits may never schedule either dangerous interleaving.
+
+This trace does not prove a complete COW implementation. It requires the selected rev5-rooted design to define whether invalidation is local or requires remote shootdown, how fault retry and page-table locks interact, and how a temporary pin is represented without holding a global reference lock across the copy.
+
+## Build evidence that can kill the design
+
+Correctness testing precedes performance measurement. If an invariant fails, treatment timing is a measurement of a different or invalid contract.
+
+### Public test contract
+
+Publish tests and oracles for all of these applicable categories:
+
+| category | minimum evidence |
+| --- | --- |
+| upstream regression | unchanged upstream suite, complete output, and exit status |
+| happy path | one smallest valid operation with exact post-state |
+| boundary | zero, one, maximum supported value, wraparound, and just-over-limit behavior |
+| invalid input | malformed identifiers, addresses, lengths, states, or permissions rejected without partial effect |
+| exhaustion | allocator, queue, log, descriptor, or process limit reached at each fallible stage |
+| concurrency | barriers or hooks force a named interleaving; stress is additional evidence, not the only method |
+| failure injection | every documented injection point maps to an allowed recovered state or explicit unsupported outcome |
+| observability | counters conserve events and do not alter the contract they measure |
+| repeatability | fixed seeds reproduce each deterministic failure; randomized seeds are recorded on failure |
+
+Tests must inspect externally visible state or independently reconstructed invariants. Do not call a private helper solely to ask whether that helper believes its own update succeeded.
+
+### Wrong-implementation kill matrix
+
+Name at least four plausible defects specific to the chosen mechanism. The generic examples below are prompts, not a substitute for project-specific analysis.
+
+| defect ID | wrong design | observation that can kill it |
+| --- | --- | --- |
+| W1 | publishes an object before all fields are initialized | reader barrier at publication; validate every field and authority bit |
+| W2 | assumes FIFO completion or wakeup | reorder two distinguishable operations and check identity-based completion |
+| W3 | drops a lifetime reference before the last copy, stale translation, or shootdown completes | pause at the release boundary, force reclamation, and detect poison/reuse or stale access |
+| W4 | updates two persistent locations outside one recovery unit | crash at each write boundary; accept only enumerated recovered states |
+| W5 | retries after partial effect without idempotence | inject duplicate completion or recovery replay; count effect exactly once |
+| W6 | improves a counter by omitting expensive work | compare end-state and independent conserved-event totals, not the reported counter alone |
+| W7 | acquires two resources in caller-dependent order | run opposite operations behind a barrier; detect cycle with bounded timeout and trace |
+| W8 | treats allocation failure as impossible | fail the nth allocation at every site; compare pre/post ownership and leak counts |
+
+For each row selected, record the test identifier, forced schedule or fault, oracle, result on the wrong implementation, result on the treatment, and residual blind spot. A test that passes both versions does not kill that defect.
+
+{/* Source tracking: Systematic fault and concurrency exploration is consistent with the bug-reproduction discipline documented by the official syzkaller project. This capstone does not require syzkaller and does not equate fuzzing coverage with proof. */}
+
+### Hidden tests and human review
+
+The evaluator may withhold exact inputs so a submission cannot specialize to a finite public suite. The **categories** are not hidden:
+
+- contract boundaries and just-over-limit values;
+- resource exhaustion and cleanup;
+- forced races and alternate CPU counts;
+- crash or interrupt cuts at declared publication points;
+- malformed user-controlled state;
+- repeated operation, replay, and teardown;
+- independent invariant reconstruction.
+
+Hidden tests contribute evidence; they do not create secret requirements. A failure outside the published contract triggers clarification, not retroactive scope. A pass does not establish absence of bugs or authorship.
+
+Human review examines the state model, control paths, lock/authority order, error cleanup, source provenance, meaningful test oracles, interpretation of results, and whether the author can derive an unfamiliar trace. The site and harness must not claim to automate that judgment.
+
+### Diagnostic checkpoint: a test that rewards the bug
+
+A scheduler test passes when a new `dispatches` counter is at least 20% lower. The treatment increments the counter only on CPU 0, so it passes on two CPUs. Repair the oracle.
+
+<details>
+<summary>Reveal the independent oracle</summary>
+
+First define the intended claim. If the goal is fewer context switches for the same completed work, independently count dispatch events from a trace point common to baseline and treatment, and verify conservation per CPU. Hold workload completion constant, record CPU count, and compare trace-derived dispatches per completed operation. Also assert that every actual transition to running has exactly one event and that the sum of per-CPU events equals the global total. A treatment-owned counter can remain an observability output, but it cannot be its own sole oracle.
+
+</details>
+
+## Measure after correctness gates pass
+
+Performance evidence must identify what changed, where the expected event reduction occurs, and which cost may have moved elsewhere.
+
+### Prediction before measurement
+
+Write a causal prediction before collecting treatment results:
+
+```text
+mechanism change
+  -> event expected to decrease/increase
+  -> counter or trace that observes that event
+  -> end-to-end metric affected
+  -> competing cost or trade-off
+  -> result that would reject the mechanism explanation
+```
+
+Examples of rejecting evidence include unchanged lock wait despite a claimed lock redesign, lower reported allocations with unchanged allocator traces, or throughput improvement that disappears in no-change calibration.
+
+### Trial protocol
+
+- Preserve every valid trial, including slow and failed runs. Mark invalid trials by a rule written before seeing treatment results.
+- Randomize or counterbalance baseline/treatment order so thermal drift and host load do not always favor one side.
+- Use identical workload generation, build mode, CPU/memory allocation, cache-state policy, and measurement interval.
+- Separate warmup from measured intervals and justify both.
+- Report the raw distribution, not only a mean. Include units, trial count, central tendency, dispersion or interval, and tail metric when latency matters.
+- Use paired comparisons when each treatment run has a matching baseline run under the same block/seed.
+- Repeat across the independent variable the claim names, such as CPU count or queue depth. One favorable point cannot support a scaling claim.
+- Record observation overhead. Tracing can serialize or perturb the path it measures.
+
+{/* Source tracking: The insistence on independent repetitions, uncertainty, effect size, and explicit experimental dimensions follows Kalibera and Jones, “Rigorous Benchmarking in Reasonable Time,” without copying its experimental prescriptions wholesale into a single fixed recipe. */}
+
+### Illustrative result trace: throughput rises, tail latency fails
+
+The numbers below are a **modeled review example**, not measurements from xv6 or any real scheduler. Each row pairs equal workload seeds; throughput is completed bursts per second.
+
+| pair | baseline throughput | treatment throughput | baseline p99 delay (ms) | treatment p99 delay (ms) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 101 | 118 | 4.1 | 10.9 |
+| 2 | 99 | 117 | 4.3 | 11.4 |
+| 3 | 100 | 120 | 4.2 | 11.8 |
+| 4 | 102 | 119 | 4.0 | 12.1 |
+| 5 | 98 | 45 | 4.5 | 97.0 |
+| 6 | 100 | 118 | 4.2 | 11.6 |
+| 7 | 100 | 119 | 4.1 | 11.9 |
+
+The median throughput changes from 100 to 118 bursts/s, an 18% increase in this modeled sample. That does not justify “the scheduler is 18% faster”:
+
+- every treatment p99 delay is worse;
+- pair 5 is a severe collapse and cannot be discarded merely because it is inconvenient;
+- seven pairs provide weak information about rare stalls;
+- a burst/s result does not establish CPU efficiency, fairness, or behavior under another mix.
+
+The next action is causal diagnosis of pair 5 using preserved seed, runnable-queue trace, lock wait, and host metadata—not editing the chart. A defensible claim might eventually be “higher median throughput for this fixed CPU-bound-heavy workload, with substantially worse interactive tail latency,” if repeated evidence supports it. The proposal's latency goal would still be rejected.
+
+### Application checkpoint: separate model, observation, and claim
+
+Classify each statement.
+
+1. “Splitting one lock into four shards permits at most four independent critical sections in the simplified lock model.”
+2. “Across 30 recorded trials at eight virtual CPUs, the treatment median was 1.31 times the baseline median.”
+3. “Sharding makes the kernel scalable.”
+
+<details>
+<summary>Reveal the classifications</summary>
+
+1. **Model result.** It follows from a simplified structural model and omits key skew, cache, and remaining-lock costs.
+2. **Measurement statement**, provided the raw trials, units, pairing, and configurations are available. It reports the sample without generalizing beyond it.
+3. **Unsupported broad claim.** “Scalable” needs an independent variable, range, workload, metric, correctness contract, and comparison. Repair it by naming the tested CPU range and key distribution, reporting the observed curve, and limiting the conclusion to that configuration.
+
+</details>
+
+## Analyze threats to validity
+
+Do not append a ceremonial “more testing is needed.” Connect each threat to a claim and mitigation.
+
+| threat class | capstone question | example | mitigation or bounded interpretation |
+| --- | --- | --- | --- |
+| **construct** | does the observable represent the concept named? | dispatch count is called fairness | report wait distribution or defined fairness index; narrow the claim |
+| **internal** | could another difference cause the result? | treatment uses a different compiler or benchmark seed | freeze treatment boundary; pair/randomize trials; no-change calibration |
+| **external** | where may the result fail to transfer? | one QEMU model stands for physical multicore hardware | state emulation boundary; test an approved second setting or restrict conclusion |
+| **conclusion** | is the sample/analysis strong enough for the relation? | median reported from three unstable runs | preserve raw data, increase independent trials, report uncertainty and instability |
+
+Also audit instrumentation validity: event loss, counter overflow, timestamp source, tracing perturbation, sampling period, CPU migration, and whether the observer shares the lock it is diagnosing.
+
+### Counterexample: a clean graph with no valid comparison
+
+Suppose the treatment benchmark is run after the filesystem cache is warmed, while the baseline begins after a fresh image boot. Thirty perfectly formatted repetitions can yield narrow intervals around a confounded difference. Repetition reduces random uncertainty; it does not remove systematic bias. The correct response is to repair the protocol and rerun both sides, not to attach a more sophisticated statistical test.
+
+### Transfer checkpoint: negative result
+
+The mechanism preserves all tested invariants, but paired trials show no meaningful throughput change and lock traces show that contention moved to the allocator. Is the project a failure?
+
+<details>
+<summary>Reveal the engineering value</summary>
+
+The performance hypothesis is rejected, but the project can still be rigorous. Preserve the result; show that the intended lock wait fell while allocator wait rose; bound the workloads and instrumentation; explain the causal bottleneck migration; and avoid claiming improvement. Correct mechanism work plus a reproducible negative evaluation and credible diagnosis can score strongly. Fabricating a win or silently changing the metric cannot.
+
+</details>
+
+## Design memo
+
+Submit a concise memo whose structure follows the argument rather than the chronology of coding:
+
+1. **Claim and scope:** approved claim, option, contract, exclusions, and reviewer conditions.
+2. **Baseline and provenance:** immutable source/configuration, license, dependencies, assistance, and treatment boundary.
+3. **State and invariants:** state variables, legal transitions, ownership, authority, lifetime, persistence, and error states.
+4. **Mechanism:** control path, synchronization or transaction order, resource bounds, and alternatives rejected.
+5. **Failure analysis:** one concrete race/crash/exhaustion trace, cleanup path, and residual unsupported fault.
+6. **Tests:** independent oracles, public categories, wrong-implementation kill matrix, hidden-category expectations, and coverage limits.
+7. **Evaluation:** pre-registered prediction, workloads, raw-data schema, analysis, observed distributions, and modeled-versus-measured labels.
+8. **Threats and interpretation:** construct/internal/external/conclusion threats, mitigations, negative evidence, and bounded conclusion.
+9. **Handoff:** build/test/measurement commands, patch organization, known issues, and safe extension points.
+
+Include diagrams or state tables where they replace ambiguous prose. A screenshot of passing output without the command, exit status, and artifact identity is not useful evidence.
+
+## Demo and defense
+
+The demo is a controlled falsification attempt, not a feature tour. In 12 minutes:
+
+1. identify the exact baseline and treatment;
+2. state the contract and one non-goal;
+3. draw or trace the hardest state transition;
+4. run one ordinary case and one adversarial case;
+5. inject one fault or forced interleaving and explain the oracle before revealing the result;
+6. show raw baseline/treatment evidence and one threat that limits interpretation;
+7. reproduce from a fresh checkout or clean build state.
+
+During the defense, the reviewer may change one assumption: CPU count, queue order, allocation outcome, crash cut, authority, or workload skew. The author must reason from invariants rather than recall a memorized transcript.
+
+Representative defense prompt:
+
+> Your queue test assumes the interrupt cannot arrive between publishing the descriptor and recording the request as in flight. Move the interrupt to that boundary. Which state can the handler observe, which invariant applies, and what code or contract change is required?
+
+A strong answer enumerates the concrete states, identifies the publication edge and synchronization, predicts the observable failure, and either derives why the state is safe or acknowledges a defect and proposes a discriminating test. Confidence without a trace earns no credit.
+
+## Reproducible handoff
+
+The final archive or repository state must contain:
+
+```text
+README.md                 project purpose, contract, exclusions
+REPRODUCE.md              pinned environment and exact commands
+DESIGN.md or report.pdf   design memo and diagrams
+PATCHES/ or named commits reviewable treatment boundary
+tests/                    public tests, fixtures, fault hooks, oracles
+results/raw/              immutable machine-readable trial outputs
+results/analysis/         scripts/notebook plus generated tables
+results/manifest.json     checksums, seeds, configurations, status
+LICENSES/ or notices      upstream and imported-code obligations
+KNOWN_ISSUES.md           residual defects, unsupported states, next probes
+ASSISTANCE.md             people, tools, models, sources, and adapted material
+```
+
+Do not include generated binaries as the only way to reproduce a result. Do not require credentials, an undisclosed local path, or a reviewer-owned script. A fresh evaluator should be able to determine within ten minutes how to build and start the public tests, even if a full measurement campaign takes longer.
+
+The handoff must explain where a future engineer can safely add a state, where lock or transaction order is defined, and which tests must change with the contract. “Read the code” is not a maintenance boundary.
+
+### Handoff checkpoint: checksum mismatch
+
+The analysis script produces the published table, but one raw file's checksum differs from `manifest.json`. May the table remain in the final memo?
+
+<details>
+<summary>Reveal the disposition</summary>
+
+Not as verified evidence. Determine whether the raw file, manifest, or table came from a different run; preserve all versions with provenance; regenerate the table only from a clearly identified immutable dataset; and update the manifest through the documented process. If provenance cannot be recovered, label the result unverifiable and exclude it from the supported claim. A visually identical table does not repair a broken evidence chain.
+
+</details>
+
+## Integrity and assistance policy
+
+Authorship means being able to explain and defend every submitted mechanism, test oracle, result, and source decision. It does not mean working without tools or feedback.
+
+Allowed when disclosed:
+
+- reading and citing primary documentation and licensed source;
+- discussing mechanisms and experimental design without exchanging project patches;
+- using debuggers, tracers, static analysis, fuzzers, code completion, and generative systems;
+- adapting licensed code when the option permits it, attribution is explicit, and the author can defend the adaptation;
+- receiving review comments and recording which changes they caused.
+
+Not allowed:
+
+- submitting another person's or a private solution's patch, tests, memo, or results as original work;
+- asking for, reconstructing, probing, or special-casing hidden-test inputs;
+- fabricating, deleting, or relabeling trials to improve a conclusion;
+- concealing assistance, copied interfaces, incompatible licenses, or known failing states;
+- using generated explanations as a substitute for the live defense.
+
+`ASSISTANCE.md` records source/tool, purpose, affected artifact, what was accepted or rejected, and how it was verified. A long undifferentiated tool transcript is not a provenance record. The reviewer may ask the author to rederive any assisted portion under a changed assumption.
+
+Suspected integrity violations require human review and evidence. Token overlap, style, an automated detector, or hidden-test failure alone is not a finding. Conversely, passing every automated check cannot certify authorship.
+
+## Transparent assessment rubric
+
+The reviewer scores evidence, not patch size, output resemblance, or presentation polish alone.
+
+| dimension | points | full-credit evidence |
+| --- | ---: | --- |
+| baseline, scope, and provenance | 8 | immutable baseline; licensed treatment boundary; approved, bounded claim and exclusions |
+| contract, state model, and invariants | 15 | precise transitions, ownership/lifetime/persistence rules, and error states that cover the implementation |
+| mechanism correctness | 20 | control paths preserve stated invariants across normal, boundary, and cleanup paths; no known contract-breaking defect concealed |
+| adversarial tests and oracles | 15 | deterministic races/faults/exhaustion plus public regression tests and a credible wrong-implementation kill matrix |
+| design quality | 12 | synchronization/transaction/authority order is justified; alternatives and resource bounds are explicit |
+| reproducible evaluation | 12 | prediction, calibrated baseline, raw paired or randomized trials, units, uncertainty, and repeatable analysis |
+| failure analysis and validity | 7 | minimized failure trace, negative evidence, four threat classes, and bounded interpretation |
+| handoff quality | 6 | fresh-build path, organized patch, tests/data/checksums, known issues, and extension guidance |
+| memo, demo, and defense | 5 | concise causal argument; adversarial demo; accurate reasoning under a changed assumption |
+| **total** | **100** | |
+
+The following are noncompensable until repaired or explicitly rescoped by the human reviewer:
+
+- the chosen start point does not descend reproducibly from rev5, or the capstone treatment does not build as a separable change from it;
+- the approved start-point regression suite or contract fails without a documented, human-approved scope change;
+- a known test exposes corruption, authority escape, use-after-free, deadlock, or recovery violation within scope;
+- claimed measurements cannot be tied to raw data and configuration;
+- required license/provenance is missing;
+- the author cannot explain a central submitted control path or oracle;
+- the submission contains fabricated evidence or unattributed work.
+
+A correct but negative performance result can earn full evaluation credit. A fast implementation that violates its contract cannot trade benchmark points for correctness.
+
+### Synthesis defense
+
+Prepare a two-minute answer to this changed requirement:
+
+> The accepted design was evaluated on two CPUs with uniform keys. Deployment now uses eight CPUs and 90% of operations target one key. Which part of the claim survives, what new bottleneck or race becomes plausible, and what evidence would you gather before recommending deployment?
+
+<details>
+<summary>Reveal the evaluation standard</summary>
+
+A complete answer separates correctness from performance. Contract and invariants may survive if they are independent of CPU count and skew, but that must be traced through all shared state; uniform-key performance does not transfer. The hot key can collapse sharding onto one lock/cache line, increase queueing, expose lifetime races at higher concurrency, or move contention to allocation/reclamation. Gather an eight-CPU correctness stress run with forced create/delete interleavings, per-shard operation and wait distributions, cache/coherence indicators available in the environment, end-to-end latency/throughput across a skew sweep, no-change calibration, and raw paired trials. Recommend deployment only within the resulting evidence boundary.
+
+</details>
+
+## Connections and deliberate boundaries
+
+The chosen change must connect at least three mechanism layers without expanding into three projects:
+
+| local mechanism | connection to trace explicitly |
+| --- | --- |
+| syscall or fault boundary | validation, privilege transition, user-visible error, and restart behavior |
+| synchronization | publication edge, lock/interrupt order, sleep/wakeup, lifetime, and progress |
+| virtual memory | translation, permission, frame ownership, TLB state, copy/pin behavior |
+| device path | descriptor ownership, interrupt ordering, DMA/model assumptions, and completion identity |
+| persistence | transaction boundary, write ordering, crash cut, replay, and recovered invariant |
+| protection | principal, authority conveyed by handle, confused-deputy risk, and revocation/lifetime |
+| observability | event definition, collection overhead, conservation, and causal link to metric |
+
+Do not claim production readiness. xv6 deliberately omits many defenses, device behaviors, storage guarantees, and scalability mechanisms. Formal verification, real-time schedulability, persistent memory, NUMA, speculative side channels, full POSIX compatibility, and deployment security require separate methods. State those boundaries where they affect the claim rather than placing them in a generic disclaimer.
+
+## References & Further Reading
+
+- Russ Cox, Frans Kaashoek, Robert Morris, et al., [xv6: a simple, Unix-like teaching operating system](https://pdos.csail.mit.edu/6.1810/2025/xv6.html), MIT PDOS. Use the book with the immutable course source and license below.
+- MIT PDOS, [xv6-riscv-rev5 immutable source tree](https://github.com/mit-pdos/xv6-riscv/tree/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa) and [license](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/LICENSE). Commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa` is the course root; cumulative checkpoints and the capstone remain separately identified layers above it.
+- USENIX, [2025 USENIX Annual Technical Conference: Call for Artifacts](https://www.usenix.org/conference/atc25/call-for-artifacts). Its availability, functionality, and reproducibility distinctions motivate the artifact questions; this course does not award USENIX badges.
+- Tomas Kalibera and Richard Jones, [Rigorous Benchmarking in Reasonable Time](https://doi.org/10.1145/2480362.2480704), ISMM 2013. Use it to reason about experimental dimensions, repetitions, effect uncertainty, and analysis—not as a ritual that rescues a confounded workload.
+- Google, [syzkaller: kernel fuzzer](https://github.com/google/syzkaller) and its linked official documentation. Its crash-reproduction workflow is useful background for preserving seeds, programs, logs, and minimized failures; use only if it fits the project's kernel and scope.
+
+These sources define baselines and methods, not a capstone solution. Cite the exact primary source beside any imported interface, code fragment, hardware contract, filesystem guarantee, or measurement method that materially shapes the submitted design.
