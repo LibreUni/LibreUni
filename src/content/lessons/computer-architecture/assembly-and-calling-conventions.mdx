@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import PlantUML from '../../../components/PlantUML.astro';
 
-<Quiz client:load title="Trace the call"
-  question="What does a calling convention make explicit?"
-  options={["Only syntax rules that the source language applies to procedure declarations", "Which registers, stack locations, and return rules form the procedure interface", "Which cache lines the processor evicts while a nested call executes", "Which operating-system packages must exist before linking the executable"]}
-  correctIndex={1}
-  explanation="A calling convention is a binary interface contract. Without it, separately compiled code cannot agree on arguments, preserved state, return values, or stack ownership."
-/>
-
 Assembly language exposes the contract between source-level procedures and the instruction-set architecture. A compiler can hide register names and stack offsets in a high-level language, but it cannot avoid choosing where arguments live, how a return address survives a call, which registers a callee must preserve, or how an aggregate is laid out. These choices form an application binary interface (ABI). An ABI is not just a compiler preference: separately compiled modules, debuggers, profilers, operating-system signal handlers, foreign-function interfaces, and hand-written assembly all depend on it.
 
 ## From source to machine state
@@ -36,6 +29,13 @@ Assembly language exposes the contract between source-level procedures and the i
 Consider a function $f(x,y)=x+2y$. At the source level, parameters are abstract values and the result is an abstract integer. At the assembly level, an ABI may place `x` and `y` in argument registers, compute `2y` with a shift or add, add `x`, place the result in a return register, and jump back through a link register. The function’s correctness has two parts: its arithmetic result is correct, and it preserves every part of the calling convention it does not own.
 
 The compiler’s liveness analysis identifies values needed after each instruction. A register can be reused only when its old value is dead or has been saved. A callee-saved register is an interprocedural liveness contract: the caller may keep a value there across a call, so the callee must preserve it. A caller-saved register is scratch space: the caller must save it if it remains live across a call. Neither classification makes a register intrinsically safe or unsafe; it specifies responsibility.
+
+<Quiz client:load title="Trace the call"
+  question="What does a calling convention make explicit?"
+  options={["Only syntax rules that the source language applies to procedure declarations", "Which registers, stack locations, and return rules form the procedure interface", "Which cache lines the processor evicts while a nested call executes", "Which operating-system packages must exist before linking the executable"]}
+  correctIndex={1}
+  explanation="A calling convention is a binary interface contract. Without it, separately compiled code cannot agree on arguments, preserved state, return values, or stack ownership."
+/>
 
 ## Calls, returns, and link state
 
@@ -109,6 +109,21 @@ Stack frames are not automatically safe storage. A pointer to a local that escap
 
 ABIs classify scalar arguments, floating-point arguments, vectors, and aggregates. Small values often travel in registers; larger or variably sized values may use memory. A structure return may be implemented by a hidden pointer argument to caller-provided storage, shifting the visible argument positions. Variadic functions need metadata or a register-save area so the callee can retrieve arguments beyond those named in the prototype.
 
+**Worked example: placing a mixed argument list (RV64 psABI).** Consider
+
+```c
+struct pair { long x, y; };            /* 16 bytes = 2 x XLEN */
+long sum4(long a, long b, long c, struct pair p, long d);
+```
+
+`a`, `b`, and `c` occupy `a0`–`a2`. The 16-byte `p` occupies the register pair `a3`/`a4`, with the lower-addressed eight bytes in `a3`; `d` then occupies `a5`. The placement is not left to the compiler's preference: the psABI fixes it so separately compiled callers and callees agree. Three consequences follow.
+
+* If `p` were 24 bytes, it would exceed $2\times\mathrm{XLEN}$ and be passed by reference: the visible argument list would contain the address of `p` in `a3`, and `d` would move to `a4`.
+* If only one argument register remained for a 16-byte aggregate, the first eight bytes would go in that register and the second eight bytes on the stack; the psABI does not pad the aggregate to force a register pair.
+* A returned `struct pair` uses `a0`/`a1`. A larger return aggregate is returned by reference: the caller allocates storage and passes its address as an implicit first argument, shifting the visible arguments by one.
+
+Narrow scalars are widened by the same agreement. An integer argument narrower than XLEN is widened according to its signedness to 32 bits and then sign-extended to XLEN. Consequently a 32-bit `unsigned int` with bit 31 set arrives with the upper 32 bits set, not zeroed; a callee that reads the full register as a zero-extended 64-bit value is wrong. A hand-written callee that reads only the low 32 bits is immune to the upper bits.
+
 The caller and callee must agree on signedness and width. Passing a 32-bit value in a 64-bit register may require sign extension or zero extension. A callee that assumes the wrong extension can interpret `0xFFFFFFFF` as -1 or 4,294,967,295. The same concern applies to Boolean values, pointers, and enum representations. ABI documentation is therefore part of the type system at a module boundary.
 
 ## Recursion and reentrancy
@@ -123,6 +138,36 @@ Reentrancy adds interruption. An interrupt or signal handler may run while a pro
 
 A tail call occurs when a function’s final action is to call another function and return its result without additional work. The current frame can be reused if arguments are placed according to the callee’s convention and the caller’s continuation is no longer needed. This turns recursion into iteration for tail-recursive functions and prevents unbounded stack growth.
 
+**Worked example: tail recursion versus a pending multiplication.** The natural factorial, for $n \ge 0$,
+
+```c
+long fact(long n) { return n <= 1 ? 1 : n * fact(n - 1); }
+```
+
+is not a tail call: after `fact(n - 1)` returns, the caller must still multiply by `n`, so every level needs a live frame holding `n` and `ra`. Rewriting with an accumulator,
+
+```c
+long fact_acc(long n, long acc) {
+    return n <= 1 ? acc : fact_acc(n - 1, n * acc);
+}
+```
+
+makes the recursive call the final action. Every level has the same argument layout, so the implementation can place the new `n` and `acc` in `a0`/`a1` and jump to the entry point without writing a new link:
+
+```asm
+fact_acc:
+    li   t0, 1
+    ble  a0, t0, .Ldone
+    mul  a1, a0, a1        # acc = n * acc
+    addi a0, a0, -1
+    j    fact_acc          # tail call: ra still points to fact_acc's caller
+.Ldone:
+    mv   a0, a1
+    ret
+```
+
+For `fact_acc(4, 1)`, the trace is `(4,1) -> (3,4) -> (2,12) -> (1,24)`, returning 24 with one active frame rather than four. The reuse is valid only because the callee’s argument layout matches the current one, every callee-saved register has already been restored, and no cleanup or unwind action remains. If the implementation emitted `call fact_acc` instead of `j fact_acc`, it would overwrite `ra`; without saving the caller's link, the eventual return would be incorrect. An ordinary correct recursive call must preserve that link, typically using a separate frame per invocation.
+
 Tail-call eligibility is constrained by ABI details: outgoing arguments may require more space, callee-saved registers must already be restored, and a frame address observable by debugging or exception machinery may prevent reuse. A compiler cannot apply tail-call elimination merely because the source expression looks final; it must preserve unwind, security, and calling-convention semantics.
 
 ## Spills and register allocation
@@ -134,6 +179,25 @@ The register allocator colors an interference graph or uses a related strategy t
 ## Debugging and unwinding
 
 A debugger needs to reconstruct source-level frames from machine state. Frame pointers make this straightforward but consume a register; frame-pointer omission relies on compact unwind metadata describing how to recover the previous stack pointer and return address. Exceptions and signals need equivalent metadata to walk through optimized code, inlined functions, and partially completed prologues.
+
+**Worked example: reconstructing one caller frame.** Suppose the current function uses `s0` as a frame pointer that points to the caller’s stack pointer, and it has stored `ra` at `s0 - 8` and the caller’s `s0` at `s0 - 16`. With `s0 = 0x8000_0020`, the saved `ra` is at `0x8000_0018` and the saved `s0` at `0x8000_0010`. If memory contains `ra = 0x4000_01a4` and saved `s0 = 0x8000_0040`, the debugger reconstructs the caller as `PC = 0x4000_01a4`, `sp = 0x8000_0020`, and `s0 = 0x8000_0040`; the next frame’s saved `ra` is then at `0x8000_0038`. The chain is a linked list through memory, not a language-level call stack.
+
+Compilers that omit the frame pointer encode the same facts as unwind rules tied to PC ranges. A minimal CFI fragment for a 32-byte frame is
+
+```asm
+fib:
+    .cfi_startproc
+    addi sp, sp, -32
+    .cfi_def_cfa_offset 32
+    sd   ra, 24(sp)
+    .cfi_offset ra, -8
+    sd   s0, 16(sp)
+    .cfi_offset s0, -16
+    ...
+    .cfi_endproc
+```
+
+The CFA is the caller’s `sp`, `sp + 32` after allocation. `.cfi_offset ra, -8` means the saved `ra` lives at `CFA - 8`, which is `24(sp)`; `.cfi_offset s0, -16` means `16(sp)`. Unwinding from any PC uses the row that covers that PC, so a prologue that adjusts `sp` before updating the CFI row becomes unwalkable in that interval. This is why hand-written assembly that omits `.cfi_*` directives can return correctly yet still break exception propagation or a profiler’s backtrace.
 
 A correct ABI implementation therefore has a temporal prologue contract: at each instruction boundary where an asynchronous event may occur, the unwind rule must describe where saved registers and the return address reside. Hand-written assembly that omits unwind metadata can break exception propagation even if ordinary calls return correctly.
 
@@ -159,12 +223,15 @@ Under the standard RISC-V standard calling convention (psABI):
 * `s0` is a callee-saved register preserved across calls.
 * The stack pointer `sp` must remain 16-byte aligned at all call boundaries.
 
+The function must preserve three values across calls: `ra`, the caller’s original `s0`, and the result of `fib(n - 1)` while `fib(n - 2)` runs; it also keeps `n` in the callee-saved `s0`. Those values need distinct storage. The saved `s0` and the spill cannot share a slot: storing the spilled result into the slot that holds saved `s0` silently replaces the caller’s `s0` with a Fibonacci value, and the epilogue then restores the wrong register.
+
 **Step 1: Frame Allocation & Register Preservation (Prologue)**
 ```asm
 fib:
-    addi sp, sp, -16      # Allocate 16-byte frame (maintains 16-byte alignment)
-    sd   ra, 8(sp)        # Save return address link
-    sd   s0, 0(sp)        # Save callee-preserved register s0
+    addi sp, sp, -32      # 32 bytes: two saved registers + one spill slot, 16-byte aligned
+    sd   ra, 24(sp)       # Save return address link
+    sd   s0, 16(sp)       # Save callee-preserved register s0
+                          # 0(sp) and 8(sp) remain available for spills
 ```
 
 **Step 2: Base Case Test & Recursive Call Preparation**
@@ -178,12 +245,11 @@ fib:
 
 **Step 3: State Reconstruction Across Calls**
 ```asm
-    # a0 contains fib(n - 1). Preserve it while computing fib(n - 2):
-    mv   t1, a0           # Save fib(n - 1) in temporary t1
+    # a0 contains fib(n - 1). Spill it to its own slot while computing fib(n - 2):
+    sd   a0, 0(sp)        # Spill fib(n - 1) to the dedicated slot at 0(sp)
     addi a0, s0, -2       # a0 = n - 2 (using preserved s0)
-    sd   t1, 0(sp)        # Spill fib(n - 1) to stack
     call fib              # Recursive call: fib(n - 2), returns result in a0
-    ld   t1, 0(sp)        # Reload fib(n - 1) from stack
+    ld   t1, 0(sp)        # Reload fib(n - 1) from its slot
     add  a0, a0, t1       # Return value = fib(n - 2) + fib(n - 1)
     j    .Lexit
 ```
@@ -193,11 +259,13 @@ fib:
 .Lbase:
     # a0 already holds n (0 or 1)
 .Lexit:
-    ld   s0, 0(sp)        # Restore caller's original s0
-    ld   ra, 8(sp)        # Restore caller's original return address
-    addi sp, sp, 16       # Deallocate stack frame
+    ld   s0, 16(sp)       # Restore caller's original s0 from its own slot
+    ld   ra, 24(sp)       # Restore caller's original return address
+    addi sp, sp, 32       # Deallocate stack frame
     ret                   # Return to caller via jr ra
 ```
+
+The 32-byte size is not arbitrary: after the 16-byte-aligned `sp` is decremented by 32, it remains 16-byte aligned at each `call`. Slots `0(sp)` and `8(sp)` are free spill space; the saved `s0` at `16(sp)` and saved `ra` at `24(sp)` are never reused for temporaries. A 16-byte frame with the spill written to `0(sp)` overwrites saved `s0`. The function may then return the correct Fibonacci number while corrupting its caller’s callee-saved register, a calling-convention violation that appears only after the caller uses `s0`.
 
 ---
 
@@ -212,7 +280,7 @@ void vulnerable_read() {
 ```
 
 1. **Stack Memory Layout**:
-   On a 64-bit architecture, the compiler allocates 16 bytes for `buf` at `0(sp)`, followed immediately by saved callee registers at `16(sp)` and the saved return address `ra` at `24(sp)`.
+   For one common 64-bit frame layout, the compiler allocates 16 bytes for `buf` at `0(sp)`, then one saved callee register at `16(sp)`, then the saved return address `ra` at `24(sp)`. The exact offsets are ABI- and compiler-dependent; the invariant that matters is that `ra` is stored above the buffer in this layout, so a write past the buffer can reach it.
 
 2. **The Buffer Overflow Attack**:
    * If an attacker supplies 24 bytes of payload, the buffer fills `0..15` and clobbers saved registers `16..23`.
@@ -276,4 +344,5 @@ void vulnerable_read() {
 * Patterson, D. A., & Waterman, A. (2017). *The RISC-V Reader: An Open Architecture Atlas*, Chapter 3 ("Assembly Language and Calling Conventions"). Strawberry Canyon LLC.
 * Bryant, R. E., & O'Hallaron, D. R. (2016). *Computer Systems: A Programmer's Perspective* (3rd ed.), Chapter 3 ("Machine-Level Representation of Programs"). Pearson.
 * RISC-V International (2023). *RISC-V ABIs Specification (psABI)*. GitHub Repository: `riscv-non-isa/riscv-elf-psabi-doc`.
+* DWARF Standards Committee (2017). *DWARF Debugging Information Format, Version 5*. https://dwarfstd.org/doc/DWARF5.pdf.
 

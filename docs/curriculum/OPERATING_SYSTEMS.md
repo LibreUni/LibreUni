@@ -43,7 +43,7 @@ LibreUni lab briefs are original. They may point to upstream code and documentat
 
 ## Workload and sequence
 
-The planned workload is 11,370 minutes (189.5 hours), represented as 7.5 ECTS in the catalog. `estimatedMinutes` includes reading, prediction, simulation, trace work, implementation, tests, design notes, and reflection—not page-scroll time.
+The planned workload is 11,370 minutes (189.5 hours). Metadata records a provisional workload-equivalence estimate of 7.5 ECTS; LibreUni awards no academic credit. `estimatedMinutes` includes reading, prediction, simulation, trace work, implementation, tests, design notes, and reflection—not page-scroll time.
 
 | Module | Lesson | Minutes | Primary evidence produced |
 | --- | --- | ---: | --- |

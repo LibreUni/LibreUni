@@ -35,10 +35,118 @@ COMPONENT_PROPS = {
     "Quiz": ["question", "options", "correctIndex", "explanation", "questions", "title", "client:load"],
     "CodeRunner": ["code", "output", "language", "title", "client:load"],
     "CodeExercise": ["code", "answers", "explanation", "title", "client:load"],
-    "CaseStudy": ["scenario", "question", "options", "correctIndex", "explanation", "title", "client:load"]
+    "CaseStudy": ["scenario", "question", "options", "correctIndex", "explanation", "title", "client:load"],
+    "SqlRunner": ["schema", "initialQuery", "title", "description", "client:load"]
 }
 
 URL_RE = re.compile(r"https?://[^\s)\]]+", re.IGNORECASE)
+
+# Structural sections frame the lesson; they are not teaching units and must not
+# be asked to supply an example or a closing interaction. Treating them as
+# ordinary sections produced hundreds of false warnings across the curriculum.
+STRUCTURAL_SECTION_RE = re.compile(
+    r"^(?:"
+    r"references?(?:\s*(?:&|and)\s*(?:further reading|sources?))?|"
+    r"sources?|bibliography|further reading|"
+    r"(?:course\s+)?(?:scope\s+)?boundar(?:y|ies).*|"
+    r"deliberate (?:omissions?|boundar(?:y|ies)).*|"
+    r"omissions?(?:\s*&.*)?|"
+    r"connections?(?:\s+and\s+.*)?|limits? and connections?|"
+    r"summary|key takeaways?|assessment(?: standard)?|grading criteria|"
+    r"(?:lab\s+)?tasks?|proof obligations?|"
+    r"required (?:submission|invariant checker)|"
+    r"deliverables?(?:\s+.*)?"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# A section can teach through a diagram, formal statement, worked trace, table,
+# or disclosure rather than a fenced code block. Count those artifacts as
+# evidence before reporting a missing example.
+EXAMPLE_SIGNAL_RE = re.compile(
+    r"```[a-zA-Z0-9+-]+"
+    r"|<(?:MathStatement|MathProof|PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|ExerciseSolution|details)\b"
+    r"|\b(?:example|case|demonstrat|scenario|worked|trace|deriv|proof|counterexample)\b"
+    r"|^\|.+\|\s*$"
+    r"|^\$\$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+EXERCISE_SIGNAL_RE = re.compile(
+    r"<(?:Quiz|CodeExercise|CodeRunner|CaseStudy|ExerciseSolution|details)\b"
+    r"|\b(?:exercise|practice|try|quiz|lab|checkpoint|prediction|synthesis)\b",
+    re.IGNORECASE,
+)
+
+
+def section_is_structural(title):
+    """Return True when a heading is framing rather than a teaching unit."""
+    return bool(STRUCTURAL_SECTION_RE.match(title.strip()))
+
+
+def component_prop_names(props_block):
+    """Return top-level JSX attribute names, ignoring expression contents.
+
+    Naive regex stripping misreads identifiers inside `options={[...]}` as
+    props. Track brace/bracket/parenthesis depth and string literals instead.
+    """
+    names = []
+    depth = 0
+    quote = None
+    index = 0
+    while index < len(props_block):
+        char = props_block[index]
+        if quote:
+            if char == "\\" and index + 1 < len(props_block):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "\"'`":
+            quote = char
+            index += 1
+            continue
+        if char in "{[(":
+            depth += 1
+            index += 1
+            continue
+        if char in "}])":
+            depth = max(0, depth - 1)
+            index += 1
+            continue
+        if depth == 0 and (char.isalpha() or char == ":"):
+            match = re.match(r"[A-Za-z][A-Za-z0-9:_]*", props_block[index:])
+            if match:
+                name = match.group(0)
+                after = props_block[index + len(name):].lstrip()
+                if after.startswith("=") or name == "client:load":
+                    names.append(name)
+                index += len(name)
+                continue
+        index += 1
+    return names
+
+
+def structure_warnings(body):
+    """Report teaching sections that lack a visible artifact or closing practice."""
+    warnings = []
+    h2_sections = re.split(r"^##\s+", body, flags=re.MULTILINE)
+    if len(h2_sections) <= 1:
+        return ["No ## subheadings found; lesson should be structured with subheadings."]
+
+    for idx, sec in enumerate(h2_sections[1:], start=1):
+        sec_title = sec.split("\n", 1)[0].strip()
+        structural = section_is_structural(sec_title)
+        has_example = bool(EXAMPLE_SIGNAL_RE.search(sec))
+        has_exercise = bool(EXERCISE_SIGNAL_RE.search(sec))
+
+        if not has_example and not structural:
+            warnings.append(f"Section '{sec_title}' has no clear code block or example signal.")
+        if not has_exercise and not structural and idx == len(h2_sections) - 1:
+            warnings.append("Lesson does not conclude with an interactive/exercise component.")
+    return warnings
 
 def split_frontmatter(content):
     match = FRONTMATTER_RE.match(content)
@@ -107,25 +215,10 @@ def verify_lesson(path, check_links=False):
         errors.append(f"Contains banned filler ({label}): '{phrase}'")
 
     # 3. Pedagogical Structure: Theory -> Example -> Exercise
-    h2_sections = re.split(r"^##\s+", body, flags=re.MULTILINE)
-    # The first element is pre-first-H2 content (introduction/theory)
-    if len(h2_sections) > 1:
-        for idx, sec in enumerate(h2_sections[1:], start=1):
-            sec_title = sec.split("\n", 1)[0].strip()
-            # Check if each H2 section has an example (either a code block or example keywords)
-            has_example = bool(re.search(r"```[a-zA-Z0-9+-]+", sec) or re.search(r"\b(example|case|demonstrat|scenario)\b", sec, re.IGNORECASE))
-            has_exercise = bool(re.search(r"<Quiz|<CodeExercise|<CodeRunner|<CaseStudy", sec) or re.search(r"\b(exercise|practice|try|quiz|lab)\b", sec, re.IGNORECASE))
-            
-            if not has_example:
-                warnings.append(f"Section '{sec_title}' has no clear code block or example signal.")
-            if not has_exercise and idx == len(h2_sections) - 1:
-                # Last section should ideally lead to practice
-                warnings.append(f"Lesson does not conclude with an interactive/exercise component.")
-    else:
-        warnings.append("No ## subheadings found; lesson should be structured with subheadings.")
+    warnings.extend(structure_warnings(body))
 
     # 4. Interactive Component Props & client:load Check
-    for comp in ["Quiz", "CodeRunner", "CodeExercise", "CaseStudy"]:
+    for comp in ["Quiz", "CodeRunner", "CodeExercise", "CaseStudy", "SqlRunner"]:
         # Match props, treating backtick strings as indivisible (they can contain >)
         pattern = re.compile(rf"<{comp}\b((?:[^>`]|`[^`]*`)+)\s*/?>", re.DOTALL)
         for match in pattern.finditer(body):
@@ -134,14 +227,7 @@ def verify_lesson(path, check_links=False):
             if "client:load" not in props_block:
                 errors.append(f"<{comp}> component is missing 'client:load'")
             
-            # Strip backtick template literals first (may contain {, }, and >)
-            stripped = re.sub(r"`[^`]*`", "", props_block)
-            # Strip remaining JSX expression values ( { ... } )
-            stripped = re.sub(r"\{[^}]*\}", "", stripped)
-            # Strip quoted attribute values without treating an equals sign in
-            # the value (for example, a mathematical explanation) as a prop.
-            stripped = re.sub(r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''', "", stripped)
-            prop_names = re.findall(r"\b([a-zA-Z0-9:]+)(?=\s*=)", stripped)
+            prop_names = component_prop_names(props_block)
             allowed = COMPONENT_PROPS[comp]
             for p in prop_names:
                 if p not in allowed:

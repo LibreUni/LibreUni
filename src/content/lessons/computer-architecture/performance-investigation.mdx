@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import CodeRunner from '../../../components/CodeRunner';
 
-<Quiz client:load title="Measure before tuning"
-  question="What is the first step in a defensible performance investigation?"
-  options={["Change the most visible code before measuring any resource behavior", "State a workload and hypothesis with a measurable metric", "Increase every cache capacity without identifying the limiting resource", "Report one best-case run as the expected production performance"]}
-  correctIndex={1}
-  explanation="A workload and hypothesis define what evidence could support or falsify the diagnosis. Without them, a benchmark is an anecdote."
-/>
-
 This laboratory treats a performance claim as a falsifiable engineering hypothesis. The subject is two implementations of a matrix kernel: a naive traversal and a tiled/vectorized implementation. The aim is not to produce a chart that flatters an optimization. It is to determine which resource limits each version, quantify uncertainty, and identify the input boundary where the conclusion changes.
 
 ## Question and model
@@ -36,6 +29,13 @@ This laboratory treats a performance claim as a falsifiable engineering hypothes
 Suppose the kernel computes $C=A+B$ for square matrices of 32-bit values. A naive row-major implementation reads two values and writes one for each element. A column-major or poorly laid-out version may touch a new cache line for each access. The hypothesis is: “For matrices larger than the last-level cache, tiled row-major traversal reduces time by improving spatial and temporal locality, and the improvement will correlate with lower cache-miss traffic rather than merely higher clock frequency.”
 
 The hypothesis predicts several observations: cache misses per instruction should decrease, memory bandwidth may become more efficient, instructions per element may change modestly, and the effect should grow when dimensions exceed cache capacity but weaken when the entire matrix fits in a higher cache. If time improves while misses and bandwidth do not change, the proposed mechanism is incomplete; perhaps vector width, compiler unrolling, or frequency changed instead.
+
+<Quiz client:load title="Measure before tuning"
+  question="What is the first step in a defensible performance investigation?"
+  options={["Change the most visible code before measuring any resource behavior", "State a workload and hypothesis with a measurable metric", "Increase every cache capacity without identifying the limiting resource", "Report one best-case run as the expected production performance"]}
+  correctIndex={1}
+  explanation="A workload and hypothesis define what evidence could support or falsify the diagnosis. Without them, a benchmark is an anecdote."
+/>
 
 ## Experimental controls
 
@@ -59,6 +59,14 @@ Repeat enough times to observe scheduling and thermal variation. Report median, 
 > **Warning.** Reading a timestamp counter (`rdcycle` / `rdtsc`) without compiler and pipeline serialization barriers allows out-of-order execution to sample the stop timestamp before slow memory stores or loop iterations have retired.
 
 Use a monotonic high-resolution timer or hardware cycle counter with a documented serialization method. The start must not be moved after work by compiler or CPU reordering; the end must not be read before stores complete if the result includes stores. A barrier or fence may be needed around timing, but its cost must be excluded or included consistently.
+
+| Measurement Phase | Executed Operation | Boundary Invariant | Serialization Primitive Required |
+| :--- | :--- | :--- | :--- |
+| **Preamble Setup** | Buffer allocation & pre-touch | Excluded from timed kernel | Compiler barrier + full memory fence |
+| **Start Timestamp** | Sample cycle counter ($T_{\text{start}}$) | No kernel instruction executes before timestamp read | `cpuid` / `fence rw, rw` before counter read |
+| **Kernel Execution** | Compute loop / memory accesses | Isolated from timing calls and verification logic | Unmodified compiler-generated sequence |
+| **Stop Timestamp** | Sample cycle counter ($T_{\text{stop}}$) | All stores and loop iterations retire before read | `fence rw, rw` + pipeline serialize before counter read |
+| **Post-run Verify** | Compute output checksum | Excluded from reported execution cycles | Bitwise assertion against reference oracle |
 
 Measure at least wall-clock time, cycles, retired instructions, cache references/misses at relevant levels, branch instructions/misses, and memory bandwidth if counters are available. Record CPU model, core, frequency, operating system, compiler, input dimensions, alignment, and thermal state. Hardware counter names and sampling may differ; report their interpretation rather than treating a counter label as a universal physical quantity.
 
@@ -84,6 +92,14 @@ Compute effect size and uncertainty. If implementation A takes 10.0 ± 0.2 ms an
 
 Compiler vectorization can turn both source variants into similar machine code. Inspect generated assembly or compiler optimization reports. A different allocation can change page coloring and TLB behavior. Transparent huge pages can change translation reach. Frequency scaling can favor the version that keeps the core busy differently. NUMA placement can dominate large matrices. Background processes, interrupts, thermal throttling, garbage collection in a host runtime, and page faults can create outliers.
 
+| Confounder Source | Mechanism of Distortion | Controlled Experimental Protocol | Verification Metric / Evidence |
+| :--- | :--- | :--- | :--- |
+| **DVFS Frequency Scaling** | Turbo Boost alters clock rate between runs | Pin governor to `performance`; fix CPU frequency | Measure CPU frequency via PMU `APERF`/`MPERF` |
+| **Core Migration & Context Switches** | Thread moves across cores, losing L1/L2 cache | Pin benchmark process to isolated physical core (`taskset`) | Read OS context-switch counters (`getrusage`) |
+| **Compiler Vectorization Asymmetry** | One variant vectorizes while other stays scalar | Compile with `-fopt-info-vec` and inspect assembly | Compare retired instruction counts and vector instructions |
+| **Page Faults & Cold Allocation** | First-touch allocation costs page faults in run | Run untimed warm-up passes to populate page tables | Assert zero minor/major page faults during timing |
+| **NUMA Remote Memory Access** | Buffers allocated on remote socket have $3\times$ latency | Bind memory allocation to local NUMA node (`numactl`) | Read uncore remote memory access counters |
+
 A benchmark that fixes all confounders may no longer represent deployment. Therefore use two phases: a controlled mechanism experiment and a representative end-to-end experiment. The former supports causal understanding; the latter tests product value. Do not use the representative result to claim a cache mechanism without counters, or the controlled result to claim universal application speed.
 
 ## Correctness and adversarial cases
@@ -91,6 +107,13 @@ A benchmark that fixes all confounders may no longer represent deployment. There
 > **Warning.** Never report timing from a kernel whose output has not been verified against an independent reference oracle across non-multiple-of-tile dimensions ($N = 1023$), misaligned base pointers, and aliased inputs (`C == A`).
 
 Compare outputs against a high-precision or reference implementation on random values, zeros, maximum and minimum representable values, NaNs if floating point is used, and dimensions that exercise tails. Vectorized code can read beyond logical bounds if masked loads are misunderstood. Tiled code can omit fringe rows or reuse a stale tile. A performance result from incorrect output is not a performance result.
+
+| Adversarial Test Vector | Input Parameter Structure | Targeted Failure Mode | Pass Invariant |
+| :--- | :--- | :--- | :--- |
+| **Non-Multiple Tile Dimensions** | Matrix size $N = 1023$ (tile $B = 32$) | Fringe tile loop boundary omission or out-of-bounds write | Output matches reference for all $N^2$ elements |
+| **Pointer Misalignment** | Base pointer offset by 1 byte (`ptr + 1`) | Unaligned SIMD load trap or silent fault | Kernel completes without bus error; results identical |
+| **Input/Output Aliasing** | In-place update (`C == A`) | RAW hazard clobbers inputs before subsequent tap reads | Prohibited by assertion or handled via staging buffer |
+| **Adversarial Stride Thrashing** | Row stride equals exact power of two cache set span | Direct-mapped / low-associativity conflict thrashing | Performance degradation diagnosed via L1/L2 miss counters |
 
 Test aliasing and alignment assumptions. If the API permits overlapping input/output, a transformation that assumes no alias may change semantics. If aligned vector loads are used, test misaligned input and either reject it explicitly or provide a safe path. Document whether the compiler is allowed to reassociate floating-point operations; bitwise differences may be acceptable only under a stated numerical tolerance.
 

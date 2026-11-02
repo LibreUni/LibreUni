@@ -12,7 +12,7 @@ outcomes:
   - "Explain why a replica, a WAL archive, and a backup answer different recovery questions."
   - "Design a restore drill that tests an RPO/RTO claim with integrity evidence."
 omissions:
-  - "Full ARIES implementation details, filesystem journaling, storage-controller failure modes, and proprietary backup products are deferred."
+  - "ARIES is taught at the protocol level: analysis, redo, undo, page LSNs, and compensation log records. A complete industrial implementation, filesystem journaling, storage-controller failure modes, and proprietary backup products are deferred."
   - "Multi-region quorum durability is treated as a distributed-system contract rather than inferred from local WAL alone."
 estimatedMinutes: 480
 assessment: "Given a crash image with page LSNs, log records, transaction states, and a recovery objective, derive the legal redo/undo result and propose a restore test that could falsify the claim."
@@ -21,6 +21,7 @@ assessment: "Given a crash image with page LSNs, log records, transaction states
 import PlantUML from '../../../components/PlantUML.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 import RecoveryLogPlayground from '../../../components/playgrounds/RecoveryLogPlayground';
+import Quiz from '../../../components/Quiz';
 
 # Recovery and Logging
 
@@ -95,6 +96,39 @@ T1 writes stock 20 → 13 at LSN 901 and commits at 902. The page flushed at LSN
 A committed log record can survive while its changed page does not. Redo brings persistent pages up to the durable committed history. Undo handles the opposite case: a page can contain a loser update that reached storage before the crash. Neither pass substitutes for the other.
 </details>
 
+## ARIES makes undo repeatable
+
+{/* Source tracking: Analysis, redo, undo, and compensation log records are synthesized from Mohan et al., ARIES (1992); the LSN trace is original. */}
+
+The three-phase sketch above becomes a real recovery protocol only when an interrupted undo can itself survive a crash. ARIES adds **compensation log records** (CLRs) and a per-transaction **undo-next LSN** so that recovery never repeats an undo it already performed.
+
+> **Definition.** A compensation log record (CLR) describes an undo action and carries an `undoNextLSN`, the next earlier record in that transaction's undo chain to examine. That record can be a begin record rather than another update. A CLR is redo-only: it can be replayed during redo but is not itself undone.
+
+**Worked trace.** T2 begins at LSN 903, updates stock at 904, and crashes without a durable commit. During undo, recovery appends CLR 906 for the reversal with `undoNextLSN = 903` and applies the undo. WAL requires that CLR to be durable before its changed page is flushed. Suppose 906 is durable and recovery crashes again before finishing. On restart, redo can repeat 906 if its effect is missing from the page; undo resumes at 903 instead of undoing 904 again. If the CLR was not durable, recovery follows the durable log instead: WAL prevents the corresponding undo page effect from having been safely flushed first.
+
+| Phase | Reads | Produces | Key invariant |
+| --- | --- | --- | --- |
+| Analysis | log from the last checkpoint | transaction table, dirty-page table | every loser is identified before any undo |
+| Redo | log forward from the smallest dirty-page `recLSN` found during analysis | pages brought to their logged history | page LSN skips changes already present |
+| Undo | losers' log records backward | CLRs and restored pre-images | `undoNextLSN` advances exactly once per action |
+
+Analysis starts from the checkpoint designated by the master record and reconstructs transaction and dirty-page state. A fuzzy checkpoint records active transactions and dirty pages while work continues; the dirty-page table can contain a `recLSN` older than the checkpoint, so redo can start earlier. The correctness claim depends on WAL and the recovery protocol, not merely checkpoint frequency.
+
+> **Warning.** A CLR is not an application-level compensating transaction. It repairs physical recovery state. Reversing a shipped order, a sent email, or a payment requires an idempotent business compensation and cannot be inferred from a database undo record.
+
+<Quiz client:load
+  title="Why undo needs its own log record"
+  question="T3 has updates at LSN 20 and 30. Recovery durably records a CLR for undoing 30 with undoNextLSN 20, then crashes. What should the next undo pass do?"
+  options={[
+    "Undo LSN 30 again because the original update is still in the log",
+    "Follow undoNextLSN to LSN 20 instead of undoing LSN 30 again",
+    "Skip both updates because any CLR commits its transaction",
+    "Discard the CLR because its transaction was uncommitted"
+  ]}
+  correctIndex={1}
+  explanation="The durable CLR describes the undo of 30 and points to 20. Redo can reapply the CLR if needed; the undo pass follows its pointer to continue the loser transaction's rollback. The CLR is redo-only and does not commit T3."
+/>
+
 ## Recovery objectives require distinct artifacts
 
 > **Warning.** A streaming replica improves failover capability; it is not automatically a historical backup. An accidental delete or logical corruption can replicate quickly to every replica.
@@ -130,6 +164,7 @@ Preserve the primary, replica, backup, and WAL evidence; restore the backup plus
 
 ## References & Further Reading
 
+* Mohan, C., Haderle, D., Lindsay, B., Pirahesh, H., & Schwarz, P. (1992). *ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging*. ACM TODS, 17(1), 94–162. (Analysis/redo/undo, page LSNs, and compensation log records.)
 * [PostgreSQL: Write-Ahead Logging](https://www.postgresql.org/docs/current/wal-intro.html)
 * [PostgreSQL: Continuous Archiving and Point-in-Time Recovery](https://www.postgresql.org/docs/current/continuous-archiving.html)
 * [PostgreSQL: Backup and Restore](https://www.postgresql.org/docs/current/backup.html)

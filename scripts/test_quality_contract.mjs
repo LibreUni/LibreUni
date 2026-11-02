@@ -119,6 +119,20 @@ test('declared workload totals match every active course manifest', () => {
   }
 });
 
+test('declared credit stays calibrated near 25 hours per ECTS', () => {
+  // Internal workload-equivalence estimates are not awarded or recognized credits.
+  const expectedEcts = { 'calculus-intro': 1, 'computer-architecture': 7.5, 'operating-systems': 7.5, 'database-systems': 7 };
+  for (const courseId of activeCourses) {
+    const metadata = JSON.parse(read(`src/content/courses/${courseId}.json`));
+    assert.equal(metadata.ects, expectedEcts[courseId], `${courseId} credit label drifted`);
+    const hoursPerEcts = metadata.workloadHours / metadata.ects;
+    assert.ok(
+      hoursPerEcts >= 22 && hoursPerEcts <= 28,
+      `${courseId} declares ${hoursPerEcts.toFixed(2)} hours per ECTS; expected 22-28`,
+    );
+  }
+});
+
 test('the systems foundations path has only real active course steps and unique gates', () => {
   const pathFiles = fs.readdirSync(path.join(root, 'src/content/careers')).filter((name) => name.endsWith('.json')).sort();
   assert.deepEqual(pathFiles, ['systems-foundations.json']);

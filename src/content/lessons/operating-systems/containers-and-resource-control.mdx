@@ -20,6 +20,7 @@ assessment: "Given an unfamiliar multi-tenant workload, derive namespace views a
 
 import PlantUML from '../../../components/PlantUML.astro';
 import IsolationBoundaryPlayground from '../../../components/playgrounds/IsolationBoundaryPlayground';
+import Quiz from '../../../components/Quiz';
 
 # Containers and Resource Control
 
@@ -60,6 +61,19 @@ VM:        application -> guest kernel -> VMM/hypervisor -> hardware
 ```
 
 A VM's guest kernel is inside the VM boundary, but the VMM and hardware remain trusted dependencies. A container's kernel is the host kernel itself.
+
+<Quiz client:load
+  title="Namespaces versus resource limits"
+  question="An untrusted program runs inside a container configured with private PID, mount, and network namespaces, but no cgroup limits are configured. The program executes a rapid fork bomb (while(1) fork()). What is the impact on the host system?"
+  options={[
+    "The fork bomb can exhaust the host kernel's global process and thread table, denying service to host processes and other containers.",
+    "The fork bomb is strictly confined to the container's PID namespace and cannot affect host process creation.",
+    "The container runtime automatically detects the rapid process creation and throttles fork system calls.",
+    "The untrusted program crashes with an illegal instruction fault because fork is disallowed inside private PID namespaces."
+  ]}
+  correctIndex={0}
+  explanation="Namespaces provide isolation of names and visibility (which PIDs or mounts a process can see), not resource quotas. Without a control group (cgroup) limit such as pids.max, all containerized processes allocate tasks from the host kernel's global process table. A fork bomb inside an unconstrained container exhausts host task capacity, demonstrating why namespace isolation without cgroups cannot guarantee resource containment."
+/>
 
 ## Namespaces alter views and identities
 
@@ -219,15 +233,15 @@ It reduces the parser's reachable syscall interface to the allowed set under the
 
 > **Warning.** Because all containers on a host execute as tasks inside a single shared kernel, namespace visibility, cgroup accounting, and syscall filtering are orthogonal controls: omitting any one leaves an unmediated resource or authority surface, and a vulnerability in any reachable kernel path compromises the host and every co-tenant container.
 
-Common non-examples expose category errors:
+**Failure modes of orthogonal container mechanisms:**
 
-- `chroot` changes pathname root but supplies no PID, network, user, or resource isolation.
-- namespaces without cgroups can expose private identifiers while allowing host-wide resource exhaustion.
-- cgroups without namespaces can partition resources while every process sees the same host object names.
-- an image without runtime constraints is a filesystem payload, not an active isolation policy.
-- UID 0 in a user namespace is not host UID 0, but it is not harmless; it has namespaced powers and kernel attack surface.
-- a CPU weight is not a latency deadline, and a memory limit is not graceful degradation.
-- a container boundary does not contain a host-kernel compromise.
+| Mechanism | What it isolates | What it leaves unisolated (failure mode) |
+| --- | --- | --- |
+| `chroot` | Pathname lookup root directory | Supplies no PID, IPC, network, or resource isolation; root processes can escape via file-descriptor `fchdir` |
+| Namespaces alone | Identifier views (PIDs, mounts, net interfaces) | Provides zero resource bounds; an unconstrained fork bomb or anonymous allocation exhausts the host |
+| Cgroups v2 alone | Resource consumption (CPU shares, memory bytes) | Provides zero naming isolation; processes see and signal arbitrary host PIDs and mounts |
+| User namespaces alone | Maps container UID 0 to unprivileged host UID | Container processes still possess namespaced capabilities and expose reachable kernel attack surfaces |
+| Seccomp BPF alone | Restricts permitted syscall numbers and registers | Cannot validate deep pointer payloads, unmediated open descriptors, or CPU/memory quotas |
 
 ## Synthesis: contain a hostile build
 

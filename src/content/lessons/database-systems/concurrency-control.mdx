@@ -20,10 +20,36 @@ assessment: "Given an unseen schedule, lock table, or read/write-set trace, iden
 
 import PlantUML from '../../../components/PlantUML.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
 
 # Concurrency Control
 
-Isolation names an allowed history; concurrency control is the mechanism that admits or rejects individual operations on the path to that history. A stock row can be protected with a lock, a version check, a timestamp rule, or serializable dependency tracking. Those mechanisms fail differently, so a system design must choose an error it can handle rather than merely demand “no races.”
+Two customers buy the last unit at the same instant. Each transaction reads `available = 1`, computes `1 - 1 = 0`, and writes `0`. Both commits succeed, the stock never becomes negative, and two units are sold from one. No individual statement is wrong; the interleaving is.
+
+| Step | T1 | T2 | Last written `available` (not necessarily committed) |
+| ---: | --- | --- | ---: |
+| 1 | read 1 | | 1 |
+| 2 | | read 1 | 1 |
+| 3 | write 0 | | 0 |
+| 4 | | write 0 | 0 |
+| 5 | commit | commit | 0 |
+
+The lost update is the motivating problem. Isolation names an allowed history; concurrency control is the mechanism that admits or rejects individual operations on the path to that history. A stock row can be protected with a lock, a version check, a timestamp rule, or serializable dependency tracking. Those mechanisms fail differently, so a system design must choose an error it can handle rather than merely demand “no races.”
+
+This schedule also shows why the repair must match the invariant. A conditional update `SET available = available - 1 WHERE available >= 1` prevents the negative count without an explicit read, while a plain read-then-write needs a lock or version check that spans both steps. The protocol is chosen from the invariant, not from a preference for one lock mode.
+
+<Quiz client:load
+  title="Why two commits are not enough"
+  question="Both transactions in the lost-update schedule commit successfully. What exactly is wrong?"
+  options={[
+    "The database might have written the same value twice, so one write was ignored",
+    "The interleaving sold one unit twice; local commit success does not prove a serializable history",
+    "The second transaction should have retried until it observed a different value",
+    "The problem is only performance, because both transactions touched the same row"
+  ]}
+  correctIndex={1}
+  explanation="Each transaction's local outcome is valid in isolation, but the history is not equivalent to either serial order: both read 1 and both sold the same unit. Concurrency control must reject one operation, serialize the pair, or require an atomic conditional update that tests the invariant in the same statement. A retry does not repair a history that has already lost the update, and contention alone is not a correctness failure."
+/>
 
 {/* Source tracking: Locking, waits-for graphs, MVCC, and transaction-control trade-offs are synthesized from PostgreSQL's explicit-locking and transaction-isolation documentation and CMU 15-445/645 materials. Protocol traces and examples are original. */}
 
@@ -108,6 +134,8 @@ Prevention: define and enforce a global lock order, for example **(warehouse_id,
 | MVCC | version visibility plus write/serializability validation | readers often avoid writer blocking | old-version retention; write skew unless stronger validation |
 
 Timestamp ordering and optimistic control do not make conflicts disappear: they shift them into aborts. MVCC makes a snapshot readable, not necessarily serializable. A high-contention counter may prefer a single conditional update or a sharded/aggregated representation over a broad transaction that repeatedly aborts.
+
+**Worked example — snapshot isolation permits write skew.** Two doctors are on call, and the invariant is “at least one doctor remains on call.” T1 reads the on-call set $\{\text{Alice},\text{Bob}\}$ and removes Alice; T2 concurrently reads the same set and removes Bob. Under snapshot isolation each transaction reads a consistent snapshot and writes a different row, so neither write conflicts with the other. Both commit, and the invariant is false. The conflict is on the predicate “the on-call set has size at least two,” not on a single row. Repairs include serializable isolation with predicate or summary-row protection, a constraint enforced by a coordinated operation, or a design that makes the aggregate a versioned object. Retrying one transaction after commit is insufficient because neither transaction observed a write conflict.
 
 <details>
 <summary>Why can “retry on serialization failure” still be unsafe?</summary>

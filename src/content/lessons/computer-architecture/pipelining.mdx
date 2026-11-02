@@ -19,13 +19,6 @@ assessment: "Given a five-stage pipeline and a dependency/branch trace, produce 
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 
-<Quiz client:load title="Pipeline invariant"
-  question="What does pipelining change first: instruction semantics or the schedule of work?"
-  options={["It changes the architectural result whenever two stages execute concurrently", "It overlaps stages while preserving the architectural result", "It removes dependencies by placing each instruction in a separate stage", "It makes every instruction independent once pipeline registers are inserted"]}
-  correctIndex={1}
-  explanation="Pipelining is a timed implementation refinement. Hazards and control logic exist precisely to preserve the sequential semantics while overlapping work."
-/>
-
 Pipelining improves instruction throughput by allowing different instructions to occupy different portions of a datapath at the same time. It does not make one instruction’s combinational work disappear. Instead, registers divide a long path into stages and establish a repeating schedule. The architectural machine still appears to execute instructions in program order, while the implementation overlaps their internal phases.
 
 The distinction between latency and throughput is fundamental. *Latency* is the time from an instruction entering the pipeline to its result becoming available or retiring. *Throughput* is the long-run completion rate after the pipeline is filled. A five-stage pipeline may have five-cycle instruction latency but complete one independent instruction per cycle. A pipeline that accepts one instruction per cycle but stalls frequently has a lower effective throughput than its ideal diagram suggests.
@@ -50,6 +43,13 @@ At cycle $t$, instruction $I_0$ may be in EX while $I_1$ is in ID and $I_2$ is i
 | 6 | – | $I_4$ | $I_3$ | $I_2$ | $I_1$ |
 
 The first result appears at cycle 5, but the fifth result appears at cycle 9. After filling, completion is one per cycle. For $N$ instructions and $k$ stages, ideal cycles are $k+N-1$, not $kN$.
+
+<Quiz client:load title="Pipeline invariant"
+  question="What does pipelining change first: instruction semantics or the schedule of work?"
+  options={["It changes the architectural result whenever two stages execute concurrently", "It overlaps stages while preserving the architectural result", "It removes dependencies by placing each instruction in a separate stage", "It makes every instruction independent once pipeline registers are inserted"]}
+  correctIndex={1}
+  explanation="Pipelining is a timed implementation refinement. Hazards and control logic exist precisely to preserve the sequential semantics while overlapping work."
+/>
 
 ## Clock period and stage balance
 
@@ -77,6 +77,13 @@ Splitting a path into more stages helps only if the new maximum decreases enough
 > **Warning.** Every instruction's destination register index `rd` and control signals (`RegWrite`, `MemRead`, `MemWrite`, `ResultSrc`) must advance through `ID/EX`, `EX/MEM`, and `MEM/WB` lockstep with its data values; driving the write-back stage's `rd` port directly from `IF/ID` overwrites a younger instruction's register with an older instruction's result.
 
 A pipeline register is a typed bundle. In IF/ID, it may hold the fetched instruction and `PC`. ID/EX holds operands, immediate, destination identifiers, and decoded controls. EX/MEM holds ALU result, store data, destination, and memory controls. MEM/WB holds loaded data or ALU result, destination, and register-write control. Every field must have a defined value when the associated instruction is valid.
+
+| Pipeline Register | Stage Input -> Output | Propagated Control Fields | Datapath & Identification Fields | Validity & Hazard Invariant |
+| :--- | :--- | :--- | :--- | :--- |
+| `IF/ID` | Fetch $\to$ Decode | None (not yet decoded) | `Instr[31:0]`, `PC`, `PC_next` | Synchronous flush clears `valid` to 0 on branch misprediction |
+| `ID/EX` | Decode $\to$ Execute | `ALUOp[1:0]`, `ALUSrc`, `Branch`, `MemRead`, `MemWrite`, `RegWrite`, `ResultSrc` | `rs1_data`, `rs2_data`, `ImmExt`, `rs1`, `rs2`, `rd`, `PC` | Stall freezes contents; bubble injects zeroed write controls |
+| `EX/MEM` | Execute $\to$ Memory | `MemRead`, `MemWrite`, `RegWrite`, `ResultSrc` | `ALU_result`, `WriteData`, `rd`, `BranchTarget`, `Zero` | Preserves `rd` of executing instruction for forwarding comparison |
+| `MEM/WB` | Memory $\to$ Writeback | `RegWrite`, `ResultSrc` | `ReadData`, `ALU_result`, `rd` | Delivers `rd` and `RegWrite` to register file write port |
 
 Validity is itself state. A bubble is an invalid pipeline entry that performs no architectural side effect. Reset typically fills the pipeline with invalid entries; a flush converts younger entries to bubbles. Treating a bubble as an instruction with arbitrary opcode is unsafe if control decode can assert writes. A valid bit must gate register writes, memory writes, exceptions, and retirement.
 
@@ -120,6 +127,14 @@ Structural hazards are not data hazards and should not be hidden under a generic
 
 A conditional branch creates a control hazard because the next PC depends on a comparison that may not be resolved until EX. Meanwhile, the fetch stage has already fetched sequential instructions. The simplest policy stalls until the branch resolves or predicts not taken and flushes wrong-path instructions when taken. If the branch resolves after $r$ stages and there are $q$ younger wrong-path instructions, the recovery cost includes those invalidated cycles and any front-end refill.
 
+| Cycle | IF | ID | EX | MEM | WB | Architectural Action |
+| :---: | :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | `beq r1, r2, target` | — | — | — | — | Fetch branch; predict not taken |
+| 2 | `sub r4, r5, r6` (wrong path) | `beq` | — | — | — | Fetch fall-through instruction |
+| 3 | `and r7, r8, r9` (wrong path) | `sub` | `beq` (resolves TAKEN) | — | — | Condition evaluates true; target computed |
+| 4 | `target: add r10, r11, r12` | bubble (`valid=0`) | bubble (`valid=0`) | `beq` | — | Pipeline flush: clear `IF/ID` and `ID/EX`; redirect PC to target |
+| 5 | `target+4: lw r13, 0(r10)` | `target: add` | bubble (`valid=0`) | bubble (`valid=0`) | `beq` | Resume fetch along correct path; flush penalty = 2 cycles |
+
 The flush must be precise. A wrong-path instruction may have computed a value internally, but it must not write a register, memory, status register, or device. Valid bits and side-effect gating enforce this. A branch target calculation and condition comparison can be moved earlier to reduce penalty, but doing so increases the earlier stage’s critical path and may introduce new forwarding requirements.
 
 Branch prediction guesses direction and sometimes target. A static predictor uses a fixed rule; a dynamic predictor records history. Prediction accuracy, branch frequency, and misprediction penalty determine benefit. If branches occur with frequency $f$, prediction accuracy is $a$, and penalty is $p$ cycles, the average branch cost is approximately $f(1-a)p$ cycles per instruction, ignoring secondary effects. Increasing predictor complexity is worthwhile only when its area, power, and access latency do not erase the gain.
@@ -129,6 +144,14 @@ Branch prediction guesses direction and sometimes target. A static predictor use
 > **Warning.** Because a younger instruction in `IF` (e.g., an instruction-fetch page fault) can detect an exception on an earlier clock cycle than an older instruction in `MEM` (e.g., a data-access fault), the pipeline must record exceptions in each instruction's stage bundle and take them strictly in program order at the commit boundary.
 
 An exception may be detected in one stage while younger instructions have advanced. Precise exception handling requires all older instructions to retire, the faulting instruction to be represented at the specified boundary, and all younger instructions to become bubbles. A page fault on a load must not allow a younger store to modify memory before the handler observes the faulting state.
+
+| Pipeline Stage | Potential Exception | Detection Cycle | Commitment Order | Required Pipeline Control Action |
+| :--- | :--- | :---: | :---: | :--- |
+| `IF` | Instruction page fault / Misaligned fetch | Cycle $t$ | Younger | Record status in `IF/ID.ExcCode`; suppress trap until WB |
+| `ID` | Illegal instruction / Reserved opcode | Cycle $t+1$ | Middle | Record status in `ID/EX.ExcCode`; suppress subsequent decoding |
+| `EX` | Integer overflow / Arithmetic trap | Cycle $t+2$ | Middle | Record status in `EX/MEM.ExcCode`; block register destination write |
+| `MEM` | Data access page fault / Misaligned load | Cycle $t+3$ | Older | Overrides younger exceptions; triggers trap handler at WB stage |
+| `WB` | Commit boundary | Cycle $t+4$ | Earliest | If `ExcCode != 0`, annul younger stages, write `sepc`/`scause`, redirect PC |
 
 Pipeline control therefore has three distinct actions: stall, which holds an instruction in place; bubble, which inserts invalid work into a stage; and flush, which discards younger work. Confusing them produces subtle bugs. On a load-use hazard, older stages continue, the dependent instruction is held, and one bubble is inserted. On a taken branch, younger instructions are flushed and a target fetch begins. On an exception, the precise recovery boundary is determined by the ISA and retirement design.
 

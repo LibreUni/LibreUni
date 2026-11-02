@@ -18,6 +18,8 @@ assessment: "Given a report requirement and seed rows, write a PostgreSQL query,
 import CodeExercise from '../../../components/CodeExercise';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 import JoinPredicatePlayground from '../../../components/playgrounds/JoinPredicatePlayground';
+import SqlRunner from '../../../components/SqlRunner';
+import Quiz from '../../../components/Quiz';
 
 # SQL querying: specify rows, then test edge cases
 
@@ -56,6 +58,48 @@ Use this registration fixture.
 
 The report must include offering 11 and 12 with count zero. Its grain is **one offering in 2026S**, not one joined enrollment row.
 
+### Execute and predict
+
+The runner seeds exactly this fixture in SQLite. State the three result rows before running the starting query, then move `AND e.status = 'enrolled'` into `WHERE` and run it again. The difference is the lesson.
+
+<SqlRunner
+  client:load
+  title="Zero-safe enrollment report"
+  description="Predict which offerings survive, including zero counts, before executing the query."
+  schema={`CREATE TABLE Student (
+  student_id text PRIMARY KEY,
+  display_name text NOT NULL
+);
+CREATE TABLE Offering (
+  offering_id integer PRIMARY KEY,
+  code text NOT NULL,
+  term text NOT NULL
+);
+CREATE TABLE Enrollment (
+  student_id text NOT NULL REFERENCES Student(student_id),
+  offering_id integer NOT NULL REFERENCES Offering(offering_id),
+  status text NOT NULL,
+  grade integer,
+  PRIMARY KEY (student_id, offering_id)
+);
+INSERT INTO Student VALUES ('Ada', 'Ada'), ('Bo', 'Bo'), ('Cy', 'Cy');
+INSERT INTO Offering VALUES (10, 'DB101', '2026S'), (11, 'DB201', '2026S'), (12, 'DB301', '2026S'), (13, 'DB101', '2025F');
+INSERT INTO Enrollment VALUES
+  ('Ada', 10, 'enrolled', 87),
+  ('Bo', 11, 'dropped', 40);`}
+  initialQuery={`SELECT o.code,
+       COUNT(e.student_id) AS enrolled_count
+FROM Offering AS o
+LEFT JOIN Enrollment AS e
+  ON e.offering_id = o.offering_id
+ AND e.status = 'enrolled'
+WHERE o.term = '2026S'
+GROUP BY o.offering_id, o.code
+ORDER BY o.code;`}
+/>
+
+The analogous PostgreSQL statement is:
+
 ```sql
 SELECT o.code,
        COUNT(e.student_id) AS enrolled_count
@@ -79,14 +123,33 @@ Move `AND e.status = 'enrolled'` from `ON` to `WHERE`. Which offering rows disap
 Offerings 11 and 12 disappear. Offering 11's only matching enrollment is `dropped`; offering 12 is null-extended because it has no enrollment. Neither makes `e.status = 'enrolled'` true in `WHERE`. The condition turns this part of the left join into inner-join-like behavior for that predicate.
 </ExerciseSolution>
 
+<Quiz client:load
+  title="Count a different right-side condition"
+  question="A report must retain every current-term offering but count only enrollment rows with grade at least 70. Where should those two conditions go in a single LEFT JOIN query?"
+  options={[
+    "Place both the term and grade predicates in WHERE after the join",
+    "Place grade in ON to limit matches and term in WHERE to select offerings",
+    "Place both predicates in ON and rely on COUNT(*) to remove old offerings",
+    "Use an inner join and discard offerings that have no passing grade"
+  ]}
+  correctIndex={1}
+  explanation="The grade qualifies right-side matches, so ON preserves a current offering even when no grade qualifies. The term selects left-side offerings and belongs in WHERE. COUNT of a non-null right-side key—not COUNT(*)—then yields zero for null-extended rows."
+/>
+
 <CodeExercise
   client:load
-  title="Preserve empty offerings"
-  code={String.raw`LEFT JOIN Enrollment AS e
+  title="Reconstruct the zero-safe report"
+  code={String.raw`SELECT o.code,
+       [!blank!] AS enrolled_count
+FROM Offering AS o
+LEFT JOIN Enrollment AS e
   [!blank!] e.offering_id = o.offering_id
- AND e.status = 'enrolled'`}
-  answers={["ON"]}
-  explanation="Use ON when the status determines whether an Enrollment row matches while every Offering must remain in the report."
+ AND e.status = 'enrolled'
+WHERE o.term = '2026S'
+[!blank!] o.offering_id, o.code
+ORDER BY o.code`}
+  answers={["COUNT(e.student_id)", "ON", "GROUP BY"]}
+  explanation="`COUNT(e.student_id)` ignores the NULL-extended right side and therefore yields zero for an empty offering; `COUNT(*)` would count the left row. The status predicate belongs in `ON` so unmatched offerings survive. `GROUP BY` fixes the output grain at one row per offering rather than one row per enrollment."
 />
 
 ## See predicate placement change the result
@@ -167,7 +230,7 @@ The `NOT IN` condition is equivalent to a chain of inequalities. One comparison 
 
 > **Remark.** Preserve the left relation's required rows first; then make each count's membership rule explicit. A report with two status counts is not a reason to let an unqualified join choose the result grain.
 
-Write a PostgreSQL query for: “For each 2026S offering, return its code, the number of enrolled students, and a Boolean `is_full`; include empty offerings; return only offerings whose capacity is at least 1; order by code.” Before writing SQL, state:
+Write a PostgreSQL query for: “For each 2026S offering, return its code, the number of enrolled students, and a Boolean `is_full`; include empty offerings; return only offerings whose capacity is at least 1; order by code.” The earlier runner fixture has no capacity field; use the registration fixture in the SQL lab or extend a disposable local fixture before executing this task. Before writing SQL, state:
 
 1. the output grain;
 2. which predicate belongs in `ON`, `WHERE`, and `HAVING` (if any);

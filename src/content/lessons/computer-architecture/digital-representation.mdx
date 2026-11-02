@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import RepresentationPlayground from '../../../components/playgrounds/RepresentationPlayground';
 
-<Quiz client:load title="Interpret the bits"
-  question="Why can one bit pattern have different meanings without being inconsistent?"
-  options={["Bits have no physical value", "Meaning is supplied by the active representation contract", "Processors randomly reinterpret memory", "All formats use the same sign rule"]}
-  correctIndex={1}
-  explanation="An agreed format maps bits to values or operations. The same storage can be decoded as an integer, character, address, or instruction under different contracts."
-/>
-
 Computer architecture begins with a contract about bits. A wire carries one of two reliably distinguishable signal ranges, but the signal itself is not intrinsically an integer, character, address, instruction, or color. Meaning is assigned by an encoding, and every later layer—from an arithmetic unit to a compiler, debugger, file format, and network protocol—must preserve that agreement. A useful architecture student therefore asks two questions for every bit pattern: “What representation is being assumed?” and “Which operations preserve its intended meaning?”
 
 This chapter develops the representations used by a small processor. It treats unsigned and signed fixed-width integers as algebraic systems, derives two’s-complement operations instead of presenting them as a memorized trick, analyzes overflow and widening, and then turns to IEEE-style floating-point numbers. The final section connects representation choices to instruction behavior, C language semantics, serialization, and testing. The examples are deliberately finite: a 4-bit or 8-bit machine makes the wraparound visible, while the same proofs scale to 32- and 64-bit words.
@@ -48,6 +41,13 @@ The same word can have several meanings. `01000001` is 65 as an unsigned integer
 The term *word* is architectural rather than universal. An ISA may define 32-bit general-purpose registers while an implementation internally uses wider physical values. Memory is usually byte-addressed, so a 32-bit word occupies four consecutive bytes, but the byte order must also be specified. In little-endian order, the least significant byte occupies the lowest address; in big-endian order, the most significant byte does. Endianness does not change the numerical value when the bytes are reassembled correctly, but it changes the byte sequence exposed to a debugger, file format, or network peer.
 
 **Worked example: reconstructing a word.** Suppose the four bytes at increasing addresses are `78 56 34 12`. Interpreted as little-endian hexadecimal, they form `0x12345678`; interpreted as big-endian, they form `0x78563412`. A memory dump is therefore incomplete without the byte-order convention. The error is not arithmetic—the reader has used the wrong reconstruction function.
+
+<Quiz client:load title="Interpret the bits"
+  question="Why can one bit pattern have different meanings without being inconsistent?"
+  options={["Bits have no physical value", "Meaning is supplied by the active representation contract", "Processors randomly reinterpret memory", "All formats use the same sign rule"]}
+  correctIndex={1}
+  explanation="An agreed format maps bits to values or operations. The same storage can be decoded as an integer, character, address, or instruction under different contracts."
+/>
 
 ## Unsigned arithmetic is modular arithmetic
 
@@ -179,14 +179,16 @@ The remedy is not “be careful” but to define boundary functions. A decoder s
 
 > **Remark.** These six representation invariants underpin every subsequent hardware layer: ALU flags in ISA semantics, immediate sign-extension in datapaths, address-offset extraction in caches, and descriptor bounds checking in I/O.
 
-The central invariants are compact:
+**Core representation invariants and failure modes:**
 
-1. A $w$-bit unsigned operation returns a residue modulo $2^w$ unless a wider result is retained.
-2. Two’s-complement signed values use the same bit patterns with a negative weight on the top bit and range $[-2^{w-1},2^{w-1}-1]$.
-3. Sign extension preserves signed value; zero extension preserves unsigned value; truncation preserves value only when discarded bits are redundant.
-4. Carry indicates unsigned overflow; signed overflow is detected from operand and result signs or equivalent carry transitions.
-5. Floating-point values are a finite, nonuniform approximation to the reals; rounding, exceptional values, and non-associativity are part of the model.
-6. Every representation crossing must specify width, signedness, byte order, validity range, reserved encodings, and failure behavior.
+| Invariant | Mathematical condition | Hardware mechanism | Concrete failure mode when violated |
+| --- | --- | --- | --- |
+| 1. Unsigned residue | $R = (A + B) \pmod{2^w}$ | Discard carry-out bit $w$ | Image buffer size calculation wraps to small value before allocation |
+| 2. Two's-complement | $[-2^{w-1}, 2^{w-1}-1]$ | MSB carries negative weight $-2^{w-1}$ | Negating the minimum value $-2^{w-1}$ produces $-2^{w-1}$ |
+| 3. Extension safety | $\operatorname{sext}(x) = x$, $\operatorname{zext}(x) = x$ | Replicate MSB for signed; zero-pad unsigned | Zero-extending negative signed index creates giant unsigned offset |
+| 4. Overflow vs carry | $V = c_{w} \oplus c_{w-1}$ | Distinct CPU flags (`CF` vs `OF`) | Using unsigned carry (`CF`) to check signed overflow (`OF`) |
+| 5. Floating point | Finite binary approximations | IEEE 754 round-to-even and exception flags | Associativity failure in summation; non-exact representation of 0.1 |
+| 6. Boundary contracts | Canonical serialization | Strict validation before field packing | Truncation silently aliases reserved bitfields to valid identifiers |
 
 ## Independent practice
 

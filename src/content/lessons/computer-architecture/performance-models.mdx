@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import AmdahlPlayground from '../../../components/playgrounds/AmdahlPlayground';
 
-<Quiz client:load title="Latency versus throughput"
-  question="Which statement distinguishes latency from throughput?"
-  options={["Latency measures one operation's completion time; throughput measures completions per interval", "Latency counts completed operations; throughput measures one operation's waiting time", "Latency and throughput become identical whenever the pipeline remains occupied", "Throughput excludes pipeline occupancy while latency includes only occupied stages"]}
-  correctIndex={0}
-  explanation="A pipeline can have long latency but high throughput after filling. A model must name which quantity the workload actually cares about."
-/>
-
 Performance engineering begins by defining what is being measured. A processor can be faster in cycles per instruction and slower in wall-clock time if its clock is lower, or faster on one input and slower on another because its memory behavior changes. A credible performance claim names the workload, correctness condition, measurement boundary, resource metric, and baseline. Only then do equations such as CPI, AMAT, Amdahl’s law, and throughput become useful rather than decorative.
 
 ## Time, instruction count, and CPI
@@ -84,6 +77,13 @@ Queueing adds waiting time. If a server’s utilization approaches one, small in
   explanation="Performance is an empirical claim. A model predicts the mechanism, while controls and repeated measurements distinguish that mechanism from cache state, thermal drift, scheduling, or workload bias."
 />
 
+<Quiz client:load title="Latency versus throughput"
+  question="Which statement distinguishes latency from throughput?"
+  options={["Latency measures one operation's completion time; throughput measures completions per interval", "Latency counts completed operations; throughput measures one operation's waiting time", "Latency and throughput become identical whenever the pipeline remains occupied", "Throughput excludes pipeline occupancy while latency includes only occupied stages"]}
+  correctIndex={0}
+  explanation="A pipeline can have long latency but high throughput after filling. A model must name which quantity the workload actually cares about."
+/>
+
 ## Amdahl’s law and bottlenecks
 
 If fraction $p$ of the original execution time is improved by factor $s$, total speedup is
@@ -114,6 +114,16 @@ where $I$ is arithmetic intensity. A low-intensity kernel is bandwidth-bound; ad
 
 A benchmark is an experiment, not a stopwatch call. Define the hypothesis, independent variable, dependent metric, controlled variables, repetitions, warm-up policy, and stopping rule. The timing boundary must exclude setup when measuring steady-state execution and include it when measuring end-to-end user experience. Report distribution and uncertainty, not only the fastest run.
 
+**Worked example: an experiment that could falsify a cache claim.** Suppose the claim is that 32×32 tiling makes a 1024×1024 double-precision transpose faster because it lowers L1 data-cache misses.
+
+* **Hypothesis:** tiling reduces L1D miss rate relative to the naive traversal, and that reduction is the mechanism behind any wall-time gain.
+* **Independent variable:** traversal order (naive, 16×16, 32×32, 64×64) with the same matrix and element type.
+* **Dependent variables:** median wall time over repeated runs, L1D and LLC miss rates, and memory bandwidth, measured with hardware counters.
+* **Controls:** identical compiler and flags, single thread pinned to one core, fixed frequency governor, same input values and alignment, warm-up before measurement, and interleaved A/B/B/A ordering to spread thermal and background drift.
+* **Stopping rule and analysis:** report all runs or their median and confidence interval, not the fastest run; use enough repetitions that the interval for the tiled-versus-naive difference is narrower than the effect the claim asserts.
+
+Under the stated hypothesis, either reduced misses without a time improvement or a time improvement without the predicted miss reduction fails to support the proposed mechanism. These observations can suggest another ceiling or cause, such as TLB behavior or code generation, but do not identify it by themselves. Reporting only a warm, best-of-three timing cannot distinguish these cases.
+
 Warm-up may populate instruction/data caches, trigger JIT compilation, stabilize branch predictors, or move a frequency governor. Randomized input order can prevent an algorithm from receiving a pre-sorted favorable trace, but randomization itself must be reproducible and reported.
 
 System-level confounders can dominate small architectural effects. CPU affinity, thread count, background OS load, thermal throttling, compiler optimization flags, and heap allocator behavior must all be tightly pinned and monitored.
@@ -124,6 +134,10 @@ Use counters to test mechanisms. If a cache hypothesis predicts that row-major t
 
 A mean is sensitive to outliers; a median describes a typical run; high percentiles describe tail behavior. Confidence intervals quantify uncertainty under assumptions about sampling, but repeated measurements from the same warmed system are not automatically independent. Effect size matters: a 1% improvement with 0.8% measurement variation is weak evidence unless the experiment is strengthened.
 
+**Worked example: a 1% mean gain against run-to-run variation.** Five independent baseline runs give a mean of 100.0 ms with sample standard deviation 0.8 ms; five independent variant runs give 99.0 ms with the same standard deviation. The observed difference is 1.0 ms, or 1%.
+
+Treating the runs as independent and approximately normal, the standard error of the difference is $0.8\sqrt{2/5} \approx 0.51$ ms. A Welch interval with about eight degrees of freedom and $t_{0.975} \approx 2.31$ gives a 95% interval of roughly $1.0 \pm 1.17$ ms, or $[-0.17, 2.17]$ ms. The interval includes zero, so the data do not establish the 1% gain even though the sample mean improved. If the same five input pairs are run in alternating order, the paired differences might be $[0.8, 1.2, 0.9, 1.1, 1.0]$ ms: mean 1.0 ms, sample standard deviation 0.16 ms, standard error 0.07 ms, and a 95% interval of about $[0.80, 1.20]$ ms, which excludes zero. Pairing removes between-run drift but does not make repeated runs on one warmed machine independent; the report must state which design was used and check for interference. Neither analysis protects against a sample that is too small to represent the workload, and neither says anything about the tail: a 1% mean gain can coexist with a worse p99.
+
 Benchmark suites should include representative and adversarial workloads. A compiler optimization that wins on one synthetic loop may lose on a real application because instruction-cache pressure or code size changes. A cache design that wins on a small working set may lose when the active data exceeds L2. The strongest report explains where the model predicts failure and tests that boundary.
 
 ## Energy and performance per watt
@@ -133,6 +147,8 @@ Performance is not the only constraint. Dynamic energy is related to switching a
 Memory traffic often consumes more energy than an arithmetic operation. Consequently, a cache optimization can improve both time and energy, or increase energy by fetching large unused lines.
 
 Performance per watt is a ratio with a workload denominator. A design that finishes quickly but uses a high power burst may compare differently from one that runs longer at low power, depending on whether the system is energy-limited, thermally limited, or latency-limited. State the objective before optimizing.
+
+**Worked example: voltage-frequency scaling and performance per watt.** Consider a simplified dynamic-power model $P_{dyn}=\alpha C V^{2} f$, with leakage and static power omitted. A core runs at 2.0 GHz and 1.0 V with $P_{dyn}=10$ W. To reach 3.0 GHz, the design raises the supply to 1.2 V. With IPC and instruction count unchanged, throughput rises by $3.0/2.0=1.5\times$, but power rises by $(1.2/1.0)^2 \times (3.0/2.0)=2.16\times$, to 21.6 W. Performance per watt therefore falls to $1.5/2.16 \approx 0.69$ of its original value, about 31% lower, and energy per instruction rises by $2.16/1.5=1.44$, or 44%. Including leakage and other static power can change the ratio in either direction: it must be measured or modeled at both operating points. The arithmetic does not prove that the higher frequency is wrong; it proves that the frequency choice must be evaluated against the stated objective, and that a 50% clock increase is not a 50% performance-per-watt increase.
 
 ### Worked Trace: Multi-Component CPI Stall Decomposition & Frequency Trade-off
 
@@ -164,7 +180,7 @@ Even though Arch-B suffers a 24.2% penalty in CPI ($1.82 \to 2.26$) due to worse
 
 ### Counterexample & Failure Mode: The MFLOPS / MIPS Mirage (The Algorithm vs Rate Trap)
 
-Can higher execution rate indicate worse performance?
+Can a lower operation count or a higher execution rate mislead an optimization decision?
 Consider multiplying two $N \times N$ dense matrices with $N = 1024$.
 
 1. **Standard Triple-Loop $O(N^3)$**:
@@ -172,15 +188,15 @@ Consider multiplying two $N \times N$ dense matrices with $N = 1024$.
    * Execution on a SIMD machine: Highly optimized BLAS achieves 80% peak compute ($800\text{ GFLOP/s}$), finishing in $2.68\text{ ms}$.
 
 2. **Strassen's Sub-Cubic Algorithm $O(N^{2.807})$**:
-   * Operations: Approximately $7^{\log_2 1024} = 7^{10} \approx 2.82 \times 10^8$ operations (nearly $7.6\times$ fewer operations).
-   * Execution on the same SIMD machine: Complex recursive memory layouts, matrix additions, and poor vector register utilization lower compute efficiency to only 20% peak ($200\text{ GFLOP/s}$).
-   * Wall time: $\frac{2.82 \times 10^8}{200 \times 10^9} \approx 1.41\text{ ms}$.
+   * Strassen performs 7 recursive multiplications instead of 8, so the number of scalar multiplications is $7^{10} \approx 2.82 \times 10^8$ at $N=1024$—about $3.8\times$ fewer than the naive algorithm’s $N^3$ multiplications. Total floating-point operations also include the 18 matrix additions/subtractions per level; under the common 7-multiplication/18-addition count, Strassen needs about $1.97 \times 10^9$ floating-point operations at this size, only about 8% fewer than the naive algorithm’s $2N^3$.
+   * Execution on the same SIMD machine: complex recursive memory layouts, matrix additions, and poor vector-register utilization lower compute efficiency to only 20% peak ($200\text{ GFLOP/s}$).
+   * Wall time: $\frac{1.97 \times 10^9}{200 \times 10^9} \approx 9.9\text{ ms}$.
 
 3. **The Mirage Breakdown**:
-   * The standard algorithm sustains $800\text{ GFLOP/s}$.
-   * Strassen sustains only $200\text{ GFLOP/s}$—a $4\times$ worse "performance rate"!
-   * Yet Strassen finishes in $1.41\text{ ms}$ vs $2.68\text{ ms}$, running **nearly twice as fast**.
-   * **Rule**: Optimizing for MFLOPS, MIPS, or CPI without fixing the algorithmic work ($IC$) produces completely invalid engineering decisions.
+   * The standard algorithm sustains $800\text{ GFLOP/s}$ and finishes in $2.68\text{ ms}$.
+   * Strassen sustains only $200\text{ GFLOP/s}$; at this size its operation-count advantage is too small to compensate, so it finishes in about $9.9\text{ ms}$.
+   * The lesson is not that Strassen is always slower. It is that a rate or an asymptotic exponent does not determine wall time: the comparison must count the same operations, include additions and data movement, and use the same implementation efficiency. Reporting $2.82 \times 10^8$ as Strassen's total work silently drops the additions, and reporting $200\text{ GFLOP/s}$ as a performance verdict silently drops the algorithm's cost model.
+   * **Rule**: Optimizing for MFLOPS, MIPS, or CPI without fixing the algorithmic work and the instruction count ($IC$) produces invalid engineering decisions.
 
 ---
 
@@ -226,4 +242,5 @@ Consider multiplying two $N \times N$ dense matrices with $N = 1024$.
 * Hennessy, J. L., & Patterson, D. A. (2019). *Computer Architecture: A Quantitative Approach* (6th ed.), Chapter 1 ("Fundamentals of Quantitative Design and Analysis") & Appendix B. Morgan Kaufmann.
 * Williams, S., Waterman, A., & Patterson, D. (2009). *Roofline: An insightful visual performance model for multicore architectures*. Communications of the ACM, 52(4), 65-76.
 * Amdahl, G. M. (1967). *Validity of the single processor approach to achieving large scale computing capabilities*. AFIPS Conference Proceedings, Vol. 30, 483-485.
+* Strassen, V. (1969). *Gaussian elimination is not optimal*. Numerische Mathematik, 13(4), 354–356. https://doi.org/10.1007/BF02165411
 

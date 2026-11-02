@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import PlantUML from '../../../components/PlantUML.astro';
 
-<Quiz client:load title="Separate mechanism and control"
-  question="What is the role of control logic in a datapath?"
-  options={["It stores the entire program", "It selects and sequences datapath operations according to instruction semantics", "It replaces registers with memory", "It guarantees every instruction takes one cycle"]}
-  correctIndex={1}
-  explanation="The datapath provides resources such as registers, ALU, and buses. Control signals select how those resources realize each instruction, often across several steps."
-/>
-
 A processor is not an instruction-shaped black box. It is a coordinated network of storage elements, combinational operators, multiplexers, decoders, and control state. The *datapath* carries and transforms values; the *control unit* determines which values move, which operation an arithmetic unit performs, which registers are written, and how the next program counter is selected. Separating these roles makes a design analyzable: the datapath can be checked against value-flow equations, while control can be checked against an instruction-state transition table.
 
 This chapter builds a small single-cycle and multicycle processor model. The exact ISA is abstract, but the method applies to RISC-V, MIPS-like teaching processors, and custom embedded cores. The objective is not to memorize a block diagram. It is to derive the minimum hardware needed by a set of instruction semantics, identify resource conflicts, and prove that control signals cause no unintended architectural side effects.
@@ -75,6 +68,13 @@ C ..> M : operand select
 C ..> D : read / write enables
 C ..> W : result select
 @enduml`} />
+
+<Quiz client:load title="Separate mechanism and control"
+  question="What is the role of control logic in a datapath?"
+  options={["It stores the entire program", "It selects and sequences datapath operations according to instruction semantics", "It replaces registers with memory", "It guarantees every instruction takes one cycle"]}
+  correctIndex={1}
+  explanation="The datapath provides resources such as registers, ALU, and buses. Control signals select how those resources realize each instruction, often across several steps."
+/>
 
 ## Single-cycle organization
 
@@ -127,6 +127,16 @@ Address generation deserves special attention. A load and store use addition, bu
 
 > **Definition.** The next-PC transition function $\mathrm{PC}_{\text{next}} = \mathrm{Mux}(\mathrm{PCSrc}, \mathrm{PC}+4, \mathrm{PC}+\mathrm{imm}_B, \mathrm{PC}+\mathrm{imm}_J, (R[rs1]+\mathrm{imm}_I)\ \&\ \sim 1, \mathrm{mtvec})$ selects the architectural continuation at the end of the instruction cycle, routing normal flow, taken branches, indirect jumps, and synchronous traps through one arbitrated state update.
 
+**Next-PC selection logic and target generation:**
+
+| Instruction class or event | Selection condition | Target address arithmetic | `PCSrc` code |
+| --- | --- | --- | :---: |
+| Normal sequential step | None (unconditional) | $\mathrm{PC} + 4$ | `00` |
+| Conditional branch (`beq`, `bne`, etc.) | Condition true ($\text{Zero}=1$, etc.) | $\mathrm{PC} + \operatorname{sext}(\mathrm{imm}_B)$ | `01` |
+| Direct jump and link (`jal`) | Unconditional | $\mathrm{PC} + \operatorname{sext}(\mathrm{imm}_J)$ | `10` |
+| Register-indirect jump (`jalr`) | Unconditional | $(R[rs1] + \operatorname{sext}(\mathrm{imm}_I)) \ \& \ \sim 1$ | `11` |
+| Architectural exception / trap | Synchronous fault or interrupt | $\mathrm{mtvec}$ (trap base vector) | `100` |
+
 The next PC is a selection problem. Common candidates are sequential `PC+instruction_length`, a conditional branch target, an unconditional jump target, a register-indirect target, and an exception vector. A branch target may be computed as `PC + sign_extend(offset << alignment)`; the shift encodes the fact that instruction addresses are aligned. The architecture must define whether the base is the current PC or the already incremented PC.
 
 Branch condition and target selection must be coordinated. A not-taken branch chooses sequential PC even if the target arithmetic was computed. A taken branch must commit the target and suppress any unintended register or memory write from the branch itself. In a pipelined implementation, younger instructions may already be in flight; in a single-cycle or multicycle implementation, the control state can choose directly.
@@ -136,6 +146,15 @@ Exceptions add another PC candidate. A faulting load should record a restart add
 ## Memory interfaces and side effects
 
 > **Warning.** When a memory or MMIO port deasserts `ready` during a multicycle access, the control FSM must freeze state transitions and qualify `RegWrite`/`PCWrite` with `mem_ready`; otherwise the processor either latches garbage into `MDR`/`rd` or re-issues a non-idempotent MMIO store across multiple clock edges.
+
+**Worked cycle trace: multicycle memory stall on `lw`:**
+
+| Cycle | Datapath state | `mem_req` | `mem_ready` | FSM action | State invariant |
+| ---: | --- | :---: | :---: | --- | --- |
+| 1 | `MEM_ADDR` | 1 | 0 | Address generated in `ALUOut`; issued to bus | Enter wait state; freeze PC and IR |
+| 2 | `MEM_WAIT` | 1 | 0 | Memory pipeline latency; data unready | Hold request; suppress `MDR` latch and `RegWrite` |
+| 3 | `MEM_WAIT` | 1 | 1 | Memory asserts data valid | Latch read bus into `MDR`; advance FSM |
+| 4 | `LOAD_WB` | 0 | — | Write `MDR` to register file $R[rd]$ | Assert `RegWrite=1`; unfreeze fetch for next PC |
 
 An instruction or data memory interface has an address, read/write request, write data, read data, and completion or fault signal. A simple teaching model may respond in one cycle; a realistic memory can stall. The control unit must not advance state as though data arrived if `ready` is low. A load’s destination write enable must be delayed until data is valid, and a store must not be repeated merely because the surrounding state was re-entered after a wait.
 

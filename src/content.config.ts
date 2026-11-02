@@ -12,7 +12,9 @@ const courses = defineCollection({
     color: z.string(),
     image: z.string().optional(),
     status: z.enum(['public', 'draft']).default('public'),
-    ects: z.union([z.literal(0), z.literal(5), z.literal(7.5), z.literal(10)]),
+    // Credit is calibrated from the declared workload rather than chosen as a
+    // marketing label. Short preparatory modules may carry fractional credit.
+    ects: z.number().nonnegative().max(30),
     workloadHours: z.number().positive().optional(),
     prerequisites: z.object({
       required: z.array(z.string()),

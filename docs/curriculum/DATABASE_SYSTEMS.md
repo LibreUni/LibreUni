@@ -43,7 +43,7 @@ LibreUni exercises, tables, diagrams, simulations, and grading criteria are orig
 
 ## Workload and sequence
 
-The planned workload is 10,800 minutes (180 hours), represented as 7.5 ECTS in the catalog. `estimatedMinutes` counts reading, prediction, worked traces, independent practice, design notes, measurements, and review—not page-scroll time.
+The planned workload is 10,800 minutes (180 hours). Metadata records a provisional workload-equivalence estimate of 7 ECTS; LibreUni awards no academic credit. `estimatedMinutes` counts reading, prediction, worked traces, independent practice, design notes, measurements, and review—not page-scroll time.
 
 | Module | Lesson | Minutes | Evidence produced |
 | --- | --- | ---: | --- |
@@ -78,7 +78,7 @@ The target course is rigorous, not prose-first. An artifact appears beside the c
 | Set/bag/NULL query semantics | relation-table explorer and algebra tree | predict rows and multiplicities |
 | Functional-dependency implication | closure stepper and labelled derivation | choose the next dependency that can fire |
 | Lossless decomposition | relation projection/join counterexample | predict whether a spurious tuple appears |
-| SQL result and predicate placement | code completion plus hand-worked result table | commit the rows before exposing the query |
+| SQL result and predicate placement | fixed-fixture SQLite runner, code completion, and hand-worked result table | predict rows and compare them with execution; use PostgreSQL for PostgreSQL-specific claims |
 | Page, buffer, and index behavior | page-map/B+ tree trace | identify the next I/O or separator range |
 | Plan quality | operator tree and bounded cost model | predict which intermediate result dominates cost |
 | Isolation | schedule explorer and precedence graph | name the first event that violates the invariant |

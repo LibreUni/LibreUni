@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import PlantUML from '../../../components/PlantUML.astro';
 
-<Quiz client:load title="Bound the speedup"
-  question="Why can doubling the number of cores fail to double application speed?"
-  options={["Additional cores cannot execute instructions from the same compiled program", "Serial work, synchronization, memory bandwidth, and imbalance limit speedup", "Parallel programs stop using shared memory after work is divided", "Processor clock frequency necessarily halves whenever another core becomes active"]}
-  correctIndex={1}
-  explanation="Amdahl-style limits and shared resources constrain the useful parallel fraction. Extra cores may add contention rather than throughput."
-/>
-
 When a single instruction stream cannot provide enough parallel work, architects add parallel execution resources. A multicore processor contains several cores, each with a program counter, registers, pipeline, and usually private upper-level caches, connected to shared memory or shared lower-level caches. SIMD (single instruction, multiple data) applies one instruction to multiple lanes of a vector register. Both approaches can increase throughput, but neither turns an inherently sequential algorithm into a parallel one. The limiting resources are serial dependencies, synchronization, memory bandwidth, communication, locality, and the cost of coordinating independent work.
 
 ## Parallel speedup and its limits
@@ -44,6 +37,13 @@ As $P\to\infty$, speedup approaches $1/s$. If $s=0.1$, the limit is 10× even wi
 Gustafson’s law describes a scaled problem where the parallel portion grows with processor count. It can justify using more cores for larger datasets, but it does not invalidate Amdahl’s limit for a fixed problem. A performance claim must specify whether input size is fixed or scaled.
 
 **Worked example.** A workload is 90% parallel and runs in 100 seconds on one core. On 8 cores, the ideal time is $10+90/8=21.25$ seconds, speedup 4.71, not 8. If synchronization adds 2 seconds and load imbalance adds 10% to the parallel component, the real time is larger still. Measuring only the parallel kernel can hide serial setup and teardown that dominate end-to-end time.
+
+<Quiz client:load title="Bound the speedup"
+  question="Why can doubling the number of cores fail to double application speed?"
+  options={["Additional cores cannot execute instructions from the same compiled program", "Serial work, synchronization, memory bandwidth, and imbalance limit speedup", "Parallel programs stop using shared memory after work is divided", "Processor clock frequency necessarily halves whenever another core becomes active"]}
+  correctIndex={1}
+  explanation="Amdahl-style limits and shared resources constrain the useful parallel fraction. Extra cores may add contention rather than throughput."
+/>
 
 ## Shared-memory execution model
 
@@ -116,6 +116,13 @@ Data-dependent branches reduce SIMD efficiency because lanes may require differe
 
 A reduction such as summing an array has a dependency chain if written as one accumulator. SIMD uses partial sums in lanes, then combines them in a tree. A multicore reduction gives each thread a chunk, computes a local sum, and combines partials. The tree reduces span from $O(n)$ to $O(\log n)$ after parallel work, but floating-point order changes and synchronization/combination costs remain.
 
+| Reduction Step | Active Elements / Vector Lanes | Pairwise Computation | Cumulative Span ($D$) | Total Parallel Work ($W$) |
+| :---: | :--- | :--- | :---: | :---: |
+| Step 0 | 8 elements: $x_0, x_1, x_2, x_3, x_4, x_5, x_6, x_7$ | Initial data distribution | 0 | 0 operations |
+| Step 1 | 4 pairs: $(x_0+x_1), (x_2+x_3), (x_4+x_5), (x_6+x_7)$ | SIMD vector add (lane stride 1) | 1 addition | 4 operations |
+| Step 2 | 2 pairs: $(s_{01}+s_{23}), (s_{45}+s_{67})$ | SIMD vector add (lane stride 2) | 2 additions | 6 operations |
+| Step 3 | 1 final pair: $(s_{0123}+s_{4567})$ | Scalar or horizontal reduction add | 3 additions | 7 operations |
+
 Barrier synchronization lets threads exchange a phase boundary: no thread proceeds until all arrive. Barriers are safe only when every participating thread executes the same barrier count under the same control conditions. A thread that skips a barrier can deadlock its peers. Fences order memory operations but do not by themselves wait for another thread; a barrier usually combines a control rendezvous with memory-order semantics.
 
 ## Scheduling and load balance
@@ -123,6 +130,13 @@ Barrier synchronization lets threads exchange a phase boundary: no thread procee
 > **Definition.** In the work-span task-graph model with total work $T_1 = W$ and critical-path span $T_\infty = D$, execution time $T_P$ on $P$ processors satisfies the lower bound $T_P \ge \max(W/P, D)$ and greedy-scheduler upper bound $T_P \le W/P + D$.
 
 Static partitioning assigns predictable chunks and has low overhead, but uneven work creates idle cores. Dynamic scheduling distributes tasks from a shared queue, improving balance at synchronization and contention cost. Work stealing lets idle workers take tasks from others, often scaling better for recursive irregular workloads but complicating locality and determinism.
+
+| Scheduling Strategy | Task Assignment Timing | Dispatch Overhead | Dynamic Imbalance Tolerance | Cache Locality Preservation |
+| :--- | :--- | :--- | :--- | :--- |
+| **Static Block** | Compile time / loop start | Minimal ($O(1)$ loop bounds arithmetic) | Poor (stragglers stall entire parallel phase) | High (contiguous chunks remain in local L1/L2 cache) |
+| **Dynamic Shared Queue** | Runtime worker demand | High (atomic locks/CAS on centralized queue) | High (fast workers drain more tasks) | Poor (tasks ping-pong between core cache domains) |
+| **Guided Self-Scheduling** | Dynamic decreasing chunks | Moderate (coarse initial chunks, fine tails) | Moderate-High (balances overhead vs imbalance) | Moderate (initial large chunks preserve spatial locality) |
+| **Work Stealing** | Thread-local deques + steal | Low on local work; contention only when idle | Exceptional (handles irregular recursive trees) | High (threads work locally until starvation occurs) |
 
 The critical path or span limits parallel speedup. If a task graph has total work $W$ and span $D$, an ideal lower bound with $P$ processors is at least $\max(W/P,D)$; scheduling overhead adds more. Amdahl’s serial fraction is one coarse view of span; a task graph exposes parallelism at finer granularity.
 

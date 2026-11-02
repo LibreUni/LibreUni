@@ -20,6 +20,7 @@ assessment: "Given an unseen page trace and workload, identify the first violate
 
 import PlantUML from '../../../components/PlantUML.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Quiz from '../../../components/Quiz';
 
 # Storage Engines
 
@@ -118,6 +119,47 @@ An event table receives 50,000 inserts/s, later serves a 90-day aggregate, and a
 An append-friendly log/LSM or time-partitioned row store fits the ingest path; columnar segments or a columnar replica can serve the aggregate after data becomes stable. A B-tree or hash-like key directory on `event_id` supplies the support lookup. The decision is conditional: if support lookups become dominant and updates are frequent, a row-oriented primary store may become the simpler choice.
 </ExerciseSolution>
 
+## Columnar execution changes the unit of work
+
+{/* Source tracking: Column layouts and materialization are synthesized from C-Store (2005) and Abadi et al. (2008); vector-at-a-time execution is synthesized from MonetDB/X100 (2005). The workload examples are original. */}
+
+> **Definition.** A row store keeps the fields of one logical row adjacent; a column store keeps values of one attribute adjacent across rows. The layout changes which bytes a scan must read, which encodings are cheap, and how updates are applied.
+
+A finance query that sums `amount` over 200 million orders touches one or two attributes. In a row store with a 200-byte row, a full scan still reads every attribute for every row: roughly 40 GB. In a column store the same query reads the `amount` column and perhaps `region`, and each column segment can be compressed independently: dictionary encoding for repeated region names, delta encoding for ordered timestamps, run-length encoding for low-cardinality status. The saving is not a better algorithm; it is a different unit of I/O.
+
+A vectorized executor can process batches instead of invoking each operator once per row. Amortizing dispatch and processing contiguous values can improve CPU efficiency and sometimes expose SIMD operations; the gain depends on operator, data, and implementation. The MonetDB/X100 design uses this approach. Vectorized execution and columnar storage are complementary choices, not the same mechanism, and compression can add decoding work.
+
+| Question | Row store answer | Column store answer |
+| --- | --- | --- |
+| Read one full order | one page, all attributes together | reconstruct the row from several column segments |
+| Sum one numeric column | read all attributes, discard most | read only that segment, often compressed |
+| Update one field | in-place or new tuple version | append a delta or rewrite a segment |
+| Compress repeated values | limited by row heterogeneity | strong per-column encodings |
+| Late materialization | unnecessary | fetch remaining columns only for qualifying rows |
+
+Columnar layouts pay for their scan advantage on updates and point reads. A single-row update may touch many segments, and a delete becomes a deletion vector or a rewritten segment. That is why analytical engines separate ingest, compaction, and query paths, and why a columnar layout is a workload hypothesis rather than a universal upgrade.
+
+### Application — change the workload
+
+A fraud service changes from nightly two-column scans to frequent updates and lookups of individual orders with all 25 attributes. Does the original columnar advantage still determine the primary layout?
+
+<ExerciseSolution hint="Compare the bytes and structures touched by a point operation, not only the scan's previous throughput.">
+Not by itself. A row-oriented primary with an order-ID index can fetch and update one record without reconstructing it from multiple column segments. Retain a columnar analytical replica only if measured scan demand justifies replication and freshness costs. Compare update rate, point latency, scan frequency, and lag rather than assuming either layout is always superior.
+</ExerciseSolution>
+
+<Quiz client:load
+  title="Columnar layout and late materialization"
+  question="An analytical query evaluates SELECT AVG(revenue) FROM orders WHERE status = 'delivered' AND date >= '2026-01-01'. The table has 40 columns. How does a column store with late materialization minimize I/O compared to a row store?"
+  options={[
+    "It scans and filters only the compressed status and date columns first, and fetches revenue column segments only for qualifying row positions.",
+    "It reconstructs all 40 columns of every row in memory before evaluating the WHERE clause filters.",
+    "It eliminates I/O because all columns in a columnar database are maintained in memory without disk persistence.",
+    "It converts all 40 attributes into integer indices to allow sorting in a single CPU cycle."
+  ]}
+  correctIndex={0}
+  explanation="In a column store, attributes reside in separate contiguous column segments. With late materialization, the engine first scans and evaluates filters on the status and date columns alone, constructing a bitset of matching row positions. It then retrieves only the revenue column for matching positions, avoiding I/O and cache pollution for the remaining 37 unused attributes as well as non-qualifying revenue values."
+/>
+
 ## A log makes a dirty page recoverable
 
 > **Theorem.** Under write-ahead logging, the log record describing a page change must be durable before the changed data page can be written to durable storage. A commit acknowledgement requires the commit record's durability under the stated failure model.
@@ -136,6 +178,9 @@ Nothing from LSN 911 may be exposed, because neither its log record nor its page
 
 ## References & Further Reading
 
+* Stonebraker, M., et al. (2005). *C-Store: A Column-oriented DBMS*. VLDB, 553–564. (Column layout, compression, and read-optimized projections.)
+* Abadi, D. J., Madden, S. R., & Hachem, N. (2008). *Column-Stores vs. Row-Stores: How Different Are They Really?* ACM SIGMOD, 967–980. (Late materialization, compression, and the limits of a row-store simulation.)
+* Boncz, P. A., Zukowski, M., & Nes, N. J. (2005). *MonetDB/X100: Hyper-Pipelining Query Execution*. CIDR. (Vectorized, cache-conscious execution.)
 * [PostgreSQL: Database Page Layout](https://www.postgresql.org/docs/current/storage-page-layout.html)
 * [PostgreSQL: Write-Ahead Logging](https://www.postgresql.org/docs/current/wal-intro.html)
 * [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

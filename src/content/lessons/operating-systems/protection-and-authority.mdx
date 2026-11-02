@@ -19,6 +19,7 @@ assessment: "Given an unfamiliar service and authority graph, identify ambient a
 ---
 
 import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
 
 # Protection and Authority
 
@@ -88,15 +89,32 @@ The caller supplied a **designation**—a string interpreted in a mutable namesp
 
 </details>
 
+<Quiz client:load
+  title="Confused deputy and capability passing"
+  question="A daemon running with root privileges provides a backup service over an IPC socket. An untrusted user asks the daemon to back up a file by providing a target path string. How does an object-capability design prevent the daemon from becoming a confused deputy?"
+  options={[
+    "The client opens the file under its own user privileges and passes the resulting open file descriptor over the socket; the daemon operates solely on that descriptor.",
+    "The daemon calls access(path, R_OK) using the user's UID immediately before opening the path string with its ambient root authority.",
+    "The daemon prefixes all requested file paths with /tmp to guarantee safe storage boundaries.",
+    "The daemon checks that the requested path string does not contain '..' or symlink traversals."
+  ]}
+  correctIndex={0}
+  explanation="In a confused deputy vulnerability, an unprivileged caller tricks a privileged service into accessing an unauthorized object using the service's ambient root authority on a forgeable designation (the path string). In an object-capability model, authority is bundled with the reference: the caller must open the file with its own rights and pass the unforgeable descriptor. The daemon operates on the provided capability rather than exercising its own ambient authority, eliminating TOCTTOU pathname races and privilege escalation."
+/>
+
 ## Derive the reference monitor obligations
 
 > **Definition.** A reference monitor mediates an access request $(s, o, r)$ soundly only if it satisfies three properties simultaneously: **complete mediation** (no access path bypasses the check or uses stale unrevoked cached authority), **tamper resistance** (untrusted subjects cannot modify policy state or forge references), and **verifiability** (the trusted enforcement boundary is small and analyzable).
 
-A protection decision is trustworthy only if every relevant access path passes through a mechanism that policy controls. Three obligations follow:
+A protection decision is trustworthy only if every relevant access path passes through a mechanism that policy controls.
 
-1. **Complete mediation:** every security-relevant access is checked against current or validly cached authority.
-2. **Tamper resistance:** untrusted subjects cannot alter the monitor, its policy state, or protected references.
-3. **Verifiability:** the mechanism is small and structured enough to analyze relative to its specification.
+**Reference monitor obligations and failure modes:**
+
+| Obligation | Architectural implementation mechanism | Concrete failure mode when violated |
+| --- | --- | --- |
+| **Complete mediation** | Hardware MMU checks every memory access; syscall trap checks all requests | Peripheral DMA bypasses CPU MMU; or stale cached capability permits revoked access |
+| **Tamper resistance** | Hardware privilege rings (U-mode vs S-mode); kernel memory protected | Stack buffer overflow overwrites kernel PC; or writable mapping aliases page table |
+| **Verifiability** | Minimal trusted computing base with formalized state invariants | Tens of millions of lines in a monolithic kernel preclude formal correctness proofs |
 
 Complete mediation does not require a slow policy database lookup on every byte. A successful `open` can create a kernel-protected descriptor that embodies the authorized object and access mode; subsequent `read` operations mediate possession and rights of that descriptor. The cached decision is valid only while the policy contract permits it. Revocation semantics must say whether existing descriptors continue working.
 

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-LibreUni Pedagogical & Cadence Auditor
-Evaluates lessons against Ivy-League / 10-ECTS pedagogical standards:
-1. Interactivity distribution (checks that exercises are woven throughout, not dumped at the end).
-2. Cognitive load & paragraph length (detects wall-of-text fatigue).
-3. Retrieval practice & predict-then-reveal checkpoints.
-4. Formal definitions, worked traces, counterexamples, and deliberate omissions.
+Heuristic lesson inventory for manual pedagogical review.
+
+Signals are keyword and source-pattern matches, not evidence that an example,
+assessment, or omission is educationally adequate. Disclosures and diagrams
+are counted as representations, not necessarily interactive retrieval.
 """
 
 from __future__ import annotations
@@ -145,7 +144,8 @@ def main():
         print("No lesson files found matching target.")
         sys.exit(1)
 
-    print(f"=== LibreUni Pedagogical & Cadence Audit ({len(files)} lessons) ===\n")
+    print(f"=== LibreUni heuristic lesson inventory ({len(files)} lessons) ===")
+    print("Pattern scores are review aids, not a pedagogical standard or certification.\n")
     failed = 0
     for f in sorted(files):
         res = audit_lesson(f)
@@ -159,9 +159,10 @@ def main():
         if res["findings"]:
             print()
 
-    print(f"Audit Summary: {len(files) - failed}/{len(files)} lessons met standard (min score {args.min_score}).")
+    print(f"Heuristic summary: {len(files) - failed}/{len(files)} lessons meet the configured pattern threshold ({args.min_score}).")
+    print("This result does not establish lesson quality, assessment validity, or creditworthiness; review the source and exercises.")
     if failed > 0:
-        print(f"{failed} lesson(s) require pedagogical refinement.")
+        print(f"{failed} lesson(s) are below the pattern threshold and need review.")
 
 
 if __name__ == "__main__":

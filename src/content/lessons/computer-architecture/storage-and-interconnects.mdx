@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import PlantUML from '../../../components/PlantUML.astro';
 
-<Quiz client:load title="Trace the transaction"
-  question="Why must an interconnect protocol define ownership and completion separately?"
-  options={["All connected devices share one clock and finish work on the same edge", "A request can be accepted before the operation's data or response is complete", "Persistent storage has no latency after an interconnect accepts its request", "Completion is only a software concern and never changes hardware ownership"]}
-  correctIndex={1}
-  explanation="Pipelined or buffered interconnects decouple request acceptance from completion. The protocol needs IDs, ordering, backpressure, and error behavior."
-/>
-
 The processor is one participant in a system that includes DRAM, persistent storage, network devices, accelerators, and controllers. An interconnect transports requests and responses among them; a storage hierarchy determines where data resides and what latency, bandwidth, ordering, and durability guarantees apply. Architecture students must distinguish capacity from availability, visibility from persistence, and link bandwidth from end-to-end throughput. A device can accept a request quickly while the data remains queued, buffered, or volatile.
 
 ## Interconnect transactions
@@ -38,6 +31,13 @@ An interconnect transaction generally contains an address or route, command, att
 Ordering is a protocol property. A system may guarantee that requests from one source preserve order, allow reads to pass writes, or permit responses to return out of order with IDs. The CPU’s memory model, cache coherence protocol, device DMA rules, and interconnect ordering must compose. A memory fence that orders ordinary cacheable stores may not order a device transaction unless the address space and ISA explicitly assign that meaning.
 
 **Worked trace: descriptor and doorbell ordering.** A CPU stores a descriptor, rings a device doorbell, and expects the device to read the descriptor. The descriptor write must become visible to the device before the doorbell write is observed. A release fence or device-memory ordering operation establishes this. If the doorbell passes the descriptor on the interconnect, the device may fetch uninitialized fields even though the CPU executed the stores in source order.
+
+<Quiz client:load title="Trace the transaction"
+  question="Why must an interconnect protocol define ownership and completion separately?"
+  options={["All connected devices share one clock and finish work on the same edge", "A request can be accepted before the operation's data or response is complete", "Persistent storage has no latency after an interconnect accepts its request", "Completion is only a software concern and never changes hardware ownership"]}
+  correctIndex={1}
+  explanation="Pipelined or buffered interconnects decouple request acceptance from completion. The protocol needs IDs, ordering, backpressure, and error behavior."
+/>
 
 ## Buses, links, and topologies
 
@@ -67,6 +67,13 @@ A sequential stream benefits from burst transfers and row locality. Random acces
 > **Definition.** End-to-end storage service time decomposes as $T_{\mathrm{I/O}} = T_{\mathrm{queue}} + T_{\mathrm{cmd}} + T_{\mathrm{media}} + T_{\mathrm{transfer}} + T_{\mathrm{completion}}$, where $T_{\mathrm{media}}$ is dominated by mechanical seek plus rotational delay on magnetic disks and by flash page read/program plus FTL garbage-collection stalls on SSDs.
 
 Storage devices add controller queues, translation layers, flash erase blocks, wear leveling, garbage collection, and firmware scheduling. A solid-state drive may complete small random reads quickly relative to a disk, but latency still varies with queue depth, garbage collection, thermal state, and whether data is resident in a device cache. A disk’s seek and rotation make sequential access much cheaper than random access.
+
+| Storage Architecture | 4 KiB Random Read Latency | Sustained Sequential Bandwidth | Overwrite / Erase Granularity | Queue Concurrency Model |
+| :--- | :--- | :--- | :--- | :--- |
+| **Mechanical HDD** | $5 - 15\,\text{ms}$ (seek + rotation) | $150 - 250\,\text{MB/s}$ | In-place 512B/4KiB sector rewrite | Native Command Queueing (NCQ, 32 commands) |
+| **SATA SSD** (AHCI) | $50 - 100\,\mu\text{s}$ | $500 - 550\,\text{MB/s}$ | Flash page read/write (4-16 KiB); block erase (2-8 MiB) | Single queue (32 entries); host register bottleneck |
+| **NVMe SSD** (PCIe Gen4) | $10 - 25\,\mu\text{s}$ | $5{,}000 - 7{,}500\,\text{MB/s}$ | Flash page write; background FTL garbage collection | Up to 64K submission/completion queue pairs (64K entries each) |
+| **Persistent Memory** (CXL) | $100 - 300\,\text{ns}$ | $20 - 32\,\text{GB/s}$ | Byte/cache-line direct addressability (`clwb` + `sfence`) | Direct load/store instructions via memory bus |
 
 The cost of an I/O request can be decomposed as queueing, command setup, media access, transfer, and completion notification. At low queue depth, media latency dominates; at high queue depth, queueing and contention dominate. A benchmark must state queue depth and request size. Reporting only peak sequential bandwidth cannot predict small synchronous writes.
 
@@ -103,6 +110,13 @@ end note
 
 A coherent DMA device participates in the cache-coherence domain or uses a coherent interconnect, so CPU and device copies follow a defined protocol. A noncoherent device requires explicit cache clean/invalidate operations. For a CPU-to-device buffer, dirty CPU cache lines must be written back before the device reads. For a device-to-CPU buffer, stale CPU cache lines must be invalidated before the CPU reads. The exact operation order depends on direction and platform.
 
+| DMA Transfer Direction | Platform Architecture | Required Pre-DMA Action | Required Post-DMA Action | Correctness Invariant |
+| :--- | :--- | :--- | :--- | :--- |
+| **CPU $\to$ Device** (Transmit) | Coherent Interconnect | Issue memory barrier (`sfence` / `dmb`) | Reclaim buffer on completion interrupt | Coherence engine snoops dirty L1/L2 lines automatically |
+| **CPU $\to$ Device** (Transmit) | Noncoherent Interconnect | Clean / Write-back dirty cache lines to RAM | Reclaim buffer on completion interrupt | Device reads valid payload from DRAM; no dirty CPU eviction overwrites |
+| **Device $\to$ CPU** (Receive) | Coherent Interconnect | Allocate and map buffer; publish descriptor | Read payload after acquire barrier | Snooping invalidates stale CPU cache lines on device DMA write |
+| **Device $\to$ CPU** (Receive) | Noncoherent Interconnect | Invalidate buffer range in CPU cache | Invalidate cache again before reading payload | CPU cannot read stale cached data; uncommitted CPU writes cannot clobber DMA |
+
 A descriptor ring has two agents updating different fields: the producer publishes a descriptor, and the consumer observes it and later returns ownership. Use release/acquire ordering or the platform’s DMA primitives. Do not infer safety from interrupt delivery alone; an interrupt can arrive before earlier writes become visible to the CPU if the architecture permits that ordering.
 
 ## Interrupts, polling, and completion queues
@@ -118,6 +132,13 @@ A completion queue decouples device progress from handler execution. The produce
 > **Definition.** Single-Error Correcting, Double-Error Detecting (SECDED) Hamming codes add parity bits to each 64-bit DRAM word (typically 8 ECC bits for a 72-bit codeword of Hamming distance 4), correcting any 1-bit flip transparently and raising a synchronous machine-check exception on any 2-bit flip.
 
 Interconnects and storage controllers detect corruption with parity, ECC, CRC, retries, or end-to-end checksums. A corrected error may be logged; an uncorrectable error may raise an exception, return a failed request, or mark a device block bad. Software must distinguish transient retry from permanent failure and must not report durable success before the relevant persistence guarantee holds.
+
+| Codeword Parity ($P$) | Syndrome Vector ($S$) | Error Classification | Hardware Action | Architectural Consequence |
+| :---: | :---: | :--- | :--- | :--- |
+| Even ($P = 0$) | $S = \mathbf{0}$ | No error detected | Forward DRAM word to memory controller | Normal memory transaction completes |
+| Odd ($P = 1$) | $S \ne \mathbf{0}$ | Single-bit error (correctable) | Invert bit at index $S$; log syndrome in register | Corrected data delivered; correctable error counter increments |
+| Even ($P = 0$) | $S \ne \mathbf{0}$ | Double-bit error (uncorrectable) | Suppress data delivery; assert error flag | Machine check exception (MCE) raised; kernel panics or kills task |
+| Odd ($P = 1$) | $S = \mathbf{0}$ | Parity bit itself corrupted | Correct parity bit; log single-bit event | Correct payload delivered transparently to CPU |
 
 ECC memory can correct a one-bit error and detect certain multi-bit patterns depending on code. The architectural consequence may be transparent correction or a machine-check exception. Redundancy improves reliability but does not make silent corruption impossible; end-to-end checksums detect errors that occur outside the protected segment or in software.
 

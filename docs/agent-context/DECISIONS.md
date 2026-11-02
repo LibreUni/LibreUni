@@ -59,6 +59,20 @@
 ## D-0009 — Dual lab-fixture and deterministic playground-model verification
 
 - **Status:** accepted · 2026-10-30
-- **Decision:** Operating Systems labs combine (a) a pinned upstream `xv6-riscv` revision-5 reference snapshot (`7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`) with verified file/symbol anchors under `fixtures/xv6-riscv/` and (b) in-repo deterministic executable lab models and mutation-killing oracles in `src/lib/osLabModels.mjs` (WVT scheduler, Virtio split/indirect queue lifecycle, atomic directory rename with crash-window injection). Every shipped interactive playground exports pure model functions tested under `scripts/test_os_models.mjs`, `scripts/test_architecture_models.mjs`, and `tests/database-playground-models.test.mjs` via `npm run test:models`.
-- **Rationale:** Learners who build the full `xv6-riscv` kernel need exact, pinned upstream commit and patch-point contracts, while repository CI and in-browser readers need deterministic, self-contained models and independent oracles that kill named wrong implementations without claiming simulated numbers are hardware benchmarks.
-- **Sources:** [`fixtures/xv6-riscv/README.md`](../../fixtures/xv6-riscv/README.md), [`src/lib/osLabModels.mjs`](../../src/lib/osLabModels.mjs), [`scripts/test_os_models.mjs`](../../scripts/test_os_models.mjs)
+- **Decision:** Operating Systems lab briefs reference upstream `xv6-riscv` revision 5 at commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`; learners obtain the upstream source separately. The repository also tests deterministic scheduler, Virtio queue, and rename models, alongside playground models.
+- **Rationale:** Pinned upstream anchors support reproducible kernel work; the smaller local models provide testable examples without presenting them as a kernel implementation or hardware benchmark.
+- **Sources:** [`scheduler-lab.mdx`](../../src/content/lessons/operating-systems/scheduler-lab.mdx), [`src/components/playgrounds/osLabModels.mjs`](../../src/components/playgrounds/osLabModels.mjs), [`scripts/test_os_models.mjs`](../../scripts/test_os_models.mjs).
+
+## D-0010 — Credit labels are derived from declared workload
+
+- **Status:** provisional implementation · 2026-11-02
+- **Decision:** Course metadata records workload-equivalence estimates of 1, 7.5, 7, and 7.5 ECTS for Calculus, Architecture, Databases, and Operating Systems respectively. The estimates use an internal 22–28 hours-per-credit range. LibreUni does not award academic credit; actual ECTS award and recognition depend on an institution's assessment and policies.
+- **Rationale:** The previous 5-credit estimate for the 28-hour preparatory module was inconsistent with its declared workload. The module remains a seven-lesson exception to the normal course-size and study-time standard, not a complete 150–200-hour course.
+- **Sources:** [`src/content/courses/`](../../src/content/courses/), [`scripts/test_quality_contract.mjs`](../../scripts/test_quality_contract.mjs), [`course overview`](../../src/pages/courses/%5BcourseId%5D.astro), and the [European Commission's ECTS overview](https://education.ec.europa.eu/education-levels/higher-education/inclusive-and-connected-higher-education/european-credit-transfer-and-accumulation-system).
+
+## D-0011 — Database labs execute read-only SQL in the browser
+
+- **Status:** accepted · 2026-11-02
+- **Decision:** `SqlRunner` seeds a fresh fixed fixture into an in-browser SQLite database for each read-only query. SQL lab and SQL-querying use it to make result contracts executable. SQLite is not PostgreSQL; PostgreSQL-specific constraint errors, isolation, and plans require a PostgreSQL run.
+- **Rationale:** A paper-only SQL lab let a wrong join or a misplaced predicate look plausible. The component keeps the fixture deterministic and the execution sandboxed, while the lesson states the dialect boundary instead of hiding it.
+- **Sources:** [`src/components/SqlRunner.tsx`](../../src/components/SqlRunner.tsx), [`sql-lab.mdx`](../../src/content/lessons/database-systems/sql-lab.mdx), [`sql-querying.mdx`](../../src/content/lessons/database-systems/sql-querying.mdx), [`COURSE_COMPONENTS.md`](../agent-rules/COURSE_COMPONENTS.md).

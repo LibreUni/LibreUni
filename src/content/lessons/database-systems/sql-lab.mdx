@@ -1,33 +1,34 @@
 ---
 title: "SQL lab: build and verify a registration report"
 course: "database-systems"
-description: "Use a deterministic PostgreSQL fixture to derive, test, and explain joins, grouped reports, anti-joins, and schema constraints."
+description: "Use a deterministic registration fixture to execute and explain joins, grouped reports, anti-joins, and schema constraints."
 prerequisites:
   - "SQL querying: joins, clause order, grouping, NULL, and `NOT EXISTS`"
   - "Schema review: grain, keys, foreign keys, and check constraints"
 outcomes:
-  - "Load or hand-trace a fixed registration fixture and state the expected result of a query before running it."
-  - "Build zero-safe grouped reports and NULL-safe anti-joins in PostgreSQL."
-  - "Use adversarial rows and optional `EXPLAIN` evidence to separate query correctness from a performance observation."
+  - "Load the fixed registration fixture in the in-browser SQLite runner or a disposable PostgreSQL database, and state the expected result before running a query."
+  - "Build zero-safe grouped reports and NULL-safe anti-joins in SQL, then verify the claims that are portable across SQLite and PostgreSQL."
+  - "Use adversarial rows and PostgreSQL `EXPLAIN` evidence to separate query correctness from a performance observation."
 omissions:
-  - "This lab does not provide arbitrary SQL execution, production deployment, transaction-concurrency testing, or vendor portability certification."
+  - "The browser runner executes read-only SQLite against the fixed fixture. It does not provide a PostgreSQL planner, multi-statement mutation, production deployment, transaction-concurrency testing, or vendor portability certification."
 estimatedMinutes: 720
 assessment: "Submit a query portfolio containing a result contract, SQL, predicted and observed edge-case rows, constraint tests, and a brief explanation of one plan observation."
 ---
 
 import CodeExercise from '../../../components/CodeExercise';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import SqlRunner from '../../../components/SqlRunner';
 
 # SQL lab: build and verify a registration report
 
-This is a paper-first lab with an optional PostgreSQL 18 run. Every task has a fixed fixture and expected edge cases, so you can complete the semantic work without a database server. If you do run it, use a disposable local database: the SQL below creates and inserts lab data.
+Every task uses the same fixed fixture and expected edge cases. The embedded runner executes read-only SQLite in the browser, so a wrong join or a misplaced predicate produces a real result rather than a plausible hand trace. SQLite and PostgreSQL both support aggregate `FILTER`, but a SQLite result is not evidence of PostgreSQL-specific behavior. Use a disposable local PostgreSQL database for constraint error text and PostgreSQL plans.
 
 | Evidence path | What it establishes | What it does not establish |
 | --- | --- | --- |
+| In-browser SQLite runner | executable join, grouping, and `NOT EXISTS` result semantics for this fixture | PostgreSQL-specific planner, MVCC, constraint error text, or isolation behavior |
 | PostgreSQL 18 fixture | PostgreSQL syntax, constraints, `FILTER`, and an observed `EXPLAIN` plan | behavior of other engines or every workload |
-| SQLite or hand trace | portable join, grouping, and `NOT EXISTS` result semantics for this fixture | PostgreSQL planner, MVCC, error text, or isolation behavior |
 
-Record the engine and version with every observed result. Do not submit SQLite output as evidence that a PostgreSQL-specific statement or plan executed.
+Record the engine and version with every observed result. In the runner, `SELECT sqlite_version();` reports the bundled SQLite version. Do not submit SQLite output as evidence that a PostgreSQL-specific statement or plan executed.
 
 > **Definition.** A lab result contract states the output grain, inclusion rules, ordering, and test rows before execution. A query is not complete because it returns plausible rows on a happy-path dataset.
 
@@ -40,13 +41,13 @@ Record the engine and version with every observed result. Do not submit SQLite o
 | Constraint probes | Four deliberately invalid writes | Each is rejected by the intended key, foreign key, or check |
 | Plan observation (optional) | `EXPLAIN` output and one cautious claim | A measured plan fact, not a promise that all data will use that plan |
 
-> **Warning.** Do not run these statements against a shared or production schema. The lesson has no arbitrary SQL executor; a local PostgreSQL instance is optional, and the supplied tables are enough to hand-trace each task.
+> **Warning.** The browser runner is read-only and sandboxed to this fixture; it is not a production client. Do not run lab statements against a shared or production schema, and do not treat SQLite acceptance as proof of PostgreSQL behavior.
 
 {/* Source tracking: SQL query semantics, `SELECT` clause behavior, `EXPLAIN`, and constraints in this lab are synthesized from PostgreSQL’s current documentation. */}
 
 ## Create the fixed fixture
 
-If you have a disposable PostgreSQL database, load the schema and rows. Otherwise, use the tables as the authoritative fixture for hand tracing.
+The browser runner below loads this fixture into SQLite automatically. To test PostgreSQL-specific behavior, load these statements into a disposable PostgreSQL database; the tables also support hand tracing.
 
 ```sql
 CREATE TABLE student (
@@ -91,6 +92,54 @@ INSERT INTO enrollment (student_id, offering_id, status, grade) VALUES
 | `offering` | DB101, DB201, DB301 are in 2026S; DB101 also has an older 2025F offering |
 | `enrollment` | Ada is enrolled in current DB101; Bo is dropped; Cy is waitlisted; Dee is enrolled only in the old term |
 
+### Execute the fixture
+
+The runner creates the tables and rows above in SQLite. Predict the warm-up report before pressing **Run query**, then change the query and explain every difference.
+
+<SqlRunner
+  client:load
+  title="Registration fixture"
+  description="Count enrolled students per 2026S offering. Predict three rows, including the zero counts, before running."
+  schema={`CREATE TABLE student (
+  student_id   integer PRIMARY KEY,
+  display_name text NOT NULL
+);
+CREATE TABLE offering (
+  offering_id integer PRIMARY KEY,
+  code        text NOT NULL,
+  term        text NOT NULL,
+  capacity    integer NOT NULL CHECK (capacity >= 0)
+);
+CREATE TABLE enrollment (
+  student_id  integer NOT NULL REFERENCES student(student_id),
+  offering_id integer NOT NULL REFERENCES offering(offering_id),
+  status      text NOT NULL CHECK (status IN ('enrolled', 'waitlisted', 'dropped')),
+  grade       integer CHECK (grade IS NULL OR grade BETWEEN 0 AND 100),
+  PRIMARY KEY (student_id, offering_id)
+);
+INSERT INTO student (student_id, display_name) VALUES
+  (1, 'Ada'), (2, 'Bo'), (3, 'Cy'), (4, 'Dee');
+INSERT INTO offering (offering_id, code, term, capacity) VALUES
+  (10, 'DB101', '2026S', 2),
+  (11, 'DB201', '2026S', 1),
+  (12, 'DB301', '2026S', 2),
+  (13, 'DB101', '2025F', 2);
+INSERT INTO enrollment (student_id, offering_id, status, grade) VALUES
+  (1, 10, 'enrolled', 87),
+  (2, 10, 'dropped', 40),
+  (3, 11, 'waitlisted', NULL),
+  (4, 13, 'enrolled', 93);`}
+  initialQuery={`SELECT o.code,
+       COUNT(e.student_id) AS enrolled_count
+FROM offering AS o
+LEFT JOIN enrollment AS e
+  ON e.offering_id = o.offering_id
+ AND e.status = 'enrolled'
+WHERE o.term = '2026S'
+GROUP BY o.offering_id, o.code
+ORDER BY o.code;`}
+/>
+
 > **Invariant.** `enrollment` has grain “one student's status in one offering.” Its composite primary key forbids two simultaneous rows for the same student/offering pair. The foreign keys forbid an enrollment for an unknown student or offering.
 
 ### Warm-up prediction
@@ -104,19 +153,26 @@ The desired report has DB101 with count 1, DB201 with count 0, and DB301 with co
 
 ## Task 1: keep offerings with zero enrolled students
 
-**Result contract:** one row per offering in `2026S`, including offerings with no enrolled students; columns are `code`, `enrolled_count`, and `is_full`; ordered by code then offering ID.
+**Result contract:** one row per offering in `2026S`, including offerings with no enrolled students; columns are `offering_id`, `code`, `enrolled_count`, and `is_full`; ordered by code then offering ID.
 
 Start with this skeleton. Decide where the status condition belongs before running it.
 
 <CodeExercise
   client:load
-  title="Match enrolled rows without deleting empty offerings"
-  code={String.raw`FROM offering AS o
+  title="Complete the matching and grouping contract"
+  code={String.raw`SELECT o.offering_id,
+       o.code,
+       [!blank!] AS enrolled_count,
+       [!blank!] AS is_full
+FROM offering AS o
 LEFT JOIN enrollment AS e
   [!blank!] e.offering_id = o.offering_id
- AND e.status = 'enrolled'`}
-  answers={["ON"]}
-  explanation="The status controls which right-side rows match. The report still requires every current-term offering from the left side."
+ AND e.status = 'enrolled'
+WHERE o.term = '2026S'
+[!blank!] o.offering_id, o.code, o.capacity
+ORDER BY o.code, o.offering_id`}
+  answers={["COUNT(e.student_id)", "COUNT(e.student_id) >= o.capacity", "ON", "GROUP BY"]}
+  explanation="`COUNT(e.student_id)` counts only real matches, so a null-extended offering reports zero; compare that count with capacity for `is_full`. The status predicate belongs in `ON`: moving it to `WHERE` removes the offerings this report must include. `GROUP BY` states the one-row-per-offering grain."
 />
 
 ```sql
@@ -161,19 +217,19 @@ Complete the absence test, then compare your result with the fixture.
 
 <CodeExercise
   client:load
-  title="Ask whether a matching row exists"
+  title="Reconstruct the correlated absence test"
   code={String.raw`SELECT s.student_id, s.display_name
 FROM student AS s
 WHERE [!blank!] (
   SELECT 1
   FROM enrollment AS e
   JOIN offering AS o ON o.offering_id = e.offering_id
-  WHERE e.student_id = s.student_id
+  WHERE [!blank!]
     AND e.status = 'enrolled'
     AND o.term = '2026S'
 );`}
-  answers={["NOT EXISTS"]}
-  explanation="The subquery is correlated to one student. The outer row survives exactly when it has no enrolled current-term row."
+  answers={["NOT EXISTS", "e.student_id = s.student_id"]}
+  explanation="`NOT EXISTS` states the required absence directly and is NULL-safe. The correlated equality is what binds the subquery to one outer student; without it the subquery answers a global question instead of a per-student one."
 />
 
 ```sql

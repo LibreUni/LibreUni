@@ -21,6 +21,8 @@ const captures = [
   { name: 'course-overview-modern-mobile', url: '/courses/operating-systems.html', theme: 'modern', mode: 'light', viewport: { width: 390, height: 844 } },
   { name: 'lesson-monochrome-dark', url: '/lessons/computer-architecture/pipelining.html', theme: 'monochrome', mode: 'dark', viewport: { width: 1440, height: 1000 } },
   { name: 'lesson-modern-mobile', url: '/lessons/operating-systems/cpu-scheduling.html', theme: 'modern', mode: 'dark', viewport: { width: 390, height: 844 } },
+  { name: 'db-sql-runner-light', url: '/lessons/database-systems/sql-lab.html', theme: 'modern', mode: 'light', viewport: { width: 1200, height: 900 }, target: '[aria-label="Registration fixture"]' },
+  { name: 'db-sql-runner-dark-mobile', url: '/lessons/database-systems/sql-lab.html', theme: 'modern', mode: 'dark', viewport: { width: 390, height: 844 }, target: '[aria-label="Registration fixture"]' },
   { name: 'db-query-plan-monochrome-light', url: '/lessons/database-systems/query-plans.html', theme: 'monochrome', mode: 'light', viewport: { width: 1200, height: 900 }, target: '.interactive-playground' },
   { name: 'db-isolation-monochrome-dark-mobile', url: '/lessons/database-systems/transactions-and-isolation.html', theme: 'monochrome', mode: 'dark', viewport: { width: 390, height: 844 }, target: '.interactive-playground' },
   { name: 'os-overview-scholar-light', url: '/courses/operating-systems.html', theme: 'scholar', mode: 'light', viewport: { width: 1440, height: 1000 } },

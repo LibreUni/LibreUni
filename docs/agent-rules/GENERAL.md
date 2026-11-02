@@ -30,6 +30,7 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
   - `<CodeRunner>`: `code`, `output`, `language`, `title`
   - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`
   - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title`
+  - `<SqlRunner>`: `schema`, `initialQuery`, `title`, `description`
 - Write new custom components when existing ones don't fit.
 - Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/agent-rules/PLANTUML.md` for troubleshooting.
 - Lessons must be self-contained — no lesson should require reading another first.

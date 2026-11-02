@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import PlantUML from '../../../components/PlantUML.astro';
 
-<Quiz client:load title="Preserve the illusion"
-  question="What must an out-of-order processor preserve for software?"
-  options={["The order of every internal micro-operation", "The architectural behavior of the specified instruction stream", "The order of cache misses", "The exact pipeline depth"]}
-  correctIndex={1}
-  explanation="Internal execution may reorder independent work, but retirement and dependency control preserve the ISA-visible result and exception behavior."
-/>
-
 An in-order scalar pipeline issues at most one instruction per cycle and waits when the next instruction cannot proceed. Modern high-performance cores attempt to exploit *instruction-level parallelism* (ILP): independent instructions can execute simultaneously, even when they appear sequentially in the program. A superscalar processor has multiple issue slots or functional pipelines; an out-of-order processor allows a ready younger instruction to execute while an older instruction waits for a cache miss or long-latency operation. The implementation must nevertheless preserve the ISA’s ordered architectural observations.
 
 ## Limits of instruction-level parallelism
@@ -97,6 +90,15 @@ The critical path remains exactly 4 serial addition latencies. Only algorithmic 
 
 Out-of-order cores hold decoded instructions in issue queues or reservation stations. Each entry stores the operation, source physical-register identifiers, readiness bits or values, destination, and exception/speculation metadata. When a producer completes, a wakeup mechanism marks dependent operands ready. A select mechanism chooses ready instructions for available functional units.
 
+**Worked trace: tag wakeup and select.** Suppose two reservation-station entries hold
+
+```text
+RS1: fadd f3, f0, f4    sources (P10, P4)   ready bits (0, 1)
+RS2: fsub f5, f1, f2    sources (P6, P8)    ready bits (1, 1)
+```
+
+and only one FP adder is free. The producer of `P10` broadcasts at the end of cycle 3. At that broadcast, RS1 compares `P10` against its outstanding source tags, sets the first ready bit, and becomes selectable for cycle 4. RS2 was already selectable; if both request the adder in cycle 4, the selector must choose by age or another policy, and the loser waits. In this timing model the broadcast at the end of cycle 3 cannot also drive an issue earlier in cycle 3. Other designs can combine or pipeline wakeup and select differently, trading latency against the delay of the compare-and-select path. The timing model, not the ISA, decides when a dependent can issue.
+
 Wakeup and select are timing-critical because a wide machine compares many tags every cycle. A centralized issue queue is flexible but expensive; clustered or partitioned designs reduce wiring but can require operand movement between clusters. The architecture is not changed by these choices, but performance and power are.
 
 Long-latency operations create pressure. A cache-miss load may occupy a queue entry and a physical destination while independent work proceeds. If the reorder buffer or load/store queue fills, dispatch eventually stops—a phenomenon called back-end or window pressure. Increasing the window can expose more ILP but raises energy, area, and recovery cost.
@@ -138,15 +140,43 @@ Both entries were allocated before their execution. B may hold a computed value,
 
 </details>
 
+<Quiz client:load title="Preserve the illusion"
+  question="What must an out-of-order processor preserve for software?"
+  options={["The order of every internal micro-operation", "The architectural behavior of the specified instruction stream", "The order of cache misses", "The exact pipeline depth"]}
+  correctIndex={1}
+  explanation="Internal execution may reorder independent work, but retirement and dependency control preserve the ISA-visible result and exception behavior."
+/>
+
 ## Load/store ordering and memory disambiguation
 
 Registers expose explicit dependences, but memory addresses may be unknown until execution. A younger load and older store can execute out of order only if the core proves their addresses do not alias, or if it speculates and can recover when the guess is wrong. The load/store queue records program order, addresses, data, and permissions. Store-to-load forwarding lets a load obtain data from an older store that has not reached cache, provided the addresses and byte masks match.
 
 Partial overlap is difficult. A 4-byte load may overlap two older stores with different byte ranges; forwarding must merge bytes or stall. An address predictor may speculate that a load does not alias an older store; a later conflict triggers replay of the load and its dependents. Memory consistency rules further restrict when stores become visible to other cores.
 
+**Worked example: byte-mask forwarding (little-endian).** Two older stores are in the load/store queue:
+
+```text
+# Assume x1 = 0x100.
+S1: sw x5, 0(x1)     bytes 0x100..0x103 = A0 A1 A2 A3
+S2: sw x6, 4(x1)     bytes 0x104..0x107 = B0 B1 B2 B3
+```
+
+Assume an implementation that permits these misaligned accesses and can forward bytes from multiple stores. A younger `lh x7, 2(x1)` reads bytes `0x102..0x103`, so it can forward `A2 A3` from S1 without waiting for S2. A younger `lw x8, 2(x1)` reads `0x102..0x105` and needs `A2 A3` from S1 and `B0 B1` from S2. If S2’s data has not arrived, the load cannot complete by forwarding from S1 alone: it must wait, or it must have speculated and be prepared to replay. A younger `lw x9, 0(x1)` is fully covered by S1 and can forward the whole word. The byte masks, not just the base addresses, determine whether forwarding is possible; an address match with a partial overlap is not enough.
+
 ## Speculation and branch recovery
 
 A branch predictor supplies a next PC before the branch resolves. The front end fetches and renames along that path. Each speculative instruction carries a branch-mask or checkpoint identifier. When the branch resolves correctly, the work may continue; when it mispredicts, the core restores the rename map, frees or invalidates younger ROB and issue entries, clears speculative stores, and redirects fetch.
+
+**Worked recovery trace.** A branch `B` occupies ROB entry 20 and is predicted taken. The front end fetches and renames 24 younger instructions into ROB entries 21–44. When `B` resolves mispredicted, the core restores the rename map from `B`’s checkpoint, marks entries 21–44 invalid, clears any speculative stores from that range, and redirects fetch to the correct target. Instructions older than `B` are unaffected and may retire.
+
+| State | Before resolution | After recovery |
+| --- | --- | --- |
+| Rename map | includes speculative mappings from 21–44 | restored to `B`’s checkpoint |
+| ROB | 20–44 occupied | 21–44 squashed; 20 may retire when all older instructions have retired |
+| Store buffer | speculative stores from 21–44 | those stores discarded |
+| Fetch PC | wrong-path target | corrected target |
+
+The invariant is falsifiable: no instruction younger than `B` may retire or make a store globally visible after the misprediction is known. A machine that lets a wrong-path store drain before the squash violates precise state even if the register results are later discarded. The recovery cost is not just the 24 discarded entries; it includes the refill latency and the time to re-establish the front-end stream.
 
 Recovery bandwidth matters. A machine that can dispatch eight instructions per cycle may need several cycles to clear a large wrong-path window. Predictor accuracy and branch resolution depth determine the average penalty. Speculation also consumes cache and predictor capacity, so wrong-path work can slow the correct path even before a flush.
 
@@ -154,11 +184,32 @@ Recovery bandwidth matters. A machine that can dispatch eight instructions per c
 
 Out-of-order execution may discover exceptions before an instruction reaches the ROB head. The exception is recorded, but the machine delays architectural entry until older instructions retire. Some operations are restartable; others require suppressing duplicate effects. A speculative page-walk fault, for example, may be handled differently from an architectural load fault depending on the design.
 
+**Worked trace: replay is not an exception.** An older store `S` is at ROB entry 9 and a younger load `L` is at entry 11. `L` executes before `S`’s address is known because the memory disambiguator predicts no alias. When `S`’s address resolves and matches `L`, the LSQ does not raise an architectural fault: it marks `L` and its dependents for replay. `L` re-executes after the store data is available, and the dependents re-execute from the replayed value. No handler runs, no `sepc` is written, and no architectural register or memory state is exposed for the wrong value.
+
+A true page fault on `L` follows a different path: the fault is recorded in `L`’s ROB entry and delivered only when `L` reaches the head; `sepc` receives `L`’s PC, younger entries are squashed, and the handler may retry the load. An interrupt is external and is taken at a precise instruction boundary: older instructions retire, younger speculative work is discarded or held, and the saved PC identifies the next instruction to execute on return.
+
+| Event | Architectural fault? | Saved PC | Recovery |
+| --- | --- | --- | --- |
+| Memory-order violation | no | none | replay load and dependents |
+| Load page fault | yes | faulting load PC | handler retries or terminates |
+| Timer interrupt | no (asynchronous) | next instruction to execute | return to saved PC |
+
+The common requirement is that no younger effect becomes visible before the event’s architectural boundary.
+
 Interrupts are taken at a precise boundary chosen by the ISA. The implementation must ensure all older effects are committed and all younger effects are recoverable. Replay mechanisms for memory-order violations and cache misses must preserve the same visible instruction ordering. The more aggressively a core speculates, the more state it must retain to restore the architectural model.
 
 ## Performance and energy trade-offs
 
 Increasing width, window size, physical registers, and speculation can improve IPC on ILP-rich code. It can hurt on branchy, pointer-heavy, or synchronization-heavy code because the extra machinery consumes power and may lengthen critical wakeup/select paths. A high IPC can also be misleading if the code performs more instructions or stalls at memory.
+
+**Worked example: width, IPC, and energy per instruction.** Compare two same-frequency cores at 3.0 GHz on a workload whose IPC rises from 2.0 to 2.3 when issue width increases from four to six:
+
+| Core | Width | IPC | Power | Time per instruction | Energy per instruction | Throughput per watt |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | 4 | 2.0 | 20 W | 0.167 ns | 3.33 nJ | $0.300 \times 10^9$ instructions/s/W |
+| B | 6 | 2.3 | 26 W | 0.145 ns | 3.77 nJ | $0.265 \times 10^9$ instructions/s/W |
+
+Core B executes 15% more instructions per second, reducing time per instruction by about 13%, but uses about 13% more energy per instruction and delivers about 12% fewer instructions per second per watt. The correct choice depends on the objective: B is preferable in a latency- or throughput-constrained system with power headroom, while A is preferable when the system is power- or thermally limited. The table also shows why an IPC claim alone is insufficient: B’s higher IPC is real, but it does not by itself establish a better design point. If B’s frequency also rose to 3.5 GHz, its time and energy per instruction would improve, but only if the power estimate still holds after the voltage increase; a 26 W budget at 3.0 GHz cannot be assumed at 3.5 GHz.
 
 The optimal width depends on workload mix. A wide core may waste energy on a serial dependency chain; a modest core with a better cache or memory system may finish sooner. Architectural evaluation therefore uses traces, counters, and representative suites, not a single synthetic instruction stream.
 
@@ -178,34 +229,27 @@ I3: fsub.d f2, f6, f8        # Subtract: 1 execution cycle (WAR on f2 with I2)
 I4: fadd.d f6, f4, f2        # Add: 1 execution cycle (RAW on f4 from I2 and f2 from I3)
 ```
 
-Suppose physical registers initially map architectural $f0 \to P_0, f2 \to P_2, f4 \to P_4, f6 \to P_6, f8 \to P_8$, with a free list of $\{P_{10}, P_{12}, P_{14}, \dots\}$.
+Suppose the initial map is $f0\to P_0$, $f2\to P_2$, $f4\to P_4$, $f6\to P_6$, $f8\to P_8$, with fresh registers $P_{10},P_{12},P_{14},P_{16}$. Define one timing model: at most two instructions dispatch in program order per cycle; execution starts no earlier than the cycle after dispatch; a result broadcasts at the end of its last execution cycle and is usable starting in the next cycle. Separate result paths permit two broadcasts in a cycle. At most two completed ROB entries retire in order per cycle, starting the cycle after broadcast. All input registers and the load's address are ready initially; the load hits the cache.
 
-1. **Cycle 1 (Dispatch I1 & I2)**:
-   * I1 destination $f0$ renamed to $P_{10}$.
-   * I2 destination $f4$ renamed to $P_{12}$. Source $f0$ mapped to $P_{10}$ (not ready), source $f2$ mapped to $P_2$ (ready).
-   * I1 issues to Load Queue; I2 enters Reservation Station waiting for $P_{10}$.
+| Instruction | Dispatch: destination and sources | Execution | Broadcast | Retirement |
+| --- | --- | --- | --- | --- |
+| I1 `fld f0` | cycle 1: $P_{10}$; address ready | cycles 2–3 | end of 3 | cycle 4 |
+| I2 `fmul f4` | cycle 1: $P_{12}\leftarrow P_{10},P_2$ | cycles 4–7 | end of 7 | cycle 8 |
+| I3 `fsub f2` | cycle 2: $P_{14}\leftarrow P_6,P_8$ | cycle 3 | end of 3 | cycle 8 |
+| I4 `fadd f6` | cycle 2: $P_{16}\leftarrow P_{12},P_{14}$ | cycle 8 | end of 8 | cycle 9 |
 
-2. **Cycle 2 (Dispatch I3 & I4)**:
-   * I3 destination $f2$ renamed to $P_{14}$! (Notice: WAR hazard eliminated—I3 writes $P_{14}$ without affecting I2's read of $P_2$).
-   * I4 destination $f6$ renamed to $P_{16}$. Sources: $P_{12}$ (from I2) and $P_{14}$ (from I3).
-   * I3 has both operands ready ($P_6, P_8$), so I3 issues immediately!
-   * I1 completes memory access; broadcast tag $P_{10}$ ready on Common Data Bus (CDB).
+At the end of cycle 3, I1 and I3 have broadcast. I2's reservation station now has both operands; I4 has $P_{14}$ but still waits for $P_{12}$. I3 can finish first because I2 captured the *old* $P_2$ at dispatch; I3 writes the distinct $P_{14}$ and cannot overwrite I2's source. The true dependence from I2 to I4 remains: I4 cannot execute until the cycle after I2 broadcasts.
 
-3. **Cycle 3**:
-   * I1 writes back $P_{10}$ to CDB and ROB. I2's reservation station wakes up!
-   * I3 completes subtraction, broadcasts $P_{14}$ ready on CDB.
-   * I1 is at ROB head and retires (commits).
+| End of cycle | ROB in program order, after retirement | Reservation-station state |
+| --- | --- | --- |
+| 2 | I1 executing; I2 waiting; I3 and I4 dispatched | I2 waits for $P_{10}$; I4 waits for $P_{12},P_{14}$ |
+| 3 | I1 done; I2 waiting; I3 done; I4 waiting | I2 ready; I4 waits for $P_{12}$ |
+| 4 | I1 retired; I2 executing; I3 done; I4 waiting | I4 still waits for $P_{12}$ |
+| 7 | I2 done; I3 done; I4 waiting | I4 becomes ready after the broadcast |
+| 8 | I2 and I3 retired; I4 done | I4 has broadcast but cannot retire until cycle 9 |
+| 9 | empty | no waiting instruction |
 
-4. **Cycle 4**:
-   * I2 issues to FP Multiplier unit (executes during cycles 4, 5, 6, 7).
-   * I4 reservation station captures $P_{14}$, but still waits for $P_{12}$ from I2.
-
-5. **Cycle 7–8**:
-   * Cycle 7: I2 completes execution, broadcasts $P_{12}$.
-   * Cycle 8: I2 writes back. I4 wakes up and issues to FP Adder. I2 retires.
-   * Cycle 9: I4 completes, writes back $P_{16}$. I3 and I4 retire in program order.
-
-**Key Insight**: Out-of-order execution allowed I3 to execute at cycle 2—**two cycles before I2 even began execution**—because renaming completely eradicated the WAR hazard on $f2$.
+I3 completes before I2 but cannot retire before it. A different issue width, broadcast bandwidth, cache latency, or retirement policy changes the cycle numbers, not the dependencies or the in-order-retirement requirement.
 
 ---
 
@@ -215,22 +259,22 @@ Unlike registers where dependencies are explicitly encoded in instruction bitfie
 
 Consider the following program sequence:
 ```asm
-I1: sw  x5, 0(x1)     # Store word: address depends on high-latency cache miss for x1
+I1: sw  x5, 0(x1)     # Store word: the load that produces x1 is still waiting on a cache miss
 I2: lw  x6, 0(x2)     # Load word: address x2 is known immediately
 I3: add x7, x6, x8    # Dependent consumer
 ```
 
 1. **Speculative Execution Decision**:
-   Because `x1` is stalled on a cache miss, an aggressive memory disambiguator speculates that `x1 != x2` (no memory aliasing). The processor executes the load `I2` immediately out-of-order and feeds `x6` to `I3`.
+   Because the load producing `x1` is stalled on a cache miss, an aggressive memory disambiguator speculates that `x1 != x2` (no memory aliasing). The processor executes the load `I2` immediately out-of-order and feeds `x6` to `I3`.
 
 2. **The Hazard Manifestation**:
-   Five cycles later, `x1` arrives from L2 cache, and the hardware evaluates `0(x1)`. Crucially, `x1 == x2`!
+   Five cycles later, the load’s data arrives from L2 cache and writes `x1`; the hardware then evaluates `0(x1)`. Crucially, `x1 == x2`!
    * `I1` was supposed to store the new value into memory location `0(x1)`.
-   * `I2` speculatively read the **stale** value prior to `I1`'s write!
-   * `I3` and all downstream instructions computed with corrupt, unarchitectural data.
+   * `I2` speculatively read the **stale** value prior to `I1`’s write!
+   * `I3` and all downstream instructions computed with corrupt, non-architectural data.
 
 3. **Required Microarchitectural Recovery**:
-   If the Load-Store Queue (LSQ) fails to detect this address collision when `I1` resolves, a silent data corruption bug occurs. A correct out-of-order core must snoop the store address against all younger speculative loads in the LSQ. Upon collision detection, the core must trigger a **pipeline squash**: flush `I2`, `I3`, and all younger instructions from the ROB, roll back the rename table to `I1`'s retirement checkpoint, and replay `I2` with the forwarded data from `I1`.
+   If the Load-Store Queue (LSQ) fails to detect this address collision when `I1` resolves, a silent data corruption bug occurs. A correct out-of-order core must snoop the store address against all younger speculative loads in the LSQ. Upon collision detection, it marks `I2` and its dependents for replay; if they have already executed, it squashes and re-executes them after `I1`’s data is available. The store `I1` itself is older and remains; recovery does not roll architectural state back to before `I1`.
 
 ---
 

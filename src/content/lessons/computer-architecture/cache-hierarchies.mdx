@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import CacheHierarchyPlayground from '../../../components/playgrounds/CacheHierarchyPlayground';
 
-<Quiz client:load title="Predict locality"
-  question="Which access pattern is most likely to benefit from spatial locality?"
-  options={["Following random pointers", "Reading consecutive elements of an array", "Accessing one address once", "Changing the page table"]}
-  correctIndex={1}
-  explanation="A cache line brings neighboring bytes together. Consecutive array access reuses that fetched neighborhood, while random pointer chasing often does not."
-/>
-
 The processor can execute many arithmetic operations in the time required for one main-memory access. A cache hierarchy reduces the effective cost by keeping recently or nearby used data in smaller, faster storage close to the core. The hierarchy is not a magical “fast memory”; it is a carefully specified prediction mechanism. A cache contains copies of lower-level data, decides whether a request hits, chooses where a block may reside, and defines how writes propagate. Its performance depends on an access trace, its correctness depends on coherence and permission rules, and its cost includes area, energy, refill bandwidth, and miss handling.
 
 ## Locality and the two-level model
@@ -50,6 +43,13 @@ $$
 The L2 miss rate is usually conditional on an L2 access, while a global miss rate is relative to all processor accesses. Confusing local and global rates is a frequent source of apparently impressive but incorrect performance calculations.
 
 **Worked AMAT example.** Suppose L1 hit time is 1 cycle and its miss rate is 5%. L2 takes 8 cycles on a hit and has a local miss rate of 20%; DRAM costs 80 cycles after an L2 miss. Then $AMAT=1+0.05(8+0.2\cdot80)=2.2$ cycles. The L2 lookup contributes $0.05\cdot8=0.4$ cycles per processor access through the L1 miss path, while DRAM contributes $0.05\cdot0.2\cdot80=0.8$ cycles. Improving L1 hit time from 1 to 0.8 cycles saves 0.2; halving the DRAM penalty saves $0.05\cdot0.2\cdot40=0.4$ cycles under this workload. The bottleneck is identified by the product of frequency and cost, not by the largest raw latency alone.
+
+<Quiz client:load title="Predict locality"
+  question="Which access pattern is most likely to benefit from spatial locality?"
+  options={["Following random pointers", "Reading consecutive elements of an array", "Accessing one address once", "Changing the page table"]}
+  correctIndex={1}
+  explanation="A cache line brings neighboring bytes together. Consecutive array access reuses that fetched neighborhood, while random pointer chasing often does not."
+/>
 
 ## Address decomposition
 
@@ -104,6 +104,14 @@ Write buffers decouple a processor from lower-level write latency. They introduc
 
 A blocking cache stalls the requesting pipeline until a miss is complete. A nonblocking cache can continue serving hits and track outstanding misses with miss-status holding registers (MSHRs). It must know which requests depend on which refill, merge multiple accesses to one missing line, and preserve ordering for stores and fences. Multiple outstanding misses improve memory-level parallelism but increase control-state complexity.
 
+| MSHR Field | Data Width / Format | Hardware Purpose | Transition on Memory Refill |
+| :--- | :--- | :--- | :--- |
+| `Valid` | 1 bit | Indicates active in-flight cache line miss request | Cleared to 0 when line arrives and targets are served |
+| `Block Address` | Tag + Set index bits | Matches secondary misses to coalesce requests to same block | Compared against incoming pipeline loads/stores |
+| `Way Allocation` | $\log_2(\text{Ways})$ bits | Pre-selected replacement way identified by cache controller | Receives refilled cache line data from interconnect |
+| `Merged Load Queue` | Entry bitmask / register list | Identifies destination registers awaiting missing words | Delivers words directly to execution units / register file |
+| `Dirty / Write Mask` | Line size bitmask | Tracks byte offsets modified by coalesced stores before refill | Merged with incoming memory line before writing back |
+
 The refill path may receive critical words first, allowing the processor to resume before the entire line arrives. This is useful when the requested word is available early but creates hazards if a later word is consumed before refill completion. The cache’s valid/ready protocol must make partial data visible only under a defined rule.
 
 ## Arrays, loops, and locality
@@ -122,6 +130,13 @@ Data layout also controls locality. An array of structures is convenient when ev
 
 In a shared-memory multiprocessor, each core may cache a copy of a line. Cache coherence answers whether writes to one location eventually become visible consistently and whether a reader can obtain the latest value under the protocol’s rules. A protocol such as MESI tracks whether a line is modified, exclusive, shared, or invalid and sends invalidations or updates over an interconnect.
 
+| Current MESI State | Local Core Read | Local Core Write | Bus Snoop Read (Peer Read) | Bus Snoop Invalidate (Peer Write) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Invalid (I)** | Miss: issue BusRd; $\to \mathbf{S}$ or $\mathbf{E}$ | Miss: issue BusRdX; $\to \mathbf{M}$ | No-op; ignore transaction | No-op; ignore transaction |
+| **Shared (S)** | Hit; no bus action; remain $\mathbf{S}$ | Hit: issue BusUpgrade; $\to \mathbf{M}$ | No-op; peer receives shared copy | Invalidate local tag; $\to \mathbf{I}$ |
+| **Exclusive (E)** | Hit; no bus action; remain $\mathbf{E}$ | Hit (silent upgrade); $\to \mathbf{M}$ | Respond Shared; transition to $\mathbf{S}$ | Invalidate local tag; $\to \mathbf{I}$ |
+| **Modified (M)** | Hit; no bus action; remain $\mathbf{M}$ | Hit; write to line; remain $\mathbf{M}$ | Intercept; flush data to bus; $\to \mathbf{S}$ | Intercept; write back dirty data; $\to \mathbf{I}$ |
+
 Coherence is per cache line, not per language object or field. Two independent variables in one line can cause false sharing: cores repeatedly invalidate each other’s copies even though they never access the same variable. Coherence also does not define all cross-address ordering; the ISA memory model and synchronization operations determine whether a flag becoming visible implies that preceding data is visible.
 
 Atomic read-modify-write and fences interact with caches. An atomic operation may acquire exclusive ownership of a line, perform the update without an intervening conflicting write, and impose ordering. A fence may prevent a compiler or processor from reordering specified memory operations, but it does not magically flush every cache on every architecture. The precise semantics belong to the ISA.
@@ -131,6 +146,13 @@ Atomic read-modify-write and fences interact with caches. An atomic operation ma
 > **Warning.** Microarchitectural cache state (which sets are occupied and how fast a load completes) is observable through timing even when architectural access checks reject an unauthorized read; furthermore, in a Virtually Indexed, Physically Tagged (VIPT) cache whose index field extends into the virtual page number ($\mathrm{sets} \times \mathrm{line\_size} > \mathrm{page\_size}$), two virtual aliases for the same physical frame can map to different sets (virtual synonyms) unless hardware or OS page coloring prevents stale duplicate lines.
 
 Caches can create timing side channels because hits and misses have different latency. Isolation mechanisms may partition cache ways, flush state on context switch, use constant-access patterns, or accept a residual risk. A correct cache from the functional viewpoint can still leak access patterns. Security analysis must distinguish architectural data returned by loads from microarchitectural observations such as timing and replacement state.
+
+| Attack / Microarchitectural Hazard | Concrete Mechanism | Target Resource | Hardware / OS Countermeasure |
+| :--- | :--- | :--- | :--- |
+| **Flush+Reload** | Attacker flushes shared line via `clflush`, times victim access | Inclusive shared LLC lines | Way partitioning (CAT), unshared address mappings |
+| **Prime+Probe** | Attacker fills target set, detects victim eviction via reload latency | Cache set conflict replacement | Random cache indexing, partitioned set allocation |
+| **VIPT Virtual Synonyms** | Two virtual aliases map to different sets ($b+s > p$) | L1 virtually-indexed sets | Hardware alias detection snoops, OS page coloring |
+| **Transient Speculative Fill** | Squashed speculative loads fetch secrets into data cache | L1/L2 data cache tags | Speculative load hardening, barrier fences (`lfence`) |
 
 The cache must also respect virtual memory permissions. Every cached access must still pass TLB permission checks for the current address space, and in virtually indexed caches where index bits extend above the page offset, synonym handling must prevent two virtual mappings of one physical frame from holding inconsistent dirty lines in different sets. The order of translation and cache lookup—physically indexed, virtually indexed, synonym handling—belongs to the implementation and must be proven equivalent to the architectural memory model.
 

@@ -12,7 +12,7 @@ outcomes:
   - "Diagnose a bad plan from estimated-versus-actual rows and propose the next measurement or statistics repair."
   - "Use an explain plan as evidence while separating semantic equivalence from performance estimates."
 omissions:
-  - "Full optimizer implementation, adaptive re-optimization, vectorized-engine internals, and vendor-specific cost constants are deferred."
+  - "A complete memo implementation, adaptive re-optimization, vectorized-engine internals, and vendor-specific cost constants are deferred; the two dominant optimizer search strategies are taught at the level needed to read their behavior."
   - "Distributed query planning is considered only through its added data-movement cost."
 estimatedMinutes: 480
 assessment: "Given an unseen SQL query, table statistics, and two candidate plans, derive intermediate cardinalities, reject an unjustified plan choice, and explain how a changed data distribution reverses the decision."
@@ -22,6 +22,7 @@ import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 import QueryPlanCostPlayground from '../../../components/playgrounds/QueryPlanCostPlayground';
+import Quiz from '../../../components/Quiz';
 
 # Query Execution and Optimization
 
@@ -106,6 +107,41 @@ An outer join must retain every customer, even those with no failed order. Where
 Place it in the right input or `ON` condition. A `WHERE order.status = 'failed'` filter after the left join removes null-extended rows and turns the result into an inner-join-like result. The optimizer may push a semantically valid filter down, but only after preserving outer-join null behavior. Correct cardinality starts with correct semantics.
 </ExerciseSolution>
 
+## The optimizer searches a space of equivalent plans
+
+{/* Source tracking: System R join enumeration and interesting orders are synthesized from Selinger et al. (1979); memo-based rule search and physical properties are synthesized from Graefe (1995). The numeric example is original. */}
+
+> **Definition.** Query optimization selects a physical plan from the plans that compute the same logical result. Join order, access path, and operator implementation interact combinatorially, so an optimizer needs both a search strategy and a cost model; neither is a proof that the chosen plan is globally best.
+
+System R's Selinger-style optimizer builds left-deep join trees bottom-up. For each subset of relations it keeps the cheapest plan for each interesting order, then extends that set by one relation and discards dominated alternatives. With $n$ relations there are $2^n$ subsets, so dynamic programming avoids enumerating $n!$ orders, but the retained plan is only as good as its cardinality estimates and cost model.
+
+**Worked search.** Let $A$ have 100 rows, $B$ 1,000 rows, and $C$ 10 rows. Assume all relevant equality joins exist, $|A \bowtie B|=50$, $|B \bowtie C|=100$, and use the deliberately simplified cost $|L|+|R|$ per hash join, with both inputs scanned once and all intermediate results fitting memory. Ignore output production, ordering, and access-path differences.
+
+| Candidate | First intermediate | First join cost | Second join cost | Total |
+| --- | --- | ---: | ---: | ---: |
+| $(A \bowtie B) \bowtie C$ | 50 rows | 1,100 | 60 | 1,160 |
+| $(B \bowtie C) \bowtie A$ | 100 rows | 1,010 | 200 | 1,210 |
+| $(A \bowtie C) \bowtie B$ | unknown | 110 | $1,000+|A\bowtie C|$ | $1,110+|A\bowtie C|$ |
+
+The first two plans differ because both the first join's input work and the intermediate size matter. The third is cheaper than 1,160 only if $|A\bowtie C|<50$ under these assumptions. In a real engine, selectivity estimates, memory, useful ordering, and physical access paths can reverse this result. A hash join may build on the smaller input; the intermediate size is not automatically the build-side size.
+
+Volcano/Cascades optimizers search top-down instead. A **memo** stores equivalence classes of logical expressions; transformation rules generate equivalent logical alternatives, implementation rules produce physical alternatives, and branch-and-bound pruning discards alternatives whose lower bound exceeds the best known cost. This can explore bushy trees that a left-deep-only search excludes and can track required physical properties, at the cost of more complex rule interaction and search control. System R also tracked interesting orders; this is not unique to Cascades. Engines choose different search and cost strategies.
+
+> **Warning.** When a plan is bad, name which of three failures you are diagnosing: the optimizer never generated the useful equivalent plan, it generated and pruned it using a wrong cost, or it estimated the inputs incorrectly. “The optimizer is dumb” diagnoses none of them.
+
+<Quiz client:load
+  title="Search strategy versus cost model"
+  question="A query uses a nested loop. A filter estimates 50 rows but produces 50,000, causing many more inner probes than expected. Which diagnosis is best supported?"
+  options={[
+    "The optimizer's search space is missing left-deep trees",
+    "The cost model was applied to a cardinality estimate that the data contradicts",
+    "The query is semantically ambiguous and must be rewritten as a union",
+    "The database must be using a rule-based optimizer with no cost model"
+  ]}
+  correctIndex={1}
+  explanation="The estimate is 1,000 times smaller than the observed input. Inspect the first divergent node, statistics, skew, and correlation before attributing the choice to a missing plan shape or the absence of a cost model. A cardinality error is evidence, not by itself proof that correcting statistics will select the best plan."
+/>
+
 ## Plans must be read as conditional evidence
 
 > **Warning.** A low estimated cost is not elapsed time and a plan is not a proof that the query is correct. Cost units compare alternatives under a DBMS model; actual timing depends on cache state, concurrency, hardware, and configuration.
@@ -130,6 +166,8 @@ Global independence predicts about $0.01\%$ of rows, while the north subset pred
 
 ## References & Further Reading
 
+* Selinger, P. G., Astrahan, M. M., Chamberlin, D. D., Lorie, R. A., & Price, T. G. (1979). *Access Path Selection in a Relational Database Management System*. ACM SIGMOD, 23–34. (System R dynamic-programming join enumeration.)
+* Graefe, G. (1995). *The Cascades Framework for Query Optimization*. IEEE Data Engineering Bulletin, 18(3), 19–29. (Rule-driven top-down search and memo.)
 * [PostgreSQL: Using EXPLAIN](https://www.postgresql.org/docs/current/using-explain.html)
 * [PostgreSQL: Planner Statistics](https://www.postgresql.org/docs/current/planner-stats.html)
 * [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

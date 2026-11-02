@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = path.join(root, 'reports', 'ux');
-const destination = path.join(root, 'apps', 'main', 'dist', 'development', 'ux');
+const destination = path.join(root, 'dist', 'development', 'ux');
 
 try {
   await rm(destination, { recursive: true, force: true });

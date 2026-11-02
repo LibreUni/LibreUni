@@ -23,9 +23,13 @@ LESSONS_DIR = ROOT / "src" / "content" / "lessons"
 
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 ARTIFACT_RE = re.compile(
-    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|StructureDiagram|StructureExercise|[A-Z][A-Za-z0-9]+Playground|details)\b|^```|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Example|Warning|Remark|Proof)\.",
+    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|StructureDiagram|StructureExercise|SqlRunner|[A-Z][A-Za-z0-9]+Playground|details)\b|^```|^\*\*(?:Worked|Example|Counterexample|Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Remark|Warning|Proof|Trace|Algorithm)\b|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Example|Warning|Remark|Proof)\.",
     re.MULTILINE,
 )
+ACTIVE_COMPONENT_RE = re.compile(
+    r"<(?:Quiz|CaseStudy|CodeRunner|CodeExercise|SqlRunner|[A-Z][A-Za-z0-9]+Playground)\b"
+)
+PASSIVE_COMPONENT_RE = re.compile(r"<(?:details|ExerciseSolution)\b")
 ASSESSMENT_RE = re.compile(r"<(Quiz|CaseStudy|StructureExercise)\b(.*?)/>", re.DOTALL)
 PLANTUML_RE = re.compile(r"<PlantUML\b.*?code=\{`(.*?)`\}\s*/>", re.DOTALL)
 FENCE_RE = re.compile(r"^```.*?^```\s*$", re.MULTILINE | re.DOTALL)
@@ -157,9 +161,15 @@ def assessment_length_cues(body: str) -> list[dict]:
     return cues
 
 
+def strip_frontmatter(content: str) -> str:
+    """Remove only leading frontmatter, preserving Markdown horizontal rules."""
+    match = re.match(r"\A---[ \t]*\r?\n.*?\r?\n---[ \t]*(?:\r?\n|\Z)", content, re.DOTALL)
+    return content[match.end():] if match else content
+
+
 def analyze_lesson(path: Path) -> dict:
     content = path.read_text(encoding="utf-8")
-    body = re.sub(r"^---.*?^---\s*", "", content, flags=re.MULTILINE | re.DOTALL)
+    body = strip_frontmatter(content)
     findings = []
     relative = str(path.relative_to(ROOT))
 
@@ -192,13 +202,31 @@ def analyze_lesson(path: Path) -> dict:
     if repeated:
         findings.append({"kind": "duplicate-prose", "severity": "error", "message": f"{repeated} repeated prose block(s)"})
 
-    ignorable_headings = re.compile(r"^(?:Exercises?|References?(?:\s+&\s+Further Reading)?|Diagnostic solutions?|Solutions?|Answer key|Rubric and self-check)$", re.IGNORECASE)
+    ignorable_headings = re.compile(
+        r"^(?:Exercises?|References?(?:\s+&\s+Further Reading)?|Diagnostic solutions?|"
+        r"Solutions?|Answer key|Rubric and self-check|"
+        r"(?:Deliberate\s+)?Omissions?(?:\s*&.*)?|(?:Course\s+)?Scope Boundaries?(?:\s*&.*)?|"
+        r"Deliberate (?:Omissions?\s*&.*|Boundary.*)|Connections and limits|"
+        r"Assessment standard|Lab tasks|Proof obligations)$",
+        re.IGNORECASE,
+    )
     uncovered = [
         title for title, section in heading_sections(body)
         if not ignorable_headings.fullmatch(title.strip()) and not artifact_in_section(section)
     ]
     if uncovered:
         findings.append({"kind": "uncovered-heading", "severity": "review", "message": "no adjacent teaching artifact: " + "; ".join(uncovered)})
+
+    # Disclosure-only practice is still passive: the learner can reveal an
+    # answer without committing to one. Assessment briefs and capstones are
+    # evidence specifications rather than teaching units, so they are exempt.
+    is_evidence_brief = bool(re.search(r"(?:^|[-])(?:assessment|capstone|review)$", path.stem))
+    if not is_evidence_brief and PASSIVE_COMPONENT_RE.search(body) and not ACTIVE_COMPONENT_RE.search(body):
+        findings.append({
+            "kind": "passive-only-interaction",
+            "severity": "review",
+            "message": "practice is disclosure-only; add a committed retrieval or executable check where the outcome warrants it",
+        })
 
     diagrams = []
     for match in PLANTUML_RE.finditer(body):

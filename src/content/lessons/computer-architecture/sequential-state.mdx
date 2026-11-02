@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import PlantUML from '../../../components/PlantUML.astro';
 
-<Quiz client:load title="State the transition"
-  question="What is required to specify a synchronous state machine?"
-  options={["Only a list of outputs observed after selected input sequences", "A state space, next-state rule, output rule, and clock/reset assumptions", "A random seed used to choose one transition at each edge", "A cache-line size that fixes how many states can be stored"]}
-  correctIndex={1}
-  explanation="A transition system needs state and rules for how inputs change it. Clock and reset assumptions determine when the mathematical transition is applied."
-/>
-
 Combinational logic answers a question about the present inputs. A processor, however, must remember a program counter, register contents, outstanding requests, protocol phase, and architectural mode. That memory is *state*. Sequential logic is the disciplined combination of storage elements and combinational next-state logic. Its correctness depends on both a functional relation—what state should follow what inputs—and a temporal relation—when a new state is allowed to become visible.
 
 This chapter develops the synchronous design model used by most digital systems. It distinguishes latches from edge-triggered registers, derives setup and hold constraints, models finite-state machines formally, and treats asynchronous inputs and reset as sources of metastability and illegal behavior. The purpose is not to draw a traffic light but to make timing and state invariants explicit enough that a pipeline controller, bus arbiter, or cache controller can be reasoned about and tested.
@@ -70,6 +63,13 @@ end note
 The states are `BUSY`, `ERROR`, `ERROR`. Exactly one request is accepted, at the first edge. Fault outranks completion at the second edge; the third request cannot escape `ERROR` without reset. Accepting another request while busy would violate the specified no-queue contract.
 
 </details>
+
+<Quiz client:load title="State the transition"
+  question="What is required to specify a synchronous state machine?"
+  options={["Only a list of outputs observed after selected input sequences", "A state space, next-state rule, output rule, and clock/reset assumptions", "A random seed used to choose one transition at each edge", "A cache-line size that fixes how many states can be stored"]}
+  correctIndex={1}
+  explanation="A transition system needs state and rules for how inputs change it. Clock and reset assumptions determine when the mathematical transition is applied."
+/>
 
 ## Latches, flip-flops, and registers
 
@@ -141,6 +141,27 @@ Derived state should be minimized when it can be recomputed without ambiguity. S
 > **Warning.** Releasing an asynchronous reset without synchronizing its deassertion edge to the local clock domain can violate reset-recovery timing on a subset of state flip-flops, throwing a multi-bit FSM or one-hot controller into an unreachable illegal state on the very first active clock edge.
 
 Reset establishes an initial state but does not automatically initialize every physical bit in every technology. A synchronous reset is sampled by the clock; an asynchronous reset can affect state between edges but introduces deassertion timing concerns. A common safe pattern asserts reset asynchronously for rapid containment and deasserts it synchronously per clock domain.
+
+**Reset strategies and timing boundaries:**
+
+| Reset architecture | Assertion timing | Deassertion timing | Hardware failure mode / race condition |
+| --- | --- | --- | --- |
+| **Pure synchronous** | On active clock edge | On active clock edge | Cannot reset if clock is stopped or gated; requires larger gates in logic path |
+| **Raw asynchronous** | Immediate (level-triggered) | Asynchronous to clock | Deassertion near clock edge violates recovery/removal timing, causing metastability |
+| **Synchronized deassertion** | Immediate (asynchronous) | Synchronized via 2-FF chain | Clean deassertion aligned to clock; eliminates cross-register reset skew |
+
+```verilog
+// Reset synchronizer: asynchronous assertion, synchronous deassertion
+always @(posedge clk or posedge async_rst) begin
+    if (async_rst) begin
+        rst_meta <= 1'b1;
+        rst_sync <= 1'b1;
+    end else begin
+        rst_meta <= 1'b0;
+        rst_sync <= rst_meta;
+    end
+end
+```
 
 Reset values should be chosen for safety, not convenience. A bus arbiter should not grant multiple owners after reset; a valid/data queue should begin empty; a privilege controller should begin in the least-authority state. If the state encoding has illegal patterns, reset should enter a legal recovery state and the transition logic should route illegal encodings there as well.
 

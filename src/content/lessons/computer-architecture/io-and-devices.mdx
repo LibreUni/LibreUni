@@ -20,13 +20,6 @@ import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import DeviceIOPlayground from '../../../components/playgrounds/DeviceIOPlayground';
 
-<Quiz client:load title="Cross the device boundary"
-  question="Why does a memory-mapped device register need a volatile access rule in many C implementations?"
-  options={["The register behaves like an ordinary local variable owned by one thread", "The device can change or observe it outside ordinary program flow", "Volatile makes every device access atomic across CPUs and devices", "Volatile encrypts register values before they cross the device boundary"]}
-  correctIndex={1}
-  explanation="The compiler must not remove or merge accesses whose effects are observable to hardware. Volatile does not by itself guarantee atomicity, ordering, or synchronization."
-/>
-
 Input/output architecture connects a general-purpose processor to components whose timing, state, and failure behavior are not controlled by the instruction pipeline. A device may be a keyboard, disk, network interface, sensor, accelerator, timer, or virtual machine endpoint. It exposes a programming interface through registers, memory-mapped queues, interrupts, DMA, or a combination. A correct driver is a protocol implementation: it establishes ownership, orders commands and data, handles backpressure and errors, and does not assume that a device responds like ordinary memory.
 
 ## Device register models
@@ -38,6 +31,13 @@ Programmed I/O exposes control, status, data, and interrupt registers. A control
 Memory-mapped I/O assigns device registers addresses in the processor’s address space. Port I/O uses a separate instruction space on some ISAs. In either model, the ISA defines ordering, width, alignment, privilege, and caching attributes. A 32-bit load from a register documented as 8-bit may trigger an invalid access or read adjacent state. The driver must use the device’s access width and avoid speculative or prefetching accesses when the mapping forbids them.
 
 **Worked register sequence.** A device has `STATUS.BUSY`, `CONTROL.START`, and a data FIFO. To start a transaction, the driver validates the buffer, writes the command and length, executes the required device-memory barrier, and writes `START`. It then either polls `BUSY` with a bounded timeout or waits for an interrupt. On completion it reads status, checks error bits before consuming data, and acknowledges the interrupt according to the device specification. Writing `START` before the descriptor is visible can launch a transaction with stale parameters.
+
+<Quiz client:load title="Cross the device boundary"
+  question="Why does a memory-mapped device register need a volatile access rule in many C implementations?"
+  options={["The register behaves like an ordinary local variable owned by one thread", "The device can change or observe it outside ordinary program flow", "Volatile makes every device access atomic across CPUs and devices", "Volatile encrypts register values before they cross the device boundary"]}
+  correctIndex={1}
+  explanation="The compiler must not remove or merge accesses whose effects are observable to hardware. Volatile does not by itself guarantee atomicity, ordering, or synchronization."
+/>
 
 ## Polling and interrupts
 
@@ -103,6 +103,12 @@ Generation tags are useful when descriptors are reused. A completion includes th
 > **Remark.** Paravirtualized ring interfaces (such as Virtio) amortize expensive VM-exit traps across batches of descriptors in shared guest-physical memory, while direct PCIe device assignment (VFIO) eliminates data-path exits only when paired with hardware IOMMU translation and interrupt remapping.
 
 A virtual machine may see a virtual device whose registers are implemented by a hypervisor. Traps, shared-memory queues, or paravirtual interfaces carry requests between guest and host. The guest driver still needs a device contract, but performance depends on exit frequency, batching, and shared-page synchronization. A virtual interrupt can be delayed or coalesced, so guest timeouts must account for scheduling.
+
+| Virtualization Strategy | Guest Access Interface | Hypervisor Interception Mechanism | I/O Datapath Overhead | Hardware Isolation Requirement |
+| :--- | :--- | :--- | :--- | :--- |
+| **Trap-and-Emulate** | Standard legacy MMIO registers | Stage-2 page table fault $\to$ VM-exit | High: each register read/write incurs $\approx 1{,}000 - 2{,}000$ cycle trap | Software boundary in hypervisor |
+| **Paravirtualization** (Virtio) | Shared split-ring descriptor buffers | Batch doorbell notification via hypercall / PIO | Low: exits amortized across batches of $N$ descriptors | Guest-physical to host-physical translation |
+| **Direct Device Assignment** (VFIO) | Native physical PCIe registers & DMA | Direct hardware execution (no VM-exits) | Near zero: native hardware throughput and latency | Hardware IOMMU (two-stage) + Interrupt Remapping |
 
 Device assignment to a guest requires isolation. An assigned device may DMA into guest memory only through an IOMMU context; interrupt remapping prevents it from targeting arbitrary host vectors. Reset and teardown are especially important because a device can retain in-flight state across ownership changes.
 

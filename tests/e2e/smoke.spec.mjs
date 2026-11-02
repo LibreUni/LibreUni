@@ -194,6 +194,30 @@ test.describe('production smoke checks', () => {
     await expect(search).toHaveValue('transaction');
   });
 
+  test('SQL lab executes queries and preserves the fixture on errors', async ({ page }) => {
+    await page.goto('/lessons/database-systems/sql-lab.html', { waitUntil: 'domcontentloaded' });
+    const lab = page.getByRole('region', { name: 'Registration fixture' });
+    const query = lab.getByRole('textbox', { name: 'SQL query' });
+    const run = lab.getByRole('button', { name: 'Run query' });
+    await run.click();
+    const results = lab.getByRole('region', { name: 'Query results' });
+    await expect(results.locator('tbody tr')).toHaveCount(3);
+    await expect(results.locator('tbody tr').nth(1)).toContainText('DB201');
+    await expect(results.locator('tbody tr').nth(1)).toContainText('0');
+
+    await query.fill("SELECT 'update;--' AS value");
+    await run.click();
+    await expect(results).toContainText('update;--');
+    await query.fill('WITH x AS (SELECT 1) DELETE FROM offering');
+    await run.click();
+    await expect(lab.getByRole('alert')).toContainText(/readonly/i);
+    await query.fill('SELECT COUNT(*) AS count FROM offering');
+    await run.click();
+    await expect(results.locator('tbody')).toContainText('4');
+    await lab.getByRole('button', { name: 'Reset query' }).click();
+    await expect(query).toContainText('LEFT JOIN');
+  });
+
   test('architecture models preserve fixed-width, cache, and branch state in the browser', async ({ page }) => {
     await page.goto('/lessons/computer-architecture/digital-representation.html', { waitUntil: 'networkidle' });
     let model = page.locator('.interactive-playground').first();

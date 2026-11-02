@@ -19,6 +19,7 @@ assessment: "Given a workload and threat model, produce mechanism-level traces f
 ---
 
 import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
 
 # Comparative Kernel Design
 
@@ -53,6 +54,19 @@ A report claims that seL4 has slower pathname lookup than Linux but gives only s
 Pathname lookup is a whole-system service, not an seL4 kernel primitive. The report must define the user-level VFS/filesystem server, namespace and cache placement, client/server protocol, page sharing or copying, storage backend, scheduling, and cache state. Kernel IPC timing is one possible component cost, not pathname latency. Linux must also be pinned by filesystem, mount options, cache state, kernel build, and workload.
 
 </details>
+
+<Quiz client:load
+  title="Driver fault isolation and the hardware boundary"
+  question="In a microkernel architecture, a network device driver crashes due to an illegal memory access inside a user-level driver task. If the hardware platform lacks an IOMMU, what limits the driver's ability to compromise the system?"
+  options={[
+    "The CPU MMU prevents the driver's own instructions from writing to kernel memory, but the network card's unconstrained DMA can overwrite arbitrary physical memory.",
+    "The microkernel software layer automatically intercepts and filters all hardware bus transactions without hardware assistance.",
+    "Running in user space completely isolates physical RAM because DMA transfers cannot bypass CPU page tables.",
+    "The crash of a user-level driver task immediately corrupts the microkernel address space because interrupt routines share a single kernel stack."
+  ]}
+  correctIndex={0}
+  explanation="Address space separation isolates CPU instructions executed by the driver: the driver cannot directly load or store into kernel pages. However, without an IOMMU to restrict direct memory access by peripherals, a compromised or malfunctioning device controlled by that driver can issue DMA writes to arbitrary physical addresses. Full driver fault containment requires both address space isolation and an IOMMU."
+/>
 
 ## A comparison protocol
 
@@ -269,14 +283,15 @@ If one system batches 100 lookups per IPC while another issues one syscall per l
 
 > **Warning.** High-level taxonomy labels ("monolithic", "microkernel", "hybrid") do not determine either the effective Trusted Computing Base (TCB) or multicore scalability. A system's fault blast radius and latency distribution are functions of the concrete authority graph, DMA isolation, and shared-cache-line write set along the executed path.
 
-Counterexamples:
+**Counterexamples to architectural taxonomy:**
 
-- a microkernel system can have one single-threaded user server that serializes all clients;
-- a monolithic kernel can use fine-grained per-CPU and RCU read paths with little shared writing;
-- an in-kernel fast path can be slower than a batched user-level path under a different cache or scheduling state;
-- a user-space driver with unrestricted DMA can exceed the authority of a carefully constrained in-kernel driver;
-- a formally verified kernel does not verify unverified user servers, device models, configuration, hardware, or availability policy; and
-- a large kernel does not imply that every bug is reachable from one constrained workload.
+| Taxonomy label assumption | Concrete counterexample | Underlying mechanism causing the reversal |
+| --- | --- | --- |
+| "Microkernels guarantee driver fault isolation" | User-space driver without an IOMMU corrupts kernel RAM | Unrestricted peripheral DMA bypasses CPU MMU page tables |
+| "Monolithic kernels cannot scale pathname lookup" | Linux VFS pathname walk scales across 64 cores | Lockless RCU traversal avoids writes to shared cache lines |
+| "Microkernel IPC is always the dominant latency bottleneck" | Batched IPC server outperforms single-syscall path | Amortizing message-passing cost across multi-block transfers |
+| "Formally verified kernels guarantee total application safety" | Verified kernel running misconfigured user servers | Proof assumes correct hardware, configuration, and user capability policy |
+| "Monolithic kernels expose every subsystem bug to every process" | Local unprivileged container cannot reach network parser | Namespace filtering and seccomp remove vulnerable syscall entry paths |
 
 The comparison target is always the end-to-end trusted and executed path.
 

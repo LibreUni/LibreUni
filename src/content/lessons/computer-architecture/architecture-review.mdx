@@ -19,13 +19,6 @@ assessment: "Given an incomplete architecture proposal, produce a risk-ranked re
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 
-<Quiz client:load title="Review the boundary"
-  question="Why must an architecture review test both the functional contract and the performance model?"
-  options={["Performance measurements replace functional tests when the service deadline is strict", "A correct design can still violate latency or bandwidth constraints", "Functional and performance models are equivalent whenever outputs are deterministic", "Review should omit measurements because hardware timing varies between executions"]}
-  correctIndex={1}
-  explanation="A processor or memory system can compute correct results while missing a service budget. Review needs separate evidence for semantics and quantitative behavior."
-/>
-
 Architecture review is a structured argument that a proposed machine satisfies its software contract under its intended workload and failure model. A block diagram can show components without proving that instruction state, memory visibility, exceptions, device ownership, and performance budgets compose. This review uses a hypothetical 4-core image-processing SoC to demonstrate the evidence a reviewer should request.
 
 ## Review packet
@@ -35,6 +28,13 @@ Architecture review is a structured argument that a proposed machine satisfies i
 The proposal contains an ISA summary, pipeline diagram, cache hierarchy, page-table model, DMA rings, and benchmark results. The cores are four-wide out of order, have private 32 KiB L1 caches and shared 2 MiB L2, use write-back coherence, and share DRAM. A camera writes frames through DMA; software applies a filter and sends output to a display engine. The design claims 30 frames per second and “strong consistency” without defining memory-ordering operations or the p99 latency boundary.
 
 The first review question is scope: which claims are architectural and which are implementation assumptions? If software binaries depend on an instruction’s exact overflow or alignment behavior, that behavior belongs to the ISA. If the claim is that a loop usually hits in L1, it is a workload-dependent performance hypothesis. If a driver assumes a DMA buffer is not reused until completion, that is an ownership protocol. Each claim needs a different proof or measurement.
+
+<Quiz client:load title="Review the boundary"
+  question="Why must an architecture review test both the functional contract and the performance model?"
+  options={["Performance measurements replace functional tests when the service deadline is strict", "A correct design can still violate latency or bandwidth constraints", "Functional and performance models are equivalent whenever outputs are deterministic", "Review should omit measurements because hardware timing varies between executions"]}
+  correctIndex={1}
+  explanation="A processor or memory system can compute correct results while missing a service budget. Review needs separate evidence for semantics and quantitative behavior."
+/>
 
 ## Contract completeness
 
@@ -79,6 +79,13 @@ Review the memory model with a message-passing test. A producer writes data then
 
 The camera DMA path must specify buffer allocation, IOMMU mapping, cache synchronization, descriptor publication, completion ordering, interrupt behavior, timeout, reset, and buffer reuse. Draw the ownership states and mark which agent may write each field. A completion carrying an invalid length must be rejected before it becomes an array bound.
 
+| Audit Dimension | Verification Standard | Failure Mode Observed | Audit Remediation Action |
+| :--- | :--- | :--- | :--- |
+| **MMIO Attributes** | Strongly-ordered, non-cacheable | Cache hit returns stale device status register | Configure page table entry with `Device-nGnRE` / `PMA` I/O attributes |
+| **Side-Effect FIFO Read** | Non-speculative load dispatch | Speculative load silently drains hardware FIFO entry | Enforce load fence (`fence r, r` / `lfence`) before FIFO read |
+| **DMA Descriptor Publication** | Strict release barrier | Device reads partially initialized descriptor | Insert `fence w, o` (write-to-output fence) before ringing doorbell |
+| **Buffer Ownership Handshake** | Single-writer / single-reader | CPU processes buffer while camera DMA writes | Require explicit generation match and ownership bit check |
+
 Review device-memory attributes. Caching a status register can return stale state; speculative reads can acknowledge a side-effect register unexpectedly. A barrier used for ordinary memory may not order a device doorbell. The driver and hardware specification must name the required primitive.
 
 ## Performance and measurement audit
@@ -94,6 +101,13 @@ Benchmark methodology must state input dimensions, pixel distribution, alignment
 > **Warning.** Without an IOMMU restricting the camera DMA engine to validated frame-buffer pages, a malformed descriptor or compromised device firmware can overwrite kernel page tables or privileged code in host DRAM.
 
 Enumerate assets and adversaries: user frames, page tables, device buffers, privileged code, and inter-core messages. Check memory-safety arithmetic, privilege boundaries, IOMMU mappings, speculative side channels, cache timing, and stale ownership. Identify the blast radius of a compromised device or driver. A security control must map to a threat and have a test or operational signal.
+
+| Hardware Security Dimension | Attack Surface Evaluated | Concrete Vulnerability Mechanism | Verified Defense Invariant |
+| :--- | :--- | :--- | :--- |
+| **DMA Access Authority** | PCIe bus-mastering endpoints | Compromised peripheral overwrites OS page tables | Hardware IOMMU enforces page-table isolation per device domain |
+| **Transient Execution Leakage** | Branch predictor & out-of-order execution | Spectre v1 bounds-check bypass reads host memory | Speculative execution barrier (`sb` / `lfence`) on untrusted indexing |
+| **Rowhammer DRAM Disturbance** | Repeated activation of adjacent DRAM rows | Bit-flips induced in adjacent physical memory pages | Target Row Refresh (TRR) enabled in DRAM controller |
+| **Fault Recovery & Privilege Containment** | Bus error / ECC double-bit parity trap | Kernel panic or uncontained privilege escalation | Synchronous Machine Check Exception (MCE) kills only faulting task |
 
 Check fault containment: illegal instruction, page fault, ECC error, DMA overrun, device timeout, thermal throttling, and power loss. For each, state whether the processor retries, kills a process, resets a device, degrades service, or enters a machine-check path. An architecture that only describes the happy path is incomplete.
 

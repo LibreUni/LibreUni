@@ -12,7 +12,7 @@ outcomes:
   - "Compare a single-writer transaction, distributed commit, and saga/compensation by atomicity, availability, and repair evidence."
   - "Design a client response to timeout, stale read, and ambiguous commit without inventing a result."
 omissions:
-  - "Formal consensus proofs, Byzantine faults, geo-replication implementation, and CRDT design are deferred."
+  - "Two-phase commit and consensus-backed replication are taught through their failure contracts and commit rules. Formal consensus proofs, Byzantine faults, geo-replication implementation, and CRDT design are deferred."
   - "Vendor topology configuration is used only as an explicit example, not as a general distributed-systems model."
 estimatedMinutes: 420
 assessment: "Given a distributed order or authorization workflow under a partition, choose a consistency contract, trace the durable decision and client response, and defend the availability trade-off with a counterexample."
@@ -22,6 +22,7 @@ import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 import ReplicationQuorumPlayground from '../../../components/playgrounds/ReplicationQuorumPlayground';
+import Quiz from '../../../components/Quiz';
 
 # Distributed Data
 
@@ -84,6 +85,19 @@ With N = 3 and W = 2, choose the smallest R that intersects every write quorum. 
 R = 2, because 2 + 2 > 3. A read of two replicas intersects a completed two-replica write, but it still needs version/term rules to distinguish a newest value from a stale or divergent response. It also says nothing about whether a client received an acknowledgement before the intended data-loss boundary.
 </ExerciseSolution>
 
+<Quiz client:load
+  title="Quorum intersection and freshness"
+  question="For N = 5 replicas, choose R = 2 and W = 3. What can be concluded about their intersection and read freshness?"
+  options={[
+    "Every read quorum intersects every write quorum, so every read is linearizable",
+    "Read and write quorums can be disjoint; freshness is not guaranteed",
+    "Every pair of write quorums can be disjoint because 2W exceeds N",
+    "The choice guarantees a fresh read whenever all five replicas are reachable"
+  ]}
+  correctIndex={1}
+  explanation="Here R + W = N, so a read of two replicas may avoid all three replicas in a completed write quorum. Even with an intersecting choice, a protocol still needs version selection, durability and fencing rules; availability alone does not establish freshness."
+/>
+
 ## Coordination has a blocking and repair cost
 
 > **Example.** An order service and a warehouse service each own a database. “Create order and reserve stock” can be treated as one distributed atomic decision, or as local durable steps with a compensating cancellation path. The observable failure behavior differs.
@@ -105,8 +119,39 @@ A system writes a financial ledger in region X and sends a warehouse reservation
 Use a durable outbox/state machine: record a pending reservation with the ledger transaction, retry the Y request idempotently, and expose “payment authorized, fulfillment pending” until the reservation succeeds or a defined compensation/refund occurs. Claiming an atomic cross-region success after X commits is false without a coordinating protocol and its availability cost. The visible intermediate state is a product decision, not a technical accident.
 </ExerciseSolution>
 
+## Distributed commit needs a durable decision, not a wish
+
+{/* Source tracking: Commit coordination and its failure modes are synthesized from Gray and Lamport (2006); TrueTime and external consistency are synthesized from Corbett et al. (2012). */}
+
+Two-phase commit (2PC) makes a set of participants agree on one outcome. In the **prepare** phase the coordinator asks each participant to durably record its vote and the resources it will need to commit. If every participant votes yes, the coordinator durably records **commit** and then tells them to commit; if any votes no, it records **abort**. A participant that has prepared must retain its locks and its ability to commit until it learns the decision.
+
+| Failure | What remains true | What the system cannot do alone |
+| --- | --- | --- |
+| participant crashes after voting yes | its prepared state is durable | decide whether the coordinator chose commit or abort |
+| coordinator crashes after recording commit | the decision is durable | notify unreachable participants until it recovers |
+| coordinator crashes before recording a decision | no decision exists | force prepared participants to commit |
+| network partition isolates a prepared participant | it cannot safely release locks | make progress without the decision |
+
+The blocking case is fundamental to 2PC: prepared participants may hold locks while they wait for the coordinator. Three-phase commit removes some blocking under stronger assumptions, but adds rounds and still assumes bounded or predictable failures. A saga avoids prepared locks by making intermediate state visible, at the cost of requiring domain compensation.
+
+Consensus protocols such as Paxos and Raft replicate a **log**, not a collection of independent row copies. A write is committed when a leader has replicated it to a quorum and the entry is ordered in the log; a new leader must contain every committed entry. Leader terms or epochs fence stale leaders so an old leader cannot acknowledge a write after a new one has been elected.
+
+> **Invariant.** A quorum acknowledgement is evidence of replication, not of external consistency. The value a client reads may still depend on which replica answers and what ordering rule the client requires.
+
+Spanner adds a physical ordering assumption: TrueTime exposes a bounded uncertainty interval for the local clock. A transaction waits out that uncertainty before committing, so timestamps assigned to committed transactions respect real-time order across regions. The result is **external consistency**, stronger than snapshot isolation, paid for with commit-wait latency and dependable clock infrastructure. Naming the assumption is part of the contract; a system without bounded clock uncertainty cannot copy the proof.
+
+### Transfer — choose the commit boundary
+
+A cross-region transfer must never be visible as two independent halves, and the service cannot tolerate blocking during a coordinator failure. Which property must it give up, and what should it tell the client while a decision is pending?
+
+<ExerciseSolution hint="A non-blocking design cannot also promise a single instantaneous cross-region commit without a stronger coordination substrate.">
+It must give up either non-blocking atomic commit or the claim of an instantaneous single decision. A durable outbox plus idempotent steps can keep serving, but the client sees an intermediate state such as “authorized, pending settlement.” A consensus-backed ledger can provide an ordered decision, but it may wait for a quorum and must expose a truthful pending status on timeout. Claiming both non-blocking operation and atomic cross-region success without naming the coordination mechanism is false.
+</ExerciseSolution>
+
 ## References & Further Reading
 
+* Gray, J., & Lamport, L. (2006). *Consensus on Transaction Commit*. ACM TODS, 31(1), 133–160. (Two-phase commit, its blocking cases, and consensus-based commit.)
+* Corbett, J. C., et al. (2012). [*Spanner: Google's Globally-Distributed Database*](https://www.usenix.org/conference/osdi12/technical-sessions/presentation/corbett). OSDI '12. (TrueTime, commit-wait, and external consistency.)
 * [In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf)
 * [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)
 * [PostgreSQL: Synchronous Replication](https://www.postgresql.org/docs/current/warm-standby.html#SYNCHRONOUS-REPLICATION)

@@ -5,6 +5,7 @@ const A11Y_ROUTES = [
   { name: 'main home', url: 'http://127.0.0.1:4321/' },
   { name: 'architecture hazard model', url: 'http://127.0.0.1:4321/lessons/computer-architecture/hazards-and-branches.html' },
   { name: 'database query model', url: 'http://127.0.0.1:4321/lessons/database-systems/query-plans.html' },
+  { name: 'database SQL lab', url: 'http://127.0.0.1:4321/lessons/database-systems/sql-lab.html' },
   { name: 'OS scheduler model', url: 'http://127.0.0.1:4321/lessons/operating-systems/cpu-scheduling.html' },
   { name: 'learning path', url: 'http://127.0.0.1:4321/careers/systems-foundations.html' },
   { name: 'main About page', url: 'http://127.0.0.1:4321/about.html' },

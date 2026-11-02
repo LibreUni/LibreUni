@@ -18,6 +18,7 @@ Import from `src/components/` with a relative MDX import and add `client:load` t
 | `CodeRunner` | A small, runnable demonstration the learner should modify or execute | `code`, optionally `output`, `language`, `title` |
 | `CodeExercise` | Fill-in-the-blank code practice | `code`, `answers`, `explanation`, `title` |
 | `CaseStudy` | A contextual decision or scenario with an analyzable trade-off | `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title` |
+| `SqlRunner` | Execute read-only SQL against a fixed, in-browser SQLite fixture | `schema`, `initialQuery`, optional `title`, `description` |
 
 `Quiz` uses a retrieval-first flow: the learner states an answer before seeing claims, then classifies each claim independently. This prevents relative answer length or position from acting as a shortcut. The review treats identification of every supported claim as mandatory; rejecting all claims never appears as a near-passing aggregate score. `CaseStudy` is open-response first: alternatives and the reference decision remain hidden until the learner records a justified decision. Authors must still keep choices concise, balance their specificity, and write plausible misconception-based alternatives; interaction design does not excuse cueing or weak distractors.
 
@@ -84,6 +85,28 @@ import CaseStudy from '../../../components/CaseStudy';
   options={["Latency", "Correctness", "...", "..."]}
   correctIndex={1}
   explanation="Correctness is the hard constraint because ..."
+/>
+```
+
+### SqlRunner
+
+Use `SqlRunner` when the learner must execute a query against a fixed fixture and compare the
+observed result with a prediction. Each run seeds a fresh in-browser SQLite database from `schema`
+and accepts one read-only `SELECT`, `WITH`, or `EXPLAIN` statement. Execution is isolated in a
+worker with a time limit and a 100-row display limit. SQLite is not PostgreSQL: state dialect- and
+planner-specific claims separately and require a PostgreSQL run to verify them. Keep the fixture
+small, deterministic, and free of secrets. Include the fixture and expected results in the lesson
+itself; the book prints the starting query but cannot run it.
+
+```mdx
+import SqlRunner from '../../../components/SqlRunner';
+
+<SqlRunner client:load
+  title="Run the zero-safe report"
+  description="Predict the three rows before running the query."
+  schema={`CREATE TABLE offering (id integer primary key, code text, term text);
+INSERT INTO offering VALUES (10, 'DB101', '2026S'), (11, 'DB201', '2026S');`}
+  initialQuery={`SELECT code, term FROM offering ORDER BY code;`}
 />
 ```
 
