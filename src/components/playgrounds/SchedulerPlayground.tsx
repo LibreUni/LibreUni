@@ -136,7 +136,7 @@ function ResultTable({ jobs, result }: { jobs: Job[]; result: ReturnType<typeof 
     <div className="overflow-x-auto" tabIndex={0} aria-label="Scrollable scheduling metrics">
       <table className="w-full min-w-[32rem] border-collapse text-left text-xs">
         <thead><tr className="border-b border-light-border dark:border-dark-border"><th className="p-2">Job</th><th className="p-2">Arrival</th><th className="p-2">Burst</th><th className="p-2">Response</th><th className="p-2">Waiting</th><th className="p-2">Turnaround</th></tr></thead>
-        <tbody>{jobs.map((job, index) => <tr key={job.id} className="border-b border-light-border/60 dark:border-dark-border/60"><th className="p-2" style={{ color: colors[job.id] }}>{job.id}</th><td className="p-2">{job.arrival}</td><td className="p-2">{job.burst}</td><td className="p-2">{result.response[index]}</td><td className="p-2">{result.waiting[index]}</td><td className="p-2">{result.turnaround[index]}</td></tr>)}</tbody>
+        <tbody>{jobs.map((job, index) => <tr key={job.id} className="border-b border-light-border/60 dark:border-dark-border/60"><th className={`p-2 font-bold ${job.id === 'A' ? 'text-blue-700 dark:text-blue-300' : job.id === 'B' ? 'text-purple-700 dark:text-purple-300' : job.id === 'C' ? 'text-pink-700 dark:text-pink-300' : 'text-emerald-700 dark:text-emerald-300'}`}>{job.id}</th><td className="p-2">{job.arrival}</td><td className="p-2">{job.burst}</td><td className="p-2">{result.response[index]}</td><td className="p-2">{result.waiting[index]}</td><td className="p-2">{result.turnaround[index]}</td></tr>)}</tbody>
       </table>
     </div>
   );

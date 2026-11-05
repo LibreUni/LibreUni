@@ -1,28 +1,28 @@
 ---
-title: "Crash Consistency and Journaling"
-course: "operating-systems"
-description: "Crash-state reasoning, write ordering, write-ahead logs, checkpointing, recovery idempotence, and the boundary between model output and storage guarantees."
+title: Crash Consistency and Journaling
+course: operating-systems
+description: Crash-state reasoning, write ordering, write-ahead logs, checkpointing, recovery idempotence, and the boundary between model output and storage guarantees.
 prerequisites:
-  - "Filesystem inodes, directories, allocation bitmaps, and buffer caches"
-  - "State machines, invariants, and concurrent critical sections"
-  - "Block-device queues, DMA, caches, and completion semantics"
+  - Filesystem inodes, directories, allocation bitmaps, and buffer caches
+  - State machines, invariants, and concurrent critical sections
+  - Block-device queues, DMA, caches, and completion semantics
 outcomes:
-  - "Enumerate every crash-visible state of a multi-block filesystem update under explicit persistence assumptions."
-  - "Derive write-ahead logging order from namespace and allocation invariants."
-  - "Prove whether a recovery procedure is atomic and idempotent for a bounded transaction model."
-  - "Distinguish modeled crash outcomes, syscall visibility, acknowledged persistence, and measured device behavior."
+  - Enumerate every crash-visible state of a multi-block filesystem update under explicit persistence assumptions.
+  - Derive write-ahead logging order from namespace and allocation invariants.
+  - Prove whether a recovery procedure is atomic and idempotent for a bounded transaction model.
+  - Distinguish modeled crash outcomes, syscall visibility, acknowledged persistence, and measured device behavior.
 omissions:
-  - "Distributed consensus, database ARIES, persistent-memory ordering, RAID write holes, and full ext4/JBD2 implementation details are outside the bounded recovery model."
-  - "The simulator assumes atomic sector writes and an honest stable-storage acknowledgement; torn writes and lying devices require additional mechanisms."
+  - Distributed consensus, database ARIES, persistent-memory ordering, RAID write holes, and full ext4/JBD2 implementation details are outside the bounded recovery model.
+  - The simulator assumes atomic sector writes and an honest stable-storage acknowledgement; torn writes and lying devices require additional mechanisms.
 estimatedMinutes: 360
-assessment: "Given an unfamiliar metadata update and a stated device model, construct its crash matrix, identify illegal states, derive a recovery protocol, and defend the protocol's assumptions and omissions."
+assessment: Given an unfamiliar metadata update and a stated device model, construct its crash matrix, identify illegal states, derive a recovery protocol, and defend the protocol's assumptions and omissions.
 ---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import CrashConsistencyPlayground from '../../../components/playgrounds/CrashConsistencyPlayground';
 import Quiz from '../../../components/Quiz';
 
-# Crash Consistency and Journaling
 
 A file grows from one block to two. The kernel must initialize a new data block, mark it allocated, and publish its address and the new size in the inode. Power fails after the inode reaches stable storage but before the data and bitmap. After reboot, the inode exposes a block the allocator considers free; another file can receive the same block, and the first read may disclose stale bytes.
 
@@ -112,8 +112,7 @@ Ordering reduces damage but does not give crash atomicity: the leak is neither t
 
 A directory insertion requires a new directory data block. The operation changes bitmap bit $B$, directory-inode pointer $P$, directory size $S$, and entry bytes $E$. State necessary implications for a visible new name, then propose a data-before-metadata order and identify its remaining non-atomic state.
 
-<details>
-<summary>Reveal the dependency analysis</summary>
+<ExerciseSolution title="Reveal the dependency analysis">
 
 If lookup can reach the new entry, then the directory's block pointer and size must expose the block, the block must be allocated, and the entry bytes must be initialized. One compact set is
 
@@ -124,7 +123,7 @@ $$
 
 A conservative home-write order is initialize $E$, persist $B$, then publish $P$ and $S$ together if they occupy one atomically written inode block. Crashing after $B$ but before publication leaks the block. If $P$ and $S$ can tear or occupy different atomic units, more intermediate states exist. The correct diagnosis is “ordered but not atomic,” not “safe because metadata was last.”
 
-</details>
+</ExerciseSolution>
 
 ## Prediction before the recovery model
 
@@ -138,14 +137,13 @@ The modeled answer is the complete post-state: recovery recognizes the durable c
 
 Replace the atomic-sector assumption with “a commit sector may tear into a mixture of old and new bytes.” What additional evidence must recovery require before replay?
 
-<details>
-<summary>Reveal the strengthened commit rule</summary>
+<ExerciseSolution title="Reveal the strengthened commit rule">
 
 Recovery needs a commit representation whose validity can be distinguished from every relevant torn state—for example a checksummed, versioned record with redundancy or an atomic write unit guaranteed by the actual device. The checksum domain must cover transaction identity and the record set it commits; otherwise a valid old commit could be paired with unrelated new records. Recovery must reject an invalid or incomplete commit and preserve the pre-state.
 
 A checksum makes corruption detectable with a quantified residual collision risk; it does not force preceding records to stable storage. Ordering/barrier semantics and commit integrity solve different obligations.
 
-</details>
+</ExerciseSolution>
 
 ## Write-ahead logging from three obligations
 
@@ -205,12 +203,11 @@ Replaying only the missing-looking inode block would require recovery to infer w
 
 Recovery replays transaction 12's directory block, then power fails before it replays the inode block. Explain why restarting recovery must replay the directory block again and why an increment-style log record would be dangerous.
 
-<details>
-<summary>Reveal the proof step</summary>
+<ExerciseSolution title="Reveal the proof step">
 
 The commit is still present, so the restarted scan cannot assume that any subset reached home. A physical redo record says “set block D to these bytes”; applying it twice yields the same D. An operation record saying “decrement inode 40's link count” is not idempotent: replaying it twice decrements twice unless the protocol carries transaction identity and per-object application state. Logical logging can be correct, but it needs a stronger replay design than blind repetition.
 
-</details>
+</ExerciseSolution>
 
 ## Concurrency changes transaction admission
 
@@ -231,12 +228,11 @@ Therefore a user-visible “write returned” claim must not be silently upgrade
 
 A log has 30 data slots. Each admitted operation reserves a worst-case 10 slots, although duplicate-block absorption often makes actual use smaller. Why may `begin_op` block the fourth concurrent operation even when the first three currently occupy only six unique slots?
 
-<details>
-<summary>Reveal the safety argument</summary>
+<ExerciseSolution title="Reveal the safety argument">
 
 Admission must remain safe if every active operation reaches its worst case after the check. Three operations can require all 30 slots. Admitting a fourth based on current use can deadlock or overflow later, when none can surrender partial work without violating atomicity. Conservative reservation trades concurrency for a simple capacity proof. A more concurrent design needs finer-grained preclaims, multiple transactions, abort support, or dynamically extensible log space; observed average use is not a proof.
 
-</details>
+</ExerciseSolution>
 
 ## Production contrast: ext4 modes are different contracts
 
@@ -276,8 +272,7 @@ An operation allocates block X, writes data X, adds directory entry `n -> inode 
 5. a proof of replay idempotence; and
 6. one changed device assumption that breaks the proof.
 
-<details>
-<summary>Reveal the transparent grading rubric</summary>
+<ExerciseSolution title="Reveal the transparent grading rubric">
 
 - **State model, 20%.** Names bitmap, data, inode, and directory state separately; states `directory reference => allocated initialized inode` and `inode block reference => allocated initialized data`.
 - **Transaction completeness, 20%.** Includes every distinct bitmap, data, inode, and directory block whose post-image is needed; duplicate writes to one block are one final redo image.
@@ -288,7 +283,7 @@ An operation allocates block X, writes data X, adds directory entry `n -> inode 
 
 A diagram without the state set earns no crash-enumeration credit. A test that kills QEMU at one random instant is useful stress evidence but not an exhaustive crash matrix.
 
-</details>
+</ExerciseSolution>
 
 ## Connections and deliberate boundary
 

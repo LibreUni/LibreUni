@@ -1,28 +1,28 @@
 ---
 title: "Device-Driver Lab: A Defensible Virtio Queue"
-course: "operating-systems"
-description: "Extend xv6-riscv revision 5 with negotiated indirect Virtio descriptors, explicit request lifecycles, deterministic fault injection, mutation-killing tests, and evidence-driven queue measurements."
+course: operating-systems
+description: Extend xv6-riscv revision 5 with negotiated indirect Virtio descriptors, explicit request lifecycles, deterministic fault injection, mutation-killing tests, and evidence-driven queue measurements.
 prerequisites:
-  - "C pointers, structs, bit fields, function interfaces, and failure cleanup"
-  - "xv6 traps, spinlocks, sleep/wakeup, buffer cache, and system-call plumbing"
-  - "MMIO, interrupts, DMA ownership, memory barriers, descriptor rings, and queue-depth measurement"
+  - C pointers, structs, bit fields, function interfaces, and failure cleanup
+  - xv6 traps, spinlocks, sleep/wakeup, buffer cache, and system-call plumbing
+  - MMIO, interrupts, DMA ownership, memory barriers, descriptor rings, and queue-depth measurement
 outcomes:
-  - "Map the complete xv6 Virtio block path from buffer-cache caller through descriptor publication, PLIC interrupt, completion, wakeup, and descriptor reclamation."
-  - "Negotiate and implement optional indirect descriptors with a correct direct-chain fallback and no unsupported feature use."
-  - "Enforce a request state machine that detects invalid IDs, duplicate pre-reap completions, status failures, early reuse, and wakeup-order defects."
-  - "Build deterministic fault hooks and tests that distinguish a correct driver from named ordering, lifecycle, direction, wrap, and timeout mutants."
-  - "Measure concurrency and latency honestly, then defend the design, evidence, and unresolved reset boundary in a technical review."
+  - Map the complete xv6 Virtio block path from buffer-cache caller through descriptor publication, PLIC interrupt, completion, wakeup, and descriptor reclamation.
+  - Negotiate and implement optional indirect descriptors with a correct direct-chain fallback and no unsupported feature use.
+  - Enforce a request state machine that detects invalid IDs, duplicate pre-reap completions, status failures, early reuse, and wakeup-order defects.
+  - Build deterministic fault hooks and tests that distinguish a correct driver from named ordering, lifecycle, direction, wrap, and timeout mutants.
+  - Measure concurrency and latency honestly, then defend the design, evidence, and unresolved reset boundary in a technical review.
 omissions:
-  - "A complete solution patch is intentionally withheld; published material stops at interfaces, invariants, oracles, and partial structural sketches."
-  - "Full Virtio queue reset, recoverable filesystem error propagation, packed rings, multiqueue, MSI-X, IOMMU programming, and real-hardware claims are extension work."
+  - A complete solution patch is intentionally withheld; published material stops at interfaces, invariants, oracles, and partial structural sketches.
+  - Full Virtio queue reset, recoverable filesystem error propagation, packed rings, multiqueue, MSI-X, IOMMU programming, and real-hardware claims are extension work.
 estimatedMinutes: 720
-assessment: "An xv6 branch descended from official revision-5 commit 7d7adbb must preserve prior cumulative labs and upstream tests, negotiate indirect descriptors only when offered, pass the mutation and fault matrix, demonstrate bounded request ownership under concurrency, report reproducible direct-versus-indirect measurements, and survive a design-memo review plus defense questions."
+assessment: An xv6 branch descended from official revision-5 commit 7d7adbb must preserve prior cumulative labs and upstream tests, negotiate indirect descriptors only when offered, pass the mutation and fault matrix, demonstrate bounded request ownership under concurrency, report reproducible direct-versus-indirect measurements, and survive a design-memo review plus defense questions.
 ---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
-# Device-Driver Lab: A Defensible Virtio Queue
 
 xv6-riscv revision 5 uses an eight-entry Virtio split queue. Each block request consumes a chain of three direct descriptors: command header, data buffer, and one-byte status. At most two requests can hold complete chains simultaneously because a third chain would require nine descriptors. The Virtio indirect-descriptor feature can represent those three elements behind one main-ring descriptor, raising the queue's descriptor-limited ceiling from two requests to eight when the device offers the feature.
 
@@ -64,12 +64,11 @@ Label these `I1`–`I10` in the memo and cite the code and test that establish e
 
 **Retrieval — before opening source.** Explain why eight main-ring entries permit only two baseline requests but as many as eight indirect requests. State the resource that still may reduce observed concurrency below eight.
 
-<details>
-<summary>Reveal the diagnostic answer</summary>
+<ExerciseSolution title="Reveal the diagnostic answer">
 
 Baseline requests each require three direct descriptors, so `floor(8/3)=2` complete chains fit. An indirect request consumes one main descriptor that points to its private three-entry indirect table, so eight heads can fit if all other resources are available. Buffer-cache locking, process scheduling, available workload, device service time, and driver metadata can reduce observed concurrency; eight is a descriptor-capacity ceiling, not a throughput promise.
 
-</details>
+</ExerciseSolution>
 
 ## Pin and verify the baseline
 
@@ -161,12 +160,11 @@ Add temporary trace points or use GDB to capture one read and one write. The tra
 
 Remove ad hoc print flooding before the final patch. The permanent trace facility is bounded and structured.
 
-<details>
-<summary>Reveal the baseline trace rubric</summary>
+<ExerciseSolution title="Reveal the baseline trace rubric">
 
 Full credit requires a causally ordered trace, not a list of function names. A read's data descriptor has `VRING_DESC_F_WRITE` because the **device** writes into memory; a write's data descriptor lacks that flag because the device reads memory. The request head is the first descriptor ID placed in the available ring and later returned in the used ring. Descriptor reclamation occurs in the waiting thread after completion wakes it in revision 5.
 
-</details>
+</ExerciseSolution>
 
 <Quiz client:load
   title="Direction from the device's view"
@@ -213,12 +211,11 @@ Tests must cover offered+enabled, offered+disabled, absent+enabled, and unknown 
 
 **Application — reject force-indirect.** A mutant sets `VRING_DESC_F_INDIRECT` in descriptors whenever the build supports it, even when the device did not offer the feature. Which invariant fails before the first request, and what deterministic unit input exposes it?
 
-<details>
-<summary>Reveal the oracle</summary>
+<ExerciseSolution title="Reveal the oracle">
 
 I1 fails. Call the decision function with an offered word whose indirect bit is clear and build support enabled. The result must select direct fallback and must not set the indirect bit in `accepted`. A test that boots only one default QEMU instance may never exercise this case.
 
-</details>
+</ExerciseSolution>
 
 ## Milestone B — implement one-head indirect requests
 
@@ -255,12 +252,11 @@ Do not delete the direct-chain implementation. Factor common command/status setu
 
 **Application — direction audit.** For an xv6 `bread`, write the flags for all three indirect entries. Repeat for `bwrite`. Explain the flag name from the device's perspective.
 
-<details>
-<summary>Reveal the flag audit</summary>
+<ExerciseSolution title="Reveal the flag audit">
 
 Entry 0 is device-readable and chains to entry 1. For `bread`, entry 1 sets device-write plus next because the device fills `b->data`; for `bwrite`, entry 1 sets next without device-write because the device consumes `b->data`. Entry 2 sets device-write because the device writes status. The main indirect descriptor uses the indirect flag and no direct-chain next flag.
 
-</details>
+</ExerciseSolution>
 
 ## Milestone C — make request lifetime explicit
 
@@ -323,12 +319,11 @@ For an invalid ID, duplicate completion, or error status, a revision-5 teaching 
 
 **Transfer — generation limit.** A duplicate used entry for head 3 arrives after head 3 was completed, reaped, incremented to generation 18, and republished. The hardware used entry carries only ID 3. Can private `generation=18` prove that this completion belongs to generation 18?
 
-<details>
-<summary>Reveal the protocol boundary</summary>
+<ExerciseSolution title="Reveal the protocol boundary">
 
 No. The standard split-ring used entry does not return the private generation. The driver can detect a duplicate before reuse because state is no longer `PUBLISHED`, and test hooks can carry synthetic generation metadata, but a post-reuse stale ID is indistinguishable from the current request at this interface. The Virtio device contract and verified reset/quiescence prevent such late completions. Claiming generation alone solves the case overstates the protocol.
 
-</details>
+</ExerciseSolution>
 
 ## Milestone D — publish with a provable happens-before edge
 
@@ -353,12 +348,11 @@ The hook makes an early-publication mutant deterministic in QEMU, where accident
 
 Provide a pure ring arithmetic test that advances at least 65,540 logical submissions/completions without performing 65,540 disk operations. Check occupancy, slot selection, and empty/full transitions across both the eight-entry wrap and the 16-bit counter wrap.
 
-<details>
-<summary>Reveal the wrap oracle</summary>
+<ExerciseSolution title="Reveal the wrap oracle">
 
 For unsigned 16-bit producer and consumer counters with at most `NUM` outstanding, `(uint16)(producer - consumer)` yields occupancy across natural wrap. The harness should place counters near `65535`, submit and complete while never exceeding eight, and compare against a wider reference model. Any implementation that stores only `index % 8` cannot distinguish full from empty when the physical indices are equal.
 
-</details>
+</ExerciseSolution>
 
 ## Milestone E — bounded observability without print storms
 
@@ -391,12 +385,11 @@ Use raw `r_time()` deltas or calibrate them against the revision-5 timer interva
 
 **Application — trace completeness.** A trace contains `publish(g=7)`, `complete(g=7)`, and `publish(g=8)` for head 2, but no `reap(g=7)` or overwrite marker. Which invariant cannot be audited, even if all file data is correct?
 
-<details>
-<summary>Reveal the missing proof</summary>
+<ExerciseSolution title="Reveal the missing proof">
 
 I9 cannot be audited: the trace does not show that generation 7's descriptor/table/buffer ownership returned to the driver before reuse for generation 8. Correct output is insufficient because a timing change could expose early reuse. Either the reap event is missing due to trace loss—which must be marked—or the lifecycle is wrong.
 
-</details>
+</ExerciseSolution>
 
 ## Milestone F — deterministic fault injection
 
@@ -530,8 +523,7 @@ Do not claim real-device speedup from QEMU. A valid result may show no throughpu
 
 **Transfer — interpret a null result.** Indirect mode reaches six in-flight requests instead of two, but throughput is unchanged and p95 latency rises. Give three plausible mechanisms and one measurement for each.
 
-<details>
-<summary>Reveal an evidence map</summary>
+<ExerciseSolution title="Reveal an evidence map">
 
 - Device/emulator service is already saturated: inspect device utilization or completion rate versus queue depth.
 - Extra queueing increases waiting without parallel service: split submit-to-dispatch and dispatch-to-complete times.
@@ -540,7 +532,7 @@ Do not claim real-device speedup from QEMU. A valid result may show no throughpu
 
 The conclusion should identify which evidence discriminates mechanisms, not select one from intuition.
 
-</details>
+</ExerciseSolution>
 
 ## Design memo
 

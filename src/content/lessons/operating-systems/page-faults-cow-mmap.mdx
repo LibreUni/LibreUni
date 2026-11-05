@@ -1,27 +1,27 @@
 ---
-title: "Page Faults, Copy-on-Write, and mmap"
-course: "operating-systems"
-description: "Treat page faults as validated state transitions that materialize anonymous memory, preserve fork isolation with copy-on-write, and connect file objects to process address spaces."
+title: Page Faults, Copy-on-Write, and mmap
+course: operating-systems
+description: Treat page faults as validated state transitions that materialize anonymous memory, preserve fork isolation with copy-on-write, and connect file objects to process address spaces.
 prerequisites:
-  - "Virtual pages, PTE permissions, TLB invalidation, and physical-frame allocation"
-  - "Processes, fork-style creation, files, and reference counting"
-  - "Locks, sleep/wakeup, and failure-atomic state updates"
+  - Virtual pages, PTE permissions, TLB invalidation, and physical-frame allocation
+  - Processes, fork-style creation, files, and reference counting
+  - Locks, sleep/wakeup, and failure-atomic state updates
 outcomes:
-  - "Classify RISC-V instruction, load, and store page faults by region, backing object, access, and recoverability."
-  - "Derive a restartable fault-handler protocol that validates authority before allocating or exposing a frame."
-  - "Trace copy-on-write fork through refcounts, PTE changes, concurrent writers, TLB invalidation, and allocation failure."
-  - "Distinguish anonymous, file-backed, MAP_PRIVATE, and MAP_SHARED fault behavior, including object-end and writeback boundaries."
+  - Classify RISC-V instruction, load, and store page faults by region, backing object, access, and recoverability.
+  - Derive a restartable fault-handler protocol that validates authority before allocating or exposing a frame.
+  - Trace copy-on-write fork through refcounts, PTE changes, concurrent writers, TLB invalidation, and allocation failure.
+  - Distinguish anonymous, file-backed, MAP_PRIVATE, and MAP_SHARED fault behavior, including object-end and writeback boundaries.
 omissions:
-  - "Swap layout, page-replacement policy, huge-page collapse, userfaultfd, NUMA migration, and memory-mapped device I/O are not implemented."
-  - "The lesson specifies a correct COW design but does not publish a complete xv6 patch or a production VM locking scheme."
+  - Swap layout, page-replacement policy, huge-page collapse, userfaultfd, NUMA migration, and memory-mapped device I/O are not implemented.
+  - The lesson specifies a correct COW design but does not publish a complete xv6 patch or a production VM locking scheme.
 estimatedMinutes: 360
-assessment: "Given a mixed anonymous/file-backed address map and an adversarial sequence of fork, read, write, truncate, and allocation-failure events, classify each fault, update mappings and refcounts, preserve retry semantics, and defend the final state against data disclosure or unintended sharing."
+assessment: Given a mixed anonymous/file-backed address map and an adversarial sequence of fork, read, write, truncate, and allocation-failure events, classify each fault, update mappings and refcounts, preserve retry semantics, and defend the final state against data disclosure or unintended sharing.
 ---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
-# Page Faults, Copy-on-Write, and mmap
 
 A 1 GiB process calls `fork()`, and the child immediately replaces its image with a small program. Eagerly copying 1 GiB delays the child and consumes memory for bytes it never reads. Pre-materializing every valid page avoids its initial not-present fault but pays work before demand exists. Deferring all allocation without recording region intent lets an invalid pointer masquerade as legitimate demand.
 
@@ -60,12 +60,11 @@ $$
 
 **Retrieval — state the missing evidence.** A store page fault arrives at an address whose PTE has `W=0`. Why is “make it writable” an invalid generic handler?
 
-<details>
-<summary>Reveal the diagnostic answer</summary>
+<ExerciseSolution title="Reveal the diagnostic answer">
 
 `W=0` could encode a genuine read-only mapping, a COW mapping, a guard, or an invalid state. The handler needs region permission and a COW-specific marker or equivalent metadata. Promoting every read-only PTE grants write authority to code, constants, and shared read-only objects.
 
-</details>
+</ExerciseSolution>
 
 <Quiz client:load
   title="Copy-on-write reference counts and promotion"
@@ -142,12 +141,11 @@ Committing from the stale region snapshot would overwrite the new file mapping w
 
 **Application — order the operations.** Place these actions into a safe demand-zero sequence: `publish writable PTE`, `zero frame`, `allocate frame`, `validate region`, `revalidate region/PTE`, `retry instruction`, `invalidate stale translation if needed`.
 
-<details>
-<summary>Reveal the ordering and failure points</summary>
+<ExerciseSolution title="Reveal the ordering and failure points">
 
 Validate region → allocate frame → zero frame → revalidate region/PTE → publish writable PTE → invalidate any stale translation required by the architecture → retry. Allocation and zeroing may occur before the commit lock; publication cannot. Failure before publication releases the candidate frame. Failure after publication must use a defined rollback that first removes authority and completes invalidation; avoiding that complex path is why commit should contain no fallible work.
 
-</details>
+</ExerciseSolution>
 
 ## Copy-on-write preserves fork semantics lazily
 
@@ -226,12 +224,11 @@ The two retained old-frame references have different meanings: one accounts for 
 
 **Transfer — allocation failure.** A child faults on a shared COW page with refcount 2, but no frame is available. Which three states must remain unchanged, and why is “temporarily grant write to the shared frame” invalid?
 
-<details>
-<summary>Reveal the failure contract</summary>
+<ExerciseSolution title="Reveal the failure contract">
 
 The child's PTE must remain read-only COW, the parent's mapping must remain unchanged, and the shared frame's reference count/content must remain valid. Granting the child write authority would make its modification visible to the parent, violating private mapping semantics. The kernel may report an out-of-memory failure or apply a documented reclamation policy; it cannot weaken isolation to make the instruction complete.
 
-</details>
+</ExerciseSolution>
 
 ## mmap binds regions to memory objects
 
@@ -271,8 +268,7 @@ If another process changes the mapped file's size after `mmap`, POSIX leaves the
 4. read fault on a nonresident file page;
 5. store to a genuine read-only mapping.
 
-<details>
-<summary>Reveal classifications</summary>
+<ExerciseSolution title="Reveal classifications">
 
 1. No file read is required; memory allocation and a RAM copy may be required.
 2. No file read is required; a zeroed frame or protected shared-zero-page mechanism is sufficient.
@@ -282,7 +278,7 @@ If another process changes the mapped file's size after `mmap`, POSIX leaves the
 
 The diagnostic gap is conflating a translation exception with one particular backing-store action.
 
-</details>
+</ExerciseSolution>
 
 ## Fault-handler boundaries that prevent security defects
 
@@ -334,8 +330,7 @@ Trace these events:
 
 For each event, state the fault/no-fault outcome, mapping/refcount changes, and whether another process or the file object observes a changed byte. End with the final references to PFNs 10, 20, 30, 40, and 77.
 
-<details>
-<summary>Reveal reference trace and rubric</summary>
+<ExerciseSolution title="Reveal reference trace and rubric">
 
 Immediately after fork:
 
@@ -367,7 +362,7 @@ Rubric, 28 points:
 
 Any trace that grants write access to PFN 10 after failed allocation or converts text to COW violates the central isolation contract and cannot receive more than half credit.
 
-</details>
+</ExerciseSolution>
 
 ## Deliberate boundary and source trail
 

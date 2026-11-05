@@ -45,7 +45,7 @@ export default function JoinPredicatePlayground() {
     onReset={() => { setPlacement('on'); setThreshold(50); }}
   >
     <div className="interactive-playground-controls mb-5 grid gap-4 rounded-xl border border-light-border bg-light-bg/60 p-4 dark:border-dark-border dark:bg-dark-bg/40 md:grid-cols-[1fr_1fr]">
-      <fieldset className="grid gap-2"><legend className="text-sm font-semibold">Place <code>e.grade ≥ threshold</code></legend><div className="flex flex-wrap gap-2">{([
+      <fieldset className="grid gap-2"><legend className="mb-2 text-sm font-semibold">Place <code>e.grade ≥ threshold</code></legend><div className="flex flex-wrap gap-2">{([
         ['on', 'In ON'],
         ['where', 'In WHERE'],
       ] as Array<[Placement, string]>).map(([value, label]) => <button key={value} type="button" aria-pressed={placement === value} onClick={() => setPlacement(value)} className={placement === value ? 'assessment-action-primary' : 'assessment-action-secondary'}>{label}</button>)}</div></fieldset>

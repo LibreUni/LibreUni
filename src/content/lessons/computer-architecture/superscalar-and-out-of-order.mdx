@@ -1,20 +1,20 @@
 ---
-title: "Superscalar and Out-of-Order Execution"
-course: "computer-architecture"
-description: "Instruction-level parallelism, renaming, speculation, and retirement."
+title: Superscalar and Out-of-Order Execution
+course: computer-architecture
+description: Instruction-level parallelism, renaming, speculation, and retirement.
 prerequisites:
-  - "Programming in a systems language"
-  - "Binary arithmetic and basic digital logic"
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
 outcomes:
-  - "Explain how issue width, renaming, reservation stations, load/store ordering, speculation, and retirement expose ILP."
-  - "Trace physical-register, reorder-buffer, and exception state through out-of-order completion and in-order commit."
-  - "Evaluate an OoO optimization by IPC, energy, recovery, and precise-state invariants."
+  - Explain how issue width, renaming, reservation stations, load/store ordering, speculation, and retirement expose ILP.
+  - Trace physical-register, reorder-buffer, and exception state through out-of-order completion and in-order commit.
+  - Evaluate an OoO optimization by IPC, energy, recovery, and precise-state invariants.
 omissions:
-  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
 estimatedMinutes: 540
-assessment: "Given an instruction window and dependencies, produce issue/retirement state and identify the first event that could violate precise exceptions or register liveness."
+assessment: Given an instruction window and dependencies, produce issue/retirement state and identify the first event that could violate precise exceptions or register liveness.
 ---
-# Superscalar and Out-of-Order Execution
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
@@ -47,20 +47,20 @@ Renaming does not remove RAW dependencies. If a later instruction reads the arch
 
 Physical registers need reclamation. When a new mapping replaces an old architectural mapping and no in-flight instruction can still read the old physical register, the old register can return to the free list. Reference tracking, retirement maps, or equivalent mechanisms prevent premature reuse. A physical-register leak eventually stalls dispatch even when execution units are idle.
 
-<details>
-<summary><strong>Pause & Predict: Can Renaming Accelerate a Pure RAW Chain?</strong></summary>
+> **Pause & Predict: Can Renaming Accelerate a Pure RAW Chain?** Suppose you have an infinite supply of execution units and physical registers, and you run the following code:
+> ```asm
+> add a0, a1, a2
+> add a0, a0, a3
+> add a0, a0, a4
+> add a0, a0, a5
+> ```
+> Will register renaming allow these four instructions to execute concurrently? Commit your reasoning before opening the analysis below.
 
-Suppose you have an infinite supply of execution units and physical registers, and you run the following code:
-```asm
-add a0, a1, a2
-add a0, a0, a3
-add a0, a0, a4
-add a0, a0, a5
-```
-Will register renaming allow these four instructions to execute concurrently?
-**Commit your reasoning before opening the solution below.**
-
----
+<ExerciseSolution
+  hint="Recall the difference between true data dependencies (RAW) and false name dependencies (WAR, WAW). Which ones can renaming eliminate?"
+  title="Reveal analysis"
+  hintTitle="Show hint"
+>
 
 **Analysis:**
 **No! Not by a single cycle.**
@@ -75,7 +75,8 @@ It does **not** eliminate Read-After-Write (RAW / true data dependence). Each in
 * `P4 = P3 + a5` (must wait for P3 to be computed)
 
 The critical path remains exactly 4 serial addition latencies. Only algorithmic reassociation (e.g. tree reduction $(a1+a2) + (a3+a4)$) or compiler loop unrolling can expose true ILP from serialized chains.
-</details>
+
+</ExerciseSolution>
 
 <CaseStudy client:load
   title="Execute early, retire in order"
@@ -133,12 +134,11 @@ end note
 
 **Transfer check.** The ROB contains older load A followed by independent add B. B completes while A waits; A then reports a page fault. Which entries were already allocated, and which result can become architectural?
 
-<details>
-<summary>Check the precise-exception boundary</summary>
+<ExerciseSolution title="Check the precise-exception boundary">
 
 Both entries were allocated before their execution. B may hold a computed value, but cannot retire past A. At the fault boundary, A traps and B is discarded; neither instruction writes an architectural result. Older instructions before A may already have retired. Recording B only when it finishes would lose this ordering information.
 
-</details>
+</ExerciseSolution>
 
 <Quiz client:load title="Preserve the illusion"
   question="What must an out-of-order processor preserve for software?"
@@ -251,7 +251,6 @@ At the end of cycle 3, I1 and I3 have broadcast. I2's reservation station now ha
 
 I3 completes before I2 but cannot retire before it. A different issue width, broadcast bandwidth, cache latency, or retirement policy changes the cycle numbers, not the dependencies or the in-order-retirement requirement.
 
----
 
 ### Counterexample & Failure Mode: Memory Disambiguation Violation (Speculative Load Bypass Hazard)
 
@@ -276,42 +275,80 @@ I3: add x7, x6, x8    # Dependent consumer
 3. **Required Microarchitectural Recovery**:
    If the Load-Store Queue (LSQ) fails to detect this address collision when `I1` resolves, a silent data corruption bug occurs. A correct out-of-order core must snoop the store address against all younger speculative loads in the LSQ. Upon collision detection, it marks `I2` and its dependents for replay; if they have already executed, it squashes and re-executes them after `I1`’s data is available. The store `I1` itself is older and remains; recovery does not roll architectural state back to before `I1`.
 
----
 
 ## Independent practice
 
-1. Rename a sequence containing RAW, WAR, and WAW dependencies and draw the physical-register mappings.
+### Exercise 1: Register renaming for dependency resolution
 
-2. Schedule four instructions on two ALUs with one three-cycle multiply and one dependent consumer. State issue, completion, and retirement cycles.
+Rename a sequence containing RAW, WAR, and WAW dependencies and draw the physical-register mappings.
 
-3. Explain why an older unresolved store can prevent a younger load from executing even when the load’s register operands are ready.
+<ExerciseSolution hint="Assign fresh physical registers to eliminate false WAR and WAW naming hazards while preserving RAW chains.">
 
-4. Trace ROB state for an exception at the head with two younger completed instructions.
+Allocate fresh physical destinations for every write, while each read uses the mapping visible at dispatch. WAR and WAW disappear; a consumer still waits for the physical register produced by its true source instruction.
 
-5. Derive the expected IPC effect of a branch frequency, prediction accuracy, and recovery cost.
+</ExerciseSolution>
 
-6. Identify the state that must be checkpointed for branch recovery.
+### Exercise 2: Superscalar dual-issue instruction scheduling
 
-7. Give three assertions that would catch premature physical-register reuse.
+Schedule four instructions on two ALUs with one three-cycle multiply and one dependent consumer. State issue, completion, and retirement cycles.
 
-<details>
-<summary>Diagnostic solutions</summary>
+<ExerciseSolution hint="Match independent instructions with complementary functional unit requirements in the same issue cycle.">
 
-1. Allocate fresh physical destinations for every write, while each read uses the mapping visible at dispatch. WAR and WAW disappear; a consumer still waits for the physical register produced by its true source instruction.
+The multiply can issue alongside an independent add if units and operands are ready. Its consumer cannot issue until three-cycle completion. Retirement remains in program order even if the independent add finishes first.
 
-2. The multiply can issue alongside an independent add if units and operands are ready. Its consumer cannot issue until three-cycle completion. Retirement remains in program order even if the independent add finishes first.
+</ExerciseSolution>
 
-3. The store address may equal the load address. Executing the load first could read an older value and violate program order. The queue can prove nonaliasing, forward from the store, or wait and replay if speculation fails.
+### Exercise 3: Memory disambiguation and store-to-load forwarding
 
-4. Older instructions before the head retire; the faulting head records cause; younger completed entries do not retire and are discarded. Architectural register and memory state contains no younger effects.
+Explain why an older unresolved store can prevent a younger load from executing even when the load’s register operands are ready.
 
-5. Branch cost is frequency times misprediction probability times penalty. IPC or CPI must then be combined with base issue width and clock period; a lower CPI does not automatically mean lower wall-clock time.
+<ExerciseSolution hint="Explain why unknown older store addresses force younger loads to wait or verify against store queues.">
 
-6. Save the rename map or a recoverable checkpoint, the ROB boundary/branch mask, speculative store state, and fetch PC/target state. Predictor updates may use a separate policy but cannot allow wrong-path architectural effects.
+The store address may equal the load address. Executing the load first could read an older value and violate program order. The queue can prove nonaliasing, forward from the store, or wait and replay if speculation fails.
 
-7. Assert that a physical register is allocated only when free, not allocated while referenced by any in-flight source, and not returned to the free list until retirement has removed every architectural and speculative reference.
+</ExerciseSolution>
 
-</details>
+### Exercise 4: Reorder buffer (ROB) precise exception handling
+
+Trace ROB state for an exception at the head with two younger completed instructions.
+
+<ExerciseSolution hint="Trace instruction retirement at the ROB head to ensure exceptions take effect at exact architectural boundaries.">
+
+Older instructions before the head retire; the faulting head records cause; younger completed entries do not retire and are discarded. Architectural register and memory state contains no younger effects.
+
+</ExerciseSolution>
+
+### Exercise 5: Branch misprediction impact on out-of-order IPC
+
+Derive the expected IPC effect of a branch frequency, prediction accuracy, and recovery cost.
+
+<ExerciseSolution hint="Calculate IPC degradation from branch flush recovery when speculative pipelines retire wrong-path work.">
+
+Branch cost is frequency times misprediction probability times penalty. IPC or CPI must then be combined with base issue width and clock period; a lower CPI does not automatically mean lower wall-clock time.
+
+</ExerciseSolution>
+
+### Exercise 6: Speculative checkpointing and architectural restore
+
+Identify the state that must be checkpointed for branch recovery.
+
+<ExerciseSolution hint="Identify the rename tables and register allocation states that must be restored on branch mispredictions.">
+
+Save the rename map or a recoverable checkpoint, the ROB boundary/branch mask, speculative store state, and fetch PC/target state. Predictor updates may use a separate policy but cannot allow wrong-path architectural effects.
+
+</ExerciseSolution>
+
+### Exercise 7: Physical register free-list management invariants
+
+Give three assertions that would catch premature physical-register reuse.
+
+<ExerciseSolution hint="Assert that physical registers are released to the free list only when younger overwriting instructions retire.">
+
+Assert that a physical register is allocated only when free, not allocated while referenced by any in-flight source, and not returned to the free list until retirement has removed every architectural and speculative reference.
+
+</ExerciseSolution>
+
+
 
 ## Deliberate Omissions & Scope Boundaries
 
@@ -319,7 +356,6 @@ I3: add x7, x6, x8    # Dependent consumer
 * **Micro-Op Fusion & Loop Stream Detectors**: CISC x86 frontend decoding engines and $\mu$op cache decoders are omitted to focus on canonical RISC out-of-order pipelines.
 * **Transistor-Level CAM Match Circuits**: Detailed electrical circuit structures of Content-Addressable Memory (CAM) arrays used in associative queue wakeups are treated in VLSI design courses.
 
----
 
 ## References & Further Reading
 

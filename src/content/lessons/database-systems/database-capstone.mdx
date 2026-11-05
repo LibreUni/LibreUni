@@ -1,27 +1,27 @@
 ---
-title: "Database Capstone"
-course: "database-systems"
-description: "Design, test, measure, and defend a multi-tenant order system whose guarantees survive contention, failure, replication, and hostile access."
+title: Database Capstone
+course: database-systems
+description: Design, test, measure, and defend a multi-tenant order system whose guarantees survive contention, failure, replication, and hostile access.
 prerequisites:
-  - "Relational design, SQL, functional dependencies, normalization, and query planning"
-  - "Indexes, transactions, concurrency control, recovery, distributed-data trade-offs, and database security"
-  - "Ability to write tests, read execution plans, construct traces, and explain assumptions in a design review"
+  - Relational design, SQL, functional dependencies, normalization, and query planning
+  - Indexes, transactions, concurrency control, recovery, distributed-data trade-offs, and database security
+  - Ability to write tests, read execution plans, construct traces, and explain assumptions in a design review
 outcomes:
-  - "Produce a coherent schema, query portfolio, transaction/state model, and operational plan for a multi-tenant system."
-  - "Demonstrate each material invariant with a constraint, transaction trace, or a named procedural enforcement boundary."
-  - "Measure a workload claim with reproducible data, plans, failure injection, and counterexample tests."
-  - "Defend limits, trade-offs, and incident recovery behavior rather than presenting a feature checklist."
+  - Produce a coherent schema, query portfolio, transaction/state model, and operational plan for a multi-tenant system.
+  - Demonstrate each material invariant with a constraint, transaction trace, or a named procedural enforcement boundary.
+  - Measure a workload claim with reproducible data, plans, failure injection, and counterexample tests.
+  - Defend limits, trade-offs, and incident recovery behavior rather than presenting a feature checklist.
 omissions:
-  - "The capstone does not require production deployment, payment-card handling, or a full DBMS implementation."
-  - "Cloud-product configuration and formal distributed-consensus proofs may support a design only when their stated assumptions are testable."
+  - The capstone does not require production deployment, payment-card handling, or a full DBMS implementation.
+  - Cloud-product configuration and formal distributed-consensus proofs may support a design only when their stated assumptions are testable.
 estimatedMinutes: 1200
-assessment: "Submit and defend a runnable multi-tenant order-system design that preserves stated invariants under adversarial queries, concurrent requests, a crash/recovery drill, and one replica or migration failure."
+assessment: Submit and defend a runnable multi-tenant order-system design that preserves stated invariants under adversarial queries, concurrent requests, a crash/recovery drill, and one replica or migration failure.
 ---
-
-import PlantUML from '../../../components/PlantUML.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import CaseStudy from '../../../components/CaseStudy';
+import Quiz from '../../../components/Quiz';
 
-# Database Capstone
 
 Build a database-backed marketplace for independent merchants. A merchant owns catalog items and warehouses; customers place orders; an order records immutable line prices; inventory is reserved before fulfillment; a provider sends duplicate and out-of-order payment webhooks. The target is not a collection of SQL snippets. It is an argument that the following facts survive normal operation and stated failures:
 
@@ -142,10 +142,29 @@ The reservation must protect its own invariant. A conditional update of one stoc
 3. T2 records or returns a rejection without creating a successful order state.
 4. A committed outbox worker can retry provider communication with the same idempotency key.
 
-<details>
-<summary>What evidence must the concurrency test retain?</summary>
+<ExerciseSolution title="What evidence must the concurrency test retain?">
+
 Keep initial fixture state, transaction timestamps/order, statement outcomes, isolation setting, locks or serialization errors, final rows, and emitted outbox IDs. A final stock value alone cannot distinguish a correct rejection from a lost update.
-</details>
+
+</ExerciseSolution>
+
+<CaseStudy client:load
+  title="Structuring the checkout and payment boundary"
+  scenario="During flash-sale contention, a checkout service begins a database transaction, locks the `warehouse_stock` row with `SELECT ... FOR UPDATE`, makes a synchronous 400 ms HTTPS call to an external payment gateway, and then commits the order."
+  question="What is the primary architectural failure mode of holding the stock lock across the external network call, and how should the transaction boundary be redesigned?"
+  options={[
+    "External network latency inflates lock holding time, exhausting the connection pool and serializing all concurrent checkouts for that SKU; commit the local stock reservation and outbox row first, then invoke the payment provider asynchronously with an idempotency key",
+    "Holding the lock across HTTPS is optimal because PostgreSQL automatically rolls back the external payment provider charge if the local commit fails",
+    "The only issue is Read Committed isolation; switching the transaction to `SERIALIZABLE` while keeping the synchronous HTTPS call inside the transaction eliminates contention",
+    "Move the `warehouse_stock` update to an asynchronous read replica so checkout writes do not acquire locks on the primary"
+  ]}
+  correctIndex={0}
+  explanation="Database transactions cannot roll back external network side effects, and holding row locks + connections during 400 ms network I/O collapses throughput under Little's Law. Persisting the reservation and an outbox event in a short local transaction decouples lock duration from external latency while preserving idempotency."
+  tradeoffs={[
+    { label: "Short Local Transaction + Transactional Outbox", pros: "Sub-millisecond lock hold time; survives worker crashes via idempotent retry.", cons: "Requires explicit compensating reservation release if payment ultimately fails." },
+    { label: "Synchronous Remote Call Inside DB Transaction", pros: "Apparent sequential code simplicity in a single handler.", cons: "Catastrophic lock convoy under contention and unrecoverable split-brain if commit fails after provider charge." }
+  ]}
+/>
 
 ## Measure the workload and physical design
 
@@ -212,6 +231,19 @@ Submit a repository or archive that runs from an empty database and includes:
 | concurrency and recovery | 20% | traces, failure injection, safe retries, restore drill |
 | security and operations | 20% | least privilege, attack tests, audit/rotation/runbooks |
 | clarity of trade-offs | 15% | rejected alternatives and explicit assumptions |
+
+<Quiz client:load
+  title="Capstone invariant verification"
+  question="Which combination of mechanisms prevents both cross-tenant order leakage and duplicate payment state transitions in the marketplace capstone?"
+  options={[
+    "Application-tier tenant filtering in `WHERE` clauses and generating a fresh UUID on every webhook retry",
+    "Composite tenant-aware foreign keys + Row-Level Security (RLS) on a non-bypass runtime role, paired with a unique constraint on `provider_event_id` and monotonic state transition checks",
+    "Storing all tenants in one table with a non-unique `tenant_id` index and relying on `READ UNCOMMITTED` isolation for webhook workers",
+    "Routing all payment webhooks and tenant permission checks to an asynchronous read replica"
+  ]}
+  correctIndex={1}
+  explanation="Defense-in-depth tenant isolation combines structural composite foreign keys with non-bypassable RLS policies on least-privilege runtime roles, while idempotent webhook processing requires a uniqueness constraint on the provider event identifier and guarded state transitions."
+/>
 
 ## References & Further Reading
 

@@ -1,20 +1,20 @@
 ---
-title: "Virtual-Memory Hardware"
-course: "computer-architecture"
-description: "Page tables, translation lookaside buffers, protection, and faults."
+title: Virtual-Memory Hardware
+course: computer-architecture
+description: Page tables, translation lookaside buffers, protection, and faults.
 prerequisites:
-  - "Programming in a systems language"
-  - "Binary arithmetic and basic digital logic"
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
 outcomes:
-  - "Decompose virtual addresses and derive multi-level page-table, TLB, permission, and physical-address behavior."
-  - "Trace TLB misses, page faults, copy-on-write, cache aliases, ASIDs, and invalidation across address spaces."
-  - "Prove that translation and permission changes cannot expose a reused frame or stale authority."
+  - Decompose virtual addresses and derive multi-level page-table, TLB, permission, and physical-address behavior.
+  - Trace TLB misses, page faults, copy-on-write, cache aliases, ASIDs, and invalidation across address spaces.
+  - Prove that translation and permission changes cannot expose a reused frame or stale authority.
 omissions:
-  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
 estimatedMinutes: 600
-assessment: "Given a page size, table geometry, access type, and stale-TLB scenario, derive the walk/fault path and specify the ordering needed for safe reuse."
+assessment: Given a page size, table geometry, access type, and stale-TLB scenario, derive the walk/fault path and specify the ordering needed for safe reuse.
 ---
-# Virtual-Memory Hardware
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
@@ -152,26 +152,77 @@ Permission upgrades and downgrades require different reasoning. Before making a 
 
 ## Independent practice
 
-1. Decompose virtual address `0x123456789abc` for 4 KiB pages and four 9-bit page-table indexes, ordered from level 4 (top) to level 1 (leaf). The leaf PTE supplies PFN `0xABCDE`. Identify all fields and compute the physical address.
-2. Compare TLB reach for 64 entries with 4 KiB pages and 2 MiB pages. State the fragmentation trade-off.
-3. Explain the complete control flow for a copy-on-write fault after a `fork`-like operation.
-4. Compute AMAT-like cost for a TLB with hit/miss probabilities and a data cache, stating whether costs overlap.
-5. Explain why stale TLB entries can become a security issue when a physical frame is reused.
-6. Compare PIPT and virtually indexed/physically tagged caches in terms of latency, synonyms, and page-offset constraints.
-7. Design page-table and fault-handler invariants that prevent a user process from writing a read-only shared code page.
+### Exercise 1: Multilevel page table virtual address decomposition
 
-<details>
-<summary>Diagnostic solutions</summary>
+Decompose virtual address `0x123456789abc` for 4 KiB pages and four 9-bit page-table indexes, ordered from level 4 (top) to level 1 (leaf). The leaf PTE supplies PFN `0xABCDE`. Identify all fields and compute the physical address.
 
-1. Four 9-bit indexes consume 36 VPN bits and the 12-bit offset completes 48 bits. From the most-significant VPN bits downward, the indexes are $36,209,179,393$ (level 4 through level 1), and the offset is `0xabc`. With leaf PFN `0xABCDE`, $PA=(0xABCDE\ll12)|0xABC=0xABCDEABC$; the offset is preserved exactly. A different page-table walk ordering must be stated rather than silently swapping levels.
-2. 64 entries cover 256 KiB with 4 KiB pages and 128 MiB with 2 MiB pages. Huge pages improve reach and reduce walk pressure but can waste up to nearly a page per allocation and make fine-grained protection or sharing less flexible.
-3. Mark shared pages read-only, let both processes point to the same frame, and fault on a write. The handler verifies the fault is a valid copy-on-write case, allocates a private frame, copies data, updates only the writer’s PTE to writable, invalidates the stale translation, and retries the store. A failed allocation must not leave the page writable.
-4. Use $t_{hit}+m_{TLB}t_{walk}+t_{cache}$ only if the stated costs are additive and page walks do not evict data. If translation and cache lookup overlap, use a conditional timing model rather than adding both full latencies.
-5. If process A’s translation remains cached after the frame is assigned to process B, A may read or write B’s physical memory through the old mapping. ASIDs, shootdowns, and ordered reuse prevent this stale authority.
-6. PIPT avoids virtual synonyms naturally but waits for translation before cache tag/index work. VIPT can overlap index lookup when index bits lie within the page offset, but aliases mapping one frame at different virtual addresses may require synonym handling or page coloring.
-7. A user PTE for shared code has user-read and execute permission but no write permission; hardware checks the TLB-cached permission on every store. The kernel changes permissions only through validated transitions, invalidates translations after updates, and never reuses a frame until all stale translations are removed.
+<ExerciseSolution hint="Extract VPN levels and page offset bits from a 48-bit or 64-bit virtual memory address.">
 
-</details>
+Four 9-bit indexes consume 36 VPN bits and the 12-bit offset completes 48 bits. From the most-significant VPN bits downward, the indexes are $36,209,179,393$ (level 4 through level 1), and the offset is `0xabc`. With leaf PFN `0xABCDE`, $PA=(0xABCDE\ll12)|0xABC=0xABCDEABC$; the offset is preserved exactly. A different page-table walk ordering must be stated rather than silently swapping levels.
+
+</ExerciseSolution>
+
+### Exercise 2: TLB reach comparison across page sizes
+
+Compare TLB reach for 64 entries with 4 KiB pages and 2 MiB pages. State the fragmentation trade-off.
+
+<ExerciseSolution hint="Calculate total addressable memory covered by fixed TLB entries when using 4 KiB versus 2 MiB huge pages.">
+
+64 entries cover 256 KiB with 4 KiB pages and 128 MiB with 2 MiB pages. Huge pages improve reach and reduce walk pressure but can waste up to nearly a page per allocation and make fine-grained protection or sharing less flexible.
+
+</ExerciseSolution>
+
+### Exercise 3: Copy-on-write fault control sequence
+
+Explain the complete control flow for a copy-on-write fault after a `fork`-like operation.
+
+<ExerciseSolution hint="Mark shared page table entries read-only and allocate fresh physical frames on first write trap.">
+
+Mark shared pages read-only, let both processes point to the same frame, and fault on a write. The handler verifies the fault is a valid copy-on-write case, allocates a private frame, copies data, updates only the writer’s PTE to writable, invalidates the stale translation, and retries the store. A failed allocation must not leave the page writable.
+
+</ExerciseSolution>
+
+### Exercise 4: TLB hit rate impact on effective access time
+
+Compute AMAT-like cost for a TLB with hit/miss probabilities and a data cache, stating whether costs overlap.
+
+<ExerciseSolution hint="Compute average memory access time taking into account multi-level page walk penalties on TLB misses.">
+
+Use $t_{hit}+m_{TLB}t_{walk}+t_{cache}$ only if the stated costs are additive and page walks do not evict data. If translation and cache lookup overlap, use a conditional timing model rather than adding both full latencies.
+
+</ExerciseSolution>
+
+### Exercise 5: Stale TLB entries and cross-core shootdown
+
+Explain why stale TLB entries can become a security issue when a physical frame is reused.
+
+<ExerciseSolution hint="Explain why revoking permissions in memory requires interprocessor interrupt shootdowns across all cores.">
+
+If process A’s translation remains cached after the frame is assigned to process B, A may read or write B’s physical memory through the old mapping. ASIDs, shootdowns, and ordered reuse prevent this stale authority.
+
+</ExerciseSolution>
+
+### Exercise 6: PIPT vs VIPT cache hierarchy trade-offs
+
+Compare PIPT and virtually indexed/physically tagged caches in terms of latency, synonyms, and page-offset constraints.
+
+<ExerciseSolution hint="Compare virtually indexed physically tagged caches with PIPT regarding translation latency and page coloring.">
+
+PIPT avoids virtual synonyms naturally but waits for translation before cache tag/index work. VIPT can overlap index lookup when index bits lie within the page offset, but aliases mapping one frame at different virtual addresses may require synonym handling or page coloring.
+
+</ExerciseSolution>
+
+### Exercise 7: Page table permission security invariants
+
+Design page-table and fault-handler invariants that prevent a user process from writing a read-only shared code page.
+
+<ExerciseSolution hint="Enforce user vs supervisor and write-xor-execute (W^X) bit configurations to prevent privilege escalation.">
+
+A user PTE for shared code has user-read and execute permission but no write permission; hardware checks the TLB-cached permission on every store. The kernel changes permissions only through validated transitions, invalidates translations after updates, and never reuses a frame until all stale translations are removed.
+
+</ExerciseSolution>
+
+
 
 ## References & Further Reading
 

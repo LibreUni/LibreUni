@@ -1,27 +1,27 @@
 ---
-title: "Filesystem Interface and Names"
-course: "operating-systems"
-description: "Path resolution, directory entries, open file descriptions, links, atomic namespace operations, and race-resistant file access."
+title: Filesystem Interface and Names
+course: operating-systems
+description: Path resolution, directory entries, open file descriptions, links, atomic namespace operations, and race-resistant file access.
 prerequisites:
-  - "C pointers, structs, arrays, and system-call error handling"
-  - "Processes, file descriptors, and virtual address spaces"
-  - "Kernel/user privilege boundaries"
+  - C pointers, structs, arrays, and system-call error handling
+  - Processes, file descriptors, and virtual address spaces
+  - Kernel/user privilege boundaries
 outcomes:
-  - "Distinguish pathnames, directory entries, filesystem objects, open file descriptions, and process-local descriptors."
-  - "Trace path resolution, descriptor duplication, unlink, link, and rename under precisely stated concurrency assumptions."
-  - "Design race-resistant and crash-aware file update protocols without confusing atomic visibility with durability."
-  - "Diagnose namespace bugs involving symbolic links, shared offsets, stale names, and open-but-unlinked objects."
+  - Distinguish pathnames, directory entries, filesystem objects, open file descriptions, and process-local descriptors.
+  - Trace path resolution, descriptor duplication, unlink, link, and rename under precisely stated concurrency assumptions.
+  - Design race-resistant and crash-aware file update protocols without confusing atomic visibility with durability.
+  - Diagnose namespace bugs involving symbolic links, shared offsets, stale names, and open-but-unlinked objects.
 omissions:
-  - "Network filesystem cache coherence, distributed naming, mandatory access control, and implementation-specific extended attributes require separate treatment."
-  - "Crash recovery is bounded here to interface guarantees; on-disk recovery mechanisms are developed independently."
+  - Network filesystem cache coherence, distributed naming, mandatory access control, and implementation-specific extended attributes require separate treatment.
+  - Crash recovery is bounded here to interface guarantees; on-disk recovery mechanisms are developed independently.
 estimatedMinutes: 300
-assessment: "Produce and defend traces for unfamiliar pathname and descriptor schedules, then specify a race-resistant update protocol with explicit atomicity, authority, and durability assumptions."
+assessment: Produce and defend traces for unfamiliar pathname and descriptor schedules, then specify a race-resistant update protocol with explicit atomicity, authority, and durability assumptions.
 ---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
-# Filesystem Interface and Names
 
 A configuration daemon opens `/srv/app/config`, validates its contents, and keeps the returned descriptor. An administrator writes a replacement file and atomically renames it over `config`. New calls to `open("/srv/app/config", ...)` reach the replacement; the daemon's existing descriptor still reaches the old object. If the old name was its last directory entry, the old object has no pathname at all, yet the daemon can continue reading it.
 
@@ -70,14 +70,13 @@ The diagram separates two graphs. Directory entries form the **namespace graph**
 
 Without consulting the answer, record which state is shared after `b = dup(a)`: pathname, descriptor number, descriptor flags, current offset, file-status flags, and inode identity.
 
-<details>
-<summary>Reveal the state partition</summary>
+<ExerciseSolution title="Reveal the state partition">
 
 `a` and `b` are different descriptor numbers in one table. They refer to the same open file description, so they share its current offset and file-status flags; they consequently reach the same inode. Descriptor flags are per descriptor and are not thereby shared. No pathname is stored as the descriptor's operative identity. If the process calls `open` a second time instead of `dup`, the new descriptor normally receives a distinct open file description and therefore a distinct offset.
 
 A response that says “everything is copied” has collapsed three layers: descriptor entry, open description, and inode. A response that gives each descriptor an independent offset has confused `dup` with a second `open`.
 
-</details>
+</ExerciseSolution>
 
 <Quiz client:load
   title="Unlinking an open file and namespace independence"
@@ -119,12 +118,11 @@ The descriptor used for an operation does not determine the offset object. `a` a
 
 A parent opens an output file, calls `fork`, and both processes write fixed-size records through the inherited descriptor without seeking. State the property that descriptor sharing supplies and the property it does not supply.
 
-<details>
-<summary>Reveal the diagnostic answer</summary>
+<ExerciseSolution title="Reveal the diagnostic answer">
 
 The inherited descriptors refer to one open file description, so they share one current offset. POSIX specifies relevant descriptor operations atomically with respect to the effects on regular files, preventing both writes from independently using the same old offset under the specified interface semantics. This does **not** impose an application-level order between parent and child records, combine several writes into one transaction, make buffered library I/O safe after `fork`, or make either record durable. If record order is part of correctness, the processes need an explicit protocol.
 
-</details>
+</ExerciseSolution>
 
 ## Path resolution is a stateful walk
 
@@ -188,14 +186,13 @@ No corruption of the kernel's lookup algorithm occurred. The application incorre
 
 A privileged image service must open a caller-supplied relative name beneath an already opened directory `tenant_dir`. The caller can concurrently rename entries and create symbolic links. Specify a safe ordering and state what remains unproved.
 
-<details>
-<summary>Reveal one defensible protocol</summary>
+<ExerciseSolution title="Reveal one defensible protocol">
 
 Keep `tenant_dir` as an open directory descriptor acquired from trusted configuration. Resolve relative to that descriptor, not the process-wide current directory. On Linux, use `openat2` with a policy-appropriate combination such as `RESOLVE_BENEATH` or `RESOLVE_IN_ROOT`, plus restrictions on symbolic links or mount crossings when the service's contract forbids them. Open with the least required access, then inspect the returned descriptor with `fstat` and perform I/O through that descriptor.
 
 The protocol binds later I/O to the object actually opened. It does not prove that file contents are benign, that the trusted directory itself was acquired securely, that every filesystem implements identical remote semantics, or that a kernel vulnerability cannot violate the boundary. Listing flags without deriving them from the service's path policy is not a complete answer.
 
-</details>
+</ExerciseSolution>
 
 ## Links, removal, and replacement
 
@@ -224,12 +221,11 @@ Creating a new `/tmp/job.out` after step 1 creates or links some other object. I
 
 `old` names inode A and `new` names inode B. Process R repeatedly resolves `new` while process W executes successful `rename(old, new)`. No other namespace changes occur. Which inode identities may R obtain? What happens to an already open descriptor for B?
 
-<details>
-<summary>Reveal the observation set</summary>
+<ExerciseSolution title="Reveal the observation set">
 
 Each completed resolution of `new` may obtain B before the rename linearization point or A after it. The specified replacement does not expose an interval in which `new` is missing. A descriptor opened on B before replacement continues to refer to B; B's content is reclaimed only after its last link and open reference are gone. An answer claiming that R's existing descriptor switches from B to A has made descriptors resolve names repeatedly. An answer claiming that the result necessarily survives a crash has imported a durability guarantee that the premise does not provide.
 
-</details>
+</ExerciseSolution>
 
 ## Deriving a crash-aware replacement protocol
 
@@ -258,8 +254,7 @@ Design an API `publish(dirfd, final_name, bytes)` for a service that publishes o
 - which errors are propagated; and
 - how a reader detects or requests a newer generation when it holds an old descriptor.
 
-<details>
-<summary>Reveal the grading criteria and a reference design</summary>
+<ExerciseSolution title="Reveal the grading criteria and a reference design">
 
 A complete specification distinguishes three contracts:
 
@@ -271,7 +266,7 @@ A strong design also bounds input size, writes until all bytes are consumed, han
 
 Award full credit only when the response states assumptions and legal states. Deduct for a pathname-based validate-then-open sequence, `rename` presented as a durability primitive, unchecked partial writes, or silent `fsync` failure.
 
-</details>
+</ExerciseSolution>
 
 ## Connections and deliberate boundary
 

@@ -25,8 +25,6 @@ interface QuizProps {
   questions?: Question[];
 }
 
-type Phase = 'retrieve' | 'evaluate' | 'review';
-
 function hash(text: string) {
   let value = 2166136261;
   for (const character of text) {
@@ -56,9 +54,10 @@ function normalizeOptions(question: Question): Option[] {
 }
 
 function orderClaims(options: Option[], question: string) {
-  return [...options].sort((left, right) => (
-    hash(`${question}:${left.id}:${left.text}`) - hash(`${question}:${right.id}:${right.text}`)
-  ));
+  return [...options].sort(
+    (left, right) =>
+      hash(`${question}:${left.id}:${left.text}`) - hash(`${question}:${right.id}:${right.text}`),
+  );
 }
 
 export default function Quiz({
@@ -74,10 +73,8 @@ export default function Quiz({
     : [{ question: question ?? '', options, correctIndex, explanation }];
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [phase, setPhase] = useState<Phase>('retrieve');
-  const [draft, setDraft] = useState('');
-  const [claimIndex, setClaimIndex] = useState(0);
   const [judgements, setJudgements] = useState<Record<string, boolean>>({});
+  const [submitted, setSubmitted] = useState(false);
 
   const currentQuestion = quizQuestions[currentQuestionIndex];
   const normalizedOptions = useMemo(
@@ -85,10 +82,18 @@ export default function Quiz({
     [currentQuestion],
   );
   const orderedOptions = useMemo(
-    () => orderClaims(normalizedOptions, currentQuestion.question),
-    [normalizedOptions, currentQuestion.question],
+    () => orderClaims(normalizedOptions, currentQuestion?.question ?? ''),
+    [normalizedOptions, currentQuestion?.question],
   );
-  const currentClaim = orderedOptions[claimIndex];
+
+  if (!currentQuestion?.question || orderedOptions.length === 0) return null;
+
+  const classifiedCount = orderedOptions.filter(
+    (option) => judgements[option.id] !== undefined,
+  ).length;
+  const allClassified = classifiedCount === orderedOptions.length;
+  const canSubmit = allClassified || Object.values(judgements).some((v) => v !== undefined);
+
   const correctCount = orderedOptions.filter(
     (option) => judgements[option.id] === option.isCorrect,
   ).length;
@@ -101,24 +106,32 @@ export default function Quiz({
   const acceptedCount = orderedOptions.filter(
     (option) => judgements[option.id] === true,
   ).length;
-  const completeReasoning = missedSupported.length === 0 && acceptedUnsupported.length === 0;
+  const completeReasoning =
+    allClassified && missedSupported.length === 0 && acceptedUnsupported.length === 0;
 
-  if (!currentQuestion?.question || orderedOptions.length === 0) return null;
-
-  const resetQuestion = () => {
-    setPhase('retrieve');
-    setDraft('');
-    setClaimIndex(0);
-    setJudgements({});
+  const setOptionEvaluation = (optionId: string, isCorrect: boolean) => {
+    setJudgements((prev) => ({ ...prev, [optionId]: isCorrect }));
+    if (submitted) {
+      setSubmitted(false);
+    }
   };
 
-  const judgeClaim = (fits: boolean) => {
-    setJudgements((current) => ({ ...current, [currentClaim.id]: fits }));
-    if (claimIndex === orderedOptions.length - 1) {
-      setPhase('review');
-    } else {
-      setClaimIndex((index) => index + 1);
-    }
+  const submitVerification = () => {
+    setJudgements((prev) => {
+      const next = { ...prev };
+      for (const opt of orderedOptions) {
+        if (next[opt.id] === undefined) {
+          next[opt.id] = false;
+        }
+      }
+      return next;
+    });
+    setSubmitted(true);
+  };
+
+  const resetQuestion = () => {
+    setJudgements({});
+    setSubmitted(false);
   };
 
   const nextQuestion = () => {
@@ -132,140 +145,193 @@ export default function Quiz({
   }));
 
   return (
-    <section className="quiz-container assessment-shell" aria-label={title || 'Knowledge check'}>
+    <section
+      className="quiz-container lu-card-tier2 assessment-shell not-prose"
+      aria-label={title || 'Knowledge check'}
+      data-component="Quiz"
+    >
       <div className="print-static-assessment hidden">
         <div className="print-static-label">{title || 'Knowledge Check'}</div>
         {allQuestions.map((quizQuestion, index) => (
           <div className="print-static-item" key={`${quizQuestion.question}-${index}`}>
-            <p className="print-static-question"><MathText>{quizQuestion.question}</MathText></p>
+            <p className="print-static-question">
+              <MathText>{quizQuestion.question}</MathText>
+            </p>
             <p className="print-static-answer">
               <strong>Answer:</strong>{' '}
-              <MathText>{quizQuestion.answers.map((answer) => answer.text).join('; ')}</MathText>
+              <MathText>
+                {quizQuestion.answers.map((answer) => answer.text).join('; ')}
+              </MathText>
             </p>
             {quizQuestion.explanation && (
-              <p className="print-static-explanation"><MathText>{quizQuestion.explanation}</MathText></p>
+              <p className="print-static-explanation">
+                <MathText>{quizQuestion.explanation}</MathText>
+              </p>
             )}
           </div>
         ))}
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <p className="label-caps m-0">{title || 'Retrieval check'}</p>
-        {quizQuestions.length > 1 && (
-          <span className="text-xs font-semibold tabular-nums text-light-muted dark:text-dark-muted">
-            Question {currentQuestionIndex + 1} of {quizQuestions.length}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="label-caps m-0 text-primary dark:text-blue-400">{title || 'Verification Check'}</p>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-medium tabular-nums text-light-muted dark:text-dark-muted">
+            {classifiedCount} / {orderedOptions.length} evaluated
           </span>
-        )}
+          {quizQuestions.length > 1 && (
+            <span className="text-xs font-semibold tabular-nums text-light-muted dark:text-dark-muted">
+              Question {currentQuestionIndex + 1} of {quizQuestions.length}
+            </span>
+          )}
+        </div>
       </div>
 
-      <h3 className="mb-4 text-lg font-semibold leading-snug text-light-text dark:text-dark-text">
+      <h3 className="mb-2 text-base font-bold leading-snug text-light-text dark:text-dark-text md:text-lg">
         <MathText>{currentQuestion.question}</MathText>
       </h3>
+      <p className="mb-4 text-xs font-medium text-light-muted dark:text-dark-muted">
+        Evaluate each candidate option independently as correct or incorrect before verifying.
+      </p>
 
-      <div className="quiz-phase-container min-h-[220px]">
-        {phase === 'retrieve' && (
-          <div className="grid gap-4">
-            <label className="grid gap-2 text-sm font-semibold text-light-text dark:text-dark-text">
-              Commit your criterion or answer before seeing the claims
-              <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                rows={3}
-                className="input-field resize-y font-normal"
-                placeholder="State the decisive condition, result, or counterexample."
-              />
-            </label>
+      <div className="quiz-phase-container grid gap-2.5">
+        {orderedOptions.map((option, idx) => {
+          const choice = judgements[option.id];
+          const isCorrectChoice = submitted && choice === option.isCorrect;
+          const isWrongChoice = submitted && choice !== option.isCorrect;
+
+          let rowBorder =
+            'border-light-border bg-light-bg/70 dark:border-dark-border dark:bg-dark-bg/50';
+          if (isCorrectChoice) {
+            rowBorder = 'border-emerald-500/35 bg-emerald-500/[0.04]';
+          } else if (isWrongChoice) {
+            rowBorder = 'border-rose-500/35 bg-rose-500/[0.04]';
+          } else if (choice !== undefined) {
+            rowBorder = 'border-primary/35 bg-primary/[0.03]';
+          }
+
+          return (
+            <div
+              key={option.id}
+              className={`rounded-lg border p-3.5 transition-colors ${rowBorder}`}
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-2.5 text-sm leading-relaxed text-light-text dark:text-dark-text">
+                  <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-light-surface font-mono text-[11px] font-bold text-light-muted dark:bg-dark-surface dark:text-dark-muted">
+                    {idx + 1}
+                  </span>
+                  <div className="min-w-0 flex-1 font-medium">
+                    <MathText>{option.text}</MathText>
+                  </div>
+                </div>
+
+                <div
+                  className="inline-flex shrink-0 items-center gap-1.5 self-end sm:self-center"
+                  role="group"
+                  aria-label={`Evaluate option ${idx + 1}`}
+                >
+                  <button
+                    type="button"
+                    aria-pressed={choice === true}
+                    onClick={() => setOptionEvaluation(option.id, true)}
+                    className={`min-h-9 cursor-pointer rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      choice === true
+                        ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm dark:border-emerald-500 dark:bg-emerald-600 dark:text-white'
+                        : 'border-light-border bg-light-surface text-light-text hover:border-emerald-500/50 hover:bg-emerald-500/5 dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:border-emerald-500/40 dark:hover:bg-emerald-500/10'
+                    }`}
+                  >
+                    Correct
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={choice === false}
+                    onClick={() => setOptionEvaluation(option.id, false)}
+                    className={`min-h-9 cursor-pointer rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      choice === false
+                        ? 'border-slate-700 bg-slate-800 text-white shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white'
+                        : 'border-light-border bg-light-surface text-light-muted hover:border-slate-400 hover:text-light-text dark:border-dark-border dark:bg-dark-surface dark:text-dark-muted dark:hover:border-slate-500 dark:hover:text-dark-text'
+                    }`}
+                  >
+                    Incorrect
+                  </button>
+                </div>
+              </div>
+
+              {submitted && (
+                <div className="mt-2.5 flex items-start gap-2 border-t border-light-border/60 pt-2 text-xs leading-relaxed dark:border-dark-border/60">
+                  {isCorrectChoice ? (
+                    <Check className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" size={14} />
+                  ) : (
+                    <X className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" size={14} />
+                  )}
+                  <div className="text-light-muted dark:text-dark-muted">
+                    <span className="font-semibold text-light-text dark:text-dark-text">
+                      {option.isCorrect
+                        ? 'Correct option.'
+                        : 'Incorrect distractor.'}
+                    </span>{' '}
+                    {option.feedback && <MathText>{option.feedback}</MathText>}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={!canSubmit}
+            onClick={submitVerification}
+            className="assessment-action-primary"
+          >
+            Verify answers <ArrowRight size={15} />
+          </button>
+
+          {(classifiedCount > 0 || submitted) && (
             <button
               type="button"
-              onClick={() => setPhase('evaluate')}
-              disabled={draft.trim().length < 8}
-              className="assessment-action-primary sm:w-fit"
+              onClick={resetQuestion}
+              className="assessment-action-secondary"
             >
-              Evaluate the claims <ArrowRight size={15} />
+              <RefreshCw size={14} /> Reset
             </button>
-          </div>
-        )}
+          )}
 
-        {phase === 'evaluate' && currentClaim && (
-          <div className="grid gap-4">
-            <div className="rounded-lg border border-light-border bg-light-bg/70 p-3 text-sm dark:border-dark-border dark:bg-dark-bg/40">
-              <span className="font-bold text-light-text dark:text-dark-text">Your retrieval:</span>{' '}
-              <span className="text-light-muted dark:text-dark-muted">{draft}</span>
-            </div>
+          {submitted && currentQuestionIndex < quizQuestions.length - 1 && (
+            <button
+              type="button"
+              onClick={nextQuestion}
+              className="assessment-action-secondary ml-auto"
+            >
+              Next question <ArrowRight size={15} />
+            </button>
+          )}
+        </div>
 
-            <div className="rounded-xl border border-primary/25 bg-primary/5 p-5">
-              <div className="mb-3 text-xs font-black uppercase tracking-[0.12em] text-primary">
-                Claim {claimIndex + 1} of {orderedOptions.length}
-              </div>
-              <p className="m-0 text-base font-semibold leading-relaxed text-light-text dark:text-dark-text">
-                <MathText>{currentClaim.text}</MathText>
-              </p>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button type="button" onClick={() => judgeClaim(true)} className="assessment-action-primary justify-center">
-                Supported answer
-              </button>
-              <button type="button" onClick={() => judgeClaim(false)} className="assessment-action-secondary w-full justify-center">
-                Not supported
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === 'review' && (
-          <div className="grid gap-4">
-            <div className={completeReasoning ? 'feedback-success' : 'feedback-diagnostic'}>
+        {submitted && (
+          <div className="mt-2 grid gap-3">
+            <div className={completeReasoning ? 'feedback-success text-sm' : 'feedback-diagnostic text-sm'}>
               {completeReasoning ? (
-                <><strong>Criterion applied consistently.</strong> You identified every supported answer and rejected every unsupported claim.</>
+                <>
+                  <strong>All options evaluated accurately.</strong> You identified every correct option and rejected every incorrect distractor.
+                </>
               ) : acceptedCount === 0 && missedSupported.length > 0 ? (
-                <><strong>No supported answer was identified.</strong> Rejecting distractors is not enough; reconstruct the criterion and find the claim it entails.</>
+                <>
+                  <strong>No correct option selected.</strong> Identify which option is substantiated by the concept or model.
+                </>
               ) : (
-                <><strong>Reasoning needs revision.</strong> You missed {missedSupported.length} supported claim{missedSupported.length === 1 ? '' : 's'} and accepted {acceptedUnsupported.length} unsupported claim{acceptedUnsupported.length === 1 ? '' : 's'}.</>
+                <>
+                  <strong>Evaluation mismatch ({correctCount} of {orderedOptions.length} aligned).</strong>{' '}
+                  You missed {missedSupported.length} correct option{missedSupported.length === 1 ? '' : 's'} and selected {acceptedUnsupported.length} incorrect distractor{acceptedUnsupported.length === 1 ? '' : 's'}.
+                </>
               )}
-              {!completeReasoning && <span className="mt-1 block text-xs">Classification trace: {correctCount} of {orderedOptions.length}. This is diagnostic detail, not a passing score.</span>}
-            </div>
-
-            <div className="grid gap-2">
-              {orderedOptions.map((option) => {
-                const learnerAccepted = judgements[option.id];
-                const correct = learnerAccepted === option.isCorrect;
-                return (
-                  <div key={option.id} className={`rounded-lg border p-3 ${correct ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-rose-500/25 bg-rose-500/5'}`}>
-                    <div className="flex items-start gap-2 text-sm leading-relaxed text-light-text dark:text-dark-text">
-                      {correct
-                        ? <Check className="mt-0.5 shrink-0 text-emerald-600" size={16} />
-                        : <X className="mt-0.5 shrink-0 text-rose-600" size={16} />}
-                      <div>
-                        <MathText>{option.text}</MathText>
-                        <div className="mt-1 text-xs font-semibold text-light-muted dark:text-dark-muted">
-                          {option.isCorrect ? 'This is a supported answer.' : 'This claim is not supported.'}
-                        </div>
-                        {option.feedback && <p className="mb-0 mt-1 text-xs"><MathText>{option.feedback}</MathText></p>}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
             </div>
 
             {currentQuestion.explanation && (
               <div className="feedback-info text-sm leading-relaxed text-light-text dark:text-dark-text">
-                <strong>Reasoning:</strong>{' '}<MathText>{currentQuestion.explanation}</MathText>
+                <strong>Analysis:</strong> <MathText>{currentQuestion.explanation}</MathText>
               </div>
             )}
-
-            <div className="flex flex-wrap gap-3">
-              {currentQuestionIndex < quizQuestions.length - 1 && completeReasoning ? (
-                <button type="button" onClick={nextQuestion} className="assessment-action-primary">
-                  Next question <ArrowRight size={15} />
-                </button>
-              ) : (
-                <button type="button" onClick={resetQuestion} className="assessment-action-secondary">
-                  <RefreshCw size={14} /> Reconstruct the answer
-                </button>
-              )}
-            </div>
           </div>
         )}
       </div>

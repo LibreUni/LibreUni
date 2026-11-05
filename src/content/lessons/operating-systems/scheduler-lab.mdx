@@ -1,31 +1,32 @@
 ---
 title: "Scheduler Lab: Weighted Virtual Time in xv6"
-course: "operating-systems"
-description: "Instrument, replace, falsify, and evaluate xv6 scheduling with weighted virtual runtime, bounded wakeup credit, adversarial tests, and a defended measurement memo."
+course: operating-systems
+description: Instrument, replace, falsify, and evaluate xv6 scheduling with weighted virtual runtime, bounded wakeup credit, adversarial tests, and a defended measurement memo.
 prerequisites:
-  - "RISC-V traps, timer interrupts, kernel/user return, and the xv6 boot path"
-  - "Process-state invariants, kernel contexts, `p->lock`, and the xv6 rev5 scheduler loop"
-  - "FCFS, SJF/SRTF, round robin, response/turnaround/waiting metrics, and context-switch cost"
-  - "C integer overflow, ABI extension across kernel/user boundaries, Git, Make, QEMU, and GDB"
+  - RISC-V traps, timer interrupts, kernel/user return, and the xv6 boot path
+  - Process-state invariants, kernel contexts, `p->lock`, and the xv6 rev5 scheduler loop
+  - FCFS, SJF/SRTF, round robin, response/turnaround/waiting metrics, and context-switch cost
+  - C integer overflow, ABI extension across kernel/user boundaries, Git, Make, QEMU, and GDB
 outcomes:
-  - "Establish a reproducible scheduler baseline and map every process-state transition before changing policy."
-  - "Implement transition-based run/ready/sleep accounting and a checked self-observation syscall whose one-read sample timestamp yields exact live-state conservation without copying to user memory under a process lock."
-  - "Implement weighted virtual-runtime selection with child placement at max(parent debt, scheduler floor), bounded wakeup credit, deterministic ties, and overflow strategy."
-  - "Author adversarial tests that distinguish the intended design from at least eight named wrong implementations."
-  - "Measure share, response, overhead, and tail behavior under controlled workloads and defend causal claims with limitations."
+  - Establish a reproducible scheduler baseline and map every process-state transition before changing policy.
+  - Implement transition-based run/ready/sleep accounting and a checked self-observation syscall whose one-read sample timestamp yields exact live-state conservation without copying to user memory under a process lock.
+  - Implement weighted virtual-runtime selection with child placement at max(parent debt, scheduler floor), bounded wakeup credit, deterministic ties, and overflow strategy.
+  - Author adversarial tests that distinguish the intended design from at least eight named wrong implementations.
+  - Measure share, response, overhead, and tail behavior under controlled workloads and defend causal claims with limitations.
 omissions:
-  - "No complete kernel patch, private grading tests, or copied university assignment is published; the learner must produce and defend the implementation."
-  - "The quantitative fairness contract is single-hart; multi-hart work tests safety and regression but does not claim exact global fairness."
-  - "Linux EEVDF, hard real-time scheduling, load balancing, NUMA, priority inheritance, and production security policy are not reimplemented."
+  - No complete kernel patch, private grading tests, or copied university assignment is published; the learner must produce and defend the implementation.
+  - The quantitative fairness contract is single-hart; multi-hart work tests safety and regression but does not claim exact global fairness.
+  - Linux EEVDF, hard real-time scheduling, load balancing, NUMA, priority inheritance, and production security policy are not reimplemented.
 estimatedMinutes: 600
-assessment: "A clean-room xv6 patch, public/adversarial test suite, raw measurement data, design memo, failure analysis, and live or written defense graded against behavior, invariants, test discrimination, and evidence—not token presence."
+assessment: A clean-room xv6 patch, public/adversarial test suite, raw measurement data, design memo, failure analysis, and live or written defense graded against behavior, invariants, test discrimination, and evidence—not token presence.
 ---
-
-import PlantUML from '../../../components/PlantUML.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeExercise from '../../../components/CodeExercise';
+import CodeRunner from '../../../components/CodeRunner';
 
-# Scheduler Lab: Weighted Virtual Time in xv6
 
 A scheduler can pass `usertests`, print plausible shares, and remain wrong. Placing a child below both its parent's charged debt and the scheduler floor rewards sequential fork/wait chains. Resetting virtual time after sleep lets an interactive task monopolize the CPU after every wakeup. Copying statistics to a bad user pointer while holding `p->lock` can freeze the process table. Selecting a candidate from an unlocked scan can run one process on two harts.
 
@@ -244,6 +245,54 @@ transition(p, new_state):
 
 Do not paste this pseudocode into C without handling initialization, same-state calls, overflow, exit, and fork creation placement.
 
+<CodeExercise
+  client:load
+  title="Complete the coherent snapshot and copyout boundary in sched_get"
+  description="Fill in the missing operations so `sched_get` takes a single timestamp cut under `p->lock`, accrues the live state without mutating stored counters, and copies to user space only after releasing `p->lock`."
+  code={String.raw`uint64 sys_sched_get(void) {
+    uint64 uaddr;
+    argaddr(0, &uaddr);
+    struct proc *p = myproc();
+    struct sched_sample snap;
+
+    acquire(&p->[!blank!]);
+    uint64 now = [!blank!]();
+    snap.sample_time = now;
+    snap.run_time = p->run_time + (p->state == RUNNING ? now - p->[!blank!] : 0);
+    release(&p->[!blank!]);
+
+    if (copyout(p->pagetable, uaddr, (char *)&snap, sizeof(snap)) < 0)
+        return -1;
+    return 0;
+}`}
+  answers={["lock", "r_time", "state_since", "lock"]}
+  explanation="Holding `p->lock` while reading `r_time()` once guarantees that `p->state`, `p->state_since`, and the stored accumulators share a single linearization cut. Releasing `p->lock` before `copyout` prevents holding a spin lock across a fallible page-table walk or user-memory copy."
+/>
+
+<CodeRunner
+  client:load
+  title="Simulate WVT virtual-runtime charging and fork floor placement"
+  language="python"
+  code={`def wvt_charge(vruntime: int, delta_t: int, weight: int) -> int:
+    return vruntime + max(1, delta_t // weight)
+
+def fork_vruntime(parent_v: int, floor_v: int) -> int:
+    return max(parent_v, floor_v)
+
+procs = {
+    "hog_w1": {"w": 1, "v": 0},
+    "worker_w4": {"w": 4, "v": 0},
+}
+for tick in range(1, 5):
+    for name, p in procs.items():
+        p["v"] = wvt_charge(p["v"], delta_t=8, weight=p["w"])
+    floor_v = min(p["v"] for p in procs.values())
+    print(f"After quantum {tick}: hog_w1 v={procs['hog_w1']['v']}, worker_w4 v={procs['worker_w4']['v']}, floor={floor_v}")
+
+print("New child from sleeping parent (v=0) placed at:", fork_vruntime(0, floor_v))
+`}
+/>
+
 ### Milestone B — checked ABI
 
 Wire declarations and numbers through all kernel/user layers; add a tiny test that changes each legal weight, rejects `0,3,16,-1`, and snapshots itself. Take two samples around known live-state activity and verify monotonic `sample_time` plus the exact three-state partition. Pass an invalid pointer and prove a subsequent `getpid`/`fork` still works. Inspect the disassembly or generated syscall stub once; a header declaration alone does not create an ABI.
@@ -318,6 +367,21 @@ Every test prints one line beginning `SCHEDTEST name PASS` or `... FAIL` and exi
 | W9 `WRAP_COMPARE` | unsigned minimum reverses after wrap | test-only virtual runtimes straddle the chosen boundary | selected order matches documented normalization/modular proof |
 
 The weight-share test needs two directions. A hard-coded preference for one PID can accidentally produce a 4:1 ratio once; swapping weights and creation order kills that counterfeit.
+
+<CaseStudy
+  client:load
+  title="Defeating the sequential fork/wait starvation attack (W3)"
+  scenario="Process P1 (weight 1) sleeps in `wait()` at `vruntime = 10` while spawning a chain of short-lived children C1, C2, ..., C50 that each run for one quantum and exit before the next is forked. Meanwhile, a long-running competitor P2 (weight 1) has advanced the scheduler floor to `vruntime = 400`."
+  question="What happens if each new child initializes `v_child = v_parent` without clamping to the scheduler floor?"
+  options={[
+    "Every new child Ck starts at `vruntime = 10`, far behind P2's `vruntime = 400`, allowing the sequential fork/wait chain to monopolize the CPU and starve P2 until the attacker stops forking",
+    "Because P1 is sleeping in `wait()`, P1's `vruntime` automatically increments on every timer interrupt, keeping `v_parent` equal to `400`",
+    "Initializing `v_child = 0` fixes the attack because all children share PID 0's run queue slot",
+    "The attack is impossible on single-hart xv6 because `fork()` blocks until P2 exits"
+  ]}
+  correctIndex={0}
+  explanation="While P1 sleeps in `wait()`, P1 is not `RUNNING` and therefore accumulates no virtual-runtime debt for the CPU time consumed by its children. Without clamping `v_child = max(v_parent, floor)`, every newly forked child inherits P1's ancient `vruntime = 10` and preempts P2 (`vruntime = 400`) indefinitely."
+/>
 
 ### Test oracle details
 
@@ -435,8 +499,7 @@ Answer without running the code, then use traces to check the answers.
 9. What does the single-hart SJF-style minimum scan cost asymptotically in `NPROC`, and which measurement could reveal it?
 10. Which result would falsify the claim that observed 1:4 share follows weight rather than PID or creation order?
 
-<details>
-<summary>Reveal defense diagnostics</summary>
+<ExerciseSolution title="Reveal defense diagnostics">
 
 1. Return occurs when the process later yields back; the dispatch happened before entering it.
 2. Charge elapsed time to the change point under weight 1, reset the timestamp, then charge subsequent time under 8.
@@ -449,7 +512,7 @@ Answer without running the code, then use traces to check the answers.
 9. A full scan is $O(NPROC)$ per selection. Measure scheduler CPU time or useful throughput as runnable count grows while holding work constant.
 10. Swapping weights while holding PID/order fixed fails to swap observed share, or reversing creation changes share more than weight does.
 
-</details>
+</ExerciseSolution>
 
 ## Grading contract
 

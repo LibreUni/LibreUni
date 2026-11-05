@@ -1,23 +1,24 @@
 ---
-title: "Digital Representation"
-course: "computer-architecture"
-description: "Binary data, signed integers, floating point, and representation error."
+title: Digital Representation
+course: computer-architecture
+description: Binary data, signed integers, floating point, and representation error.
 prerequisites:
-  - "Programming in a systems language"
-  - "Binary arithmetic and basic digital logic"
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
 outcomes:
-  - "Derive unsigned and two's-complement interpretations, extension, truncation, and overflow predicates from fixed-width bit patterns."
-  - "Choose and validate integer, fixed-point, floating-point, endian, and packed-field representations at software boundaries."
-  - "Diagnose a representation failure with a counterexample and a checked conversion or arithmetic contract."
+  - Derive unsigned and two's-complement interpretations, extension, truncation, and overflow predicates from fixed-width bit patterns.
+  - Choose and validate integer, fixed-point, floating-point, endian, and packed-field representations at software boundaries.
+  - Diagnose a representation failure with a counterexample and a checked conversion or arithmetic contract.
 omissions:
-  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
 estimatedMinutes: 600
-assessment: "Given an unfamiliar fixed-width encoding, decode it under two plausible contracts, derive the overflow/extension behavior, and propose boundary tests that distinguish them."
+assessment: Given an unfamiliar fixed-width encoding, decode it under two plausible contracts, derive the overflow/extension behavior, and propose boundary tests that distinguish them.
 ---
-# Digital Representation
-
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
+import CodeExercise from '../../../components/CodeExercise';
+import CodeRunner from '../../../components/CodeRunner';
 import RepresentationPlayground from '../../../components/playgrounds/RepresentationPlayground';
 
 Computer architecture begins with a contract about bits. A wire carries one of two reliably distinguishable signal ranges, but the signal itself is not intrinsically an integer, character, address, instruction, or color. Meaning is assigned by an encoding, and every later layer—from an arithmetic unit to a compiler, debugger, file format, and network protocol—must preserve that agreement. A useful architecture student therefore asks two questions for every bit pattern: “What representation is being assumed?” and “Which operations preserve its intended meaning?”
@@ -141,6 +142,40 @@ To insert a new unsigned field value $v$, first validate $0\le v<2^r$, clear the
 
 **Worked example: a packed control word.** Let bit 0 be `enabled`, bits 1–3 be a mode in the range 0–7, and bits 4–7 be a priority in the range 0–15. For word `10110101`, `enabled=1`; extracting mode gives `(0xB5>>1)&0x7 = 2`; extracting priority gives `(0xB5>>4)&0xF = 11`. To set mode to 6, clear mask `0x0E` and insert `6<<1`, obtaining `0xBD`. The operation preserves all bits outside the mode field by construction.
 
+<CodeExercise
+  client:load
+  title="Pack and extract bit fields without clobbering neighbors"
+  description="Complete the bitwise expressions to extract the 3-bit mode field (bits 1..3) and update it to a validated new mode while preserving bit 0 (enabled) and bits 4..7 (priority)."
+  code={String.raw`uint8_t extract_mode(uint8_t word) {
+    return (word >> [!blank!]) & [!blank!];
+}
+
+uint8_t update_mode(uint8_t word, uint8_t new_mode) {
+    assert(new_mode < 8);
+    return (word & ~([!blank!] << 1)) | (new_mode << [!blank!]);
+}`}
+  answers={["1", "0x7", "0x7", "1"]}
+  explanation="Shifting right by 1 moves bits 1..3 into positions 0..2, and masking with 0x7 (binary 111) isolates the 3-bit unsigned field. To update bits 1..3 in place, clear them with ~(0x7 << 1) and OR in (new_mode << 1)."
+/>
+
+<CodeRunner
+  client:load
+  title="Verify two's-complement sign extension and overflow predicates"
+  language="python"
+  code={`def decode_word(bits: int, width: int):
+    mask = (1 << width) - 1
+    u = bits & mask
+    sign_bit = 1 << (width - 1)
+    s = u - (1 << width) if (u & sign_bit) else u
+    return u, s
+
+for pattern in [0b01111111, 0b10000000, 0b11110110]:
+    u8, s8 = decode_word(pattern, 8)
+    sext16 = (pattern | 0xFF00) if (pattern & 0x80) else pattern
+    print(f"8-bit 0x{pattern:02X}: unsigned={u8:3d}, signed={s8:4d}, sext16=0x{sext16:04X}")
+`}
+/>
+
 Bit-field layout creates an interface boundary. A producer and consumer must agree on width, signedness, reserved values, byte order, and whether unknown bits must be zero. The safest parser rejects impossible encodings rather than treating reserved patterns as future-compatible by accident.
 
 ## Fixed-point and floating-point numbers
@@ -192,22 +227,55 @@ The remedy is not “be careful” but to define boundary functions. A decoder s
 
 ## Independent practice
 
-1. A 5-bit two’s-complement machine adds `10110` and `01011`. Decode both operands, compute the bit result, decide whether signed overflow occurred, and decide whether unsigned carry occurred.
-2. A 12-bit word stores a 3-bit tag at bits 9–11, a 5-bit length at bits 4–8, and a 4-bit flags field at bits 0–3. Give masks and extraction expressions for each field. What must be checked before inserting a length of 31?
-3. Explain why zero-extending a negative 8-bit array index before checking it against an unsigned array length can be dangerous. Give a safe sequence of checks.
-4. Derive the maximum relative spacing in a normalized binary floating-point format with precision $p$ under round-to-nearest, ignoring subnormals. State the assumption about the exact value’s location between adjacent representable numbers.
-5. Design a byte-level serialization for a signed 24-bit integer. Specify byte order, encoding range, and the decoder’s response to out-of-range or noncanonical encodings.
+### Exercise 1: Two's-complement arithmetic and overflow flags
 
-<details>
-<summary>Diagnostic solutions</summary>
+A 5-bit two’s-complement machine adds `10110` and `01011`. Decode both operands, compute the bit result, decide whether signed overflow occurred, and decide whether unsigned carry occurred.
 
-1. `10110` is $22-32=-10$ and `01011` is 11. The mathematical sum is 1, so the result is `00001` with no signed overflow. As unsigned values, the operands are 22 and 11, whose sum 33 is outside the 5-bit unsigned range 0–31; the low result is 1 and carry-out is 1. This contrast is the point: one bit computation supports two different overflow predicates.
-2. The tag mask is `0xE00`, the length mask is `0x1F0`, and the flags mask is `0x00F`; extraction shifts the masked value right by 9, 4, or 0 respectively. Length 31 fits the five-bit field exactly; length 32 does not and must be rejected rather than truncated to zero.
-3. A negative signed index such as -1 becomes a very large unsigned value after conversion, potentially passing a poorly ordered comparison or changing which comparison is performed. First verify that the signed index is nonnegative, then convert to an unsigned size type, then compare against the array length, and only then calculate the address.
-4. In a binade, adjacent normalized values are separated by $2^{e-(p-1)}$. The relative gap to the lower value is therefore $2^{-(p-1)}$. Round-to-nearest makes the maximum rounding error half an ULP, at most $2^{-p}$ relative to a value near the lower endpoint; the exact bound varies slightly across the binade. The assumption is that the exact value is rounded to the nearest representable neighbor, not truncated.
-5. A 24-bit signed two’s-complement value ranges from $-2^{23}$ through $2^{23}-1$. Encode its modular 24-bit pattern, choose big- or little-endian order, and require the decoder to sign-extend bit 23. A canonical decoder rejects a byte sequence of the wrong length and any alternate encoding not allowed by the format rather than silently accepting ambiguous representations.
+<ExerciseSolution hint="Recall that signed overflow detects whether the mathematical sum falls outside the 5-bit signed range [-16, 15], while unsigned carry checks whether the sum exceeds 31.">
 
-</details>
+`10110` is $22-32=-10$ and `01011` is 11. The mathematical sum is 1, so the result is `00001` with no signed overflow. As unsigned values, the operands are 22 and 11, whose sum 33 is outside the 5-bit unsigned range 0–31; the low result is 1 and carry-out is 1. This contrast is the point: one bit computation supports two different overflow predicates.
+
+</ExerciseSolution>
+
+### Exercise 2: Bitfield masks and extraction
+
+A 12-bit word stores a 3-bit tag at bits 9–11, a 5-bit length at bits 4–8, and a 4-bit flags field at bits 0–3. Give masks and extraction expressions for each field. What must be checked before inserting a length of 31?
+
+<ExerciseSolution hint="Construct each mask with 1s at designated positions in hex. Extract with bitwise AND followed by right-shift by the field's starting index. Compare 31 against the 5-bit maximum capacity.">
+
+The tag mask is `0xE00`, the length mask is `0x1F0`, and the flags mask is `0x00F`; extraction shifts the masked value right by 9, 4, or 0 respectively. Length 31 fits the five-bit field exactly; length 32 does not and must be rejected rather than truncated to zero.
+
+</ExerciseSolution>
+
+### Exercise 3: Sign extension safety at boundaries
+
+Explain why zero-extending a negative 8-bit array index before checking it against an unsigned array length can be dangerous. Give a safe sequence of checks.
+
+<ExerciseSolution hint="Trace what value -1 becomes when zero-extended versus sign-extended into a 32-bit or 64-bit unsigned type.">
+
+A negative signed index such as -1 becomes a very large unsigned value after conversion, potentially passing a poorly ordered comparison or changing which comparison is performed. First verify that the signed index is nonnegative, then convert to an unsigned size type, then compare against the array length, and only then calculate the address.
+
+</ExerciseSolution>
+
+### Exercise 4: Floating-point precision and relative spacing
+
+Derive the maximum relative spacing in a normalized binary floating-point format with precision $p$ under round-to-nearest, ignoring subnormals. State the assumption about the exact value’s location between adjacent representable numbers.
+
+<ExerciseSolution hint="In a binade [2^e, 2^(e+1)), adjacent normalized values are spaced by 2^(e - p + 1). Relate the half-ULP maximum rounding error to the binade's lower endpoint.">
+
+In a binade, adjacent normalized values are separated by $2^{e-(p-1)}$. The relative gap to the lower value is therefore $2^{-(p-1)}$. Round-to-nearest makes the maximum rounding error half an ULP, at most $2^{-p}$ relative to a value near the lower endpoint; the exact bound varies slightly across the binade. The assumption is that the exact value is rounded to the nearest representable neighbor, not truncated.
+
+</ExerciseSolution>
+
+### Exercise 5: Canonical serialization design
+
+Design a byte-level serialization for a signed 24-bit integer. Specify byte order, encoding range, and the decoder’s response to out-of-range or noncanonical encodings.
+
+<ExerciseSolution hint="Specify an exact 3-byte layout (e.g. little-endian two's complement), write down the explicit range [-2^23, 2^23 - 1], and state parser rejection rules for malformed lengths.">
+
+A 24-bit signed two’s-complement value ranges from $-2^{23}$ through $2^{23}-1$. Encode its modular 24-bit pattern, choose big- or little-endian order, and require the decoder to sign-extend bit 23. A canonical decoder rejects a byte sequence of the wrong length and any alternate encoding not allowed by the format rather than silently accepting ambiguous representations.
+
+</ExerciseSolution>
 
 ## References & Further Reading
 

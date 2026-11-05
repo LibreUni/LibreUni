@@ -20,7 +20,7 @@ Import from `src/components/` with a relative MDX import and add `client:load` t
 | `CaseStudy` | A contextual decision or scenario with an analyzable trade-off | `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title` |
 | `SqlRunner` | Execute read-only SQL against a fixed, in-browser SQLite fixture | `schema`, `initialQuery`, optional `title`, `description` |
 
-`Quiz` uses a retrieval-first flow: the learner states an answer before seeing claims, then classifies each claim independently. This prevents relative answer length or position from acting as a shortcut. The review treats identification of every supported claim as mandatory; rejecting all claims never appears as a near-passing aggregate score. `CaseStudy` is open-response first: alternatives and the reference decision remain hidden until the learner records a justified decision. Authors must still keep choices concise, balance their specificity, and write plausible misconception-based alternatives; interaction design does not excuse cueing or weak distractors.
+`Quiz` uses a multi-claim classification matrix: the learner classifies every claim independently as supported or unsupported before verifying. This prevents relative answer length or position from acting as a shortcut. The review treats identification of every supported claim as mandatory; rejecting all claims never appears as a near-passing aggregate score. `CaseStudy` requires structured decision commitment: the learner inspects the scenario and candidate alternatives and commits to a recommended decision before the trade-off analysis and reference decision are revealed. Authors must still keep choices concise, balance their specificity, and write plausible misconception-based alternatives; interaction design does not excuse cueing or weak distractors.
 
 `Quiz` also accepts `questions` for a sequence of questions. `title` is optional. `CaseStudy` can reveal analysis without options, but it still needs a meaningful `scenario`, `question`, and `explanation`.
 
@@ -142,6 +142,7 @@ These are Astro components and do not need `client:load`.
 | `Math` | A KaTeX-rendered inline or display formula | `math`, optional `block` |
 | `MathStatement` | A semantic definition, lemma, theorem, proposition, corollary, example, or remark with stable linking | `id`, `title`, optional `kind`, `number`, `proofId`, `dependsOn` |
 | `MathProof` | A proof linked back to its statement, optionally collapsible | `id`, `for`, optional `title`, `collapsible`, `open` |
+| `ExerciseSolution` | Collapsible solution card with optional hint disclosure for self-checks | optional `hint`, `title`, `hintTitle` |
 
 Prefer a diagram when it communicates relationships more clearly than prose. Keep source code deterministic and bounded. A diagram is not a substitute for explaining the model it represents.
 
@@ -166,6 +167,31 @@ If $H \le G$ and $G$ is finite, then $|H|$ divides $|G|$.
 <MathProof id="lagrange-proof" for="lagrange" collapsible open>
 The cosets partition $G$ into equally sized sets, so $|G|$ is an integer multiple of $|H|$.
 </MathProof>
+```
+
+### ExerciseSolution
+
+Use for non-interactive self-checks, calculation exercises, or proof tasks where a learner benefits from a hint before opening the worked solution. Provides distinct accessible disclosures for the hint and the worked solution without nesting, and supports inline and display LaTeX math in both hints and solutions.
+
+```mdx
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
+### Exercise 1: Cache capacity calculation
+
+Calculate the minimum capacity required for ...
+
+<ExerciseSolution
+  hint="Recall that $\text{Capacity} = \text{Sets} \times \text{Associativity} \times \text{BlockSize}$."
+  title="Show solution"
+  hintTitle="Show hint"
+>
+
+**Solution:**
+
+Applying the capacity equation:
+...
+
+</ExerciseSolution>
 ```
 
 ### Diagram types and usage
@@ -215,7 +241,7 @@ If a course would materially benefit from reusable variants such as semantic the
 For every new, repaired, or substantially revised lesson, record a brief decision for the applicable options below. For course- or module-scale work, audit the complete target set and include the decisions in the review evidence. “Not applicable” is valid only with a pedagogical reason.
 
 - existing React components: `Quiz`, `CodeRunner`, `CodeExercise`, and `CaseStudy`;
-- existing Astro/rendered components: `PlantUML`, `PythonDiagram`, `TikZ`, `Math`, `MathStatement`, and `MathProof`;
+- existing Astro/rendered components: `PlantUML`, `PythonDiagram`, `TikZ`, `Math`, `MathStatement`, `MathProof`, and `ExerciseSolution`;
 - MDX and Astro primitives: semantic headings, tables, labeled blockquotes, `<details>`, `BookOnly`, `ScreenOnly`, math, and fenced code;
 - diagram families: flow/activity, sequence, state, class/domain, component/deployment, use-case/context, mathematical/geometric, quantitative, and custom conceptual/network; and
 - a small custom Astro or React component when the current surface cannot express a necessary teaching interaction or semantic structure.

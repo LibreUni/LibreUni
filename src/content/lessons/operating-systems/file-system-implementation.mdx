@@ -1,27 +1,27 @@
 ---
-title: "Filesystem Implementation"
-course: "operating-systems"
-description: "On-disk layout, inodes, block mapping, directories, allocation, buffer caches, and the invariants that connect them."
+title: Filesystem Implementation
+course: operating-systems
+description: On-disk layout, inodes, block mapping, directories, allocation, buffer caches, and the invariants that connect them.
 prerequisites:
-  - "Filesystem pathnames, directory entries, descriptors, links, and rename semantics"
-  - "C structs, integer arithmetic, pointers, and synchronization primitives"
-  - "Block-device I/O and interrupt-driven completion"
+  - Filesystem pathnames, directory entries, descriptors, links, and rename semantics
+  - C structs, integer arithmetic, pointers, and synchronization primitives
+  - Block-device I/O and interrupt-driven completion
 outcomes:
-  - "Derive inode, bitmap, directory-entry, and data-block locations from an explicit disk layout."
-  - "Trace pathname lookup and byte-offset translation through caches to a physical block."
-  - "State and preserve allocation, reference-count, cache-uniqueness, and namespace invariants during mutation."
-  - "Evaluate an implementation against sparse-file, large-file, concurrency, and failure boundaries."
+  - Derive inode, bitmap, directory-entry, and data-block locations from an explicit disk layout.
+  - Trace pathname lookup and byte-offset translation through caches to a physical block.
+  - State and preserve allocation, reference-count, cache-uniqueness, and namespace invariants during mutation.
+  - Evaluate an implementation against sparse-file, large-file, concurrency, and failure boundaries.
 omissions:
-  - "Extent trees, B-trees, copy-on-write trees, checksums, deduplication, compression, quotas, and flash-specific allocation are deferred to specialist storage material."
-  - "The concrete model derives a compact inode filesystem; its constants and scaling properties are not production recommendations."
+  - Extent trees, B-trees, copy-on-write trees, checksums, deduplication, compression, quotas, and flash-specific allocation are deferred to specialist storage material.
+  - The concrete model derives a compact inode filesystem; its constants and scaling properties are not production recommendations.
 estimatedMinutes: 360
-assessment: "Given an unfamiliar compact filesystem layout and operation trace, compute every touched structure, justify lock and reference transitions, and identify the first violated invariant in a faulty implementation."
+assessment: Given an unfamiliar compact filesystem layout and operation trace, compute every touched structure, justify lock and reference transitions, and identify the first violated invariant in a faulty implementation.
 ---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
-# Filesystem Implementation
 
 Appending one byte can require more than one byte of work. If a file has exhausted its direct block pointers, the append may allocate an indirect block, allocate a data block, set a bitmap bit, install two pointers, extend the inode size, dirty several cache entries, and arrange for all of those changes to become recoverable. A design that models `write` as “copy bytes to disk” cannot explain either its cost or its failure modes.
 
@@ -136,14 +136,13 @@ The formulas reveal a boundary condition: inode 16 starts a new inode block, and
 
 The block size becomes 4096 bytes, inode size remains 64 bytes, and block numbers remain 32 bits. Compute `IPB`, `BPB`, and `NINDIRECT`. Then state which values are format commitments rather than values the kernel may change while mounting an existing image.
 
-<details>
-<summary>Reveal the derivation and diagnosis</summary>
+<ExerciseSolution title="Reveal the derivation and diagnosis">
 
 $IPB=4096/64=64$, $BPB=8\cdot4096=32768$, and $NINDIRECT=4096/4=1024$. Block size, on-disk inode layout, pointer width, region locations, and interpretation of bitmap bits are format commitments: changing them without a versioned migration changes the meaning of existing bytes. An in-memory cache capacity can change without rewriting the disk format, provided all observable behavior and invariants remain intact.
 
 A response giving `BPB=4096` has counted bytes rather than bits. A response treating `sizeof(struct dinode)` as automatically stable across compilers has missed why on-disk layouts need fixed-width fields, layout checks, and versioning.
 
-</details>
+</ExerciseSolution>
 
 <Quiz client:load
   title="Locate inode and bitmap"
@@ -188,12 +187,11 @@ Freeing at step 2 would let the allocator hand a still-open block to another fil
 
 An inode cache searches without a lock, finds no entry for `(1,52)`, and two CPUs each install that identity into a different free slot. Each slot has its own sleep lock. Explain why adding locks around `writei` cannot repair the design.
 
-<details>
-<summary>Reveal the invariant failure</summary>
+<ExerciseSolution title="Reveal the invariant failure">
 
 The first failure is cache identity, before either `writei` begins. The two locks guard different memory objects, so both writers can hold a lock while independently reading and overwriting inode 52's size or block pointers. The lookup-and-reserve transition must be atomic under a cache-level lock or equivalent uniqueness mechanism. Per-inode locking is meaningful only after identity uniqueness has been established.
 
-</details>
+</ExerciseSolution>
 
 ## Mapping byte offsets to blocks
 
@@ -225,8 +223,7 @@ This access can require two cache lookups: one for indirect block 700 and one fo
 
 Choose the smallest set of byte offsets that distinguishes direct mapping, the direct-to-indirect transition, the last representable byte, and the first rejected byte.
 
-<details>
-<summary>Reveal a minimal discriminating set</summary>
+<ExerciseSolution title="Reveal a minimal discriminating set">
 
 One suitable set is:
 
@@ -238,7 +235,7 @@ One suitable set is:
 
 Adding offsets around an inode-block and bitmap-block boundary tests different mechanisms and is valuable, but it is not required to distinguish the block-map branches themselves.
 
-</details>
+</ExerciseSolution>
 
 ## Directory files implement the namespace edge
 
@@ -313,14 +310,13 @@ Ordering these writes directly to home locations is unsafe: publishing the inode
 
 A faulty allocator sets the bitmap bit and returns the block but does not zero it. A prior file filled that block with `SECRET`, then was removed. Design a deterministic test that distinguishes the faulty allocator from a correct one without assuming which numeric block will be reused.
 
-<details>
-<summary>Reveal a test strategy and its limitation</summary>
+<ExerciseSolution title="Reveal a test strategy and its limitation">
 
 Fill the filesystem sufficiently to control the free set, create a file whose allocated blocks contain a repeated nonzero pattern, delete it, then allocate a new file into the now-constrained free space. Extend the new file in a way that makes newly allocated bytes readable without overwriting the full block—if the filesystem supports sparse extension—or instrument the teaching kernel immediately after allocation and before caller writes. Assert that every exposed byte in the new allocation is zero.
 
 On compact xv6, ordinary writes copy caller bytes into the written range, and its interface does not provide a rich sparse-file operation. A pure user-space test may therefore be unable to observe unwritten bytes deterministically. The honest solution is a kernel test hook or a scoped sparse-extension feature, not a claim that one lucky block reuse proves zeroing. The test must also restore or rebuild the image so free-space history is controlled.
 
-</details>
+</ExerciseSolution>
 
 ## Synthesis: audit an append implementation
 
@@ -333,8 +329,7 @@ Audit a candidate `writei`/`bmap` path for the one-byte indirect append. Produce
 - the cleanup or rollback obligation; and
 - one test for each branch boundary and one concurrent test.
 
-<details>
-<summary>Reveal the grading rubric</summary>
+<ExerciseSolution title="Reveal the grading rubric">
 
 Full-credit work demonstrates all of the following:
 
@@ -347,7 +342,7 @@ Full-credit work demonstrates all of the following:
 
 A patch that returns the expected bytes but cannot explain its partial-allocation and concurrent states does not meet the invariant requirement.
 
-</details>
+</ExerciseSolution>
 
 ## Connections and deliberate boundary
 

@@ -23,14 +23,14 @@ LESSONS_DIR = ROOT / "src" / "content" / "lessons"
 
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 ARTIFACT_RE = re.compile(
-    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|StructureDiagram|StructureExercise|SqlRunner|[A-Z][A-Za-z0-9]+Playground|details)\b|^```|^\*\*(?:Worked|Example|Counterexample|Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Remark|Warning|Proof|Trace|Algorithm)\b|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Example|Warning|Remark|Proof)\.",
+    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|SqlRunner|ExerciseSolution|[A-Z][A-Za-z0-9]+Playground|details)\b|^```|^\*\*(?:Worked|Example|Counterexample|Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Remark|Warning|Proof|Trace|Algorithm)\b|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Example|Warning|Remark|Proof)\.",
     re.MULTILINE,
 )
 ACTIVE_COMPONENT_RE = re.compile(
     r"<(?:Quiz|CaseStudy|CodeRunner|CodeExercise|SqlRunner|[A-Z][A-Za-z0-9]+Playground)\b"
 )
 PASSIVE_COMPONENT_RE = re.compile(r"<(?:details|ExerciseSolution)\b")
-ASSESSMENT_RE = re.compile(r"<(Quiz|CaseStudy|StructureExercise)\b(.*?)/>", re.DOTALL)
+ASSESSMENT_RE = re.compile(r"<(Quiz|CaseStudy)\b(.*?)/>", re.DOTALL)
 PLANTUML_RE = re.compile(r"<PlantUML\b.*?code=\{`(.*?)`\}\s*/>", re.DOTALL)
 FENCE_RE = re.compile(r"^```.*?^```\s*$", re.MULTILINE | re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>|\{[^{}]*\}", re.DOTALL)

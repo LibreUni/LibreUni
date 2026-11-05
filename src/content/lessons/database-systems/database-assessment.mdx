@@ -1,27 +1,27 @@
 ---
-title: "Database Assessment"
-course: "database-systems"
-description: "An integrated, unseen design assessment requiring relational, physical, concurrent, recovery, and security evidence."
+title: Database Assessment
+course: database-systems
+description: An integrated, unseen design assessment requiring relational, physical, concurrent, recovery, and security evidence.
 prerequisites:
   - "All database-systems foundations: schemas, SQL, dependencies, normalization, and query plans"
-  - "Storage, indexes, transactions, concurrency control, recovery, distributed-data trade-offs, and security"
-  - "Ability to construct a trace, inspect a plan, state an invariant, and defend a counterexample"
+  - Storage, indexes, transactions, concurrency control, recovery, distributed-data trade-offs, and security
+  - Ability to construct a trace, inspect a plan, state an invariant, and defend a counterexample
 outcomes:
-  - "Construct a database design argument from an unseen system contract rather than recall a named pattern."
-  - "Prove or test relational, query, concurrency, recovery, and authorization claims with appropriate evidence."
-  - "Identify an assumption that invalidates an otherwise plausible solution and revise the design."
-  - "Communicate trade-offs and limits precisely under time-bounded assessment conditions."
+  - Construct a database design argument from an unseen system contract rather than recall a named pattern.
+  - Prove or test relational, query, concurrency, recovery, and authorization claims with appropriate evidence.
+  - Identify an assumption that invalidates an otherwise plausible solution and revise the design.
+  - Communicate trade-offs and limits precisely under time-bounded assessment conditions.
 omissions:
-  - "This assessment does not certify vendor administration skill, production authorization, or authorship without an oral/written defense."
-  - "Full implementations are optional evidence; the rubric evaluates correctness of executable artifacts and reasoning, not framework choice."
+  - This assessment does not certify vendor administration skill, production authorization, or authorship without an oral/written defense.
+  - Full implementations are optional evidence; the rubric evaluates correctness of executable artifacts and reasoning, not framework choice.
 estimatedMinutes: 900
-assessment: "Complete the unseen equipment-network case, submit the specified artifacts, and defend one design decision and one counterexample orally or in writing using the rubric below."
+assessment: Complete the unseen equipment-network case, submit the specified artifacts, and defend one design decision and one counterexample orally or in writing using the rubric below.
 ---
-
-import PlantUML from '../../../components/PlantUML.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import CaseStudy from '../../../components/CaseStudy';
+import Quiz from '../../../components/Quiz';
 
-# Database Assessment
 
 This assessment uses a different domain from the capstone: a multi-tenant equipment network. Universities and labs lend instruments through local sites. An organization owns members, equipment, and sites; a booking reserves one instrument for a time interval; an inspection can make equipment unavailable; deposits are processed by an external provider; and every tenant must remain isolated. A request may be retried, staff may work concurrently, a primary may fail, and reports may read from a delayed replica.
 
@@ -128,10 +128,11 @@ Write and test these queries:
 
 For each query, state the input/output grain, joins that can multiply rows, NULL/empty-set behavior, and one hand-derived result fixture. For physical design, propose access paths for tenant booking history, interval conflict checks, and inspection lookups. Supply representative plan evidence and compare estimated with actual rows under a skewed tenant.
 
-<details>
-<summary>Minimum plan note</summary>
+<ExerciseSolution title="Minimum plan note">
+
 Record DBMS version, relevant settings, fixture distribution, query parameters, plan shape, estimated rows, actual rows, loops, and buffer/I/O behavior. Explain one rejected index or plan. A plan used once on an empty fixture is not evidence of scalability.
-</details>
+
+</ExerciseSolution>
 
 ## Part C — schedule, retries, and recovery
 
@@ -153,6 +154,24 @@ A worker times out after calling the provider and creates a new provider request
 <ExerciseSolution>
 The provider can process both request IDs and collect two deposits. Serializable database execution does not join an external provider's state into the transaction. Persist one idempotency key before the call, reuse it on retry, deduplicate incoming provider event IDs, and reconcile ambiguous outcomes by querying the provider/state record rather than inventing success or failure.
 </ExerciseSolution>
+
+<CaseStudy client:load
+  title="Enforcing non-overlapping bookings across concurrent transactions"
+  scenario="Two lab coordinators concurrently submit booking requests for instrument 42 on tenant 7: Request A reserves [10:00, 12:00) and Request B reserves [11:00, 13:00). Both transactions execute `SELECT COUNT(*) FROM booking WHERE tenant_id = 7 AND equipment_id = 42 AND tstzrange(starts_at, ends_at) && tstzrange($1, $2)` under Read Committed isolation, observe 0 rows, and insert their bookings."
+  question="Which mechanism enforces the non-overlapping interval invariant under concurrent writes without relying on application-level timing?"
+  options={[
+    "A PostgreSQL GiST exclusion constraint `EXCLUDE USING gist (tenant_id WITH =, equipment_id WITH =, tstzrange(starts_at, ends_at) WITH &&)` on active bookings",
+    "A row-level `CHECK (ends_at > starts_at)` constraint combined with a B-tree index on `(tenant_id, equipment_id, starts_at)`",
+    "Running `SELECT COUNT(*)` inside a Read Committed transaction immediately before the `INSERT` statement",
+    "Routing the overlap check query to an asynchronous read replica to reduce lock contention on the write primary"
+  ]}
+  correctIndex={0}
+  explanation="Under Read Committed, two transactions checking for non-existent overlapping rows experience a write-skew / phantom anomaly because neither sees the other's uncommitted insert. A GiST exclusion constraint (or Serializable snapshot isolation with predicate locking / explicit parent-equipment row locking) enforces mutual exclusion at the storage/index layer."
+  tradeoffs={[
+    { label: "GiST Exclusion Constraint", pros: "Declarative, enforced by the index for every writer regardless of isolation level.", cons: "Higher index maintenance cost than a plain B-tree; requires btree_gist for scalar equality columns." },
+    { label: "Locking parent equipment row (SELECT ... FOR UPDATE)", pros: "Simple B-tree locking that serializes all booking attempts per equipment item.", cons: "Serializes even non-overlapping future bookings for the same instrument." }
+  ]}
+/>
 
 ## Part D — replication, security, and operations
 
@@ -205,6 +224,19 @@ For asynchronous reporting, a just-created booking may be absent from a report t
 | defense quality | 15% | one rejected alternative, one limitation, and precise response to challenge |
 
 A short defense asks the learner to explain one plan estimate error, one schedule conflict, and one security/failure counterexample from their own artifacts. An answer that changes a guarantee after a counterexample receives credit only if it explicitly revises the client-visible contract and repair path.
+
+<Quiz client:load
+  title="Verify assessment evidence boundaries"
+  question="Which artifact package satisfies the integrated database assessment requirement for a multi-tenant booking and deposit workflow?"
+  options={[
+    "An ER diagram and a list of PostgreSQL features without DDL constraints, execution plans, or concurrency traces",
+    "Composite tenant-scoped keys, an interval exclusion/serialization proof, EXPLAIN (ANALYZE, BUFFERS) plans under skew, an outbox idempotency trace, and an RPO/RTO failover contract",
+    "A benchmark run on an empty table showing sub-millisecond latency under a single superuser connection",
+    "An ORM model definition that validates non-overlapping intervals in application memory before issuing inserts"
+  ]}
+  correctIndex={1}
+  explanation="Database architecture claims require layered evidence: relational constraints for invariants, measured plans on representative skewed data, explicit concurrency/recovery traces across external boundaries, and least-privilege operational verification."
+/>
 
 ## References & Further Reading
 

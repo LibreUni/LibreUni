@@ -98,7 +98,7 @@ export default function Search({ baseUrl, variant = 'compact' }: { baseUrl: stri
                         >
                             <span className="flex items-center gap-3">
                                 <span className="font-bold text-light-text dark:text-dark-text group-hover:text-primary transition-colors">{res.title}</span>
-                                <span className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-primary">{res.type}</span>
+                                <span className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-blue-700 dark:text-blue-300">{res.type}</span>
                             </span>
                             <span className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/70">{res.type === 'course' ? 'Course' : res.course}</span>
                             {variant === 'hero' && res.description && (

@@ -26,14 +26,16 @@ const courses = defineCollection({
 const lessons = defineCollection({
   loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/lessons' }),
   schema: z.object({
-    title: z.string(),
-    course: z.string(),
-    description: z.string().optional(),
-    prerequisites: z.array(z.string()).default([]),
-    outcomes: z.array(z.string()).default([]),
-    omissions: z.array(z.string()).default([]),
-    estimatedMinutes: z.number().int().positive().optional(),
-    assessment: z.string().optional(),
+    title: z.string().min(1),
+    course: z.string().min(1),
+    module: z.string().optional(),
+    order: z.number().int().nonnegative().optional(),
+    description: z.string().min(10),
+    prerequisites: z.array(z.string().min(1)).min(1),
+    outcomes: z.array(z.string().min(5)).min(1),
+    omissions: z.array(z.string().min(3)).min(1),
+    estimatedMinutes: z.number().int().positive(),
+    assessment: z.string().min(10),
   }),
 });
 

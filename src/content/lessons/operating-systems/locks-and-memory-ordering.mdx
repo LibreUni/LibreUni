@@ -1,27 +1,29 @@
 ---
-title: "Locks, Atomics, and Memory Ordering"
-course: "operating-systems"
-description: "Mutual exclusion, acquire/release visibility, spin and blocking locks, interrupt context, and lock-invariant proofs."
+title: Locks, Atomics, and Memory Ordering
+course: operating-systems
+description: Mutual exclusion, acquire/release visibility, spin and blocking locks, interrupt context, and lock-invariant proofs.
 prerequisites:
-  - "Interleavings and atomicity"
-  - "C object and pointer semantics"
-  - "Caches and multicore coherence"
+  - Interleavings and atomicity
+  - C object and pointer semantics
+  - Caches and multicore coherence
 outcomes:
-  - "Derive a lock's safety obligation from a protected invariant and prove that acquire/use/release preserves it."
-  - "Explain the distinct roles of atomicity, coherence, and acquire/release ordering in a publication protocol."
-  - "Choose between spinning, blocking, and finer-grained locking under explicit wait-time, context, fairness, and contention assumptions."
-  - "Diagnose interrupt, preemption, lock-order, and false-sharing failures from an execution trace."
+  - Derive a lock's safety obligation from a protected invariant and prove that acquire/use/release preserves it.
+  - Explain the distinct roles of atomicity, coherence, and acquire/release ordering in a publication protocol.
+  - Choose between spinning, blocking, and finer-grained locking under explicit wait-time, context, fairness, and contention assumptions.
+  - Diagnose interrupt, preemption, lock-order, and false-sharing failures from an execution trace.
 omissions:
-  - "Lock-free memory reclamation, full ISO C memory-model formalism, and architecture-specific litmus tooling require later specialist study."
-  - "Condition variables, semaphores, and deadlock protocols are developed in the following lessons."
+  - Lock-free memory reclamation, full ISO C memory-model formalism, and architecture-specific litmus tooling require later specialist study.
+  - Condition variables, semaphores, and deadlock protocols are developed in the following lessons.
 estimatedMinutes: 360
-assessment: "Given an unfamiliar kernel critical section and a weak-memory execution, state the protected invariant, identify missing atomicity or ordering edges, select a context-safe lock design, and give both a preservation argument and a contention counterexample."
+assessment: Given an unfamiliar kernel critical section and a weak-memory execution, state the protected invariant, identify missing atomicity or ordering edges, select a context-safe lock design, and give both a preservation argument and a contention counterexample.
 ---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
 import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeExercise from '../../../components/CodeExercise';
 
-# Locks, Atomics, and Memory Ordering
 
 A driver appends a request to a queue, then sets `ready = 1`. Another core observes `ready == 1` but follows an old queue tail and submits the wrong descriptor to hardware. No two cores wrote the same queue field at the same instant; the publication still failed because the consumer observed the flag without an ordering guarantee for the data it announced.
 
@@ -62,12 +64,11 @@ end note
 
 **Retrieval.** Why is “only one thread executes this function” weaker than a queue correctness proof?
 
-<details>
-<summary>Answer</summary>
+<ExerciseSolution title="Answer">
 
 The function may call another path that accesses the same fields under a different lock, readers may bypass the function, callbacks may re-enter it, and an early return may release before restoring the representation. The proof must identify all shared state covered by $I_L$, all access paths, acquisition and release boundaries, and preservation of the abstraction—not one function name.
 
-</details>
+</ExerciseSolution>
 
 ### Worked trace and preservation derivation for one enqueue
 
@@ -137,8 +138,7 @@ This fragment establishes one owner and acquire/release ordering under the C abs
 
 **Application — kill a plausible wrong lock.** Replace `atomic_flag_test_and_set` with an atomic load followed by an atomic store. Construct a schedule with two owners.
 
-<details>
-<summary>Schedule</summary>
+<ExerciseSolution title="Schedule">
 
 The atomicity of each access is insufficient:
 
@@ -149,7 +149,7 @@ The atomicity of each access is insufficient:
 
 The winner election must itself be one read-modify-write operation, or a compare-and-exchange loop whose failed contender retries from a fresh observation.
 
-</details>
+</ExerciseSolution>
 
 ## Acquire and release publish a relation
 
@@ -198,14 +198,50 @@ If the acquire load reads the value from the release sequence, the release synch
 
 Replacing both operations on `ready` with `memory_order_relaxed` preserves atomic accesses to `ready` but removes the publication edge for `payload`. Relaxed order is suitable for a counter whose numeric value is independent, not for announcing that an object graph is initialized.
 
+<CodeExercise
+  client:load
+  title="Establish an acquire/release publication edge in C11"
+  description="Complete the memory-order specifiers so that whenever `consume()` observes `ready == 1`, the prior non-atomic store `payload = 42` is guaranteed to be visible without a data race."
+  code={String.raw`void publish(void) {
+    payload = 42;
+    atomic_store_explicit(&ready, 1, [!blank!]);
+}
+
+void consume(void) {
+    if (atomic_load_explicit(&ready, [!blank!]) == 1) {
+        assert(payload == 42);
+    }
+}`}
+  answers={["memory_order_release", "memory_order_acquire"]}
+  explanation="A release store on `ready` paired with an acquire load on `ready` creates a synchronizes-with edge when the load observes the stored value, placing `payload = 42` in happens-before order prior to `assert(payload == 42)`."
+/>
+
+<CaseStudy
+  client:load
+  title="Interrupt-context self-deadlock on a single hart"
+  scenario="A kernel thread on hart 0 acquires spin lock `rx_lock` to dequeue a packet from a driver ring buffer. While `rx_lock` is held with local interrupts still enabled, the network interface raises an interrupt on hart 0. The interrupt handler runs on hart 0 and calls `spin_lock(&rx_lock)` to append the newly arrived descriptor."
+  question="What is the exact failure mode on hart 0, and which locking protocol prevents it?"
+  options={[
+    "Hart 0 spins forever in the interrupt handler because the interrupted thread holding `rx_lock` cannot resume on hart 0 until the handler returns; disable local interrupts on the hart before acquiring any spin lock shared with an interrupt handler",
+    "The interrupt handler automatically preempts the lock and steals ownership, corrupting the ring buffer invariant without spinning",
+    "Switching `rx_lock` to a sleeping mutex inside the interrupt handler resolves the deadlock because interrupt handlers can safely block in the scheduler",
+    "Adding `memory_order_seq_cst` to `spin_lock` prevents the interrupt controller from delivering interrupts while the lock is held"
+  ]}
+  correctIndex={0}
+  explanation="An interrupt handler preempts the current thread on the same hart and must run to completion before the interrupted context can execute another instruction. If the handler spins on a lock held by the interrupted thread on that hart, neither can progress. Any spin lock shared with an interrupt handler must mask local interrupts prior to acquisition (such as xv6 `push_off()` / Linux `spin_lock_irqsave()`)."
+  tradeoffs={[
+    { label: "Disable local interrupts while holding spin lock (push_off / irqsave)", pros: "Allows small shared structures between top-half interrupt handlers and kernel threads without self-deadlock.", cons: "Increases interrupt latency if critical sections are not kept strictly bounded and non-blocking." },
+    { label: "Defer work to a threaded bottom half / workqueue", pros: "Keeps hardware interrupt handler minimal and allows thread-context synchronization.", cons: "Requires an additional wakeup/scheduling transition before packet processing." }
+  ]}
+/>
+
 **Transfer.** A statistics counter is incremented with relaxed atomics. A shutdown thread observes the expected count and then frees every worker's result object. Is the count observation enough to publish those objects?
 
-<details>
-<summary>Analysis</summary>
+<ExerciseSolution title="Analysis">
 
 No. A relaxed fetch-add makes the counter update atomic and gives that atomic object a modification order, but it does not make preceding ordinary writes to each result happen before the shutdown thread's reads or frees. Use a joining operation, a release/acquire completion protocol, a mutex/condition predicate, or another mechanism with the required lifetime and visibility guarantees. The exact repair depends on who owns each object and whether workers can still access it.
 
-</details>
+</ExerciseSolution>
 
 {/* Source tracking: RVWMO ordering claims synthesized from the ratified RISC-V unprivileged ISA memory-model chapter; xv6 lock behavior cross-checked against the current xv6 RISC-V book and source. */}
 
@@ -285,8 +321,7 @@ Use this sequence in a kernel code review:
 7. Construct a contention workload and a rare long-hold workload.
 8. Separate correctness evidence from performance evidence.
 
-<details>
-<summary>Synthesis exercise and rubric</summary>
+<ExerciseSolution title="Synthesis exercise and rubric">
 
 A kernel table uses one spin lock. Lookup holds the lock while comparing a variable-length user-supplied key and may fault while copying that key. Inserts are rare; lookups dominate on 32 cores. Propose a repair.
 
@@ -294,7 +329,7 @@ A defensible answer first moves untrusted copying and any faulting operation out
 
 Rubric: invariant/access-path audit 25%; context-safe repair 25%; acquire/release and lifetime reasoning 20%; adversarial correctness tests 15%; workload and tail-latency evaluation 10%; explicit omissions 5%.
 
-</details>
+</ExerciseSolution>
 
 ## References & Further Reading
 

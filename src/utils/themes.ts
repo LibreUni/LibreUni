@@ -26,7 +26,7 @@ export const COLOR_MODES = [
 
 export type ColorMode = (typeof COLOR_MODES)[number]['id'];
 
-export const DEFAULT_THEME_ID: ThemeId = 'monochrome';
+export const DEFAULT_THEME_ID: ThemeId = 'modern';
 export const DEFAULT_COLOR_MODE: ColorMode = 'auto';
 
 export function isThemeId(value: unknown): value is ThemeId {
@@ -41,6 +41,10 @@ export function isColorMode(value: unknown): value is ColorMode {
   return typeof value === 'string' && COLOR_MODES.some((mode) => mode.id === value);
 }
 
-export function resolveColorMode(mode: ColorMode, hour = new Date().getHours()) {
-  return mode === 'auto' ? (hour >= 22 || hour < 7 ? 'dark' : 'light') : mode;
+export function resolveColorMode(mode: ColorMode): 'light' | 'dark' {
+  if (mode === 'light' || mode === 'dark') return mode;
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  return 'light';
 }

@@ -98,7 +98,7 @@ export default function SqlRunner({
   };
 
   return (
-    <section className="assessment-shell my-12" aria-label={title}>
+    <section className="lu-card-tier3 not-prose my-8" aria-label={title} data-component="SqlRunner">
       <div className="print-static-assessment hidden">
         <div className="print-static-label">{title}</div>
         {description && <p>{description}</p>}
@@ -106,55 +106,64 @@ export default function SqlRunner({
         <p className="print-static-explanation">The screen version executes this query against the fixture in SQLite. Predict the output before checking it in an engine.</p>
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <p className="label-caps m-0">{title}</p>
-        <span className="text-xs font-semibold text-light-muted dark:text-dark-muted">SQLite in the browser</span>
-      </div>
-      {description && <p className="mb-4 text-sm leading-relaxed text-light-muted dark:text-dark-muted">{description}</p>}
-      <p className="text-xs text-light-muted dark:text-dark-muted">Read-only queries; a fresh fixture is loaded each run. Results are limited to 100 rows.</p>
-      <label className="mb-2 block text-sm font-semibold text-light-text dark:text-dark-text" htmlFor={fieldId}>SQL query</label>
-      <textarea
-        id={fieldId}
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        rows={8}
-        spellCheck={false}
-        className="input-field min-h-[12rem] w-full resize-y font-mono text-sm"
-        aria-describedby={`${fieldId}-status`}
-      />
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button type="button" onClick={runQuery} disabled={isRunning} className="assessment-action-primary">
-          <Play size={15} /> {isRunning ? 'Running…' : 'Run query'}
-        </button>
-        <button type="button" onClick={reset} className="assessment-action-secondary">
-          <RotateCcw size={14} /> Reset query
-        </button>
-      </div>
-      <p id={`${fieldId}-status`} role="status" aria-live="polite" className="mt-3 text-xs font-semibold text-light-muted dark:text-dark-muted">{status}</p>
-      {error && <div className="feedback-diagnostic mt-4 text-sm" role="alert"><strong>Query error.</strong> {error}</div>}
-      {result && (
-        <div className="mt-6 overflow-x-auto rounded-xl border border-light-border dark:border-dark-border" role="region" aria-label="Query results" tabIndex={0}>
-          {result.columns.length === 0 ? (
-            <p className="m-0 p-4 text-sm text-light-muted dark:text-dark-muted">No columns were returned.</p>
-          ) : (
-            <table className="min-w-full border-collapse text-sm">
-              <caption className="sr-only">Results for the submitted SQLite query</caption>
-              <thead>
-                <tr className="border-b border-light-border bg-light-bg dark:border-dark-border dark:bg-dark-bg/40">
-                  {result.columns.map((column, index) => <th key={index} scope="col" className="px-3 py-2 text-left font-mono font-bold">{column}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {result.values.map((row, rowIndex) => (
-                  <tr key={rowIndex} className="border-b border-light-border/60 last:border-0 dark:border-dark-border/60">
-                    {row.map((cell, cellIndex) => <td key={cellIndex} className="px-3 py-2 font-mono">{formatCell(cell)}</td>)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-light-border bg-light-surface/90 px-4 py-3 dark:border-dark-border dark:bg-dark-surface/90">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="inline-flex items-center rounded-md border border-primary/25 bg-primary/10 px-2.5 py-1 font-mono text-[11px] font-bold uppercase text-blue-700 dark:text-blue-300">
+            SQL
+          </span>
+          <h3 className="m-0 truncate text-sm font-bold text-light-text dark:text-dark-text">
+            {title}
+          </h3>
         </div>
-      )}
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={reset} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-light-border bg-light-bg px-2.5 py-1.5 text-xs font-semibold text-light-muted transition-colors hover:border-primary/40 hover:text-light-text dark:border-dark-border dark:bg-dark-bg dark:text-dark-muted dark:hover:text-dark-text">
+            <RotateCcw size={14} /> Reset query
+          </button>
+          <button type="button" onClick={runQuery} disabled={isRunning} className="assessment-action-primary min-h-9 px-3.5 py-1.5 text-xs">
+            <Play size={14} /> {isRunning ? 'Running…' : 'Run query'}
+          </button>
+        </div>
+      </div>
+
+      <div className="p-4">
+        {description && <p className="mb-2 text-sm leading-relaxed text-light-text dark:text-dark-text">{description}</p>}
+        <p className="mb-3 text-xs text-light-muted dark:text-dark-muted">Read-only SQLite fixture; reloaded fresh on each execution (100-row display limit).</p>
+        <label className="sr-only" htmlFor={fieldId}>SQL query</label>
+        <textarea
+          id={fieldId}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          rows={Math.max(4, Math.min(12, query.split('\n').length + 1))}
+          spellCheck={false}
+          className="w-full resize-y rounded-lg border border-light-border bg-light-bg p-3.5 font-mono text-sm leading-6 text-light-text focus:border-primary focus:outline-none dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+          aria-describedby={`${fieldId}-status`}
+        />
+        <p id={`${fieldId}-status`} role="status" aria-live="polite" className="mb-0 mt-2 text-xs font-medium text-light-muted dark:text-dark-muted">{status}</p>
+        {error && <div className="feedback-diagnostic mt-3 text-sm" role="alert"><strong>Query error.</strong> {error}</div>}
+        {result && (
+          <div className="mt-4 overflow-x-auto rounded-lg border border-light-border dark:border-dark-border" role="region" aria-label="Query results" tabIndex={0}>
+            {result.columns.length === 0 ? (
+              <p className="m-0 p-4 text-sm text-light-muted dark:text-dark-muted">No columns were returned.</p>
+            ) : (
+              <table className="min-w-full border-collapse text-sm">
+                <caption className="sr-only">Results for the submitted SQLite query</caption>
+                <thead>
+                  <tr className="border-b border-light-border bg-light-bg dark:border-dark-border dark:bg-dark-bg/40">
+                    {result.columns.map((column, index) => <th key={index} scope="col" className="px-3 py-2 text-left font-mono text-xs font-bold">{column}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.values.map((row, rowIndex) => (
+                    <tr key={rowIndex} className="border-b border-light-border/60 last:border-0 dark:border-dark-border/60">
+                      {row.map((cell, cellIndex) => <td key={cellIndex} className="px-3 py-2 font-mono text-xs">{formatCell(cell)}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

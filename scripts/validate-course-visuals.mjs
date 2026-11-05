@@ -17,7 +17,8 @@ for (const courseId of activeCourses) {
     const slug = fileName.replace(/\.mdx?$/, '');
     const source = fs.readFileSync(path.join(lessonDir, fileName), 'utf8');
     if (!listed.has(slug)) failures.push(`${courseId}/${fileName}: lesson is not listed by its manifest`);
-    if (!/^# .+/m.test(source)) failures.push(`${courseId}/${fileName}: missing lesson h1`);
+    if (!/^title:\s*\S+/m.test(source)) failures.push(`${courseId}/${fileName}: missing lesson title in frontmatter`);
+    if (!/^## .+/m.test(source)) failures.push(`${courseId}/${fileName}: missing lesson h2 section headings`);
     for (const [, name, importPath] of source.matchAll(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g)) {
       if (!importPath.includes('components/')) continue;
       const target = path.resolve(lessonDir, importPath);

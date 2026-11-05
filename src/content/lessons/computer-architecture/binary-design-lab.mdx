@@ -1,20 +1,20 @@
 ---
-title: "Binary Design Lab"
-course: "computer-architecture"
-description: "Design, encode, decode, and verify a binary device record."
+title: Binary Design Lab
+course: computer-architecture
+description: Design, encode, decode, and verify a binary device record.
 prerequisites:
-  - "Programming in a systems language"
-  - "Binary arithmetic and basic digital logic"
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
 outcomes:
-  - "Specify a binary record's fields, widths, signedness, byte order, reserved values, and versioning contract."
-  - "Implement and test encode/decode state transitions, rejecting malformed or ambiguous records."
-  - "Defend portability with round-trip, boundary, mutation, and compatibility evidence."
+  - Specify a binary record's fields, widths, signedness, byte order, reserved values, and versioning contract.
+  - Implement and test encode/decode state transitions, rejecting malformed or ambiguous records.
+  - Defend portability with round-trip, boundary, mutation, and compatibility evidence.
 omissions:
-  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
 estimatedMinutes: 420
-assessment: "Given a binary format and hostile byte stream, derive the parser state, reject invalid lengths/fields, and prove valid round-trip preservation."
+assessment: Given a binary format and hostile byte stream, derive the parser state, reject invalid lengths/fields, and prove valid round-trip preservation.
 ---
-# Binary Design Lab
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
@@ -27,13 +27,13 @@ Choose a wire format rather than inheriting the host machine’s struct layout. 
 
 The version field supports evolution, but a parser must define whether it accepts unknown versions. Flags need a mask of defined bits; reserved bits should be zero in canonical encodings and rejected or ignored according to policy. Temperature has a signed range $[-327.68,327.67]$ degrees if represented in hundredths. Pressure’s valid physical range may be narrower than the unsigned bit range; validation belongs above bit decoding and should not be conflated with syntax validity.
 
-<details>
-<summary><strong>Pause & Predict: The Packed Struct Portability Trap</strong></summary>
+> **Pause & Predict: The Packed Struct Portability Trap.** Why should systems engineers never parse incoming network or sensor byte streams using a C struct cast like `struct Sensor* s = (struct Sensor*)buf;` even with `#pragma pack(1)`? Consider CPU alignment traps, endianness, and aliasing rules before opening the analysis below.
 
-Why should systems engineers never parse incoming network or sensor byte streams using a C struct cast like `struct Sensor* s = (struct Sensor*)buf;` even with `#pragma pack(1)`?
-Think about CPU alignment traps and endianness before reading the solution below.
-
----
+<ExerciseSolution
+  hint="Consider what happens when an ARM Cortex-M0 accesses a 32-bit integer at an odd address, or when an x86 host decodes a big-endian network packet."
+  title="Reveal analysis"
+  hintTitle="Show hint"
+>
 
 **Analysis:**
 Directly overlaying a C struct onto a byte stream introduces three fatal hazards:
@@ -42,7 +42,8 @@ Directly overlaying a C struct onto a byte stream introduces three fatal hazards
 3. **Compiler Undefined Behavior**: The C standard prohibits aliasing arbitrary byte buffers through incompatible struct pointers (the strict aliasing rule). Compilers may optimize out subsequent memory re-reads entirely.
 
 **Rule**: Always deserialize byte streams by explicitly shifting and masking individual octets (`val = (buf[0] << 24) | (buf[1] << 16) | ...`).
-</details>
+
+</ExerciseSolution>
 
 <Quiz client:load title="Specify before encode"
   question="Why should a binary format be specified before writing bit-manipulation code?"
@@ -124,7 +125,6 @@ Using CRC-16-CCITT (polynomial $x^{16} + x^{12} + x^5 + 1 = \text{0x1021}$, init
    double temp_c = (double)raw_temp / 100.0;             // Yields exact -12.34
    ```
 
----
 
 ### Counterexample & Failure Mode: The Fixed-Point Unsigned Sign-Extension Disaster
 
@@ -148,17 +148,78 @@ Consider an environmental sensor deployed in an Antarctic research station measu
    * Emergency cooling protocols trigger, fire suppressants discharge, or heaters shut off in sub-zero conditions, destroying equipment.
    * **Root Cause**: The software treated bitfield syntax as an unsigned scalar rather than enforcing the two's complement arithmetic invariant defined in the interface contract.
 
----
 
 ## Lab tasks
 
-1. Produce a byte-offset table with field name, width, signedness, scaling, valid range, and endianness.
-2. Derive the encoded bytes for five samples, including minimum and maximum representable temperature.
-3. Write pseudocode for a streaming parser with explicit states and error returns.
-4. Define a checksum and demonstrate detection of a one-bit error and a two-byte transposition.
-5. Design a version-2 extension that preserves version-1 parser safety.
-6. Give a proof sketch that encoding followed by decoding returns the original canonical sample.
-7. Create a test matrix for truncation, reserved fields, overflow, checksum, sequence, and physical range.
+### Task 1: Byte-offset specification table
+
+Produce a byte-offset table with field name, width, signedness, scaling, valid range, and endianness.
+
+<ExerciseSolution hint="Specify explicit bit/byte widths, signedness, valid numerical ranges, and endianness for every field.">
+
+A complete table names every byte and makes no reliance on host padding. The signed temperature field must explicitly say two’s complement before scaling; pressure and timestamps must state whether all bit patterns are syntactically valid.
+
+</ExerciseSolution>
+
+### Task 2: Two's-complement sample encoding
+
+Derive the encoded bytes for five samples, including minimum and maximum representable temperature.
+
+<ExerciseSolution hint="Convert negative scaled values using modular complement arithmetic before emitting high-order bytes.">
+
+Encode negative scaled temperature as $2^{16}-|x|$ and emit high byte first. Check the result by decoding the emitted bytes and comparing the integer scaled value before converting to floating point.
+
+</ExerciseSolution>
+
+### Task 3: Streaming parser state machine
+
+Write pseudocode for a streaming parser with explicit states and error returns.
+
+<ExerciseSolution hint="Define explicit states (header, payload, checksum) and deterministic error rejection paths.">
+
+States should collect header/body bytes, then checksum, then validate and publish. Each read may return fewer bytes than requested. On any error, discard the current record and do not retain partial data as a future header unless the framing protocol says how resynchronization works.
+
+</ExerciseSolution>
+
+### Task 4: Checksum design and error detection
+
+Define a checksum and demonstrate detection of a one-bit error and a two-byte transposition.
+
+<ExerciseSolution hint="Specify polynomial, initial value, and bit coverage to detect single-bit flips and transpositions.">
+
+A CRC specification must include polynomial, initial value, reflection, final XOR, and coverage. Demonstrate the computed checksum before and after mutation; do not claim security or collision resistance from an unspecified sum.
+
+</ExerciseSolution>
+
+### Task 5: Version-2 backward compatibility
+
+Design a version-2 extension that preserves version-1 parser safety.
+
+<ExerciseSolution hint="Ensure version-1 parsers reject newer versions cleanly while version-2 parsers can decode legacy frames.">
+
+Put new records under version 2 and keep byte offsets unambiguous. A version-1 parser should reject version 2 before interpreting payload, while a version-2 parser can decode a shared prefix and additional fields.
+
+</ExerciseSolution>
+
+### Task 6: Encode/decode round-trip correctness
+
+Give a proof sketch that encoding followed by decoding returns the original canonical sample.
+
+<ExerciseSolution hint="Show field-level injectivity, exact integer scaling preservation, and invertibility of byte reversal.">
+
+Show each field’s encoding is injective over its valid range, byte reversal is undone by decoding, sign extension inverts two’s-complement encoding, and scaling uses an exact integer representation. Canonicality excludes alternate encodings.
+
+</ExerciseSolution>
+
+### Task 7: Boundary and fuzz test matrix
+
+Create a test matrix for truncation, reserved fields, overflow, checksum, sequence, and physical range.
+
+<ExerciseSolution hint="Include zero-length frames, partial truncations, reserved-field mutations, and out-of-range sensor values.">
+
+Include length 0, every length 1–15, exact 16, extra trailing bytes, all-zero/all-one values, signed boundaries, each reserved bit, one-bit and burst mutations, stale sequence, and physical limits. Expected outcomes must distinguish reject, accept, and accept-with-warning.
+
+</ExerciseSolution>
 
 ## Proof obligations
 
@@ -176,32 +237,12 @@ An excellent lab report contains a complete byte-level specification, integer de
 
 The reviewer should be able to implement the encoder and parser independently from the report and obtain identical bytes for every canonical example.
 
-<details>
-<summary>Diagnostic solutions</summary>
-
-1. A complete table names every byte and makes no reliance on host padding. The signed temperature field must explicitly say two’s complement before scaling; pressure and timestamps must state whether all bit patterns are syntactically valid.
-
-2. Encode negative scaled temperature as $2^{16}-|x|$ and emit high byte first. Check the result by decoding the emitted bytes and comparing the integer scaled value before converting to floating point.
-
-3. States should collect header/body bytes, then checksum, then validate and publish. Each read may return fewer bytes than requested. On any error, discard the current record and do not retain partial data as a future header unless the framing protocol says how resynchronization works.
-
-4. A CRC specification must include polynomial, initial value, reflection, final XOR, and coverage. Demonstrate the computed checksum before and after mutation; do not claim security or collision resistance from an unspecified sum.
-
-5. Put new records under version 2 and keep byte offsets unambiguous. A version-1 parser should reject version 2 before interpreting payload, while a version-2 parser can decode a shared prefix and additional fields.
-
-6. Show each field’s encoding is injective over its valid range, byte reversal is undone by decoding, sign extension inverts two’s-complement encoding, and scaling uses an exact integer representation. Canonicality excludes alternate encodings.
-
-7. Include length 0, every length 1–15, exact 16, extra trailing bytes, all-zero/all-one values, signed boundaries, each reserved bit, one-bit and burst mutations, stale sequence, and physical limits. Expected outcomes must distinguish reject, accept, and accept-with-warning.
-
-</details>
-
 ## Deliberate Omissions & Scope Boundaries
 
 * **Variable-Length Huffman / Prefix Encodings**: Variable-length entropy compression schemes (e.g., DEFLATE or protobuf varints) are omitted to focus on fixed-width binary record parsing.
 * **Cryptographic Signatures & HMAC Authentication**: Cryptographic message integrity (e.g., Ed25519 or HMAC-SHA256) is treated in Network Security; CRC-16 is evaluated purely as an error-detecting code.
 * **Complex Self-Describing Schemas**: Self-describing serialization engines (such as ASN.1 BER/DER or Avro) are omitted in favor of bare-metal deterministic binary layout.
 
----
 
 ## References & Further Reading
 

@@ -8,6 +8,7 @@ import rehypeKatex from 'rehype-katex';
 import katex from 'katex';
 import fs from 'node:fs';
 import path from 'node:path';
+import { remarkLessonStructurePlugin } from './src/plugins/remark-lesson-structure.mjs';
 
 function checkPythonDiagramErrors() {
   const errorLogs = [
@@ -45,7 +46,7 @@ function checkPythonDiagramErrors() {
 
 // Common Markdown configuration for extreme performance
 const markdownProcessor = unified({
-  remarkPlugins: [remarkMath, validateMathPlugin],
+  remarkPlugins: [remarkMath, validateMathPlugin, remarkLessonStructurePlugin],
   rehypePlugins: [
     [rehypeKatex, { 
       output: 'mathml', // MUCH faster bundling due to smaller JS modules

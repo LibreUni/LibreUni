@@ -1,20 +1,20 @@
 ---
-title: "Instruction-Set Architecture"
-course: "computer-architecture"
-description: "The contract between software and a processor implementation."
+title: Instruction-Set Architecture
+course: computer-architecture
+description: The contract between software and a processor implementation.
 prerequisites:
-  - "Programming in a systems language"
-  - "Binary arithmetic and basic digital logic"
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
 outcomes:
-  - "Specify programmer-visible state and precise instruction semantics, including memory access, control flow, privilege, and exceptions."
-  - "Decode encodings and trace an ABI-conforming sequence through registers, stack, memory order, and traps."
-  - "Separate ISA guarantees from implementation choices and construct a refinement test for an ISA extension."
+  - Specify programmer-visible state and precise instruction semantics, including memory access, control flow, privilege, and exceptions.
+  - Decode encodings and trace an ABI-conforming sequence through registers, stack, memory order, and traps.
+  - Separate ISA guarantees from implementation choices and construct a refinement test for an ISA extension.
 omissions:
-  - "RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor."
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
 estimatedMinutes: 540
-assessment: "Given an unfamiliar instruction encoding and memory-ordering rule, derive its architectural transition, trace a short program, and identify an implementation that violates the contract."
+assessment: Given an unfamiliar instruction encoding and memory-ordering rule, derive its architectural transition, trace a short program, and identify an implementation that violates the contract.
 ---
-# Instruction-Set Architecture
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
@@ -70,15 +70,13 @@ An instruction encoding partitions bits into fields: opcode, register identifier
 
 Immediate encoding also interacts with sign extension. An instruction that adds a signed 12-bit immediate must interpret `0xFFF` as -1, not 4095. A separate unsigned-immediate instruction or zero-extension rule is needed when the latter is intended. The opcode’s semantic definition, not the bit pattern alone, determines the result.
 
-<details>
-<summary><strong>Pause & Predict: The 12-Bit Immediate Sign-Extension Trap</strong></summary>
+> **Pause & Predict: The 12-Bit Immediate Sign-Extension Trap.** Suppose you execute `addi a0, zero, 0x800` on a 32-bit RISC-V processor where `addi` accepts a 12-bit immediate field `imm[11:0]`. What 32-bit hexadecimal value is stored in `a0`? Is it `0x00000800` ($+2048$) or `0xFFFFF800` ($-2048$)? Commit your reasoning before opening the analysis below.
 
-Suppose you execute `addi a0, zero, 0x800` on a 32-bit RISC-V processor where `addi` accepts a 12-bit immediate field `imm[11:0]`.
-What 32-bit hexadecimal value is stored in `a0`? Is it `0x00000800` ($+2048$) or `0xFFFFF800` ($-2048$)?
-
-**Commit your reasoning before opening the solution below.**
-
----
+<ExerciseSolution
+  hint="Check bit 11 of `0x800` (`0b1000_0000_0000`). If the most significant bit of the 12-bit immediate is 1, what does arithmetic sign extension do to bits 31..12?"
+  title="Reveal analysis"
+  hintTitle="Show hint"
+>
 
 **Analysis:**
 The value stored is `0xFFFFF800` ($-2048$)!
@@ -88,7 +86,8 @@ The sign bit `imm[11]` is copied into all upper 20 bits:
 `imm[31:12] = 0b1111_1111_1111_1111_1111` (`0xFFFFF`).
 Thus, the machine sign-extends `0x800` to `0xFFFFF800`.
 To load an unsigned $+2048$ or construct larger 32-bit values, one must use `lui` (Load Upper Immediate) combined with `addi`, carefully adjusting for the negative sign bit.
-</details>
+
+</ExerciseSolution>
 
 For a hypothetical 32-bit, fixed-width register-add ISA with modular arithmetic and no flags, the decoded fields select a precise state transition. This is a semantic map, not a claim about execution stages; the source operands are read from the pre-state even when a destination aliases a source.
 
@@ -107,12 +106,11 @@ S --> N : preserve other registers and memory
 
 **Transfer check.** Set `rs1=5`, `rs2=6`, `rd=5`, with initial `R[5]=0xffffffff` and `R[6]=2`. Determine the post-state and explain why destination/source aliasing does not change the operands.
 
-<details>
-<summary>Check the simultaneous state update</summary>
+<ExerciseSolution title="Check the simultaneous state update">
 
 The mathematical sum is $2^{32}+1$, so `R[5]` becomes 1. `R[6]` and memory remain unchanged; PC advances by four bytes. Both operands came from the pre-state. Writing the result early and then rereading `R[5]` as an input would implement a different transition. No carry flag is updated because this hypothetical ISA has no flags.
 
-</details>
+</ExerciseSolution>
 
 ## Addressing modes and memory consistency
 
@@ -208,42 +206,80 @@ Consider executing a 32-bit load `lw x5, 0(x1)` where `x1 = 0x0FFF_FFFE`.
    * The load reads bytes 0-1 from before the store, and bytes 2-3 from after the store, observing a "torn read" word that never existed in memory.
    * **ISA Contract Guarantee**: This is why strict RISC ISAs specify that misaligned accesses either raise an Address-Misaligned Trap or are explicitly non-atomic across cache boundaries.
 
----
 
 ## Independent practice
 
-1. Specify the complete architectural transition for a signed load, including address calculation, alignment, permission, byte order, sign extension, PC update, and fault behavior.
+### Exercise 1: Signed load state transition
 
-2. Design a 32-bit fixed-width encoding for an ISA with 32 general-purpose registers that supports: (a) 16 three-register (R-type) arithmetic/logic operations, (b) 8 two-register (I-type) operations with a 12-bit signed immediate, and (c) 8 two-register (B-type) word-aligned conditional branches with a 12-bit signed displacement. Account for every bit in all three formats and state what immediate/displacement range cannot fit.
+Specify the complete architectural transition for a signed load, including address calculation, alignment, permission, byte order, sign extension, PC update, and fault behavior.
 
-3. Prove the array-sum invariant for the assembly loop described above. Include the empty-array case and a length large enough to overflow a 32-bit accumulator.
+<ExerciseSolution hint="Trace effective address generation, alignment verification, memory read, and sign extension into destination.">
 
-4. Construct a short multiprocessor program whose result differs under sequential consistency and a weak ordering model. State the fence or atomic operation needed to establish the intended message-passing order.
+Compute $EA$, check privilege and alignment, translate or fault, read the specified number of bytes in the specified order, sign-extend to the register width, commit the destination, and update PC. On a fault, the destination and later architectural effects must not commit, and the handler must receive a restartable PC and cause.
 
-5. Explain why precise exceptions constrain out-of-order retirement. Give an example in which a younger store must not become architecturally visible before an older instruction faults.
+</ExerciseSolution>
 
-6. Design an ABI for a tiny language with integer arguments, a struct return value, recursion, and 16-byte stack alignment. State preservation rules and draw one stack frame.
+### Exercise 2: Fixed-width 32-bit instruction encoding
 
-7. Create a differential-test suite for an instruction that sign-extends a 12-bit immediate. Include ordinary values, boundaries, negative values, and a random property.
+Design a 32-bit fixed-width encoding for an ISA with 32 general-purpose registers that supports: (a) 16 three-register (R-type) arithmetic/logic operations, (b) 8 two-register (I-type) operations with a 12-bit signed immediate, and (c) 8 two-register (B-type) word-aligned conditional branches with a 12-bit signed displacement. Account for every bit in all three formats and state what immediate/displacement range cannot fit.
 
-<details>
-<summary>Diagnostic solutions</summary>
+<ExerciseSolution hint="Allocate explicit bitfields for opcode, destination register, source registers, and immediate constants.">
 
-1. Compute $EA$, check privilege and alignment, translate or fault, read the specified number of bytes in the specified order, sign-extend to the register width, commit the destination, and update PC. On a fault, the destination and later architectural effects must not commit, and the handler must receive a restartable PC and cause.
+Three 5-bit register fields consume 15 bits, leaving 17 bits for opcode/function/immediate in a 32-bit word. A 12-bit immediate format can use five opcode bits and preserve room for mode bits; a branch displacement must additionally state alignment and PC base. There is no single correct allocation without an instruction inventory, but every allocation must account for every bit.
 
-2. Three 5-bit register fields consume 15 bits, leaving 17 bits for opcode/function/immediate in a 32-bit word. A 12-bit immediate format can use five opcode bits and preserve room for mode bits; a branch displacement must additionally state alignment and PC base. There is no single correct allocation without an instruction inventory, but every allocation must account for every bit.
+</ExerciseSolution>
 
-3. Initially $k=0$, the accumulator is the empty sum, and the pointer is the array base. One iteration adds element $k$, advances the pointer, and makes the invariant true for $k+1$. At termination, $k=n$, so the accumulator is the sum. If the accumulator wraps, the proof is valid only for modular arithmetic; a mathematical integer-sum specification requires widening or overflow detection.
+### Exercise 3: Loop invariant inductive proof in assembly
 
-4. A producer stores data then sets a flag; a consumer reads the flag then data. Weak ordering may expose the flag before the data unless a release store and acquire load, or an appropriate fence, orders the operations. The exact instruction depends on the ISA memory model.
+Prove the array-sum invariant for the assembly loop described above. Include the empty-array case and a length large enough to overflow a 32-bit accumulator.
 
-5. If an older load faults while a younger store has already changed memory, the handler observes a state that could not arise from sequential execution at the fault point. A reorder buffer or equivalent mechanism delays younger stores until all older instructions are known to retire successfully.
+<ExerciseSolution hint="Induct on array index $k$, showing that the accumulator equals $\sum_{i=0}^{k-1} A[i]$ at the loop header, and discuss modular integer overflow.">
 
-6. A sound ABI assigns the first arguments to registers, returns small integers in a result register, places larger struct returns in caller-provided storage, saves return address and callee-saved registers in a frame, and rounds the stack pointer to 16 bytes. Recursion works because every invocation owns a distinct frame.
+Initially $k=0$, the accumulator is the empty sum, and the pointer is the array base. One iteration adds element $k$, advances the pointer, and makes the invariant true for $k+1$. At termination, $k=n$, so the accumulator is the sum. If the accumulator wraps, the proof is valid only for modular arithmetic; a mathematical integer-sum specification requires widening or overflow detection.
 
-7. Test immediate 0, 1, -1, 2047, -2048, bit patterns with only the sign bit, and random 12-bit values. The property is that decoding bits $b$ equals $b$ for nonnegative values and $b-4096$ when the top bit is set, after extension to the destination width.
+</ExerciseSolution>
 
-</details>
+### Exercise 4: Memory consistency and litmus test synchronization
+
+Construct a short multiprocessor program whose result differs under sequential consistency and a weak ordering model. State the fence or atomic operation needed to establish the intended message-passing order.
+
+<ExerciseSolution hint="Write a classic 2-thread message passing pattern (data write, flag set vs flag check, data read) and insert memory fences or acquire/release operations.">
+
+A producer stores data then sets a flag; a consumer reads the flag then data. Weak ordering may expose the flag before the data unless a release store and acquire load, or an appropriate fence, orders the operations. The exact instruction depends on the ISA memory model.
+
+</ExerciseSolution>
+
+### Exercise 5: Precise exception constraints on speculative stores
+
+Explain why precise exceptions constrain out-of-order retirement. Give an example in which a younger store must not become architecturally visible before an older instruction faults.
+
+<ExerciseSolution hint="Explain how committing a younger store to cache or memory before an older instruction's fault status is determined violates precise state.">
+
+If an older load faults while a younger store has already changed memory, the handler observes a state that could not arise from sequential execution at the fault point. A reorder buffer or equivalent mechanism delays younger stores until all older instructions are known to retire successfully.
+
+</ExerciseSolution>
+
+### Exercise 6: Procedure calling convention and stack frame ABI design
+
+Design an ABI for a tiny language with integer arguments, a struct return value, recursion, and 16-byte stack alignment. State preservation rules and draw one stack frame.
+
+<ExerciseSolution hint="Partition registers into argument, temporary (caller-saved), and preserved (callee-saved) sets, and allocate stack slots for spilled return addresses and frames.">
+
+A sound ABI assigns the first arguments to registers, returns small integers in a result register, places larger struct returns in caller-provided storage, saves return address and callee-saved registers in a frame, and rounds the stack pointer to 16 bytes. Recursion works because every invocation owns a distinct frame.
+
+</ExerciseSolution>
+
+### Exercise 7: Differential testing of 12-bit immediate sign extension
+
+Create a differential-test suite for an instruction that sign-extends a 12-bit immediate. Include ordinary values, boundaries, negative values, and a random property.
+
+<ExerciseSolution hint="Construct test vectors covering positive maximum ($+2047$), negative minimum ($-2048$), zero, $-1$, and property-based mathematical equivalence.">
+
+Test immediate 0, 1, -1, 2047, -2048, bit patterns with only the sign bit, and random 12-bit values. The property is that decoding bits $b$ equals $b$ for nonnegative values and $b-4096$ when the top bit is set, after extension to the destination width.
+
+</ExerciseSolution>
+
+
 
 ## Deliberate Omissions & Scope Boundaries
 
@@ -253,7 +289,6 @@ Consider executing a 32-bit load `lw x5, 0(x1)` where `x1 = 0x0FFF_FFFE`.
 * **Hardware Hypervisor Extensions**: Virtual machine control blocks, nested page table walks (stage-2 translation), and hypervisor trap delegation are treated in advanced operating systems.
 * **Microcode ROM State Machines**: Legacy CISC multistep microcode sequencers are omitted to maintain focus on hardwired RISC control logic.
 
----
 
 ## References & Further Reading
 

@@ -40,6 +40,16 @@ export default function ThemeToggle() {
   useEffect(() => {
     const root = window.document.documentElement;
     root.classList.toggle('dark', resolveColorMode(mode) === 'dark');
+
+    if (mode !== 'auto' || typeof window.matchMedia !== 'function') return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (event: MediaQueryListEvent) => {
+      if (root.dataset.colorMode === 'auto') {
+        root.classList.toggle('dark', event.matches);
+      }
+    };
+    mediaQuery.addEventListener('change', onChange);
+    return () => mediaQuery.removeEventListener('change', onChange);
   }, [mode]);
 
   useEffect(() => {
@@ -89,7 +99,7 @@ export default function ThemeToggle() {
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-xl border border-light-border bg-light-accent/5 p-2.5 text-light-text shadow-sm transition-all hover:scale-105 hover:bg-light-accent/10 active:scale-95 dark:border-dark-border dark:bg-dark-accent/5 dark:text-dark-text dark:hover:bg-dark-accent/10"
+        className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-xl border border-light-border bg-light-accent/5 p-2.5 text-light-text shadow-sm transition-colors hover:bg-light-accent/10 dark:border-dark-border dark:bg-dark-accent/5 dark:text-dark-text dark:hover:bg-dark-accent/10"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Choose theme and appearance. Current theme: ${activeTheme.label}, ${mode} mode`}

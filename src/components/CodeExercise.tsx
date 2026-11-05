@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Check, X, RefreshCw } from 'lucide-react';
+import { ArrowRight, Check, Code2, Eye, RefreshCw, X } from 'lucide-react';
 import { highlightCode } from './SyntaxHighlighter';
+import MathText from './MathText';
 
 interface CodeExerciseProps {
   title?: string;
@@ -9,9 +10,6 @@ interface CodeExerciseProps {
   explanation?: string;
 }
 
-// Blanks test the code token, not a user's choice of harmless whitespace.
-// Keep punctuation and operators meaningful while accepting forms such as
-// `x+h`, `x + h`, and `f ( x )` interchangeably.
 function normalizeAnswer(value: string) {
   return value
     .replace(/[−–—]/g, '-')
@@ -19,58 +17,109 @@ function normalizeAnswer(value: string) {
     .trim();
 }
 
-export default function CodeExercise({ title = "Complete the Code", code, answers, explanation }: CodeExerciseProps) {
+export default function CodeExercise({
+  title = 'Complete the Code',
+  code,
+  answers,
+  explanation,
+}: CodeExerciseProps) {
   const actualCode = code || '';
   const actualAnswers = answers || [];
-  
-  // Split by [!blank!] or any sequence of 3 or more underscores
+
   const parts = actualCode.split(/\[!blank!]|_{3,}/);
   const completedCode = parts.reduce((result, part, index) => {
     const answer = index < actualAnswers.length ? actualAnswers[index] || '' : '';
     return result + part + answer;
   }, '');
-  
-  const [userInputs, setUserInputs] = useState<string[]>(new Array(actualAnswers.length).fill(''));
+
+  const [userInputs, setUserInputs] = useState<string[]>(
+    new Array(actualAnswers.length).fill(''),
+  );
   const [submitted, setSubmitted] = useState(false);
-  const [isCorrect, setIsCorrect] = useState(false);
+  const [attempts, setAttempts] = useState(0);
+  const [revealedSolution, setRevealedSolution] = useState(false);
+
+  const blankMatches = actualAnswers.map(
+    (expected, idx) =>
+      normalizeAnswer(userInputs[idx] || '') === normalizeAnswer(expected || ''),
+  );
+  const isCorrect = submitted && blankMatches.every(Boolean);
+  const allFilled = userInputs.every((inp) => inp.trim().length > 0);
 
   const handleInputChange = (index: number, value: string) => {
-    if (submitted) return;
-    const newInputs = [...userInputs];
-    newInputs[index] = value;
-    setUserInputs(newInputs);
+    const next = [...userInputs];
+    next[index] = value;
+    setUserInputs(next);
+    if (submitted) {
+      setSubmitted(false);
+      setRevealedSolution(false);
+    }
   };
 
   const checkAnswers = () => {
-    const correct = userInputs.every((input, index) => 
-      normalizeAnswer(input) === normalizeAnswer(actualAnswers[index] || '')
-    );
-    setIsCorrect(correct);
+    if (!allFilled) return;
     setSubmitted(true);
+    setRevealedSolution(false);
+    setAttempts((c) => c + 1);
+  };
+
+  const showExpectedTokens = () => {
+    setUserInputs([...actualAnswers]);
+    setSubmitted(true);
+    setRevealedSolution(true);
   };
 
   const reset = () => {
     setUserInputs(new Array(actualAnswers.length).fill(''));
     setSubmitted(false);
-    setIsCorrect(false);
+    setRevealedSolution(false);
   };
 
   return (
-    <div className="code-exercise my-12 group">
+    <section
+      className="code-exercise lu-card-tier2 assessment-shell not-prose"
+      aria-label={title}
+      data-component="CodeExercise"
+    >
       <div className="print-static-assessment hidden">
         <div className="print-static-label">{title}</div>
-        <pre className="print-static-code"><code>{completedCode}</code></pre>
-        {explanation && <p className="print-static-explanation">{explanation}</p>}
+        <pre className="print-static-code">
+          <code>{completedCode}</code>
+        </pre>
+        {explanation && (
+          <p className="print-static-explanation">
+            <MathText>{explanation}</MathText>
+          </p>
+        )}
       </div>
 
-      <div className="code-exercise-shell bg-light-bg dark:bg-dark-surface rounded-3xl overflow-hidden border border-light-border dark:border-dark-border shadow-[0_30px_60px_-15px_rgba(0,0,0,0.05)] dark:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] transition-all duration-500 group-hover:border-primary/30">
-        <div className="code-exercise-header bg-light-surface dark:bg-dark-bg/20 px-5 py-1 md:px-7 md:py-1.5 border-b border-light-border dark:border-dark-border flex items-center justify-start">
-          <h3 className="code-exercise-title text-[0.78rem] md:text-sm font-black text-light-text dark:text-dark-text tracking-[0.18em] uppercase leading-none">{title}</h3>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-primary">
+          <Code2 size={15} />
+          <p className="label-caps m-0 text-primary">Code Exercise</p>
         </div>
+        <span className="text-xs font-medium text-light-muted dark:text-dark-muted">
+          {actualAnswers.length} token{actualAnswers.length === 1 ? '' : 's'} to supply
+        </span>
+      </div>
 
-        <div className="code-exercise-body p-2 md:p-3">
-          <pre className="code-exercise-codeframe hl-default whitespace-pre m-0 overflow-auto p-4 md:p-6 font-mono text-[14.5px] leading-[24px]">
-            {parts.map((part, index) => (
+      <h3 className="mb-3 text-base font-bold leading-snug text-light-text dark:text-dark-text md:text-lg">
+        {title}
+      </h3>
+
+      <div className="code-exercise-shell overflow-hidden rounded-lg border border-light-border bg-light-bg dark:border-dark-border dark:bg-dark-bg">
+        <pre className="code-exercise-codeframe hl-default m-0 overflow-x-auto whitespace-pre p-4 font-mono text-sm leading-7 border-0 rounded-none shadow-none bg-transparent">
+          {parts.map((part, index) => {
+            const matched = blankMatches[index];
+            let blankClass =
+              'border-light-border bg-light-surface text-light-text focus:border-primary dark:border-dark-border dark:bg-dark-surface dark:text-dark-text';
+            if (submitted) {
+              blankClass = matched
+                ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                : 'border-rose-500 bg-rose-500/10 text-rose-700 dark:text-rose-300';
+            }
+
+            return (
               <React.Fragment key={index}>
                 <span dangerouslySetInnerHTML={{ __html: highlightCode(part) }} />
                 {index < parts.length - 1 && (
@@ -78,77 +127,90 @@ export default function CodeExercise({ title = "Complete the Code", code, answer
                     type="text"
                     value={userInputs[index] || ''}
                     onChange={(e) => handleInputChange(index, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && allFilled) {
+                        e.preventDefault();
+                        checkAnswers();
+                      }
+                    }}
                     aria-label={`Code blank ${index + 1}`}
-                    disabled={submitted}
                     placeholder="?"
-                    size={Math.max((actualAnswers[index] || '').length, 2)}
-                    className={`code-exercise-blank
-                      mx-1.5 px-2 py-0 h-[22px] rounded border-2 font-black text-center focus:outline-none transition-all duration-300 text-sm
-                      ${submitted 
-                        ? (normalizeAnswer(userInputs[index] || '') === normalizeAnswer(actualAnswers[index] || '') ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 border-rose-500 text-rose-600 dark:text-rose-400')
-                        : 'bg-light-surface dark:bg-dark-surface border-light-border dark:border-dark-border text-light-text dark:text-dark-text focus:border-primary focus:bg-light-bg dark:focus:bg-dark-surface'}
-                    `}
+                    style={{
+                      width: `${Math.max((actualAnswers[index] || '').length + 3, 5)}ch`,
+                    }}
+                    className={`code-exercise-blank mx-1 inline-block h-7 rounded-md border px-2 py-0 text-center font-mono text-xs font-bold transition-colors focus:outline-none focus:ring-2 focus:ring-primary/25 ${blankClass}`}
                   />
                 )}
               </React.Fragment>
-            ))}
-          </pre>
-
-          <div className="mt-6 flex flex-col gap-5">
-            {!submitted ? (
-              <button
-                onClick={checkAnswers}
-                disabled={userInputs.some(inp => !inp.trim())}
-                className={`code-exercise-button
-                    self-start px-10 py-4 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all shadow-xl
-                    ${userInputs.every(inp => inp.trim()) 
-                        ? 'bg-primary text-primary-foreground hover:scale-105 active:scale-95 shadow-primary/20'
-                        : 'bg-light-border dark:bg-dark-border text-light-muted dark:text-dark-muted cursor-not-allowed'}
-                `}
-              >
-                Check answer
-              </button>
-            ) : (
-              <div className="space-y-4">
-                <div className={`p-6 rounded-xl border-2 flex flex-col gap-3 ${isCorrect ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/5 border-rose-500/20 text-rose-600 dark:text-rose-400'}`}>
-                  <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-lg ${isCorrect ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'}`}>
-                        {isCorrect ? <Check size={18} strokeWidth={3} /> : <X size={18} strokeWidth={3} />}
-                    </div>
-                    <span className="font-black uppercase tracking-tighter text-xl">
-                      {isCorrect ? "Correct" : "Not quite"}
-                    </span>
-                  </div>
-                  {!isCorrect && (
-                    <div className="text-[10px] font-mono opacity-80 p-4 bg-rose-500/10 rounded-lg border border-rose-500/10 mt-1">
-                      <span className="text-rose-500 uppercase text-[9px] font-black tracking-[0.2em] block mb-1.5">Expected token</span>
-                      {actualAnswers.map((ans, i) => (
-                        <div key={i} className="flex gap-3">
-                           <span className="opacity-40">[{i}]</span>
-                           <span className="font-bold">{ans}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {explanation && (
-                    <div className="mt-3 pt-4 border-t border-current/10 opacity-80 leading-relaxed italic text-sm">
-                        {explanation}
-                    </div>
-                  )}
-                </div>
-                
-                <button
-                  onClick={reset}
-                  className="flex items-center gap-2.5 px-5 py-2.5 bg-light-surface dark:bg-dark-bg/20 text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white rounded-lg transition-all text-[9px] font-black uppercase tracking-[0.2em] border border-light-border dark:border-dark-border"
-                >
-                  <RefreshCw size={12} strokeWidth={3} />
-                  Restart Simulation
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+            );
+          })}
+        </pre>
       </div>
-    </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={checkAnswers}
+          disabled={!allFilled}
+          className="code-exercise-button assessment-action-primary"
+        >
+          Check code <ArrowRight size={15} />
+        </button>
+
+        {attempts >= 1 && !isCorrect && (
+          <button
+            type="button"
+            onClick={showExpectedTokens}
+            className="assessment-action-secondary"
+          >
+            <Eye size={14} /> Show expected tokens
+          </button>
+        )}
+
+        {(userInputs.some((inp) => inp.length > 0) || submitted) && (
+          <button
+            type="button"
+            onClick={reset}
+            className="assessment-action-secondary"
+          >
+            <RefreshCw size={14} /> Reset
+          </button>
+        )}
+      </div>
+
+      {submitted && (
+        <div className="mt-4 grid gap-3">
+          <div className={isCorrect ? 'feedback-success text-sm' : 'feedback-diagnostic text-sm'}>
+            <div className="flex items-start gap-2">
+              {isCorrect ? (
+                <Check className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" size={16} />
+              ) : (
+                <X className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" size={16} />
+              )}
+              <div>
+                <strong>
+                  {revealedSolution
+                    ? 'Expected tokens filled.'
+                    : isCorrect
+                    ? 'All tokens verified.'
+                    : 'One or more tokens do not match.'}
+                </strong>{' '}
+                {!isCorrect && (
+                  <span>
+                    Check the highlighted blank{blankMatches.filter((m) => !m).length === 1 ? '' : 's'} above and try again, or click &ldquo;Show expected tokens&rdquo;.
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {(isCorrect || revealedSolution) && explanation && (
+            <div className="feedback-info text-sm leading-relaxed text-light-text dark:text-dark-text">
+              <strong>Explanation:</strong> <MathText>{explanation}</MathText>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

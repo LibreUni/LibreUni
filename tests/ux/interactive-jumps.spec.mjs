@@ -167,7 +167,7 @@ test.describe('Interactive Exercise UX: Stepped Sliders and Layout Stability', (
     });
   }
 
-  test('Quiz: transitioning between retrieval and evaluation must not cause jarring container collapse', async ({ page }) => {
+  test('Quiz: multi-claim classification matrix evaluates inline without container collapse', async ({ page }) => {
     await page.goto('/lessons/database-systems/normalization.html', { waitUntil: 'networkidle' });
 
     const quiz = page.locator('section.quiz-container').first();
@@ -176,52 +176,57 @@ test.describe('Interactive Exercise UX: Stepped Sliders and Layout Stability', (
     const initialBox = await quiz.boundingBox();
     expect(initialBox).not.toBeNull();
 
-    // Fill in retrieval draft and advance to evaluate phase
-    const textarea = quiz.locator('textarea');
-    await textarea.fill('Functional dependency determines normal form invariants.');
+    // Evaluate options using the upfront Correct/Incorrect controls
+    const claimGroups = quiz.locator('[role="group"]');
+    const count = await claimGroups.count();
+    expect(count).toBeGreaterThanOrEqual(2);
 
-    const evaluateButton = quiz.locator('button:has-text("Evaluate the claims")');
-    await evaluateButton.click();
+    await claimGroups.nth(0).getByRole('button', { name: 'Correct', exact: true }).click();
+    for (let i = 1; i < count; i++) {
+      await claimGroups.nth(i).getByRole('button', { name: 'Incorrect', exact: true }).click();
+    }
+
+    const verifyButton = quiz.locator('button:has-text("Verify answers")');
+    await verifyButton.click();
     await page.waitForTimeout(50);
 
     const evaluateBox = await quiz.boundingBox();
     expect(evaluateBox).not.toBeNull();
 
-    // Verify container maintained minimum height and did not shrink drastically (> 40%)
+    // Verify container expanded or maintained height and did not shrink drastically (> 20%)
     const heightDrop = (initialBox.height - evaluateBox.height) / initialBox.height;
     expect(
       heightDrop,
-      `Quiz container shrank drastically by ${(heightDrop * 100).toFixed(1)}% between phases, causing page jump.`,
-    ).toBeLessThan(0.3);
+      `Quiz container shrank drastically by ${(heightDrop * 100).toFixed(1)}% on verification, causing page jump.`,
+    ).toBeLessThan(0.2);
   });
 
-  test('CaseStudy: toggling between decision draft and analysis must remain layout-stable', async ({ page }) => {
-    await page.goto('/lessons/database-systems/normalization.html', { waitUntil: 'networkidle' });
+  test('CaseStudy: selecting a decision option and evaluating trade-offs remains layout-stable', async ({ page }) => {
+    await page.goto('/lessons/computer-architecture/digital-representation.html', { waitUntil: 'networkidle' });
 
     const caseStudy = page.locator('section.case-study-container').first();
     await expect(caseStudy).toBeVisible();
 
-    const textarea = caseStudy.locator('textarea');
-    await textarea.fill('We should normalize to BCNF because functional dependencies violate Boyce-Codd normal form.');
+    const initialBox = await caseStudy.boundingBox();
+    expect(initialBox).not.toBeNull();
 
-    const compareBtn = caseStudy.locator('button:has-text("Compare with the reference analysis")');
-    await compareBtn.click();
+    await caseStudy.locator('[role="radio"]').first().click();
+
+    const evaluateBtn = caseStudy.locator('button:has-text("Evaluate engineering trade-offs")');
+    await evaluateBtn.click();
     await page.waitForTimeout(50);
 
     const revealedBox = await caseStudy.boundingBox();
     expect(revealedBox).not.toBeNull();
+    expect(revealedBox.height).toBeGreaterThanOrEqual(initialBox.height * 0.9);
 
-    const reviseBtn = caseStudy.locator('button:has-text("Revise the decision")');
+    const reviseBtn = caseStudy.locator('button:has-text("Reset")');
     await reviseBtn.click();
     await page.waitForTimeout(50);
 
     const revisedBox = await caseStudy.boundingBox();
     expect(revisedBox).not.toBeNull();
-
-    // The phase container preserves height and prevents sudden collapse
-    const phaseContainer = caseStudy.locator('.case-study-phase-container');
-    const phaseBox = await phaseContainer.boundingBox();
-    expect(phaseBox.height).toBeGreaterThanOrEqual(190);
+    expect(Math.abs(revisedBox.height - initialBox.height)).toBeLessThanOrEqual(24);
   });
 });
 

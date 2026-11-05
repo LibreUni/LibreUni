@@ -34,8 +34,8 @@ FILLER_PATTERNS = {
 COMPONENT_PROPS = {
     "Quiz": ["question", "options", "correctIndex", "explanation", "questions", "title", "client:load"],
     "CodeRunner": ["code", "output", "language", "title", "client:load"],
-    "CodeExercise": ["code", "answers", "explanation", "title", "client:load"],
-    "CaseStudy": ["scenario", "question", "options", "correctIndex", "explanation", "title", "client:load"],
+    "CodeExercise": ["code", "answers", "explanation", "title", "description", "client:load"],
+    "CaseStudy": ["scenario", "question", "options", "correctIndex", "explanation", "tradeoffs", "title", "client:load"],
     "SqlRunner": ["schema", "initialQuery", "title", "description", "client:load"]
 }
 
