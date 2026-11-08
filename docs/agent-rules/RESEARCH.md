@@ -2,7 +2,7 @@
 
 **Trigger:** Activate this skill whenever asked to add information, explain a new concept, write a course lesson, or when specifically instructed to "find sources" for a topic.
 
-**Context:** LibreUni is a Free and Open Source (FOSS) educational platform. Maintaining academic integrity, respecting copyright, and providing a trail of knowledge (both for students and open-source contributors) are top priorities.
+**Context:** LibreUni is a Free and Open Source (FOSS) educational platform. Maintaining scholarly integrity, respecting copyright, and providing a trail of knowledge (both for independent learners and open-source contributors) are top priorities.
 
 #### Execution Steps:
 

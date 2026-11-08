@@ -23,7 +23,7 @@ import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
 
-An application asks, “Which students are enrolled in each offering?” It should not need to know whether the database found those rows through a heap scan, an index, or a partition. It *does* need to know what one output row means, which rows it may see, and whether its requested order is guaranteed.
+An application asks, “Which services are running across our clusters?” It should not need to know whether the database found those rows through a heap scan, an index, or a partition. It *does* need to know what one output row means, which rows it may see, and whether its requested order is guaranteed.
 
 <MathStatement id="def-abstraction-contract" kind="definition" title="Database abstraction contract">
 An abstraction contract states the meaning and permitted observations of data at one boundary. An external contract is what a client can request and observe; a logical contract is relations, attributes, and constraints; a physical contract is the layout and access methods that implement them.
@@ -33,26 +33,26 @@ An abstraction contract states the meaning and permitted observations of data at
 
 ## One domain, three descriptions
 
-Start with a course-registration domain. The diagram is conceptual: it says a student can have many enrollment records and an offering can have many enrollment records. It deliberately says nothing about files or indexes.
+Start with a cluster-allocation domain. The diagram is conceptual: it says a tenant can have many compute allocations and a cluster can host many allocations. It deliberately says nothing about files or indexes.
 
 <PlantUML
   code={String.raw`
-class Student {
-  student_id : UUID <<PK>>
+class Tenant {
+  tenant_id : UUID <<PK>>
   display_name : text
 }
-class Enrollment {
-  student_id : UUID <<FK>>
-  offering_id : UUID <<FK>>
+class Allocation {
+  tenant_id : UUID <<FK>>
+  cluster_id : UUID <<FK>>
   status : text
 }
-class Offering {
-  offering_id : UUID <<PK>>
-  course_code : text
-  term : text
+class Cluster {
+  cluster_id : UUID <<PK>>
+  region : text
+  tier : text
 }
-Student "1" -- "0..*" Enrollment : has
-Offering "1" -- "0..*" Enrollment : records
+Tenant "1" -- "0..*" Allocation : owns
+Cluster "1" -- "0..*" Allocation : hosts
 `}
 />
 
@@ -60,11 +60,11 @@ The same domain acquires a different, sharper meaning at each layer.
 
 | Layer | Example representation | Question it answers | Deliberately not promised |
 | --- | --- | --- | --- |
-| External | `CurrentEnrollment(student_name, course_code, term)` view | What may a reporting client read? | Base-table names or access path |
-| Logical | `Student`, `Offering`, `Enrollment` with keys and foreign keys | What facts exist and how are they related? | Page layout or index choice |
-| Physical | Heap, B-tree on `(student_id, offering_id)`, partitions by term | How are logical rows stored and found? | A different result for the same logical query |
+| External | `CurrentAllocation(display_name, region, tier)` view | What may a reporting client read? | Base-table names or access path |
+| Logical | `Tenant`, `Cluster`, `Allocation` with keys and foreign keys | What facts exist and how are they related? | Page layout or index choice |
+| Physical | Heap, B-tree on `(tenant_id, cluster_id)`, partitions by region | How are logical rows stored and found? | A different result for the same logical query |
 
-> **Worked example.** The relationship in the diagram becomes `Enrollment(student_id, offering_id, status)`. Its grain is **one student's enrollment in one offering**. Its primary key can be `(student_id, offering_id)` if a student has at most one current enrollment per offering. Both columns are foreign keys. A client-facing view may join the three relations and omit identifiers, but it must preserve that stated grain.
+> **Worked example.** The relationship in the diagram becomes `Allocation(tenant_id, cluster_id, status)`. Its grain is **one tenant's allocation on one cluster**. Its primary key can be `(tenant_id, cluster_id)` if a tenant has at most one active allocation per cluster. Both columns are foreign keys. A client-facing view may join the three relations and omit identifiers, but it must preserve that stated grain.
 
 <MathStatement id="inv-physical-independence" kind="invariant" title="Physical data independence">
 Physical data independence means that if only the physical design changes, every permitted logical query and constraint has the same meaning. Cost, lock timing, and an undocumented incidental row order may change; specified semantics may not.
@@ -72,20 +72,20 @@ Physical data independence means that if only the physical design changes, every
 
 ## A view is an interface, not decoration
 
-Suppose a reporting client needs “one row per active enrollment.” This is an external contract; it needs more than a column list.
+Suppose a reporting client needs “one row per active allocation.” This is an external contract; it needs more than a column list.
 
-| Contract field | Decision for `CurrentEnrollment` |
+| Contract field | Decision for `CurrentAllocation` |
 | --- | --- |
-| Grain | One active enrollment for one student in one offering |
-| Authority | `Enrollment.status = 'enrolled'` is the source of truth for active |
-| Duplicates | Impossible if `(student_id, offering_id)` is unique; otherwise report them as a data error |
-| `NULL` | `display_name` may be absent; `student_id` and `offering_id` may not be absent |
-| Ordering | None unless the client explicitly requests `ORDER BY course_code, display_name` |
+| Grain | One active allocation for one tenant on one cluster |
+| Authority | `Allocation.status = 'active'` is the source of truth for active |
+| Duplicates | Impossible if `(tenant_id, cluster_id)` is unique; otherwise report them as a data error |
+| `NULL` | `display_name` may be absent; `tenant_id` and `cluster_id` may not be absent |
+| Ordering | None unless the client explicitly requests `ORDER BY region, display_name` |
 | Freshness and access | Reads see the database's transaction visibility rules and the caller's permissions |
 
-> **Warning.** A join does not choose the grain for you. Joining `Enrollment` to a table with one row per attendance event can turn one enrollment into many output rows. A correct-looking query can still violate the view's “one row per enrollment” promise.
+> **Warning.** A join does not choose the grain for you. Joining `Allocation` to a table with one row per telemetry metric event can turn one allocation into many output rows. A correct-looking query can still violate the view's “one row per allocation” promise.
 
-> **Counterexample.** Replacing `Offering.course_code` with a nullable free-text column may be a logical-schema change, not merely a physical one. A view that promised a non-null, validated course code now has a broken contract even if every query still parses.
+> **Counterexample.** Replacing `Cluster.region` with a nullable free-text column may be a logical-schema change, not merely a physical one. A view that promised a non-null, validated region code now has a broken contract even if every query still parses.
 
 ## Declarative request, physical plan
 
@@ -118,10 +118,10 @@ Do not overstate the boundary. Adding an index can raise write cost. Partitionin
 Keys, foreign keys, `CHECK` constraints, and `UNIQUE` constraints place facts at the database boundary so every client is checked by the same rule.
 
 <MathStatement id="def-referential-integrity" kind="definition" title="Referential integrity constraint">
-Referential integrity means that if `Enrollment.student_id` is non-null and refers to `Student(student_id)`, then a matching student row must exist when the foreign-key constraint is checked. A deferred foreign key postpones that check; it does not waive it at commit.
+Referential integrity means that if `Allocation.tenant_id` is non-null and refers to `Tenant(tenant_id)`, then a matching tenant row must exist when the foreign-key constraint is checked. A deferred foreign key postpones that check; it does not waive it at commit.
 </MathStatement>
 
-> **Worked example.** Two web requests both see one open seat and both attempt to enroll a student. An application-side “count first, then insert” check can race. The schema can at least enforce uniqueness of a student's enrollment; a capacity rule requires an atomic transaction design, which is a later topic. The abstraction lesson's point is the boundary: a constraint is checked centrally, while a client-only observation is not.
+> **Worked example.** Two web requests both see one available compute slot and both attempt to allocate a worker. An application-side “count first, then insert” check can race. The schema can at least enforce uniqueness of a tenant's allocation; a capacity rule requires an atomic transaction design, which is a later topic. The abstraction lesson's point is the boundary: a constraint is checked centrally, while a client-only observation is not.
 
 ## Change evidence: preserve meaning, measure cost
 
@@ -140,11 +140,11 @@ Use two separate checklists for a physical redesign.
 
 <Exercise id="ex-predict-order" type="verify" level="recall" title="Physical Indexing and Output Ordering">
 
-The registration office adds an index on `Enrollment(offering_id, student_id)`. A report asks for the count of enrolled students per offering but contains no `ORDER BY`. Which observations must be unchanged, and which observation must not be inferred from a successful test run?
+The platform database administrator adds an index on `Allocation(cluster_id, tenant_id)`. A report asks for the count of active allocations per cluster but contains no `ORDER BY`. Which observations must be unchanged, and which observation must not be inferred from a successful test run?
 
 <ExerciseSolution hint="Separate the requested result from the way rows were found.">
 
-The count and the set of grouped offerings must be unchanged if the index is correct. The chosen plan, page reads, and emitted row sequence need not be unchanged. Because the query has no `ORDER BY`, a test must not treat the observed output order as part of its contract.
+The count and the set of grouped clusters must be unchanged if the index is correct. The chosen plan, page reads, and emitted row sequence need not be unchanged. Because the query has no `ORDER BY`, a test must not treat the observed output order as part of its contract.
 
 </ExerciseSolution>
 
@@ -152,11 +152,11 @@ The count and the set of grouped offerings must be unchanged if the index is cor
 
 <Exercise id="ex-view-compat" type="construct" level="application" title="Schema Migration and View Grain Preservation">
 
-An existing view exposes `student_name`, `course_code`, and `term`. The team wants to split `Offering` into `Course(course_code, title)` and `Section(offering_id, course_code, term)`. State a compatible view definition and name one test case that catches a broken migration.
+An existing view exposes `display_name`, `region`, and `tier`. The team wants to split `Cluster` into `Datacenter(region, campus)` and `Cluster(cluster_id, region, tier)`. State a compatible view definition and name one test case that catches a broken migration.
 
-<ExerciseSolution hint="The client should still see the same grain and column meanings. Look for an offering whose course lookup is missing.">
+<ExerciseSolution hint="The client should still see the same grain and column meanings. Look for a cluster whose datacenter lookup is missing.">
 
-The compatible view still has one row per active enrollment and obtains `course_code` by joining `Section` to `Course` through the validated code. Test an enrollment whose section exists but whose course row is accidentally absent after migration: an inner join would silently drop the client row. Compare old and new view results, including this case, rather than comparing table counts alone.
+The compatible view still has one row per active allocation and obtains `campus` by joining `Cluster` to `Datacenter` through the validated region. Test an allocation whose cluster exists but whose datacenter row is accidentally absent after migration: an inner join would silently drop the client row. Compare old and new view results, including this case, rather than comparing table counts alone.
 
 </ExerciseSolution>
 
@@ -164,11 +164,11 @@ The compatible view still has one row per active enrollment and obtains `course_
 
 <Exercise id="ex-myschedule-contract" type="formalise" level="application" title="Declarative Client Contract Specification">
 
-A mobile application wants a view called `MySchedule`. It must show each signed-in student only their enrolled offerings, omit dropped enrollments, and display a stable time order. Specify the four contract clauses required before physical optimization.
+A management dashboard wants a view called `MyAllocations`. It must show each authenticated tenant only their active cluster allocations, omit terminated allocations, and display a stable time order. Specify the four contract clauses required before physical optimization.
 
 <ExerciseSolution hint="Use grain, authority, access, and ordering; avoid naming an index.">
 
-One sound contract is: (1) one row per enrolled offering for the authenticated student; (2) `Enrollment.status = 'enrolled'` determines inclusion; (3) authorization binds the authenticated student to `Enrollment.student_id` and does not trust a client-supplied identifier; (4) rows are ordered by the documented meeting start time and then `offering_id`. An index might help later, but it is not part of this client contract.
+One sound contract is: (1) one row per active allocation for the authenticated tenant; (2) `Allocation.status = 'active'` determines inclusion; (3) authorization binds the authenticated tenant to `Allocation.tenant_id` and does not trust a client-supplied identifier; (4) rows are ordered by allocation timestamp and then `cluster_id`. An index might help later, but it is not part of this client contract.
 
 </ExerciseSolution>
 
@@ -176,11 +176,11 @@ One sound contract is: (1) one row per enrolled offering for the authenticated s
 
 <Exercise id="ex-partition-tradeoff" type="generalise" level="transfer" title="Table Partitioning Correctness and Operational Trade-Offs">
 
-Your team proposes partitioning `Enrollment` by `term` because reports usually filter by term. Produce a design note specifying the logical rows and constraints that must remain true, one query differential test, and two operational measurements that could reveal an unfavorable trade-off.
+Your team proposes partitioning `Allocation` by `region` because reports usually filter by region. Produce a design note specifying the logical rows and constraints that must remain true, one query differential test, and two operational measurements that could reveal an unfavorable trade-off.
 
-<ExerciseSolution hint="A partition key is physical. Start from the enrollment relation's grain and foreign keys, then name costs that are not logical errors.">
+<ExerciseSolution hint="A partition key is physical. Start from the allocation relation's grain and foreign keys, then name costs that are not logical errors.">
 
-The note should preserve one enrollment per permitted `(student_id, offering_id)` pair and every checked foreign-key relationship. It can compare the old and new `CurrentEnrollment` view over boundary terms, plus test that a student cannot read another student's schedule. Useful operational measurements include cross-term query cost, insert/delete cost, lock or migration duration, and backup/restore behavior. A slower write path can reject the proposal even when every logical result matches.
+The note should preserve one allocation per permitted `(tenant_id, cluster_id)` pair and every checked foreign-key relationship. It can compare the old and new `CurrentAllocation` view over boundary regions, plus test that a tenant cannot read another tenant's allocation. Useful operational measurements include cross-region query cost, insert/delete cost, lock or migration duration, and backup/restore behavior. A slower write path can reject the proposal even when every logical result matches.
 
 </ExerciseSolution>
 

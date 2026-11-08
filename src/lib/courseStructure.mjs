@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 
-export const PAGE_KINDS = ['lesson', 'lab', 'problems', 'recap', 'practice', 'exam'];
-export const MODULE_KINDS = ['chapter', 'practice', 'exam', 'reference'];
-export const PROGRESS_PAGE_KINDS = ['lesson', 'lab', 'problems', 'practice', 'exam'];
+export const PAGE_KINDS = ['lesson', 'lab', 'problems', 'recap', 'practice'];
+export const MODULE_KINDS = ['chapter', 'practice', 'reference'];
+export const PROGRESS_PAGE_KINDS = ['lesson', 'lab', 'problems', 'practice'];
 
 export const PAGE_ICONS = {
   lesson: 'BookOpen',
@@ -12,13 +12,11 @@ export const PAGE_ICONS = {
   problems: 'PencilRuler',
   recap: 'NotebookText',
   practice: 'Sparkles',
-  exam: 'Sparkles',
 };
 
 export const MODULE_ICONS = {
   chapter: 'BookOpen',
   practice: 'Sparkles',
-  exam: 'Sparkles',
   reference: 'Library',
 };
 
@@ -101,12 +99,12 @@ export function loadCourseStructure(courseId, options = {}) {
       }
 
       // Validate module and page kind compatibility
-      if (moduleKind === 'chapter' && (pageKind === 'exam' || pageKind === 'practice')) {
+      if (moduleKind === 'chapter' && pageKind === 'practice') {
         throw new Error(
-          `[courseStructure] Chapter module "${mod.title}" in course "${courseId}" may not contain ${pageKind} page "${slug}".`
+          `[courseStructure] Chapter module "${mod.title}" in course "${courseId}" may not contain practice page "${slug}".`
         );
       }
-      if ((moduleKind === 'practice' || moduleKind === 'exam') && pageKind !== 'practice' && pageKind !== 'exam') {
+      if (moduleKind === 'practice' && pageKind !== 'practice') {
         throw new Error(
           `[courseStructure] Practice module "${mod.title}" in course "${courseId}" may only contain practice pages, found "${slug}" of kind "${pageKind}".`
         );
@@ -133,7 +131,7 @@ export function loadCourseStructure(courseId, options = {}) {
           number = null;
           label = `${moduleIndex}.R`;
         }
-      } else if (moduleKind === 'practice' || moduleKind === 'exam') {
+      } else if (moduleKind === 'practice') {
         number = null;
         label = '';
       } else if (moduleKind === 'reference') {

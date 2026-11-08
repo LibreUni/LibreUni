@@ -12,9 +12,8 @@ const courses = defineCollection({
     color: z.string(),
     image: z.string().optional(),
     status: z.enum(['public', 'draft']).default('public'),
-    // Credit is calibrated from the declared workload rather than chosen as a
-    // marketing label. Short preparatory modules may carry fractional credit.
-    ects: z.number().nonnegative().max(30),
+    // Workload hours are the primary metric. ECTS is optional for reference only.
+    ects: z.number().nonnegative().max(30).optional(),
     workloadHours: z.number().positive().optional(),
     prerequisites: z.object({
       required: z.array(z.string()),
@@ -66,15 +65,6 @@ const practiceLessonSchema = baseLessonSchema.extend({
   outcomes: z.array(z.string().min(5)).optional(),
 });
 
-const examLessonSchema = baseLessonSchema.extend({
-  kind: z.literal('exam'),
-  covers: z.array(z.string().min(1)).min(1),
-  durationMinutes: z.number().int().positive().optional(),
-  totalPoints: z.number().int().positive().optional(),
-  allowedMaterials: z.array(z.string()).optional(),
-  passMark: z.number().int().positive().optional(),
-});
-
 const lessons = defineCollection({
   loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/lessons' }),
   schema: z.discriminatedUnion('kind', [
@@ -83,7 +73,6 @@ const lessons = defineCollection({
     problemsLessonSchema,
     recapLessonSchema,
     practiceLessonSchema,
-    examLessonSchema,
   ]),
 });
 
@@ -108,7 +97,7 @@ const careers = defineCollection({
       })).min(1),
       gate: z.object({ lesson: z.string(), prompt: z.string(), criteria: z.array(z.string()).min(1) }),
     })).min(1),
-    synthesis: z.object({ title: z.string(), estimatedHours: z.number().positive(), brief: z.string(), deliverables: z.array(z.string()).min(1), criteria: z.array(z.string()).min(1), boundary: z.string() }),
+    synthesis: z.object({ title: z.string(), estimatedHours: z.number().positive(), brief: z.string(), artifacts: z.array(z.string()).min(1), criteria: z.array(z.string()).min(1), boundary: z.string() }),
   }),
 });
 

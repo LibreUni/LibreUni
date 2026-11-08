@@ -12,11 +12,11 @@ LibreUni models curriculum at four scales:
 
 ```mermaid
 flowchart TD
-  C["Course (Book) - Leitmotif, audience, prerequisites, dependency graph, notation"] --> M["Module (Chapter, Exam, or Reference)"]
+  C["Course (Book) - Leitmotif, audience, prerequisites, dependency graph, notation"] --> M["Module (Chapter, Practice, or Reference)"]
   M --> K["Core Lesson or Lab (m.s) - Formal exposition, definitions, proofs, 4-8 section exercises"]
   M --> PS["Problem Set (m.P) - 10-20 chapter synthesis, transfer, and challenge problems"]
   M --> RC["Recap Sheet (m.R) - Condensed summary, method chooser, hypothesis checklist, common errors"]
-  M --> EX["Exam Paper (Unnumbered) - Timed assessment with questions and isolated marking schemes"]
+  M --> PR["Practice Workshop (Unnumbered) - Algorithmic generator with hints and step-by-step solutions"]
   K --> S["Section Arc: Why → Definition → Commentary → Examples → Non-example → Theorems → Exercises"]
   S --> B["Typed Blocks: Definition, Theorem, Lemma, Invariant, Proof, Example, Figure, Exercise"]
 ```
@@ -24,10 +24,10 @@ flowchart TD
 | Level | Physical Unit | Architectural Role | Reference Equivalent |
 | --- | --- | --- | --- |
 | **Course** | `course-manifests/<course-id>.yml` & `courses/<course-id>.json` | Book-scale learning journey with a central leitmotif and dependency structure | Reference textbook (e.g. Abbott *Understanding Analysis*) |
-| **Module** | Manifest module entry (`modules: [...]`) | Thematic chapter, exam checkpoint, or reference appendix | Book chapter or exam checkpoint |
-| **Page** | Single MDX document (`lessons/<course>/<slug>.mdx`) | Typed learning unit: `lesson`, `lab`, `problems`, `recap`, or `exam` | Section, problem set, recap sheet, or exam paper |
+| **Module** | Manifest module entry (`modules: [...]`) | Thematic chapter, practice workshop, or reference appendix | Book chapter or capstone practice |
+| **Page** | Single MDX document (`lessons/<course>/<slug>.mdx`) | Typed learning unit: `lesson`, `lab`, `problems`, `recap`, or `practice` | Section, problem set, recap sheet, or practice generator |
 | **Subsection** | Markdown `## H2` | Navigable topic noun block | Section subsection |
-| **Block** | Statement, Proof, Diagram, Figure, Exercise, Problem, Question | Addressable, typed semantic entity with generated numbering | Numbered theorem/example/figure/exercise |
+| **Block** | Statement, Proof, Diagram, Figure, Exercise, Problem | Addressable, typed semantic entity with generated numbering | Numbered theorem/example/figure/exercise |
 
 ---
 
@@ -42,11 +42,8 @@ Every manifest module and content document declares an explicit architectural `k
    - Contains a sequence of `lesson` or `lab` pages, concluded by a chapter `problems` page and an epilogue `recap` page.
 2. **`practice` (Comprehensive Self-Check Workshop):**
    - Interactive algorithmic problem generator module (`<PracticeGenerator>`). Unnumbered (`index: null`).
-   - Contains solely `practice` pages.
-3. **`exam` (Milestone Assessment Checkpoint):**
-   - Formal examination module (e.g. Midterm, Final). Unnumbered (`index: null`).
-   - Contains solely `exam` pages.
-4. **`reference` (Course Appendix / Toolkit):**
+   - Contains solely `practice` pages with infinite randomized question generation, progressive hints, and complete step-by-step worked solutions.
+3. **`reference` (Course Appendix / Toolkit):**
    - Reference and notation compendia. Unnumbered (`index: null`).
    - Contains solely `recap` pages.
 
@@ -59,9 +56,10 @@ Every manifest module and content document declares an explicit architectural `k
 | `problems` | `chapter` | $m.\text{P}$ (does not increment $s$) | 10–20 deep synthesis problems in `<ProblemSet>` covering the chapter. Uses `<Problem>` and `<ExerciseSolution>`. |
 | `recap` | `chapter` or `reference` | $m.\text{R}$ (does not increment $s$) | Hand-condensed summary sheet. Method chooser, hypothesis checklist with counterexamples, typical errors, thumbnail `<Figure>`. Uses `<Ref>` for all statements. |
 | `practice` | `practice` | Unnumbered | Interactive algorithmic problem generator (`<PracticeGenerator>`) with randomized parameters, progressive hints, and step-by-step worked solutions. |
-| `exam` | `exam` | Unnumbered (e.g. `Midterm`) | Timed examination paper. `<ExamAttempt>` interactive island, `<ExamQuestion>` items with points and sealed `<MarkingScheme>` disclosures. |
 
-**Crucial Invariant:** `<MathStatement>` is permitted **only** on `lesson` and `lab` pages. `problems`, `recap`, and `exam` pages reference statements via `<Ref id="...">`; they never redefine them.
+**Crucial Invariant:** `<MathStatement>` is permitted **only** on `lesson` and `lab` pages. `problems`, `recap`, and `practice` pages reference statements via `<Ref id="...">`; they never redefine them.
+
+> **Open Digital Learning Philosophy (D-0017):** LibreUni is an open digital curriculum platform, not a physical university. Never assume learners are students in a classroom, cohort, semester, or academic year. Never write or retain physical university terminology ("students", "professors", "instructors", "TAs", "office hours", "semesters", "deliverables", "submitting/submissions", "grading rubrics", "oral defense", "human reviewer", "passing grade"). Timed exam hall simulations with countdown timers and point scoring are abolished in favor of self-paced, constructive algorithmic practice (`<PracticeGenerator>`). All topics are non-sequential reference units accessible in any order.
 
 ---
 
@@ -110,8 +108,7 @@ All formal claims, definitions, and highlights belong to the unified Statement a
   - Exercises on lessons/labs: `Exercise m.s.i`.
   - Problems on problem sets: `Problem m.P.i`.
   - Figures: `Figure m.s.i` on lessons, `Figure m.P.i` on problems, `Figure m.R.i` on recaps.
-  - Exam Questions: `Question i` (scoped to the exam paper).
-- Non-chapter modules (`exam`, `reference`) have index `null` and do not consume chapter numbers.
+- Non-chapter modules (`practice`, `reference`) have index `null` and do not consume chapter numbers.
 
 ### Resolvable Cross-References (`<Ref>`)
 

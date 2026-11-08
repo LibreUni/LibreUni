@@ -163,15 +163,12 @@ These are Astro components and do not need `client:load`.
 | `Math` | A KaTeX-rendered inline or display formula | `math`, optional `block` |
 | `MathStatement` | A semantic definition, lemma, theorem, proposition, corollary, invariant, example, or remark with stable linking | `id`, `title`, optional `kind`, `proofId`, `dependsOn` |
 | `MathProof` | A proof linked back to its statement, optionally collapsible | `id`, `for`, optional `title`, `collapsible`, `open` |
-| `Ref` | Dynamic semantic link with hover popover preview to any statement, exercise, problem, figure, or exam question | `id` |
+| `Ref` | Dynamic semantic link with hover popover preview to any statement, exercise, problem, or figure | `id` |
 | `ExerciseSet` | Concluding exercise set on lesson/lab pages (4–8 items) | slot |
 | `Exercise` | Practice exercise item on lesson/lab pages | `id`, `title`, optional `type`, `level`, `challenge` |
 | `ProblemSet` | Problem set container on chapter `problems` pages (10–20 items) | slot |
 | `Problem` | Practice problem item on `problems` pages | `id`, `title`, optional `type`, `level`, `challenge`, `covers` |
 | `PracticeGenerator` | Interactive question generator with parameter randomization, progressive hints, and worked solutions | `client:load`, `courseId` |
-| `ExamAttempt` | Interactive island controlling timed examination attempt, state persistence, and isolated marking reveal | `client:load` |
-| `ExamQuestion` | Examination question card | `id`, `points`, `covers` |
-| `MarkingScheme` | Isolated scoring breakdown and model answer inside `ExamQuestion` (revealed only upon finishing attempt) | slot |
 | `ExerciseSolution` | Collapsible solution card with optional hint disclosure for self-checks | optional `hint`, `title`, `hintTitle` |
 
 Prefer a diagram or figure when it communicates relationships more clearly than prose. Keep source code deterministic and bounded. A diagram is not a substitute for explaining the model it represents.
@@ -213,24 +210,9 @@ import Problem from '../../../components/Problem.astro';
 </ProblemSet>
 ```
 
-### Examinations and Isolated Marking Schemes (`<ExamAttempt>`, `<ExamQuestion>`, `<MarkingScheme>`)
+### Practice Generators vs Abolished Timed Examinations (D-0017)
 
-Use on `exam` pages. The `<ExamAttempt client:load />` island manages the attempt lifecycle (*not started → in progress → finished*). In strict adherence to D-0012, marking schemes are server-rendered with `hidden` and become visible **only on that exam page after the learner confirms "Finish attempt"**.
-
-```mdx
-import ExamAttempt from '../../../components/ExamAttempt';
-import ExamQuestion from '../../../components/ExamQuestion.astro';
-import MarkingScheme from '../../../components/MarkingScheme.astro';
-
-<ExamAttempt client:load />
-
-<ExamQuestion id="q1-proof" points={15} covers={["limits"]}>
-  Question prompt...
-  <MarkingScheme>
-    Point breakdown and model answer...
-  </MarkingScheme>
-</ExamQuestion>
-```
+Per **D-0017**, timed examination halls, countdown clocks, proctoring states, points tallies, and marking schemes (`<ExamAttempt>`, `<ExamQuestion>`, `<MarkingScheme>`) are completely abolished from LibreUni. Practice is self-paced, generative, and mastery-driven via `<PracticeGenerator client:load courseId="..." />`. All practice modules across courses (`calculus-intro`, `database-systems`, `computer-architecture`, `operating-systems`) use `<PracticeGenerator>` with randomized parameters, progressive hints, concise answers, and complete worked derivations.
 
 ### Interconnected mathematical statements and proofs
 

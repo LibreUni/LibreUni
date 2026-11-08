@@ -1,6 +1,7 @@
 ---
 title: "SQL lab: build and verify a registration report"
 course: database-systems
+kind: lab
 description: Use a deterministic registration fixture to execute and explain joins, grouped reports, anti-joins, and schema constraints.
 prerequisites:
   - "SQL querying: joins, clause order, grouping, NULL, and `NOT EXISTS`"
@@ -12,7 +13,7 @@ outcomes:
 omissions:
   - The browser runner executes read-only SQLite against the fixed fixture. It does not provide a PostgreSQL planner, multi-statement mutation, production deployment, transaction-concurrency testing, or vendor portability certification.
 estimatedMinutes: 720
-assessment: Submit a query portfolio containing a result contract, SQL, predicted and observed edge-case rows, constraint tests, and a brief explanation of one plan observation.
+assessment: Construct a query portfolio containing a result contract, SQL, predicted and observed edge-case rows, constraint tests, and a brief explanation of one plan observation.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 import ExerciseSet from '../../../components/ExerciseSet.astro';
@@ -29,16 +30,16 @@ Every task uses the same fixed fixture and expected edge cases. The embedded run
 | In-browser SQLite runner | executable join, grouping, and `NOT EXISTS` result semantics for this fixture | PostgreSQL-specific planner, MVCC, constraint error text, or isolation behavior |
 | PostgreSQL 18 fixture | PostgreSQL syntax, constraints, `FILTER`, and an observed `EXPLAIN` plan | behavior of other engines or every workload |
 
-Record the engine and version with every observed result. In the runner, `SELECT sqlite_version();` reports the bundled SQLite version. Do not submit SQLite output as evidence that a PostgreSQL-specific statement or plan executed.
+Record the engine and version with every observed result. In the runner, `SELECT sqlite_version();` reports the bundled SQLite version. Do not use SQLite output as evidence that a PostgreSQL-specific statement or plan executed.
 
 > **Definition.** A lab result contract states the output grain, inclusion rules, ordering, and test rows before execution. A query is not complete because it returns plausible rows on a happy-path dataset.
 
 ## Lab brief and evidence checklist
 
-| Deliverable | What to include | Evidence of success |
+| Artifact | What to include | Evidence of success |
 | --- | --- | --- |
-| Zero-safe enrollment report | Contract, query, predicted table | Offerings with zero enrolled students remain |
-| Anti-join | Contract, query, predicted table | A student with only an old enrollment is correctly included |
+| Zero-safe allocation report | Contract, query, predicted table | Offerings with zero active allocations remain |
+| Anti-join | Contract, query, predicted table | A client with only an other-region allocation is correctly included |
 | Constraint probes | Four deliberately invalid writes | Each is rejected by the intended key, foreign key, or check |
 | Plan observation (optional) | `EXPLAIN` output and one cautious claim | A measured plan fact, not a promise that all data will use that plan |
 
@@ -51,47 +52,47 @@ Record the engine and version with every observed result. In the runner, `SELECT
 The browser runner below loads this fixture into SQLite automatically. To test PostgreSQL-specific behavior, load these statements into a disposable PostgreSQL database; the tables also support hand tracing.
 
 ```sql
-CREATE TABLE student (
-  student_id   integer PRIMARY KEY,
+CREATE TABLE client (
+  client_id    integer PRIMARY KEY,
   display_name text NOT NULL
 );
 
 CREATE TABLE offering (
   offering_id integer PRIMARY KEY,
   code        text NOT NULL,
-  term        text NOT NULL,
+  region      text NOT NULL,
   capacity    integer NOT NULL CHECK (capacity >= 0)
 );
 
-CREATE TABLE enrollment (
-  student_id  integer NOT NULL REFERENCES student(student_id),
+CREATE TABLE allocation (
+  client_id   integer NOT NULL REFERENCES client(client_id),
   offering_id integer NOT NULL REFERENCES offering(offering_id),
-  status      text NOT NULL CHECK (status IN ('enrolled', 'waitlisted', 'dropped')),
-  grade       integer CHECK (grade IS NULL OR grade BETWEEN 0 AND 100),
-  PRIMARY KEY (student_id, offering_id)
+  status      text NOT NULL CHECK (status IN ('active', 'queued', 'suspended')),
+  memory_gb   integer CHECK (memory_gb IS NULL OR memory_gb BETWEEN 0 AND 100),
+  PRIMARY KEY (client_id, offering_id)
 );
 
-INSERT INTO student (student_id, display_name) VALUES
+INSERT INTO client (client_id, display_name) VALUES
   (1, 'Ada'), (2, 'Bo'), (3, 'Cy'), (4, 'Dee');
 
-INSERT INTO offering (offering_id, code, term, capacity) VALUES
-  (10, 'DB101', '2026S', 2),
-  (11, 'DB201', '2026S', 1),
-  (12, 'DB301', '2026S', 2),
-  (13, 'DB101', '2025F', 2);
+INSERT INTO offering (offering_id, code, region, capacity) VALUES
+  (10, 'DB101', 'us-east-1', 2),
+  (11, 'DB201', 'us-east-1', 1),
+  (12, 'DB301', 'us-east-1', 2),
+  (13, 'DB101', 'us-west-2', 2);
 
-INSERT INTO enrollment (student_id, offering_id, status, grade) VALUES
-  (1, 10, 'enrolled', 87),
-  (2, 10, 'dropped', 40),
-  (3, 11, 'waitlisted', NULL),
-  (4, 13, 'enrolled', 93);
+INSERT INTO allocation (client_id, offering_id, status, memory_gb) VALUES
+  (1, 10, 'active', 87),
+  (2, 10, 'suspended', 40),
+  (3, 11, 'queued', NULL),
+  (4, 13, 'active', 93);
 ```
 
 | Relation | Fixture facts |
 | --- | --- |
-| `student` | Ada, Bo, Cy, and Dee exist |
-| `offering` | DB101, DB201, DB301 are in 2026S; DB101 also has an older 2025F offering |
-| `enrollment` | Ada is enrolled in current DB101; Bo is dropped; Cy is waitlisted; Dee is enrolled only in the old term |
+| `client` | Ada, Bo, Cy, and Dee exist |
+| `offering` | DB101, DB201, DB301 are in us-east-1; DB101 also has an older us-west-2 offering |
+| `allocation` | Ada has active allocation in DB101; Bo is suspended; Cy is queued; Dee has active allocation only in us-west-2 |
 
 ### Execute the fixture
 
@@ -99,62 +100,62 @@ The runner creates the tables and rows above in SQLite. Predict the warm-up repo
 
 <SqlRunner
   client:load
-  title="Registration fixture"
-  description="Count enrolled students per 2026S offering. Predict three rows, including the zero counts, before running."
-  schema={`CREATE TABLE student (
-  student_id   integer PRIMARY KEY,
+  title="Service allocation fixture"
+  description="Count active allocations per us-east-1 offering. Predict three rows, including the zero counts, before running."
+  schema={`CREATE TABLE client (
+  client_id    integer PRIMARY KEY,
   display_name text NOT NULL
 );
 CREATE TABLE offering (
   offering_id integer PRIMARY KEY,
   code        text NOT NULL,
-  term        text NOT NULL,
+  region      text NOT NULL,
   capacity    integer NOT NULL CHECK (capacity >= 0)
 );
-CREATE TABLE enrollment (
-  student_id  integer NOT NULL REFERENCES student(student_id),
+CREATE TABLE allocation (
+  client_id   integer NOT NULL REFERENCES client(client_id),
   offering_id integer NOT NULL REFERENCES offering(offering_id),
-  status      text NOT NULL CHECK (status IN ('enrolled', 'waitlisted', 'dropped')),
-  grade       integer CHECK (grade IS NULL OR grade BETWEEN 0 AND 100),
-  PRIMARY KEY (student_id, offering_id)
+  status      text NOT NULL CHECK (status IN ('active', 'queued', 'suspended')),
+  memory_gb   integer CHECK (memory_gb IS NULL OR memory_gb BETWEEN 0 AND 100),
+  PRIMARY KEY (client_id, offering_id)
 );
-INSERT INTO student (student_id, display_name) VALUES
+INSERT INTO client (client_id, display_name) VALUES
   (1, 'Ada'), (2, 'Bo'), (3, 'Cy'), (4, 'Dee');
-INSERT INTO offering (offering_id, code, term, capacity) VALUES
-  (10, 'DB101', '2026S', 2),
-  (11, 'DB201', '2026S', 1),
-  (12, 'DB301', '2026S', 2),
-  (13, 'DB101', '2025F', 2);
-INSERT INTO enrollment (student_id, offering_id, status, grade) VALUES
-  (1, 10, 'enrolled', 87),
-  (2, 10, 'dropped', 40),
-  (3, 11, 'waitlisted', NULL),
-  (4, 13, 'enrolled', 93);`}
+INSERT INTO offering (offering_id, code, region, capacity) VALUES
+  (10, 'DB101', 'us-east-1', 2),
+  (11, 'DB201', 'us-east-1', 1),
+  (12, 'DB301', 'us-east-1', 2),
+  (13, 'DB101', 'us-west-2', 2);
+INSERT INTO allocation (client_id, offering_id, status, memory_gb) VALUES
+  (1, 10, 'active', 87),
+  (2, 10, 'suspended', 40),
+  (3, 11, 'queued', NULL),
+  (4, 13, 'active', 93);`}
   initialQuery={`SELECT o.code,
-       COUNT(e.student_id) AS enrolled_count
+       COUNT(a.client_id) AS active_allocations
 FROM offering AS o
-LEFT JOIN enrollment AS e
-  ON e.offering_id = o.offering_id
- AND e.status = 'enrolled'
-WHERE o.term = '2026S'
+LEFT JOIN allocation AS a
+  ON a.offering_id = o.offering_id
+ AND a.status = 'active'
+WHERE o.region = 'us-east-1'
 GROUP BY o.offering_id, o.code
 ORDER BY o.code;`}
 />
 
-> **Invariant.** `enrollment` has grain “one student's status in one offering.” Its composite primary key forbids two simultaneous rows for the same student/offering pair. The foreign keys forbid an enrollment for an unknown student or offering.
+> **Invariant.** `allocation` has grain “one client's status in one service offering.” Its composite primary key forbids two simultaneous rows for the same client/offering pair. The foreign keys forbid an allocation for an unknown client or offering.
 
 ### Warm-up prediction
 
-Before writing SQL, list the 2026S offerings and the count of rows whose status is `enrolled`. Do not count `dropped` or `waitlisted` rows.
+Before writing SQL, list the us-east-1 offerings and the count of rows whose status is `active`. Do not count `suspended` or `queued` rows.
 
-<ExerciseSolution hint="Filter the enrollment rows by status first, then keep every current-term offering.">
+<ExerciseSolution hint="Filter the allocation rows by status first, then keep every current-region offering.">
 
-The desired report has DB101 with count 1, DB201 with count 0, and DB301 with count 0. The fixed fixture has no enrolled row for DB201 or DB301. This table is the oracle for the first task, not an optional afterthought.
+The desired report has DB101 with count 1, DB201 with count 0, and DB301 with count 0. The fixed fixture has no active row for DB201 or DB301. This table is the oracle for the first task, not an optional afterthought.
 </ExerciseSolution>
 
-## Task 1: keep offerings with zero enrolled students
+## Task 1: keep offerings with zero active allocations
 
-**Result contract:** one row per offering in `2026S`, including offerings with no enrolled students; columns are `offering_id`, `code`, `enrolled_count`, and `is_full`; ordered by code then offering ID.
+**Result contract:** one row per offering in `us-east-1`, including offerings with no active allocations; columns are `offering_id`, `code`, `active_allocations`, and `is_full`; ordered by code then offering ID.
 
 Start with this skeleton. Decide where the status condition belongs before running it.
 
@@ -163,108 +164,108 @@ Start with this skeleton. Decide where the status condition belongs before runni
   title="Complete the matching and grouping contract"
   code={String.raw`SELECT o.offering_id,
        o.code,
-       [!blank!] AS enrolled_count,
+       [!blank!] AS active_allocations,
        [!blank!] AS is_full
 FROM offering AS o
-LEFT JOIN enrollment AS e
-  [!blank!] e.offering_id = o.offering_id
- AND e.status = 'enrolled'
-WHERE o.term = '2026S'
+LEFT JOIN allocation AS a
+  [!blank!] a.offering_id = o.offering_id
+ AND a.status = 'active'
+WHERE o.region = 'us-east-1'
 [!blank!] o.offering_id, o.code, o.capacity
 ORDER BY o.code, o.offering_id`}
-  answers={["COUNT(e.student_id)", "COUNT(e.student_id) >= o.capacity", "ON", "GROUP BY"]}
-  explanation="`COUNT(e.student_id)` counts only real matches, so a null-extended offering reports zero; compare that count with capacity for `is_full`. The status predicate belongs in `ON`: moving it to `WHERE` removes the offerings this report must include. `GROUP BY` states the one-row-per-offering grain."
+  answers={["COUNT(a.client_id)", "COUNT(a.client_id) >= o.capacity", "ON", "GROUP BY"]}
+  explanation="`COUNT(a.client_id)` counts only real matches, so a null-extended offering reports zero; compare that count with capacity for `is_full`. The status predicate belongs in `ON`: moving it to `WHERE` removes the offerings this report must include. `GROUP BY` states the one-row-per-offering grain."
 />
 
 ```sql
 SELECT o.offering_id,
        o.code,
-       COUNT(e.student_id) AS enrolled_count,
-       COUNT(e.student_id) >= o.capacity AS is_full
+       COUNT(a.client_id) AS active_allocations,
+       COUNT(a.client_id) >= o.capacity AS is_full
 FROM offering AS o
-LEFT JOIN enrollment AS e
-  ON e.offering_id = o.offering_id
- AND e.status = 'enrolled'
-WHERE o.term = '2026S'
+LEFT JOIN allocation AS a
+  ON a.offering_id = o.offering_id
+ AND a.status = 'active'
+WHERE o.region = 'us-east-1'
 GROUP BY o.offering_id, o.code, o.capacity
 ORDER BY o.code, o.offering_id;
 ```
 
-> **Worked example.** The left join emits each 2026S offering even when no enrolled right row exists. `COUNT(e.student_id)` ignores the null-extended value, so it produces zero for DB201 and DB301; `COUNT(*)` would instead count the left row and be wrong for this contract.
+> **Worked example.** The left join emits each us-east-1 offering even when no active right row exists. `COUNT(a.client_id)` ignores the null-extended value, so it produces zero for DB201 and DB301; `COUNT(*)` would instead count the left row and be wrong for this contract.
 
 | Expected `Task 1` result |  |  |  |
 | --- | --- | --- | --- |
-| `offering_id` | `code` | `enrolled_count` | `is_full` |
+| `offering_id` | `code` | `active_allocations` | `is_full` |
 | 10 | DB101 | 1 | false |
 | 11 | DB201 | 0 | false |
 | 12 | DB301 | 0 | false |
 
 ### Break it on purpose
 
-Move `e.status = 'enrolled'` into `WHERE`, then predict the result. Why is DB201 absent even though it has an enrollment row?
+Move `a.status = 'active'` into `WHERE`, then predict the result. Why is DB201 absent even though it has an allocation row?
 
 <ExerciseSolution hint="`WHERE` filters after NULL extension and after the right-side status is visible.">
 
-Only DB101 remains. DB201's only match has status `waitlisted`, so the `WHERE` predicate is false; DB301 has a null-extended status, so the predicate is `UNKNOWN`. Both are removed. The query has changed from “all offerings, count enrolled matches” to “offerings with at least one enrolled match.”
+Only DB101 remains. DB201's only match has status `queued`, so the `WHERE` predicate is false; DB301 has a null-extended status, so the predicate is `UNKNOWN`. Both are removed. The query has changed from “all offerings, count active matches” to “offerings with at least one active match.”
 </ExerciseSolution>
 
-> **Counterexample.** A query can be syntactically valid, return a count, and still fail the report contract. A test dataset containing only offerings with enrolled students would not expose this `ON`/`WHERE` bug; zero and nonqualifying cases must be seeded deliberately.
+> **Counterexample.** A query can be syntactically valid, return a count, and still fail the report contract. A test dataset containing only offerings with active allocations would not expose this `ON`/`WHERE` bug; zero and nonqualifying cases must be seeded deliberately.
 
-## Task 2: find students with no current enrollment
+## Task 2: find clients with no active allocation in region us-east-1
 
-**Result contract:** one row per student who has no `enrolled` registration in a 2026S offering; ordered by student ID.
+**Result contract:** one row per client who has no `active` allocation in a us-east-1 offering; ordered by client ID.
 
 Complete the absence test, then compare your result with the fixture.
 
 <CodeExercise
   client:load
   title="Reconstruct the correlated absence test"
-  code={String.raw`SELECT s.student_id, s.display_name
-FROM student AS s
+  code={String.raw`SELECT c.client_id, c.display_name
+FROM client AS c
 WHERE [!blank!] (
   SELECT 1
-  FROM enrollment AS e
-  JOIN offering AS o ON o.offering_id = e.offering_id
+  FROM allocation AS a
+  JOIN offering AS o ON o.offering_id = a.offering_id
   WHERE [!blank!]
-    AND e.status = 'enrolled'
-    AND o.term = '2026S'
+    AND a.status = 'active'
+    AND o.region = 'us-east-1'
 );`}
-  answers={["NOT EXISTS", "e.student_id = s.student_id"]}
-  explanation="`NOT EXISTS` states the required absence directly and is NULL-safe. The correlated equality is what binds the subquery to one outer student; without it the subquery answers a global question instead of a per-student one."
+  answers={["NOT EXISTS", "a.client_id = c.client_id"]}
+  explanation="`NOT EXISTS` states the required absence directly and is NULL-safe. The correlated equality is what binds the subquery to one outer client; without it the subquery answers a global question instead of a per-client one."
 />
 
 ```sql
-SELECT s.student_id, s.display_name
-FROM student AS s
+SELECT c.client_id, c.display_name
+FROM client AS c
 WHERE NOT EXISTS (
   SELECT 1
-  FROM enrollment AS e
-  JOIN offering AS o ON o.offering_id = e.offering_id
-  WHERE e.student_id = s.student_id
-    AND e.status = 'enrolled'
-    AND o.term = '2026S'
+  FROM allocation AS a
+  JOIN offering AS o ON o.offering_id = a.offering_id
+  WHERE a.client_id = c.client_id
+    AND a.status = 'active'
+    AND o.region = 'us-east-1'
 )
-ORDER BY s.student_id;
+ORDER BY c.client_id;
 ```
 
-> **Worked example.** Bo is included because dropped is not enrolled. Cy is included because waitlisted is not enrolled. Dee is included because the only enrolled row is in 2025F. Ada is excluded because the correlated subquery finds current DB101.
+> **Worked example.** Bo is included because suspended is not active. Cy is included because queued is not active. Dee is included because the only active row is in us-west-2. Ada is excluded because the correlated subquery finds current DB101.
 
 | Expected `Task 2` result |  |
 | --- | --- |
-| `student_id` | `display_name` |
+| `client_id` | `display_name` |
 | 2 | Bo |
 | 3 | Cy |
 | 4 | Dee |
 
-> **Warning.** Do not replace this query with `NOT IN (SELECT student_id FROM enrollment)` without a precise proof about NULL and the omitted term/status conditions. `NOT EXISTS` states the required correlated absence directly.
+> **Warning.** Do not replace this query with `NOT IN (SELECT client_id FROM allocation)` without a precise proof about NULL and the omitted region/status conditions. `NOT EXISTS` states the required correlated absence directly.
 
 ### Change the requirement
 
-The registrar changes “no current enrollment” to “no current **or waitlisted** registration.” Which predicate changes, and which expected row disappears?
+The platform policy changes “no active allocation” to “no active **or queued** allocation.” Which predicate changes, and which expected row disappears?
 
-<ExerciseSolution hint="The term boundary is unchanged. Only the accepted enrollment states change.">
+<ExerciseSolution hint="The region boundary is unchanged. Only the accepted allocation states change.">
 
-Change the correlated condition to `e.status IN ('enrolled', 'waitlisted')`. Cy disappears because Cy is waitlisted in DB201 for 2026S. Bo remains because dropped is still excluded; Dee remains because the only row is in 2025F.
+Change the correlated condition to `a.status IN ('active', 'queued')`. Cy disappears because Cy is queued in DB201 for us-east-1. Bo remains because suspended is still excluded; Dee remains because the only row is in us-west-2.
 </ExerciseSolution>
 
 ## Task 3: test the schema, not just the queries
@@ -273,15 +274,15 @@ For each proposed write, predict the intended rejection. In a local PostgreSQL l
 
 | Proposed fact | Constraint that should reject it |
 | --- | --- |
-| Add a second `(1, 10, 'enrolled', 91)` row | Composite primary key on `(student_id, offering_id)` |
-| Add `(1, 999, 'enrolled', 91)` | Foreign key to `offering` |
-| Add `(1, 11, 'enrolled', -4)` | Grade check |
-| Add `(1, 11, 'enrolled', 101)` | Grade check |
+| Add a second `(1, 10, 'active', 91)` row | Composite primary key on `(client_id, offering_id)` |
+| Add `(1, 999, 'active', 91)` | Foreign key to `offering` |
+| Add `(1, 11, 'active', -4)` | Memory allocation range check |
+| Add `(1, 11, 'active', 101)` | Memory allocation range check |
 
 ```sql
 BEGIN;
-INSERT INTO enrollment (student_id, offering_id, status, grade)
-VALUES (1, 999, 'enrolled', 91);
+INSERT INTO allocation (client_id, offering_id, status, memory_gb)
+VALUES (1, 999, 'active', 91);
 -- PostgreSQL reports a foreign-key violation here.
 ROLLBACK;
 ```
@@ -290,11 +291,11 @@ ROLLBACK;
 
 ### Diagnose a missing rule
 
-The school now says “a full offering may not gain another enrolled student.” Can you express that correctly with the existing row-local `CHECK` constraints? State what is missing from the lab design.
+The infrastructure team now says “a full offering may not gain another active allocation.” Can you express that correctly with the existing row-local `CHECK` constraints? State what is missing from the lab design.
 
-<ExerciseSolution hint="Capacity depends on multiple enrollment rows, but a CHECK sees its own row's values.">
+<ExerciseSolution hint="Capacity depends on multiple allocation rows, but a CHECK sees its own row's values.">
 
-No. `capacity` and the count of enrolled rows live in different rows/relations, so an ordinary row-local check cannot safely compare them. The design needs a transaction-aware enrollment operation or another coordinated integrity mechanism, plus concurrency tests. This lab intentionally stops before transaction isolation and does not pretend a check constraint solves it.
+No. `capacity` and the count of active allocation rows live in different rows/relations, so an ordinary row-local check cannot safely compare them. The design needs a transaction-aware allocation operation or another coordinated integrity mechanism, plus concurrency tests. This lab intentionally stops before transaction isolation and does not pretend a check constraint solves it.
 </ExerciseSolution>
 
 ## Task 4: make a cautious plan observation (optional)
@@ -305,12 +306,12 @@ Run the zero-safe report with PostgreSQL's read-only plan command:
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT o.offering_id,
        o.code,
-       COUNT(e.student_id) AS enrolled_count
+       COUNT(a.client_id) AS active_allocations
 FROM offering AS o
-LEFT JOIN enrollment AS e
-  ON e.offering_id = o.offering_id
- AND e.status = 'enrolled'
-WHERE o.term = '2026S'
+LEFT JOIN allocation AS a
+  ON a.offering_id = o.offering_id
+ AND a.status = 'active'
+WHERE o.region = 'us-east-1'
 GROUP BY o.offering_id, o.code
 ORDER BY o.code, o.offering_id;
 ```
@@ -323,18 +324,18 @@ Record exactly one observation that the output supports, such as “on this four
 
 <Exercise id="ex-lab-conditional-aggregation" type="construct" level="application" title="Conditional Aggregation with Status Filtering">
 
-Write a PostgreSQL query against `offering(offering_id, code, term)` and `enrollment(student_id, offering_id, status)` that reports `(code, enrolled_count, waitlisted_count)` for all 2026S offerings, preserving offerings with zero registrations. Use standard SQL aggregate `FILTER` clauses.
+Write a PostgreSQL query against `offering(offering_id, code, region)` and `allocation(client_id, offering_id, status)` that reports `(code, active_count, queued_count)` for all us-east-1 offerings, preserving offerings with zero allocations. Use standard SQL aggregate `FILTER` clauses.
 
-<ExerciseSolution hint="Use a LEFT JOIN from offering to enrollment and aggregate using FILTER (WHERE ...).">
+<ExerciseSolution hint="Use a LEFT JOIN from offering to allocation and aggregate using FILTER (WHERE ...).">
 
 ```sql
 SELECT o.code,
-       COUNT(*) FILTER (WHERE e.status = 'enrolled') AS enrolled_count,
-       COUNT(*) FILTER (WHERE e.status = 'waitlisted') AS waitlisted_count
+       COUNT(*) FILTER (WHERE a.status = 'active') AS active_count,
+       COUNT(*) FILTER (WHERE a.status = 'queued') AS queued_count
 FROM offering AS o
-LEFT JOIN enrollment AS e
-  ON e.offering_id = o.offering_id
-WHERE o.term = '2026S'
+LEFT JOIN allocation AS a
+  ON a.offering_id = o.offering_id
+WHERE o.region = 'us-east-1'
 GROUP BY o.offering_id, o.code
 ORDER BY o.code;
 ```
@@ -346,7 +347,7 @@ ORDER BY o.code;
 
 <Exercise id="ex-lab-multi-row-check-invariant" type="verify" level="application" title="Capacity Check Constraint Scope Limitation">
 
-A developer attempts to enforce an offering capacity limit by writing `CHECK ((SELECT COUNT(*) FROM enrollment e WHERE e.offering_id = offering_id) <= capacity)` inside a table definition. Verify why standard SQL rejects or fails to guarantee this constraint under concurrent transactions.
+A developer attempts to enforce an offering capacity limit by writing `CHECK ((SELECT COUNT(*) FROM allocation a WHERE a.offering_id = offering_id) <= capacity)` inside a table definition. Verify why standard SQL rejects or fails to guarantee this constraint under concurrent transactions.
 
 <ExerciseSolution hint="Check constraints are evaluated strictly on the single modified row and cannot safely query dynamic foreign tables.">
 
@@ -368,14 +369,14 @@ For small relations occupying a single disk page, a sequential scan reads the si
 
 </Exercise>
 
-<Exercise id="ex-lab-dual-status-report-transfer" type="generalise" level="transfer" title="Multi-Status Enrollment Reporting with Null Preservation">
+<Exercise id="ex-lab-dual-status-report-transfer" type="generalise" level="transfer" title="Multi-Status Allocation Reporting with Null Preservation">
 
-Design test cases for the multi-status registration query. Identify two adversarial seed rows that expose bugs in: (1) moving status checks to `WHERE`, and (2) using unfiltered `COUNT(*)`.
+Design test cases for the multi-status allocation query. Identify two adversarial seed rows that expose bugs in: (1) moving status checks to `WHERE`, and (2) using unfiltered `COUNT(*)`.
 
-<ExerciseSolution hint="Provide an offering with only dropped enrollments, and an offering with zero enrollments.">
+<ExerciseSolution hint="Provide an offering with only suspended allocations, and an offering with zero allocations.">
 
-1. Seed an offering with only a `dropped` enrollment: moving status checks into `WHERE` removes this offering entirely instead of reporting counts `(0, 0)`.
-2. Seed an offering with zero enrollments: using unfiltered `COUNT(*)` reports count 1 due to the null-extended joined row, whereas `COUNT(*) FILTER (...)` or `COUNT(e.student_id)` correctly yields 0.
+1. Seed an offering with only a `suspended` allocation: moving status checks into `WHERE` removes this offering entirely instead of reporting counts `(0, 0)`.
+2. Seed an offering with zero allocations: using unfiltered `COUNT(*)` reports count 1 due to the null-extended joined row, whereas `COUNT(*) FILTER (...)` or `COUNT(a.client_id)` correctly yields 0.
 
 </ExerciseSolution>
 

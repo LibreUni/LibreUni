@@ -1,6 +1,6 @@
 /**
  * Small deterministic lab oracles. These model contracts, not xv6 itself;
- * kernel submissions still require the pinned-kernel workflow and tests.
+ * kernel implementations still require the pinned-kernel workflow and tests.
  */
 
 export function weightedCharge(delta, weight) {

@@ -3,6 +3,7 @@ import MathText from './MathText';
 import {
   generateQuestion,
   repairStoredQuestion,
+  getCourseTopics,
   type TopicId,
   type DifficultyLevel,
   type StoredPracticeQuestion,
@@ -54,7 +55,7 @@ export default function PracticeGenerator({ courseId }: PracticeGeneratorProps) 
   };
 
   const handleGenerate = () => {
-    const newQ = generateQuestion(topic, difficulty);
+    const newQ = generateQuestion(courseId, topic, difficulty);
     const storedQ: StoredPracticeQuestion = {
       ...newQ,
       revealedHintsCount: 0,
@@ -199,10 +200,11 @@ export default function PracticeGenerator({ courseId }: PracticeGeneratorProps) 
               className="w-full rounded-xl border border-light-border bg-light-bg px-3.5 py-2.5 text-sm font-bold text-light-text shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text cursor-pointer"
             >
               <option value="all">All Topics (Comprehensive)</option>
-              <option value="limits">Limits & Continuity</option>
-              <option value="derivatives">Derivatives & Applications</option>
-              <option value="integrals">Integration & Accumulation</option>
-              <option value="approximations">Series & Approximations</option>
+              {getCourseTopics(courseId).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
             </select>
           </div>
 

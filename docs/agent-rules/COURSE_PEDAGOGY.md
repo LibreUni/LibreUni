@@ -26,16 +26,16 @@ To address the systemic issues of AI-generated content, all output must adhere t
 
 Use this structure to introduce concepts, replacing the standard "I do, We do, You do" with a structure modeled after how the brain actually learns advanced math:
 
-- **Motivated Discovery (The "Why"):** Do not just hand the student an arbitrary formula. Establish a real problem or tension. Show the "happy path" of discovery: Question → Attempt → Obstacle → Insight → Formalization. Walk through how a mathematician or engineer would have discovered this through inquiry.
+- **Motivated Discovery (The "Why"):** Do not just hand the learner an arbitrary formula. Establish a real problem or tension. Show the "happy path" of discovery: Question → Attempt → Obstacle → Insight → Formalization. Walk through how a mathematician or engineer would have discovered this through inquiry.
 - **Formal Definition Grounded in Step-by-Step Examples:** State the rigorous, formal definition or invariant in an addressable statement card, then immediately ground it in step-by-step worked examples (canonical case, then edge/variable case) where the reasoning behind every single step is explicitly justified, followed by non-examples that reveal boundary limits.
 - **Deep Independent Practice:** Provide challenging problems in an `<ExerciseSet>` that require independent transfer across Bloom's levels (D-0013, `COURSE_STRUCTURE.md`). These problems operate at the edge of learner understanding to build genuine mastery.
-- **Feedback & Knowledge Gaps:** Feedback must do more than provide the correct answer. It must act as a "diagnosis," revealing the exact missing prerequisite or logic gap that caused the error, allowing the student to use targeted self-explanation (Feynman technique) to patch their understanding.
+- **Feedback & Knowledge Gaps:** Feedback must do more than provide the correct answer. It must act as a "diagnosis," revealing the exact missing prerequisite or logic gap that caused the error, allowing the learner to use targeted self-explanation (Feynman technique) to patch their understanding.
 
 ## 4. Substantive Quality Checks
 
 When reviewing or generating material, rank findings by learning impact.
 
-- **Critical Violations:** Missing prerequisites, mathematically imprecise formulas, conversational fluff, assumed chronological sequencing (interlinking), and mindless/unrelated quiz questions.
-- **Substantive Improvements:** Enhancing the transition from concrete examples to formal proofs, providing a missing visual graph, adding deeper edge-case problems to challenge advanced students, or clarifying the "why" behind a specific mathematical move.
+- **Critical Violations:** Missing prerequisites, mathematically imprecise formulas, conversational fluff, assumed chronological sequencing (interlinking), mindless/unrelated quiz questions, and physical university simulation antipatterns (D-0017).
+- **Substantive Improvements:** Enhancing the transition from concrete examples to formal proofs, providing a missing visual graph, adding deeper edge-case problems to challenge advanced learners, or clarifying the "why" behind a specific mathematical move.
 
 > **Note:** Cosmetic changes like synonym swaps or paragraph reshuffling are forbidden unless they directly compress the text or remove filler.

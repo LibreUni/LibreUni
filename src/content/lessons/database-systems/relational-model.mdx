@@ -23,89 +23,89 @@ import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
-“Store student registrations” is not a schema. First decide what one row is allowed to assert. Then make the database reject row combinations that would contradict that assertion.
+“Store cluster allocations” is not a schema. First decide what one row is allowed to assert. Then make the database reject row combinations that would contradict that assertion.
 
 <MathStatement id="def-relation-schema" kind="definition" title="Relation schema, instance, and grain">
-A relation schema names attributes and their domains, such as `Enrollment(student_id, offering_id, status)`. A relation instance is the current collection of tuples permitted by that schema and its constraints. The **grain** states what one tuple represents.
+A relation schema names attributes and their domains, such as `Allocation(tenant_id, cluster_id, status)`. A relation instance is the current collection of tuples permitted by that schema and its constraints. The **grain** states what one tuple represents.
 </MathStatement>
 
 {/* Source tracking: The relational vocabulary and separation of relations from their implementation are synthesized from E. F. Codd, “A Relational Model of Data for Large Shared Data Banks,” *Communications of the ACM* 13(6), pp. 377–387 (1970); key terminology follows Ramakrishnan & Gehrke, *Database Management Systems*, 3rd ed., §3.1. */}
 
 ## Build one small schema carefully
 
-We will model a student enrolling in an offering of a course during a term.
+We will model a tenant allocating compute resources in a cluster during a deployment lifecycle.
 
 | Relation | Grain | Candidate key | Required checks |
 | --- | --- | --- | --- |
-| `Student(student_id, display_name)` | One identified student | `student_id` | `student_id` is non-null and unique |
-| `Offering(offering_id, course_code, term, capacity)` | One scheduled offering | `offering_id` | `capacity >= 0` |
-| `Enrollment(student_id, offering_id, status)` | One student's current state in one offering | `(student_id, offering_id)` | Both IDs refer to existing rows; `status` is an allowed value |
+| `Tenant(tenant_id, display_name)` | One identified tenant | `tenant_id` | `tenant_id` is non-null and unique |
+| `Cluster(cluster_id, cluster_name, region, capacity)` | One managed compute cluster | `cluster_id` | `capacity >= 0` |
+| `Allocation(tenant_id, cluster_id, status)` | One tenant's current resource allocation on one cluster | `(tenant_id, cluster_id)` | Both IDs refer to existing rows; `status` is an allowed value |
 
-The three relations and their identifying keys, with every reference from `Enrollment` to its parents:
+The three relations and their identifying keys, with every reference from `Allocation` to its parents:
 
 <PlantUML
   code={String.raw`
-class Student {
-  student_id : uuid <<PK>>
+class Tenant {
+  tenant_id : uuid <<PK>>
   display_name : text NOT NULL
 }
-class Offering {
-  offering_id : uuid <<PK>>
-  course_code : text
-  term : text
+class Cluster {
+  cluster_id : uuid <<PK>>
+  cluster_name : text
+  region : text
   capacity : integer CHECK >= 0
 }
-class Enrollment {
-  student_id : uuid <<PK, FK>>
-  offering_id : uuid <<PK, FK>>
-  status : text CHECK in enrolled/waitlisted/dropped
+class Allocation {
+  tenant_id : uuid <<PK, FK>>
+  cluster_id : uuid <<PK, FK>>
+  status : text CHECK in active/queued/released
 }
-Student "1" <-- "0..*" Enrollment : student_id
-Offering "1" <-- "0..*" Enrollment : offering_id
+Tenant "1" <-- "0..*" Allocation : tenant_id
+Cluster "1" <-- "0..*" Allocation : cluster_id
 `}
 />
 
-**Figure 1.** The registration grain: one `Enrollment` tuple asserts one student's current state in one `Offering`. The composite key `(student_id, offering_id)` makes two rows for the same pair illegal regardless of `status`, and the two foreign keys confine each enrollment to existing parent rows.
+**Figure 1.** The allocation grain: one `Allocation` tuple asserts one tenant's current resource state on one `Cluster`. The composite key `(tenant_id, cluster_id)` makes two rows for the same pair illegal regardless of `status`, and the two foreign keys confine each allocation to existing parent rows.
 
-> **Example.** The tuple `(s17, o3, 'enrolled')` in `Enrollment` says one fact: student `s17` is enrolled in offering `o3`. If a later requirement says that a student may drop and re-enroll multiple times, this relation no longer has the right grain. Add an event identifier or timestamped enrollment-history relation rather than quietly inserting duplicate current rows.
+> **Example.** The tuple `(t17, c3, 'active')` in `Allocation` says one fact: tenant `t17` holds an active allocation on cluster `c3`. If a later requirement says that a tenant may release and reallocate multiple times, this relation no longer has the right grain. Add an event identifier or timestamped allocation-history relation rather than quietly inserting duplicate current rows.
 
 ### Worked example: declare the schema, then watch it reject rows
 
-Given `Student = {(s17, 'Ada')}` and `Offering = {(o3, 'DB101', '2026F', 30)}`, declare the schema and attempt four inserts:
+Given `Tenant = {(t17, 'Acme Corp')}` and `Cluster = {(c3, 'prod-east', 'us-east-1', 30)}`, declare the schema and attempt four inserts:
 
 ```sql
-CREATE TABLE Enrollment (
-  student_id text NOT NULL REFERENCES Student(student_id),
-  offering_id text NOT NULL REFERENCES Offering(offering_id),
+CREATE TABLE Allocation (
+  tenant_id text NOT NULL REFERENCES Tenant(tenant_id),
+  cluster_id text NOT NULL REFERENCES Cluster(cluster_id),
   status text NOT NULL
-    CHECK (status IN ('enrolled', 'waitlisted', 'dropped')),
-  PRIMARY KEY (student_id, offering_id)
+    CHECK (status IN ('active', 'queued', 'released')),
+  PRIMARY KEY (tenant_id, cluster_id)
 );
 
 -- Input rows, one statement per attempt:
-INSERT INTO Enrollment VALUES ('s17', 'o3', 'enrolled');  -- accepted
-INSERT INTO Enrollment VALUES ('s17', 'o3', 'dropped');  -- rejected: duplicate key (s17, o3)
-INSERT INTO Enrollment VALUES ('s99', 'o3', 'enrolled');  -- rejected: no Student row s99
-INSERT INTO Enrollment VALUES ('s17', 'o9', 'enrolled');  -- rejected: no Offering row o9
+INSERT INTO Allocation VALUES ('t17', 'c3', 'active');    -- accepted
+INSERT INTO Allocation VALUES ('t17', 'c3', 'released');  -- rejected: duplicate key (t17, c3)
+INSERT INTO Allocation VALUES ('t99', 'c3', 'active');    -- rejected: no Tenant row t99
+INSERT INTO Allocation VALUES ('t17', 'c9', 'active');    -- rejected: no Cluster row c9
 ```
 
-The second statement fails with a unique-violation on the composite primary key: changing `status` does not create a new current-enrollment fact, because `status` is not part of the key. The third and fourth fail foreign-key checks because each `NOT NULL` reference must match an existing key value in its parent. Which statement fails *first* for the second row—the key check or a check constraint—is not fixed by the relational model; a constraint set only has to reject the row.
+The second statement fails with a unique-violation on the composite primary key: changing `status` does not create a new current-allocation fact, because `status` is not part of the key. The third and fourth fail foreign-key checks because each `NOT NULL` reference must match an existing key value in its parent. Which statement fails *first* for the second row—the key check or a check constraint—is not fixed by the relational model; a constraint set only has to reject the row.
 
 ### Prediction: what is illegal?
 
-Assume `Enrollment` has primary key `(student_id, offering_id)`, and `student_id` and `offering_id` are non-null foreign keys.
+Assume `Allocation` has primary key `(tenant_id, cluster_id)`, and `tenant_id` and `cluster_id` are non-null foreign keys.
 
-| `student_id` | `offering_id` | `status` |
+| `tenant_id` | `cluster_id` | `status` |
 | --- | --- | --- |
-| `s17` | `o3` | `enrolled` |
-| `s17` | `o3` | `dropped` |
-| `s99` | `o3` | `enrolled` |
+| `t17` | `c3` | `active` |
+| `t17` | `c3` | `released` |
+| `t99` | `c3` | `active` |
 
-Which rows can coexist if only `s17` and `o3` exist?
+Which rows can coexist if only `t17` and `c3` exist?
 
 <ExerciseSolution hint="Check the composite key first, then each foreign key.">
 
-Only the first row `(s17, o3, 'enrolled')` can exist. The second row duplicates the existing candidate key `(s17, o3)`, while the third references absent student `s99` in violation of foreign key integrity.
+Only the first row `(t17, c3, 'active')` can exist. The second row duplicates the existing candidate key `(t17, c3)`, while the third references absent tenant `t99` in violation of foreign key integrity.
 
 </ExerciseSolution>
 
@@ -115,25 +115,25 @@ Only the first row `(s17, o3, 'enrolled')` can exist. The second row duplicates 
 A superkey is a set of attributes that uniquely identifies a tuple in every legal instance. A candidate key is a minimal superkey: remove any one of its attributes and it no longer identifies tuples. A primary key is a chosen candidate key. (Ramakrishnan & Gehrke, *Database Management Systems*, 3rd ed., §3.2.1.)
 </MathStatement>
 
-For `Enrollment`, `(student_id, offering_id)` is a candidate key under the stated rule. `(student_id, offering_id, status)` is a superkey but not a candidate key because `status` is unnecessary for identity. `(student_id, status)` is not even a superkey: a student may hold the same status in two different offerings, so it does not uniquely identify a tuple.
+For `Allocation`, `(tenant_id, cluster_id)` is a candidate key under the stated rule. `(tenant_id, cluster_id, status)` is a superkey but not a candidate key because `status` is unnecessary for identity. `(tenant_id, status)` is not even a superkey: a tenant may hold the same status across two different clusters, so it does not uniquely identify a tuple.
 
 <MathStatement id="inv-constraint-checkpoint" kind="invariant" title="Constraint check point and deferrability">
 A declared constraint must hold at its check point. By default SQL checks each constraint **immediately**, after every statement that could violate it. A constraint declared `DEFERRABLE INITIALLY DEFERRED` is checked at **commit** instead; the transaction may transiently violate it. Deferring never weakens the constraint—it only changes *when* the database checks it.
 </MathStatement>
 
-> **Worked example (deferred check point).** Constraint: “`Offering.term` is referenced by enrollments and each offering keeps a `successor_id` foreign key to the next term's offering.” Swapping two offerings' `successor_id` values with two `UPDATE` statements transiently breaks referential integrity if the constraint is immediate. Declaring it `DEFERRABLE INITIALLY DEFERRED` lets both updates commit only if, **at commit**, every referenced `successor_id` exists. Committing with the violation still fails—deferral moves the check, never removes it.
+> **Worked example (deferred check point).** Constraint: “`Cluster.region` is referenced by allocations and each cluster keeps a `standby_cluster_id` foreign key to a backup cluster.” Swapping two clusters' `standby_cluster_id` values with two `UPDATE` statements transiently breaks referential integrity if the constraint is immediate. Declaring it `DEFERRABLE INITIALLY DEFERRED` lets both updates commit only if, **at commit**, every referenced `standby_cluster_id` exists. Committing with the violation still fails—deferral moves the check, never removes it.
 
 > **Counterexample (UNIQUE is not "no duplicates" in general).** The SQL standard leaves `UNIQUE` treatment of multiple `NULL`s to the implementation; PostgreSQL's default (`NULLS DISTINCT`) treats `NULL`s as mutually distinct, so `UNIQUE(email)` admits unlimited rows with `email IS NULL`. Only PostgreSQL 15's `UNIQUE NULLS NOT DISTINCT` collapses them. Claiming “`UNIQUE` forbids duplicates” without saying how the vendor treats `NULL` is a falsifiable error a reviewer can check against the vendor's own constraint documentation.
 
-> **Counterexample.** `display_name` might look unique in a three-row sample, but two students can share it. An observed sample pattern is not a business rule. Declare a `UNIQUE` constraint only when the domain truly requires uniqueness, and say which `NULL` treatment you are relying on.
+> **Counterexample.** `display_name` might look unique in a three-row sample, but two tenants can share it. An observed sample pattern is not an architectural invariant. Declare a `UNIQUE` constraint only when the domain truly requires uniqueness, and say which `NULL` treatment you are relying on.
 
 {/* Source tracking: Constraint behavior (primary keys, unique constraints, checks, foreign keys, deferrable modes) follows PostgreSQL's constraint documentation, in particular the unique, check, foreign-key, and deferrable sections; the NULL treatment of UNIQUE follows the SQL standard's implementation-defined rule. */}
 
 <Quiz client:load
   title="Identity versus connection"
-  question="An enrollment row stores student_id and offering_id forming a composite primary key (student_id, offering_id). Evaluate each claim:"
+  question="An allocation row stores tenant_id and cluster_id forming a composite primary key (tenant_id, cluster_id). Evaluate each claim:"
   options={[
-    { id: '1', text: 'The composite pair uniquely identifies one enrollment at the stated grain, while each component serves as a foreign key.', isCorrect: true },
+    { id: '1', text: 'The composite pair uniquely identifies one allocation at the stated grain, while each component serves as a foreign key.', isCorrect: true },
     { id: '2', text: 'A column may simultaneously serve as a foreign key reference and participate in a composite primary key.', isCorrect: true },
     { id: '3', text: 'Relational algebra requires all primary keys to consist of exactly one single atomic column.', isCorrect: false },
     { id: '4', text: 'Declaring a foreign key unconditionally blocks row deletion regardless of declared ON DELETE clauses.', isCorrect: false }
@@ -152,30 +152,30 @@ The mathematical relational model treats a relation as a set of tuples. SQL is d
 | Can an attribute be missing? | Classical model has a value in its domain | SQL has `NULL`; predicates can evaluate to `UNKNOWN` |
 
 <MathStatement id="warn-sql-null-ternary" kind="warning" title="Three-valued predicate logic and NULL semantics">
-`NULL` is not an ordinary value. In a `WHERE` condition, only `TRUE` retains a row. `FALSE` and `UNKNOWN` both remove it. Therefore `WHERE advisor_id <> 7` does not retain a row whose `advisor_id` is `NULL`: the comparison is `UNKNOWN`, not `TRUE`.
+`NULL` is not an ordinary value. In a `WHERE` condition, only `TRUE` retains a row. `FALSE` and `UNKNOWN` both remove it. Therefore `WHERE gateway_ip <> '10.0.0.1'` does not retain a row whose `gateway_ip` is `NULL`: the comparison is `UNKNOWN`, not `TRUE`.
 </MathStatement>
 
-> **Worked example.** Suppose two enrollment rows project to the same `course_code` after joining with offerings. `SELECT course_code ...` can return the code twice; `SELECT DISTINCT course_code ...` returns it once. Neither query is universally “more relational”—the right one depends on whether the client wants offerings or enrollment occurrences.
+> **Worked example.** Suppose two allocation rows project to the same `region` after joining with clusters. `SELECT region ...` can return the region twice; `SELECT DISTINCT region ...` returns it once. Neither query is universally “more relational”—the right one depends on whether the client wants distinct regions or allocation occurrences.
 
 ## From requirements to a legal instance
 
 Schema review starts by separating facts from presentation.
 
-> **Example.** `StudentOffering(student_name, course_code, term, capacity, status)` mixes an offering fact (`capacity`) with an enrollment fact (`status`). If 30 students enroll, the same capacity appears 30 times and can disagree. Put capacity in `Offering`; put status in `Enrollment`; create a view when a screen needs both.
+> **Example.** `TenantClusterAllocation(tenant_name, cluster_name, region, capacity, status)` mixes a cluster fact (`capacity`) with an allocation fact (`status`). If 30 tenants allocate resources on the cluster, the same capacity appears 30 times and can disagree. Put capacity in `Cluster`; put status in `Allocation`; create a view when a screen needs both.
 
 <MathStatement id="inv-constraint-scope" kind="invariant" title="Constraint scope and enforcement boundaries">
-Every constraint has a scope. A key constrains rows of one relation. A foreign key constrains a reference across relations. A view controls a presented shape. None automatically proves an aggregate policy such as “at most capacity enrolled.”
+Every constraint has a scope. A key constrains rows of one relation. A foreign key constrains a reference across relations. A view controls a presented shape. None automatically proves an aggregate policy such as “at most capacity allocated.”
 </MathStatement>
 
 <ExerciseSet>
 
 <Exercise id="ex-rel-legal-instance" type="verify" level="recall" title="Candidate Key and Referential Integrity Validation">
 
-Consider `Student(student_id, display_name)`, `Offering(offering_id, course_code, term, capacity)`, and `Enrollment(student_id, offering_id, status)` with primary key `(student_id, offering_id)`. Suppose only student `s17` and offering `o3` exist in the database. Examine these candidate rows: `(s17, o3, 'enrolled')`, `(s17, o3, 'dropped')`, and `(s99, o3, 'enrolled')`. Which rows can legally coexist?
+Consider `Tenant(tenant_id, display_name)`, `Cluster(cluster_id, cluster_name, region, capacity)`, and `Allocation(tenant_id, cluster_id, status)` with primary key `(tenant_id, cluster_id)`. Suppose only tenant `t17` and cluster `c3` exist in the database. Examine these candidate rows: `(t17, c3, 'active')`, `(t17, c3, 'released')`, and `(t99, c3, 'active')`. Which rows can legally coexist?
 
 <ExerciseSolution hint="Check the composite key first, then each foreign key.">
 
-The first row can exist. The second conflicts with the same composite primary key, even though its `status` differs. The third violates the `student_id` foreign key because `s99` has no matching `Student` row. A history requirement needs a different key and grain; changing `status` alone does not create a new current-enrollment fact.
+The first row can exist. The second conflicts with the same composite primary key, even though its `status` differs. The third violates the `tenant_id` foreign key because `t99` has no matching `Tenant` row. A history requirement needs a different key and grain; changing `status` alone does not create a new current-allocation fact.
 
 </ExerciseSolution>
 
@@ -183,11 +183,11 @@ The first row can exist. The second conflicts with the same composite primary ke
 
 <Exercise id="ex-rel-constraint-types" type="construct" level="application" title="Narrowest Constraint Domain Selection">
 
-For each requirement, specify the narrowest SQL constraint that directly enforces it: (1) An offering cannot have negative capacity; (2) A student cannot appear twice in the same current offering; (3) Every enrollment names an existing offering; (4) A status must be `enrolled`, `waitlisted`, or `dropped`.
+For each requirement, specify the narrowest SQL constraint that directly enforces it: (1) A cluster cannot have negative capacity; (2) A tenant cannot appear twice in the same current allocation; (3) Every allocation names an existing cluster; (4) A status must be `active`, `queued`, or `released`.
 
 <ExerciseSolution hint="Use a check for a predicate, a key for identity, and a foreign key for a cross-relation reference.">
 
-Use `CHECK (capacity >= 0)`, a primary or unique key on `(student_id, offering_id)`, a foreign key from `Enrollment.offering_id` to `Offering.offering_id`, and a check constraint or controlled ENUM status domain. These constraints do not by themselves enforce multi-row capacity limits; that requires transaction-aware isolation.
+Use `CHECK (capacity >= 0)`, a primary or unique key on `(tenant_id, cluster_id)`, a foreign key from `Allocation.cluster_id` to `Cluster.cluster_id`, and a check constraint or controlled ENUM status domain. These constraints do not by themselves enforce multi-row capacity limits; that requires transaction-aware isolation.
 
 </ExerciseSolution>
 
@@ -195,23 +195,23 @@ Use `CHECK (capacity >= 0)`, a primary or unique key on `(student_id, offering_i
 
 <Exercise id="ex-rel-projection-grain" type="describe" level="application" title="Set vs. Bag Projection Semantics">
 
-If an `Enrollment` relation contains two different students in `CS101`, what does projecting onto `course_code` produce under pure relational set semantics versus SQL bag semantics? Explain how to align the result grain with application intent.
+If an `Allocation` relation contains two different tenants allocated on cluster `prod-east`, what does projecting onto `cluster_name` produce under pure relational set semantics versus SQL bag semantics? Explain how to align the result grain with application intent.
 
 <ExerciseSolution hint="Projection removes attributes. Decide whether equal remaining tuples collapse.">
 
-With set semantics, the projection has one tuple `CS101`. With bag semantics, it has two occurrences of `CS101`. The source relation's grain was one enrollment; a result whose grain is one course should normally use `DISTINCT` deliberately rather than inherit duplicate behavior accidentally.
+With set semantics, the projection has one tuple `prod-east`. With bag semantics, it has two occurrences of `prod-east`. The source relation's grain was one allocation; a result whose grain is one cluster should normally use `DISTINCT` deliberately rather than inherit duplicate behavior accidentally.
 
 </ExerciseSolution>
 
 </Exercise>
 
-<Exercise id="ex-rel-schema-transfer" type="generalise" level="transfer" title="Multi-Section Offering Schema and Rubric Validation">
+<Exercise id="ex-rel-schema-transfer" type="generalise" level="transfer" title="Multi-Pool Cluster Allocation Schema Specification">
 
-A university offers the same course code across multiple sections in one term (`DB101` in `2026S`, sections 1 and 2). Design a revised `Offering` and `Enrollment` schema. State the grain and candidate key of each relation, provide one row combination your constraints reject, and describe how waitlist ordering is formally modeled.
+A cloud infrastructure platform offers the same cluster tier across multiple resource pools in one region (`prod-tier` in `us-east-1`, pools `pool-a` and `pool-b`). Design a revised `Cluster` and `Allocation` schema. State the grain and candidate key of each relation, provide one row combination your constraints reject, and describe how allocation queuing priority is formally modeled.
 
-<ExerciseSolution hint="Course code is no longer enough to identify an offering. Keep the enrollment fact separate from the offering fact.">
+<ExerciseSolution hint="Cluster name is no longer enough to identify a resource pool. Keep the allocation fact separate from the cluster pool fact.">
 
-One sound solution is `Offering(offering_id, course_code, term, section, capacity)` with candidate key `offering_id` and unique constraint `UNIQUE(course_code, term, section)`, plus `Enrollment(student_id, offering_id, status)` with composite key `(student_id, offering_id)`. The schema rejects duplicate enrollments for the same student in one section and rejects non-existent offerings. Waitlist ordering requires an explicit ranking attribute such as `waitlist_rank` with a partial uniqueness constraint.
+One sound solution is `Cluster(cluster_id, tier, region, pool, capacity)` with candidate key `cluster_id` and unique constraint `UNIQUE(tier, region, pool)`, plus `Allocation(tenant_id, cluster_id, status)` with composite key `(tenant_id, cluster_id)`. The schema rejects duplicate allocations for the same tenant in one pool and rejects non-existent clusters. Queue ordering requires an explicit ranking attribute such as `queue_rank` with a partial uniqueness constraint.
 
 </ExerciseSolution>
 

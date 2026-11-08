@@ -82,7 +82,7 @@ All implementation work branches from the licensed xv6 RISC-V rev5 commit `7d7ad
 
 Two checkout modes serve different evidence needs:
 
-- The **clean-lab checkout** starts each published lab from the pinned upstream commit. This makes its ABI, patch boundary, tests, and review reproducible without depending on earlier student work.
+- The **clean-lab checkout** starts each published lab from the pinned upstream commit. This makes its ABI, patch boundary, tests, and review reproducible without depending on earlier learner work.
 - The **cumulative integration branch** applies accepted checkpoints in course order. After each integration commit, the learner reruns upstream, earlier-checkpoint, and current-checkpoint tests and records any interface adaptation. The capstone starts from this branch.
 
 The clean checkout is the specification reference; the cumulative branch is the systems-integration artifact. Code or instructions from another xv6 revision must not be mixed into either one without an explicit port and compatibility record.
@@ -136,9 +136,9 @@ Each lesson distributes four forms of work through the explanation:
 3. **transfer** under a changed workload, failure, or assumption; and
 4. **synthesis** as a design claim supported by evidence.
 
-Choice questions are exceptional. When used, distractors must represent plausible mechanism errors, options must be syntactically parallel, length must not reveal the answer, and feedback must be option-specific. Labs are graded from behavior, invariants, tests, measurement quality, failure analysis, and the learner's oral or written defense—not token presence or output resemblance alone.
+Choice questions are exceptional. When used, distractors must represent plausible mechanism errors, options must be syntactically parallel, length must not reveal the answer, and feedback must be option-specific. Labs are verified from observable runtime behavior, invariants, regression tests, measurement quality, and failure analysis—not token presence or output resemblance alone.
 
-The capstone requires external human review. The site may provide a rubric and test harness, but it must not claim that an automatically rendered page can validate engineering judgment, authorship, or a defense.
+The capstone evaluates falsifiable experimental claims against explicit baseline treatments and invariant test matrices. The course provides verification harnesses and contracts, requiring complete reproducible artifacts.
 
 ## Deliberate boundaries
 

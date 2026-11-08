@@ -1,6 +1,7 @@
 ---
 title: "Device-Driver Lab: A Defensible Virtio Queue"
 course: operating-systems
+kind: lab
 description: Extend xv6-riscv revision 5 with negotiated indirect Virtio descriptors, explicit request lifecycles, deterministic fault injection, mutation-killing tests, and evidence-driven queue measurements.
 prerequisites:
   - C pointers, structs, bit fields, function interfaces, and failure cleanup
@@ -16,7 +17,7 @@ omissions:
   - A complete solution patch is intentionally withheld; published material stops at interfaces, invariants, oracles, and partial structural sketches.
   - Full Virtio queue reset, recoverable filesystem error propagation, packed rings, multiqueue, MSI-X, IOMMU programming, and real-hardware claims are extension work.
 estimatedMinutes: 720
-assessment: An xv6 branch descended from official revision-5 commit 7d7adbb must preserve prior cumulative labs and upstream tests, negotiate indirect descriptors only when offered, pass the mutation and fault matrix, demonstrate bounded request ownership under concurrency, report reproducible direct-versus-indirect measurements, and survive a design-memo review plus defense questions.
+assessment: An xv6 branch descended from official revision-5 commit 7d7adbb must preserve prior cumulative labs and upstream tests, negotiate indirect descriptors only when offered, pass the mutation and fault matrix, demonstrate bounded request ownership under concurrency, report reproducible direct-versus-indirect measurements, and survive a design-memo review and diagnostic verification questions.
 ---
 import ExerciseSet from '../../../components/ExerciseSet.astro';
 import Exercise from '../../../components/Exercise.astro';
@@ -32,18 +33,18 @@ The implementation target is not “make the benchmark number larger.” The tar
 
 This is an original LibreUni lab. It uses the licensed upstream teaching kernel and the public Virtio specification; it does not reproduce another course's assignment or solution.
 
-## Deliverable contract
+## Implementation contract
 
-Submit one repository branch with the pinned upstream commit as a verified ancestor, plus generated evidence outside the source diff. In the cumulative course, the branch must retain every accepted earlier lab; independent learners may start directly at the baseline.
+Maintain a repository branch with the pinned upstream commit as a verified ancestor, plus generated evidence outside the source diff. Learners studying the operating systems sequence cumulatively retain earlier labs; independent learners may start directly from the pinned baseline.
 
 1. the driver and minimal, non-conflicting syscall/user-test support needed by the design, preserving earlier cumulative interfaces;
 2. a test manifest mapping each invariant to an oracle and named mutant;
 3. raw measurement output and a script or exact command sequence that reproduces every table;
 4. a design memo of 1,500–2,500 words;
 5. a driver-lab patch-range diff against the recorded lab-start commit, plus the ancestry evidence back to the pinned baseline; and
-6. a ten-minute defense with the code and traces available.
+6. a diagnostic self-verification trace with the code and execution logs available.
 
-No grade is awarded for a diff that cannot be built from the declared commit. No performance credit is awarded until correctness tests pass. The 720-minute workload is a planning estimate, not permission to stop with an unverified state.
+A diff that cannot be built from the declared commit is invalid. Performance claims are meaningless until correctness invariants pass. The 720-minute workload is a planning estimate, not permission to stop with an unverified state.
 
 ### Non-negotiable invariants
 
@@ -96,7 +97,7 @@ git rev-parse HEAD
 git switch -c libreuni/virtio-indirect-lifecycle
 ```
 
-The first command must exit zero; the second must print the pinned baseline; the third is the lab-start commit to preserve in the submission. In standalone setup, `rev-parse` instead prints the baseline itself. The revision-5 Makefile requires a RISC-V toolchain and QEMU 7.2 or newer. Capture regression evidence before changing the driver; on a cumulative branch, this also proves the earlier labs still build and run:
+The first command must exit zero; the second must print the pinned baseline; the third is the lab-start commit to preserve in the implementation record. In standalone setup, `rev-parse` instead prints the baseline itself. The revision-5 Makefile requires a RISC-V toolchain and QEMU 7.2 or newer. Capture regression evidence before changing the driver; on a cumulative branch, this also proves the earlier labs still build and run:
 
 ```text
 $ usertests -q
@@ -162,9 +163,9 @@ Add temporary trace points or use GDB to capture one read and one write. The tra
 
 Remove ad hoc print flooding before the final patch. The permanent trace facility is bounded and structured.
 
-<ExerciseSolution title="Reveal the baseline trace rubric">
+<ExerciseSolution title="Reveal the baseline trace verification criteria">
 
-Full credit requires a causally ordered trace, not a list of function names. A read's data descriptor has `VRING_DESC_F_WRITE` because the **device** writes into memory; a write's data descriptor lacks that flag because the device reads memory. The request head is the first descriptor ID placed in the available ring and later returned in the used ring. Descriptor reclamation occurs in the waiting thread after completion wakes it in revision 5.
+A complete derivation requires a causally ordered trace, not a list of function names. A read's data descriptor has `VRING_DESC_F_WRITE` because the **device** writes into memory; a write's data descriptor lacks that flag because the device reads memory. The request head is the first descriptor ID placed in the available ring and later returned in the used ring. Descriptor reclamation occurs in the waiting thread after completion wakes it in revision 5.
 
 </ExerciseSolution>
 
@@ -424,7 +425,7 @@ Returning an error while freeing the descriptor or buffer is forbidden. Recovery
 
 ## Tests must kill named wrong implementations
 
-For each mutant below, include a one-line code transformation, the test that fails, the expected failure, and evidence that the unmutated driver passes. The instructor may apply equivalent mutations rather than your exact macro.
+For each mutant below, include a one-line code transformation, the test that fails, the expected failure, and evidence that the unmutated driver passes. An automated test harness or adversarial reviewer may apply equivalent mutations rather than your exact macro.
 
 | Mutant name | Deliberate defect | Test that must kill it |
 | --- | --- | --- |
@@ -569,11 +570,11 @@ Present raw-data link/path, environment, repetitions, summary statistics, uncert
 
 Name at least three untested assumptions, including post-reuse stale IDs, device reset, and filesystem error propagation. State the experiment or design work needed to reduce each risk.
 
-## Defense questions
+## Self-audit and diagnostic verification questions
 
 > **Example.** For Question 9 (16-bit index wrap): if `avail_idx = 65535` (`0xFFFF`) and `used_idx = 65527` (`0xFFF7`), the in-flight count in unsigned 16-bit modular arithmetic is `(uint16_t)(65535 - 65527) = 8` (full 8-slot ring). Publishing one more request wraps `avail_idx` to `0`, and `(uint16_t)(0 - 65528) = 8`, whereas an empty ring has `avail_idx == used_idx` (`0`). Storing only indices modulo 8 (`M_MODULO_COUNTERS`) collapses both `0` and `8` to `0`, making full and empty indistinguishable.
 
-The reviewer chooses at least six and may change constants or point to a trace.
+Audit your implementation against these questions, verifying each against runtime traces or source invariants:
 
 1. Why does one indirect descriptor increase request capacity without increasing main-ring size?
 2. Which exact store publishes device ownership, and what must happen-before it?
@@ -594,24 +595,23 @@ The reviewer chooses at least six and may change constants or point to a trace.
 
 An answer may consult source and traces. Guessing an undocumented guarantee is worse than identifying the boundary.
 
-## Grading rubric
+## Verification checklist and defect conditions
 
-> **Warning.** Any implementation that reuses a descriptor or buffer while DMA ownership remains active, or reports success on a nonzero Virtio status byte, triggers an automatic publication blocker regardless of point totals in other rubric categories.
+> **Warning.** Any implementation that reuses a descriptor or buffer while DMA ownership remains active, or reports success on a nonzero Virtio status byte, is a critical safety defect that invalidates verification.
 
-| Dimension | Points | Full-credit evidence |
-| --- | ---: | --- |
-| baseline reconstruction | 8 | exact commit, passing baseline, causal read/write traces |
-| negotiation and fallback | 10 | synthetic feature matrix and no unsupported feature use |
-| indirect implementation | 16 | correct persistent layout, directions, fallback, and rollback |
-| lifecycle and ordering | 18 | I1–I10 mapped to code, legal transitions, barriers, completion order |
-| fault injection | 12 | deterministic modes with bounded, documented outcomes |
-| mutation-killing tests | 16 | every named mutant fails for the intended reason; correct builds pass |
-| data integrity/regression | 8 | upstream and reboot/checksum evidence in both modes |
-| measurement and analysis | 7 | controlled runs, raw data, tails, concurrency, uncertainty |
-| memo and defense | 5 | precise residual-risk disclosure and defensible answers |
-| **Total** | **100** | |
+| Dimension | Invariant criterion | Verification evidence |
+| --- | --- | --- |
+| Baseline reconstruction | Clean build from pinned commit | Exact commit, passing baseline, causal read/write traces |
+| Negotiation and fallback | Compliance with Virtio feature negotiation | Synthetic feature matrix and zero unsupported feature use |
+| Indirect implementation | Memory-safe chained descriptor allocation | Correct persistent layout, directions, fallback, and rollback |
+| Lifecycle and ordering | Invariants I1–I10 preserved across all transitions | I1–I10 mapped to code, legal transitions, barriers, completion order |
+| Fault injection | Deterministic fault handling and recovery | Deterministic failure modes with bounded, documented outcomes |
+| Mutation-killing tests | Falsification of flawed driver variants | Every named mutant fails for the intended reason; correct builds pass |
+| Data integrity/regression | Filesystem consistency after reboot | Upstream and reboot/checksum evidence in both modes |
+| Measurement and analysis | Controlled performance evaluation | Controlled runs, raw data, tails, concurrency, uncertainty |
+| Architectural understanding | Complete derivation of ownership and race boundaries | Precise residual-risk disclosure and falsifiable explanations |
 
-Publication blockers regardless of points:
+Critical defect conditions that invalidate verification:
 
 - device uses an unoffered feature;
 - user-visible success on nonzero device status;
@@ -632,7 +632,7 @@ Publication blockers regardless of points:
 | indirect descriptor path | 180 | direct+indirect data-integrity tests; capacity trace |
 | lifecycle, trace ring, and stats | 135 | state-edge tests and consistent snapshot |
 | fault hooks and mutation matrix | 150 | failing mutant logs and passing correct logs |
-| measurements, memo, and defense preparation | 105 | raw runs, analysis, final memo |
+| measurements, memo, and self-audit | 105 | raw runs, analysis, final memo |
 | **Total** | **720** | |
 
 Exit evidence, not elapsed time, completes a work unit. A failed invariant returns the implementation to the relevant milestone.
@@ -641,7 +641,7 @@ Exit evidence, not elapsed time, completes a work unit. A failed invariant retur
 
 > **Remark.** Optional extensions are evaluated by the same mutation-killing standard as the core lab: every added capability (such as queue reset or `VIRTIO_RING_F_EVENT_IDX`) must include a dedicated fault mode and a mutant that fails when its safety check is removed.
 
-Extensions are considered only after the core reaches 100-point behavior:
+Extensions are considered only after the core implementation passes all verification invariants:
 
 - implement Virtio queue reset when the feature/transport supports it, with proof that old DMA ownership ended;
 - propagate block errors through buffer cache and filesystem without panic;

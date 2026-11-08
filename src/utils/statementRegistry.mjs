@@ -375,43 +375,6 @@ export function buildStatementRegistry(customRoot) {
         courseBlocks.push(record);
         figureItemIndex++;
       }
-
-      // 5. ExamQuestion (<ExamQuestion ...>...</ExamQuestion>)
-      const questionRegex = /<ExamQuestion\s+([^>]*?)>([\s\S]*?)<\/ExamQuestion>/g;
-      while ((match = questionRegex.exec(content)) !== null) {
-        const rawAttrs = match[1];
-        const rawBody = match[2];
-
-        const idMatch = rawAttrs.match(/\bid=["']([^"']+)["']/);
-        if (!idMatch) continue;
-        const id = idMatch[1].trim();
-
-        const number = `${questionItemIndex}`;
-
-        const record = {
-          id,
-          courseId,
-          lessonSlug: page.slug,
-          moduleIndex: page.moduleIndex,
-          itemIndex: questionItemIndex,
-          number,
-          kind: 'question',
-          kindLabel: 'Question',
-          title: `Question ${number}`,
-          preview: cleanPreviewText(rawBody),
-          previewHtml: renderPreviewHtml(rawBody),
-          url: `/lessons/${courseId}/${page.slug}#${id}`,
-        };
-
-        if (registry.has(id)) {
-          const existing = registry.get(id);
-          console.warn(`[StatementRegistry] Duplicate block id="${id}" in ${courseId}/${page.slug} and ${existing.courseId}/${existing.lessonSlug}`);
-        }
-
-        registry.set(id, record);
-        courseBlocks.push(record);
-        questionItemIndex++;
-      }
     }
 
     byCourse.set(courseId, courseBlocks);

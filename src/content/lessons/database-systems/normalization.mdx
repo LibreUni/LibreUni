@@ -33,37 +33,37 @@ Normalization is not a ritual of splitting tables. It asks whether one tuple sto
 skinparam linetype ortho
 hide circle
 
-class "Registration [Unnormalized]" as R {
-  * **student_id**
-  * **course_code**
-  * **term**
+class "TaskAllocation [Unnormalized]" as R {
+  * **task_id**
+  * **service_name**
+  * **cluster_id**
   --
-  instructor
-  room
+  node_ip
+  port
 }
 
 note bottom of R
-  FD: (course_code, term) -> (instructor, room)
+  FD: (service_name, cluster_id) -> (node_ip, port)
   Violates BCNF because determinant is NOT a superkey!
 end note
 
-class "Offering [BCNF]" as O {
-  * **course_code** <<PK>>
-  * **term** <<PK>>
+class "ServiceDeployment [BCNF]" as O {
+  * **service_name** <<PK>>
+  * **cluster_id** <<PK>>
   --
-  instructor
-  room
+  node_ip
+  port
 }
 
-class "Enrollment [BCNF]" as E {
-  * **student_id** <<PK>>
-  * **course_code** <<PK, FK>>
-  * **term** <<PK, FK>>
+class "TaskAssignment [BCNF]" as E {
+  * **task_id** <<PK>>
+  * **service_name** <<PK, FK>>
+  * **cluster_id** <<PK, FK>>
 }
 
 R -down-> O : "Lossless Decompose"
 R -down-> E : "Lossless Decompose"
-O "1" -right- "many" E : "(course_code, term)"
+O "1" -right- "many" E : "(service_name, cluster_id)"
 @enduml
 `} />
 
@@ -71,33 +71,33 @@ O "1" -right- "many" E : "(course_code, term)"
 
 ## See the repeated fact before naming a normal form
 
-Suppose one relation records both registrations and scheduled-section facts:
+Suppose one relation records both scheduled tasks and cluster deployment facts:
 
 ```text
-Registration(student_id, course_code, term, instructor, room)
+TaskAllocation(task_id, service_name, cluster_id, node_ip, port)
 ```
 
-The grain is **one student's registration in one course offering during one term**. The scheduling rule says
+The grain is **one task execution assigned to a deployed service on a cluster**. The infrastructure scheduling rule says
 
 $$
-(course\_code, term) \to (instructor, room).
+(service\_name, cluster\_id) \to (node\_ip, port).
 $$
 
-| `student_id` | `course_code` | `term` | `instructor` | `room` |
+| `task_id` | `service_name` | `cluster_id` | `node_ip` | `port` |
 | --- | --- | --- | --- | --- |
-| Ada | DB101 | 2026S | Ng | R101 |
-| Bo | DB101 | 2026S | Ng | R101 |
-| Cy | DB201 | 2026S | Shah | Lab3 |
+| t-101 | auth-svc | us-east-1 | 10.0.1.5 | 8080 |
+| t-102 | auth-svc | us-east-1 | 10.0.1.5 | 8080 |
+| t-103 | billing-svc | us-east-1 | 10.0.1.12 | 8443 |
 
-> **Worked example.** `(student_id, course_code, term)` is a candidate key under the stated rules, yet `instructor` and `room` depend only on `(course_code, term)`. Changing DB101's room requires editing Ada's and Bo's rows. A missed edit creates a contradiction about the same offering.
+> **Worked example.** `(task_id, service_name, cluster_id)` is a candidate key under the stated rules, yet `node_ip` and `port` depend only on `(service_name, cluster_id)`. Moving `auth-svc` to another node requires editing rows `t-101` and `t-102`. A missed edit creates an inconsistent state about the same service deployment.
 
 ### Predict the anomaly
 
-DB101 moves from R101 to R202 before any student enrolls. Which operation is awkward in this relation, and what data could be lost if the last DB101 registration is deleted?
+`auth-svc` migrates to node `10.0.1.9` before any task is scheduled. Which operation is awkward in this relation, and what data could be lost if the last `billing-svc` task finishes and its row is deleted?
 
-<ExerciseSolution hint="The relation's grain begins with a student registration, but the new fact is about an offering.">
+<ExerciseSolution hint="The relation's grain begins with a task execution, but the deployment fact is about a cluster service.">
 
-Inserting the offering fact is awkward because there is no `student_id` to make a registration tuple. Deleting the last DB101 registration also deletes the only stored instructor/room fact. These are insertion and deletion anomalies; they reveal that an offering fact has been forced into a registration-grain relation.
+Inserting the service deployment is awkward because there is no `task_id` to form a legal tuple. Deleting the last `billing-svc` task also deletes the only record of its assigned node and port. These are insertion and deletion anomalies; they reveal that a service deployment fact has been forced into a task-grain relation.
 </ExerciseSolution>
 
 ## Use the normal forms as tests
@@ -111,7 +111,7 @@ Inserting the offering fact is awkward because there is no `student_id` to make 
 
 > **Warning.** “Atomic” does not mean “never split a value.” A postal address may be a single value for one application and several independently queried facts for another. Choose domains from the operations and constraints you must support.
 
-In `Registration`, `(course_code, term)` is not a superkey because it does not determine `student_id`. Its dependency to `instructor, room` therefore violates BCNF. Because those attributes are non-prime and depend on a proper subset of the composite key, it also violates 2NF.
+In `TaskAllocation`, `(service_name, cluster_id)` is not a superkey because it does not determine `task_id`. Its dependency to `node_ip, port` therefore violates BCNF. Because those attributes are non-prime and depend on a proper subset of the composite key, it also violates 2NF.
 
 ### Recheck the determinant
 
@@ -119,11 +119,11 @@ Trace the dependency inside the actual normalization example rather than changin
 
 | Start | Dependency applied | Closure after the step | Missing attribute |
 | --- | --- | --- | --- |
-| `(course_code, term)` | `(course_code, term) → (instructor, room)` | `(course_code, term, instructor, room)` | `student_id` |
+| `(service_name, cluster_id)` | `(service_name, cluster_id) → (node_ip, port)` | `(service_name, cluster_id, node_ip, port)` | `task_id` |
 
-<ExerciseSolution hint="In `Registration`, the scheduling determinant cannot add a student identifier.">
+<ExerciseSolution hint="In `TaskAllocation`, the service deployment determinant cannot add a task identifier.">
 
-For `Registration`, `(course_code, term)^+` adds `instructor` and `room`, not `student_id`; it is not a superkey. That is exactly the BCNF failure. The functional-dependencies lesson's explorer is the place to practice the general closure algorithm; this table keeps the proof tied to the relation being decomposed.
+For `TaskAllocation`, `(service_name, cluster_id)^+` adds `node_ip` and `port`, not `task_id`; it is not a superkey. That is exactly the BCNF failure. The functional-dependencies lesson's explorer is the place to practice the general closure algorithm; this table keeps the proof tied to the relation being decomposed.
 </ExerciseSolution>
 
 ## Decompose, then prove the join is lossless
@@ -131,11 +131,11 @@ For `Registration`, `(course_code, term)^+` adds `instructor` and `room`, not `s
 Split the relation on the violating dependency:
 
 ```text
-Offering(course_code, term, instructor, room)
-Enrollment(student_id, course_code, term)
+ServiceDeployment(service_name, cluster_id, node_ip, port)
+TaskAssignment(task_id, service_name, cluster_id)
 ```
 
-`Offering` has one tuple per scheduled offering. `Enrollment` has one tuple per student's registration in that offering. A foreign key from `(course_code, term)` in `Enrollment` to the key of `Offering` records the intended connection.
+`ServiceDeployment` has one tuple per service deployed to a cluster. `TaskAssignment` has one tuple per task scheduled on that deployment. A foreign key from `(service_name, cluster_id)` in `TaskAssignment` to the key of `ServiceDeployment` records the intended connection.
 
 <MathStatement id="lossless-binary" kind="proposition" title="Binary lossless-join criterion">
 
@@ -150,7 +150,7 @@ $$
 is implied by $F^+$. In words: the shared attributes determine one whole side.
 </MathStatement>
 
-For every proposed split, submit a three-part evidence record: the two projected relations, their natural join on the shared attributes, and either (a) equality with the original legal instance under the stated dependencies or (b) a concrete spurious tuple. A lossless claim without the shared-attribute closure and this counterexample test is incomplete. The join test is a finite witness for the supplied instance; the criterion above is the dependency-level argument that generalizes it.
+For every proposed split, verify a three-part evidence record: the two projected relations, their natural join on the shared attributes, and either (a) equality with the original legal instance under the stated dependencies or (b) a concrete spurious tuple. A lossless claim without the shared-attribute closure and this counterexample test is incomplete. The join test is a finite witness for the supplied instance; the criterion above is the dependency-level argument that generalizes it.
 
 > **Worked example.** The shared attributes are `(course_code, term)`. They determine all of `Offering` by the scheduling dependency, so joining `Enrollment` back to `Offering` does not invent extra registration/offering combinations. The decomposition is lossless under the stated rule.
 
@@ -192,9 +192,9 @@ For the `Registration` split, name $R_1$, $R_2$, their intersection, and the dep
   explanation="Binary decomposition losslessness requires the intersection of attributes to functionally determine at least one of the decomposed schemas."
 />
 
-<ExerciseSolution hint="Put the scheduled-offering relation on the side determined by the shared pair.">
+<ExerciseSolution hint="Put the service-deployment relation on the side determined by the shared pair.">
 
-Take $R_1 = Offering(course\_code, term, instructor, room)$ and $R_2 = Enrollment(student\_id, course\_code, term)$. Their intersection is $(course\_code, term)$, and $(course\_code, term) \to R_1$ follows from $(course\_code, term) \to (instructor, room)$ plus reflexivity. The criterion therefore proves the binary decomposition lossless.
+Take $R_1 = ServiceDeployment(service\_name, cluster\_id, node\_ip, port)$ and $R_2 = TaskAssignment(task\_id, service\_name, cluster\_id)$. Their intersection is $(service\_name, cluster\_id)$, and $(service\_name, cluster\_id) \to R_1$ follows from $(service\_name, cluster\_id) \to (node\_ip, port)$ plus reflexivity. The criterion therefore proves the binary decomposition lossless.
 </ExerciseSolution>
 
 ## BCNF is not the only goal
@@ -257,11 +257,11 @@ Document the business cost of inconsistent redundant facts, the dependency that 
 
 <Exercise id="ex-norm-lossless-verification" type="verify" level="application" title="Binary Decomposition Losslessness Verification">
 
-A relation schema $Enrollment(student\_id, course\_code, term, instructor, room)$ is decomposed into $Offering(course\_code, term, instructor, room)$ and $Registration(student\_id, course\_code, term)$. Using <Ref id="lossless-binary" />, verify whether this decomposition is lossless under functional dependency $(course\_code, term) \to (instructor, room)$.
+A relation schema $TaskAllocation(task\_id, service\_name, cluster\_id, node\_ip, port)$ is decomposed into $ServiceDeployment(service\_name, cluster\_id, node\_ip, port)$ and $TaskAssignment(task\_id, service\_name, cluster\_id)$. Using <Ref id="lossless-binary" />, verify whether this decomposition is lossless under functional dependency $(service\_name, cluster\_id) \to (node\_ip, port)$.
 
-<ExerciseSolution hint="Find the shared attributes between Offering and Registration, then compute their attribute closure.">
+<ExerciseSolution hint="Find the shared attributes between ServiceDeployment and TaskAssignment, then compute their attribute closure.">
 
-The intersection of attributes is $Offering \cap Registration = \{course\_code, term\}$. Under the given functional dependency, $\{course\_code, term\}^+ = \{course\_code, term, instructor, room\}$, which equals the entire attribute set of $Offering$. By the binary lossless-join criterion, because the intersection functionally determines one of the decomposed relations, the decomposition is guaranteed to be lossless.
+The intersection of attributes is $ServiceDeployment \cap TaskAssignment = \{service\_name, cluster\_id\}$. Under the given functional dependency, $\{service\_name, cluster\_id\}^+ = \{service\_name, cluster\_id, node\_ip, port\}$, which equals the entire attribute set of $ServiceDeployment$. By the binary lossless-join criterion, because the intersection functionally determines one of the decomposed relations, the decomposition is guaranteed to be lossless.
 
 </ExerciseSolution>
 
@@ -291,17 +291,17 @@ Candidate keys are $(Street, City)$ and $(Street, Zip)$. In $Zip \to City$, $Zip
 
 </Exercise>
 
-<Exercise id="ex-norm-multi-meeting-transfer" type="generalise" level="transfer" title="Lossless Normalization of Multi-Meeting Section Schedules">
+<Exercise id="ex-norm-multi-meeting-transfer" type="generalise" level="transfer" title="Lossless Normalization of Multi-Region Service Deployments">
 
-A university section registration schema is given by $SectionRegistration(student\_id, course\_code, section, term, meeting\_time, room, instructor)$ with dependencies $(course\_code, section, term) \to instructor$ and $(course\_code, section, term, meeting\_time) \to room$. Propose a BCNF decomposition into three relations with stated grains, candidate keys, and lossless join justifications.
+A microservice deployment schema is given by $RegionalDeployment(task\_id, service\_name, cluster\_id, region, endpoint\_port, node\_ip)$ with dependencies $(service\_name, cluster\_id) \to node\_ip$ and $(service\_name, cluster\_id, region) \to endpoint\_port$. Propose a BCNF decomposition into three relations with stated grains, candidate keys, and lossless join justifications.
 
-<ExerciseSolution hint="Separate section facts, meeting schedule facts, and student enrollments iteratively.">
+<ExerciseSolution hint="Separate service placement facts, regional routing endpoint facts, and task executions iteratively.">
 
 Decompose into three relations:
-1. $Section(course\_code, section, term, instructor)$ with key $(course\_code, section, term)$ and grain 'one course section'.
-2. $Meeting(course\_code, section, term, meeting\_time, room)$ with key $(course\_code, section, term, meeting\_time)$ and grain 'one meeting slot of a section'.
-3. $Registration(student\_id, course\_code, section, term)$ with key $(student\_id, course\_code, section, term)$ and grain 'one student registration in a section'.
-Each step is lossless: $Section$ intersects the remainder on $(course\_code, section, term)$, which determines $Section$; $Meeting$ intersects $Registration$ on $(course\_code, section, term)$, which is a foreign key in both.
+1. $ServiceHost(service\_name, cluster\_id, node\_ip)$ with key $(service\_name, cluster\_id)$ and grain 'one node assignment for a service cluster'.
+2. $RegionalIngress(service\_name, cluster\_id, region, endpoint\_port)$ with key $(service\_name, cluster\_id, region)$ and grain 'one regional ingress port for a cluster service'.
+3. $TaskExecution(task\_id, service\_name, cluster\_id, region)$ with key $(task\_id, service\_name, cluster\_id, region)$ and grain 'one task execution allocated to a regional service'.
+Each step is lossless: $ServiceHost$ intersects the remainder on $(service\_name, cluster\_id)$, which determines $ServiceHost$; $RegionalIngress$ intersects $TaskExecution$ on $(service\_name, cluster\_id, region)$, which is a candidate key of $RegionalIngress$.
 
 </ExerciseSolution>
 

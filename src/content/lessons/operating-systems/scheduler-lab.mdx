@@ -1,6 +1,7 @@
 ---
 title: "Scheduler Lab: Weighted Virtual Time in xv6"
 course: operating-systems
+kind: lab
 description: Instrument, replace, falsify, and evaluate xv6 scheduling with weighted virtual runtime, bounded wakeup credit, adversarial tests, and a defended measurement memo.
 prerequisites:
   - RISC-V traps, timer interrupts, kernel/user return, and the xv6 boot path
@@ -14,11 +15,11 @@ outcomes:
   - Author adversarial tests that distinguish the intended design from at least eight named wrong implementations.
   - Measure share, response, overhead, and tail behavior under controlled workloads and defend causal claims with limitations.
 omissions:
-  - No complete kernel patch, private grading tests, or copied university assignment is published; the learner must produce and defend the implementation.
+  - No complete kernel patch, private tests, or copied assignment is published; the learner must develop and verify the implementation.
   - The quantitative fairness contract is single-hart; multi-hart work tests safety and regression but does not claim exact global fairness.
   - Linux EEVDF, hard real-time scheduling, load balancing, NUMA, priority inheritance, and production security policy are not reimplemented.
 estimatedMinutes: 600
-assessment: A clean-room xv6 patch, public/adversarial test suite, raw measurement data, design memo, failure analysis, and live or written defense graded against behavior, invariants, test discrimination, and evidence—not token presence.
+assessment: A clean-room xv6 patch, public/adversarial test suite, raw measurement data, design memo, failure analysis, and invariant verification evaluated against behavior, invariants, test discrimination, and evidence.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 import ExerciseSet from '../../../components/ExerciseSet.astro';
@@ -34,11 +35,11 @@ A scheduler can pass `usertests`, print plausible shares, and remain wrong. Plac
 
 The lab treats a scheduling patch as a concurrent mechanism with evidence, not as a changed `if` statement.
 
-> **Original lab brief.** The task, milestones, interface, workloads, wrong-implementation matrix, and rubric below are original LibreUni material. They were designed against the permissively licensed upstream xv6 source and do not reproduce MIT 6.1810 lab instructions or solutions.
+> **Original lab brief.** The task, milestones, interface, workloads, wrong-implementation matrix, and verification criteria below are original LibreUni material. They were designed against the permissively licensed upstream xv6 source and do not reproduce MIT 6.1810 lab instructions or solutions.
 
 {/* Source tracking: The baseline file map and invariants were verified against MIT PDOS tag `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`. The scheduling design is an original teaching policy; Linux EEVDF documentation is comparative background only. */}
 
-## Deliverable and non-negotiable boundary
+## Implementation contract and invariants
 
 Implement a scheduler named **WVT** (weighted virtual time) in a detached checkout of xv6 rev5. Each runnable process has weight $w\in\{1,2,4,8\}$ and virtual runtime $v$. When a process leaves `RUNNING` after consuming measured processor time $\Delta t$,
 
@@ -50,14 +51,14 @@ $$
 
 On one hart, select a `RUNNABLE` process with minimum $v$; break exact ties by PID. Larger weight accumulates virtual time more slowly and therefore receives a larger long-run share while continuously runnable.
 
-The deliverable contains:
+The complete implementation package contains:
 
 - the patch, based on the exact commit below;
 - `schedtests`, a user-space test binary with machine-checkable summaries;
 - optional test-only kernel hooks isolated behind `#ifdef SCHED_TEST`;
 - raw CSV or TSV measurements and the script/notebook used to summarize them;
 - a design memo of at most 2,500 words plus appendices; and
-- answers to the defense questions.
+- answers to the diagnostic analysis questions.
 
 No full implementation appears here. Pseudocode exposes proof obligations, not line-by-line placement.
 
@@ -66,7 +67,7 @@ No full implementation appears here. Pseudocode exposes proof obligations, not l
 Why does “pick the smallest `vruntime`” fail as a complete specification? List at least five missing rules.
 
 <ExerciseSolution hint="Creation, sleeping, time measurement, ties, concurrency, and wraparound all change the order relation.">
-Missing rules include initialization, child placement at $\max(v_{parent}, floor)$, wakeup placement, permitted weights, when elapsed time is charged, how voluntary yield is charged, deterministic ties, candidate revalidation on multiple harts, lock order, overflow/renormalization, exit/reap accounting, and what “fair” means over a measurement window. Any five with consequences earn credit. A data-field definition is not a scheduling policy.
+Missing rules include initialization, child placement at $\max(v_{parent}, floor)$, wakeup placement, permitted weights, when elapsed time is charged, how voluntary yield is charged, deterministic ties, candidate revalidation on multiple harts, lock order, overflow/renormalization, exit/reap accounting, and what “fair” means over a measurement window. Any five with consequences constitute a sound analysis. A data-field definition is not a scheduling policy.
 </ExerciseSolution>
 
 <Quiz client:load
@@ -112,7 +113,7 @@ Inside xv6, run `usertests` and `forktest`; save complete console output. Repeat
 
 ### Baseline record
 
-Submit this table before implementation:
+Record this table before implementation:
 
 | Evidence | CPUS=1 | CPUS=3 |
 | --- | --- | --- |
@@ -299,7 +300,7 @@ print("New child from sleeping parent (v=0) placed at:", fork_vruntime(0, floor_
 Wire declarations and numbers through all kernel/user layers; add a tiny test that changes each legal weight, rejects `0,3,16,-1`, and snapshots itself. Take two samples around known live-state activity and verify monotonic `sample_time` plus the exact three-state partition. Pass an invalid pointer and prove a subsequent `getpid`/`fork` still works. Inspect the disassembly or generated syscall stub once; a header declaration alone does not create an ABI.
 
 <ExerciseSolution hint="The dangerous operation is not reading the stats; it is copying them across a fallible boundary while owning scheduler state.">
-Full-credit behavior: legal weights round-trip; illegal values return `-1` without mutation; `sample_time` and current-state accrual derive from one `r_time()` read; paired live-state samples satisfy the exact partition; invalid `copyout` returns `-1`; no process lock remains held; baseline tests still pass. A kernel that reads time separately for each field, validates only the start address, or writes the user pointer directly fails the boundary contract. The implementation remains intentionally undisclosed.
+Verified correct behavior: legal weights round-trip; illegal values return `-1` without mutation; `sample_time` and current-state accrual derive from one `r_time()` read; paired live-state samples satisfy the exact partition; invalid `copyout` returns `-1`; no process lock remains held; baseline tests still pass. A kernel that reads time separately for each field, validates only the start address, or writes the user pointer directly fails the boundary contract. The implementation remains intentionally undisclosed.
 </ExerciseSolution>
 
 ## Contract: WVT selection, creation, and wakeup
@@ -485,7 +486,7 @@ The memo must contain:
 
 Every design claim cites source lines by file/function or primary reference. Do not paste large source fragments.
 
-## Defense questions
+## Diagnostic analysis questions
 
 Answer without running the code, then use traces to check the answers.
 
@@ -500,7 +501,7 @@ Answer without running the code, then use traces to check the answers.
 9. What does the single-hart SJF-style minimum scan cost asymptotically in `NPROC`, and which measurement could reveal it?
 10. Which result would falsify the claim that observed 1:4 share follows weight rather than PID or creation order?
 
-<ExerciseSolution title="Reveal defense diagnostics">
+<ExerciseSolution title="Reveal diagnostic solutions">
 
 1. Return occurs when the process later yields back; the dispatch happened before entering it.
 2. Charge elapsed time to the change point under weight 1, reset the timestamp, then charge subsequent time under 8.
@@ -515,23 +516,22 @@ Answer without running the code, then use traces to check the answers.
 
 </ExerciseSolution>
 
-## Grading contract
+## Verification checklist and defect conditions
 
 > **Warning.** Safety blockers cap the result regardless of throughput because a fast double-running or lock-leaking scheduler is not an acceptable scheduler.
 
-| Dimension | Points | Publication blocker |
-| --- | ---: | --- |
-| Baseline reproducibility and source map | 8 | wrong/unrecorded commit or broken baseline |
-| State/accounting invariants | 16 | bypassed transition, double charge, missing/split-read `sample_time`, or nonzero in-scope residual |
-| WVT policy completeness | 18 | child below $\max(v_{parent}, floor)$, no wakeup bound, undefined ties/overflow |
-| Locking and SMP safety | 14 | double-running, stale dispatch, or lock-order deadlock |
-| ABI and failure behavior | 10 | unchecked pointer, lock-held copyout, partial mutation |
-| Test discrimination | 16 | tests do not kill W3/W4/W7/W8, statistical tolerances are post-hoc, or W6 tolerates a nonzero residual |
-| Measurements and causal interpretation | 12 | no raw data, confounded policy comparison, invented values |
-| Memo and defense | 6 | cannot explain own state/lock protocol |
-| **Total** | **100** | |
+| Dimension | Invariant criterion | Defect condition |
+| --- | --- | --- |
+| Baseline reproducibility and source map | Clean diff against pinned commit `7d7adbb1…` | Wrong/unrecorded commit or broken baseline |
+| State/accounting invariants | Conservation of sample time across all process states | Bypassed transition, double charge, missing/split-read `sample_time`, or nonzero in-scope residual |
+| WVT policy completeness | Correct debt updates, floor tracking, bounded wakeup | Child below $\max(v_{parent}, floor)$, no wakeup bound, undefined ties/overflow |
+| Locking and SMP safety | Total ordering across locks without deadlock | Double-running, stale dispatch, or lock-order deadlock |
+| ABI and failure behavior | Safe parameter validation and unheld copyout | Unchecked pointer, lock-held copyout, partial mutation |
+| Test discrimination | Falsification of flawed mutants W1–W9 | Tests do not kill W3/W4/W7/W8, statistical tolerances are post-hoc, or W6 tolerates a nonzero residual |
+| Measurements and causal interpretation | Reproducible trial outputs and controlled sweeps | No raw data, confounded policy comparison, invented values |
+| Architectural understanding | Complete derivation of state and lock invariants | Cannot explain own state/lock protocol |
 
-Passing requires at least 70 overall **and** no publication blocker. Performance cannot compensate for a safety defect. A human reviewer must inspect authorship and defense; the page cannot certify either automatically.
+A verified implementation must satisfy all invariant criteria with zero defect conditions. Performance throughput cannot compensate for a safety or isolation defect. Every diagnostic question should be falsifiable against execution traces.
 
 ## Handoff checklist
 
@@ -539,7 +539,7 @@ Passing requires at least 70 overall **and** no publication blocker. Performance
 
 **Required lab evidence checklist:**
 
-| Deliverable item | Verification criterion | Required evidence artifact |
+| Engineering artifact | Verification criterion | Required evidence artifact |
 | --- | --- | --- |
 | Pinned patch diff | Formatted against pinned commit `7d7adbb1…` | Git diff file with zero unrelated changes |
 | Upstream test suite | Passes full regression suite on CPUS=1 and CPUS=3 | Raw console logs with zero assertion failures |

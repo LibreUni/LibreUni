@@ -196,7 +196,7 @@ test.describe('production smoke checks', () => {
 
   test('SQL lab executes queries and preserves the fixture on errors', async ({ page }) => {
     await page.goto('/lessons/database-systems/sql-lab.html', { waitUntil: 'domcontentloaded' });
-    const lab = page.getByRole('region', { name: 'Registration fixture' });
+    const lab = page.getByRole('region', { name: 'Service allocation fixture' });
     const query = lab.getByRole('textbox', { name: 'SQL query' });
     const run = lab.getByRole('button', { name: 'Run query' });
     await run.click();
@@ -261,7 +261,7 @@ test.describe('production smoke checks', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(/The Operating-System Contract/i);
 
     const sidebar = page.locator('#course-sidebar');
-    await expect(sidebar.locator('[data-course-module]')).toHaveCount(7);
+    await expect(sidebar.locator('[data-course-module]')).toHaveCount(8);
     const mobile = testInfo.project.name === 'mobile-chrome';
     if (mobile) await page.getByRole('button', { name: 'Course contents', exact: true }).click();
     await expect(sidebar.getByRole('link', { name: /The Operating-System Contract/i })).toHaveAttribute('aria-current', 'page');
@@ -286,7 +286,7 @@ test.describe('production smoke checks', () => {
     await completion.click();
     await expect(completion).toHaveAttribute('aria-pressed', 'true');
     if (mobile) await page.getByRole('button', { name: 'Course contents', exact: true }).click();
-    await expect(sidebar.locator('#course-completion-summary')).toHaveText('1 of 28 complete');
+    await expect(sidebar.locator('#course-completion-summary')).toHaveText('1 of 29 complete');
   });
 
   test('Operating Systems scheduler model changes state and restores its documented baseline', async ({ page }) => {

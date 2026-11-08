@@ -47,6 +47,8 @@ Academic but not dry. Engaging, clear, precise, to the point. No filler.
 
 **Never use:** "welcome", "let's dive in", "in this lesson", "as you have learned before", "congratulations on finishing", "you have completed", "next up", "previously", "before we move on", "let's explore", "let's take a look at".
 
+**Autonomous Open Digital Learning Contract (D-0017):** LibreUni is an open digital curriculum platform, NOT a brick-and-mortar university. Never assume learners are enrolled students in a cohort, classroom, semester, or academic year. Never write or retain physical university terminology ("students", "professors", "instructors", "TAs", "office hours", "semesters", "deliverables", "submitting/submissions", "grading rubrics", "oral defense", "human reviewer", "passing grade", "academic integrity dean"). Never create timed exam hall simulations with countdown clocks. Course practice is self-paced, constructive, and algorithmic (`<PracticeGenerator>`). All topics are non-sequential reference units accessible in any order.
+
 **Prompt Parroting Prohibition (D-0015):** Prompt instructions, user constraints, design rationales, or implementation directives (e.g. "don't add a timer", "no teacher grading", "coming later as a feature") must NEVER be parroted or echoed into user-facing copy, headers, badges, or descriptions. Public page copy must be written strictly from the learner's perspective as professional, standalone educational material describing what the content is, never discussing prompt directives, absent features, or omitted requirements.
 
 Instead — directly present the question, problem, or concept.
@@ -62,7 +64,7 @@ Instead — directly present the question, problem, or concept.
 
 ## Structure & Testing
 
-**Course size:** typically 15–40 lessons per full-semester course (focused preparatory modules such as Calculus may have 7–15 lessons). **Lesson size:** typically 10,000–30,000 characters (~6–8 hours of focused study including exercises/derivations). Note that there is no strict limit; focus should remain on depth, clarity, and academic rigor without artificial constraints.
+**Course size:** typically 15–40 lessons per full-length course (focused preparatory modules such as Calculus may have 7–15 lessons). **Lesson size:** typically 10,000–30,000 characters (~6–8 hours of focused study including exercises/derivations). Note that there is no strict limit; focus should remain on depth, clarity, and scholarly rigor without artificial constraints.
 
 Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: define the concept, demonstrate it with examples (including edge cases), then give the reader something to try.
 
@@ -70,7 +72,7 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
 
 **Commit messages:** Use `[Verb] Short description` style (e.g., `[Add]`, `[Fix]`, `[Refactor]`, `[Update]`, `[Remove]`).
 
-**Before submitting:**
+**Before completing a task:**
 
 1. Run `python3 scripts/course_stats.py` — run course smoke tests and inventory code blocks/components. Every `CodeRunner` must use a checked, declared language; renderer failures from PlantUML, PythonDiagram, and TikZ logs are also failures. A passing result means the checked structure and code are not broken; it is not a quality rating.
    - Run `python3 scripts/course_stats.py <course-id>` to smoke-test one course.

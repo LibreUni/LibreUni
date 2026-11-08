@@ -57,8 +57,6 @@ test('course structure validates module and page kinds and numbering rules', () 
           }
         } else if (mod.kind === 'practice') {
           assert.equal(page.kind, 'practice', `Practice module may only contain practice pages`);
-        } else if (mod.kind === 'exam') {
-          assert.equal(page.kind, 'exam', `Exam module may only contain exam pages`);
         } else if (mod.kind === 'reference') {
           assert.equal(page.kind, 'recap', `Reference module may only contain recap pages`);
         }
@@ -146,20 +144,6 @@ test('problem set, recap sheet, and exam contracts hold for specialized page kin
 
         if (page.kind === 'practice') {
           assert.ok(Array.isArray(page.frontmatter.covers) && page.frontmatter.covers.length >= 1, `${page.slug} needs covers`);
-        }
-
-        if (page.kind === 'exam') {
-          assert.ok(Array.isArray(page.frontmatter.covers) && page.frontmatter.covers.length >= 1, `${page.slug} needs covers`);
-          assert.ok(typeof page.frontmatter.durationMinutes === 'number' && page.frontmatter.durationMinutes > 0);
-          assert.ok(typeof page.frontmatter.totalPoints === 'number' && page.frontmatter.totalPoints > 0);
-          assert.ok(Array.isArray(page.frontmatter.allowedMaterials));
-
-          // Points sum check (§3.3)
-          const questionPoints = [...rawContent.matchAll(/<ExamQuestion\b[^>]*\bpoints=\{?([0-9]+)\}?/g)].map((m) => Number(m[1]));
-          if (questionPoints.length > 0) {
-            const total = questionPoints.reduce((a, b) => a + b, 0);
-            assert.equal(total, page.frontmatter.totalPoints, `Sum of question points (${total}) must equal totalPoints (${page.frontmatter.totalPoints}) on ${page.slug}`);
-          }
         }
       }
     }

@@ -53,9 +53,9 @@ STRUCTURAL_SECTION_RE = re.compile(
     r"deliberate (?:omissions?|boundar(?:y|ies)).*|"
     r"omissions?(?:\s*&.*)?|"
     r"connections?(?:\s+and\s+.*)?|limits? and connections?|"
-    r"summary|key takeaways?|assessment(?: standard)?|grading criteria|"
+    r"summary|key takeaways?|assessment(?: standard)?|grading criteria|verification (?:criteria|checklist).*|"
     r"(?:lab\s+)?tasks?|proof obligations?|"
-    r"required (?:submission|invariant checker)|"
+    r"required (?:submission|invariant checker)|(?:architecture\s+)?specification(?:\s+package)?|"
     r"deliverables?(?:\s+.*)?|"
     r"definitions and results|method chooser|hypothesis checklist|typical errors"
     r")\s*$",

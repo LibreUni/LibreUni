@@ -49,80 +49,80 @@ $$
 
 ## Trace a query, not just its notation
 
-Use these fixed relations for term `2026S`.
+Use these fixed relations for region `us-east`.
 
-| `Student` |  |  | `Required` |  | `Enrollment` |  |  |
+| `Node` |  |  | `RequiredService` |  | `Deployment` |  |  |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `sid` | `cohort` |  | `cid` |  | `sid` | `cid` | `term` |
-| Ada | first_year |  | C101 |  | Ada | C101 | 2026S |
-| Bo | second_year |  | C201 |  | Ada | C201 | 2026S |
-| Cy | first_year |  |  |  | Bo | C101 | 2026S |
-|  |  |  |  |  | Bo | C201 | 2025F |
-|  |  |  |  |  | Cy | C101 | 2026S |
+| `node_id` | `tier` |  | `service_id` |  | `node_id` | `service_id` | `region` |
+| worker-01 | edge |  | S101 |  | worker-01 | S101 | us-east |
+| worker-02 | core |  | S201 |  | worker-01 | S201 | us-east |
+| worker-03 | edge |  |  |  | worker-02 | S101 | us-east |
+|  |  |  |  |  | worker-02 | S201 | eu-west |
+|  |  |  |  |  | worker-03 | S101 | us-east |
 
-> **Worked example.** “Which students are enrolled in C101 in 2026S?” starts with selection, then projection:
+> **Worked example.** “Which nodes are hosting service S101 in us-east?” starts with selection, then projection:
 
 $$
-\pi_{sid}\bigl(\sigma_{cid = \text{'C101'} \land term = \text{'2026S'}}(Enrollment)\bigr)
-= \{\text{Ada}, \text{Bo}, \text{Cy}\}.
+\pi_{node\_id}\bigl(\sigma_{service\_id = \text{'S101'} \land region = \text{'us-east'}}(Deployment)\bigr)
+= \{\text{worker-01}, \text{worker-02}, \text{worker-03}\}.
 $$
 
-The selected relation still has grain “one enrollment.” The projected result has grain “one student who meets the condition.” That change is intentional.
+The selected relation still has grain “one deployment.” The projected result has grain “one node that meets the condition.” That change is intentional.
 
 ### Predict the intermediate result
 
 What is the schema and tuple set of
 
 $$
-\pi_{sid,cid}\bigl(\sigma_{term = \text{'2026S'}}(Enrollment)\bigr)?
+\pi_{node\_id,service\_id}\bigl(\sigma_{region = \text{'us-east'}}(Deployment)\bigr)?
 $$
 
-<ExerciseSolution hint="Selection leaves all attributes in place; projection then drops only `term`.">
+<ExerciseSolution hint="Selection leaves all attributes in place; projection then drops only `region`.">
 
-Its schema is `(sid, cid)` and its tuples are `(Ada, C101)`, `(Ada, C201)`, `(Bo, C101)`, and `(Cy, C101)`. The result says that a student is enrolled in a course during the chosen term; it no longer states the term, so do not reuse it for a multi-term question without rebuilding the scope.
+Its schema is `(node_id, service_id)` and its tuples are `(worker-01, S101)`, `(worker-01, S201)`, `(worker-02, S101)`, and `(worker-03, S101)`. The result says that a node hosts a service during the chosen regional scope; it no longer states the region, so do not reuse it for a multi-region question without rebuilding the scope.
 </ExerciseSolution>
 
 ### Make the same operations visible
 
-The playground contains a separate fixed enrollment/course fixture. Use it to perform one selection, compare bag versus set projection, and inspect an equijoin. Before each step, say whether you expect its output grain to be one enrollment, one course, or a joined pair.
+The playground contains a separate fixed deployment fixture. Use it to perform one selection, compare bag versus set projection, and inspect an equijoin. Before each step, say whether you expect its output grain to be one deployment, one service, or a joined pair.
 
 <RelationalAlgebraPlayground client:load />
 
 > **Warning.** This visual model intentionally excludes `NULL`, outer joins, nonunique join keys, ordering, and optimizer behavior. It teaches a clean set-oriented core; SQL introduces those additional semantics later.
 
-## “All required courses” is a missing-pair problem
+## “All required services” is a missing-pair problem
 
 The word **all** often tempts people into a vague division operator. Derive it by enumerating what should exist and subtracting what is absent.
 
-> **Example.** Find students who are enrolled in every required course in `2026S`. First make every expected student/course pair. Then remove pairs that have no matching enrollment.
+> **Example.** Find nodes that host every required service in `us-east`. First make every expected node/service pair. Then remove pairs that have no matching deployment.
 
 $$
 \begin{aligned}
-Enrolled &= \pi_{sid,cid}\bigl(\sigma_{term = \text{'2026S'}}(Enrollment)\bigr) \\
-Expected &= \pi_{sid}(Student) \times Required \\
-Missing &= Expected - Enrolled \\
-Answer &= \pi_{sid}(Student) - \pi_{sid}(Missing)
+Deployed &= \pi_{node\_id,service\_id}\bigl(\sigma_{region = \text{'us-east'}}(Deployment)\bigr) \\
+Expected &= \pi_{node\_id}(Node) \times RequiredService \\
+Missing &= Expected - Deployed \\
+Answer &= \pi_{node\_id}(Node) - \pi_{node\_id}(Missing)
 \end{aligned}
 $$
 
-`Expected` and `Enrolled` both have schema `(sid, cid)`, so the difference is defined. For the data above, `Missing` contains `(Bo, C201)`, `(Cy, C201)`; `Answer` is `{Ada}`.
+`Expected` and `Deployed` both have schema `(node_id, service_id)`, so the difference is defined. For the data above, `Missing` contains `(worker-02, S201)`, `(worker-03, S201)`; `Answer` is `{worker-01}`.
 
-> **Invariant.** Before taking a union, intersection, or difference, verify compatible schemas and attribute meanings. Two columns both named `id` are not automatically compatible if one is a student identifier and the other is an offering identifier.
+> **Invariant.** Before taking a union, intersection, or difference, verify compatible schemas and attribute meanings. Two columns both named `id` are not automatically compatible if one is a node identifier and the other is a service identifier.
 
 ### Apply the derivation
 
-The dean asks for students who are enrolled in every required course **and** are in the `first_year` cohort. Where should the cohort condition go: in `Enrolled`, `Expected`, or the final answer?
+A query specification requires finding nodes that host every required service **and** belong to the `edge` tier. Where should the tier condition go: in `Deployed`, `Expected`, or the final answer?
 
-<ExerciseSolution hint="The cohort condition restricts who is required to satisfy all pairs, not what counts as a matching enrollment.">
+<ExerciseSolution hint="The tier condition restricts which nodes are required to satisfy all pairs, not what counts as a matching deployment.">
 
-Restrict the candidate students before forming expected pairs:
+Restrict the candidate nodes before forming expected pairs:
 
 $$
-Eligible = \sigma_{cohort = \text{first\_year}}(Student), \qquad
-Expected = \pi_{sid}(Eligible) \times Required.
+Eligible = \sigma_{tier = \text{'edge'}}(Node), \qquad
+Expected = \pi_{node\_id}(Eligible) \times RequiredService.
 $$
 
-Then use the same `Missing` and final subtraction pattern with `Eligible`. Filtering only the final answer can be correct for a simple output filter, but it unnecessarily constructs missing pairs for students who were never candidates and obscures the requirement.
+Then use the same `Missing` and final subtraction pattern with `Eligible`. Filtering only the final answer can be correct for a simple output filter, but it unnecessarily constructs missing pairs for nodes that were never candidates and obscures the requirement.
 </ExerciseSolution>
 
 ## A rewrite needs stated assumptions
@@ -173,11 +173,11 @@ Check that the join is inner, the predicate reads only `R` attributes, and the i
 
 <Exercise id="ex-ra-intermediate-grain" type="describe" level="recall" title="Intermediate Schema and Tuple Projection">
 
-Given relation schema $Enrollment(sid, cid, term)$ and selection $\sigma_{term = \text{'2026S'}}(Enrollment)$, determine the schema and result grain of $\pi_{sid,cid}\bigl(\sigma_{term = \text{'2026S'}}(Enrollment)\bigr)$. Explain why dropping $term$ affects subsequent multi-term queries.
+Given relation schema $Deployment(node\_id, service\_id, region)$ and selection $\sigma_{region = \text{'us-east'}}(Deployment)$, determine the schema and result grain of $\pi_{node\_id,service\_id}\bigl(\sigma_{region = \text{'us-east'}}(Deployment)\bigr)$. Explain why dropping $region$ affects subsequent multi-region queries.
 
-<ExerciseSolution hint="Selection preserves all attributes; projection then retains only sid and cid.">
+<ExerciseSolution hint="Selection preserves all attributes; projection then retains only node_id and service_id.">
 
-The output schema is $(sid, cid)$ with tuples representing students actively enrolled in a course during 2026S. Because $term$ is omitted from the projected schema, the output relation loses temporal context and cannot be directly intersected with other terms without reapplying a term qualifier.
+The output schema is $(node\_id, service\_id)$ with tuples representing nodes actively hosting a service in us-east. Because $region$ is omitted from the projected schema, the output relation loses geographic context and cannot be directly intersected with other regions without reapplying a region qualifier.
 
 </ExerciseSolution>
 
@@ -185,11 +185,11 @@ The output schema is $(sid, cid)$ with tuples representing students actively enr
 
 <Exercise id="ex-ra-pushdown-validation" type="verify" level="application" title="Inner-Join Pushdown Precondition Check">
 
-An engineer proposes rewriting $\sigma_{R.term = \text{'2026S'}}(R \bowtie_{R.sid = S.sid} S)$ into $\sigma_{R.term = \text{'2026S'}}(R) \bowtie_{R.sid = S.sid} S$. Referring to <Ref id="ra-pushdown" />, verify whether this rewrite is valid under two-valued set semantics, and identify one condition under which it fails for outer joins.
+An engineer proposes rewriting $\sigma_{R.region = \text{'us-east'}}(R \bowtie_{R.node\_id = S.node\_id} S)$ into $\sigma_{R.region = \text{'us-east'}}(R) \bowtie_{R.node\_id = S.node\_id} S$. Referring to <Ref id="ra-pushdown" />, verify whether this rewrite is valid under two-valued set semantics, and identify one condition under which it fails for outer joins.
 
 <ExerciseSolution hint="Check predicate attribute dependency and outer-join null extension semantics.">
 
-Under two-valued set semantics, the rewrite is valid because the selection predicate references only attributes of $R$ and the join is an inner equijoin. For a left outer join where the predicate references $S$ instead (e.g. $S.flag = \text{'Y'}$), pushing the predicate into $S$ retains non-matching $R$ tuples with NULL padding, whereas the post-join filter eliminates them.
+Under two-valued set semantics, the rewrite is valid because the selection predicate references only attributes of $R$ and the join is an inner equijoin. For a left outer join where the predicate references $S$ instead (e.g. $S.active = \text{'Y'}$), pushing the predicate into $S$ retains non-matching $R$ tuples with NULL padding, whereas the post-join filter eliminates them.
 
 </ExerciseSolution>
 
@@ -197,40 +197,40 @@ Under two-valued set semantics, the rewrite is valid because the selection predi
 
 <Exercise id="ex-ra-universal-derivation" type="construct" level="application" title="Universal Division via Difference Formulation">
 
-Let $Student(sid, cohort)$, $Required(cid)$, and $Enrollment(sid, cid, term)$ be set relations. Using relational algebra operators from <Ref id="ra-operators" />, construct an expression that returns all students in the `first_year` cohort who are enrolled in every course in $Required$ during term `2026S`.
+Let $Node(node\_id, tier)$, $RequiredService(service\_id)$, and $Deployment(node\_id, service\_id, region)$ be set relations. Using relational algebra operators from <Ref id="ra-operators" />, construct an expression that returns all nodes in the `edge` tier that host every service in $RequiredService$ in region `us-east`.
 
-<ExerciseSolution hint="Restrict candidate students first before constructing the Cartesian product of expected pairs.">
+<ExerciseSolution hint="Restrict candidate nodes first before constructing the Cartesian product of expected pairs.">
 
-Define candidate first-year students and expected pairs:
+Define candidate edge nodes and expected pairs:
 $$
 \begin{aligned}
-Eligible &= \sigma_{cohort = \text{'first\_year'}}(Student) \\
-Expected &= \pi_{sid}(Eligible) \times Required \\
-Enrolled &= \pi_{sid,cid}\bigl(\sigma_{term = \text{'2026S'}}(Enrollment)\bigr) \\
-Missing &= Expected - Enrolled \\
-Answer &= \pi_{sid}(Eligible) - \pi_{sid}(Missing)
+Eligible &= \sigma_{tier = \text{'edge'}}(Node) \\
+Expected &= \pi_{node\_id}(Eligible) \times RequiredService \\
+Deployed &= \pi_{node\_id,service\_id}\bigl(\sigma_{region = \text{'us-east'}}(Deployment)\bigr) \\
+Missing &= Expected - Deployed \\
+Answer &= \pi_{node\_id}(Eligible) - \pi_{node\_id}(Missing)
 \end{aligned}
 $$
-Filtering candidates before forming the product avoids generating missing pairs for unrelated cohorts.
+Filtering candidates before forming the product avoids generating missing pairs for unrelated tiers.
 
 </ExerciseSolution>
 
 </Exercise>
 
-<Exercise id="ex-ra-dual-difference-transfer" type="generalise" level="transfer" title="Constrained Core-Course Enrollment Derivation">
+<Exercise id="ex-ra-dual-difference-transfer" type="generalise" level="transfer" title="Constrained Core-Service Deployment Derivation">
 
-Let $Student(sid)$, $Course(cid)$, $Taken(sid, cid, term)$, and $Core(cid)$ be set relations. Derive an algebra expression for students who took every core course in `2026S` but took no non-core course in that term. State the compatibility of schemas in every difference operation.
+Let $Node(node\_id)$, $Service(service\_id)$, $Deployed(node\_id, service\_id, region)$, and $Core(service\_id)$ be set relations. Derive an algebra expression for nodes that host every core service in `us-east` but host no non-core service in that region. State the compatibility of schemas in every difference operation.
 
-<ExerciseSolution hint="Derive universal completion of Core, then subtract the set of students with non-core enrollments.">
+<ExerciseSolution hint="Derive universal deployment of Core, then subtract the set of nodes with non-core deployments.">
 
-First isolate 2026S completions: $Completed = \pi_{sid,cid}(\sigma_{term = \text{'2026S'}}(Taken))$. Compute students completing all core courses:
+First isolate us-east deployments: $Active = \pi_{node\_id,service\_id}(\sigma_{region = \text{'us-east'}}(Deployed))$. Compute nodes hosting all core services:
 $$
 \begin{aligned}
-ExpectedCore &= \pi_{sid}(Student) \times Core \\
-AllCore &= \pi_{sid}(Student) - \pi_{sid}(ExpectedCore - Completed)
+ExpectedCore &= \pi_{node\_id}(Node) \times Core \\
+AllCore &= \pi_{node\_id}(Node) - \pi_{node\_id}(ExpectedCore - Active)
 \end{aligned}
 $$
-Next isolate non-core courses: $NonCore = \pi_{cid}(Course) - Core$ (both schema $(cid)$). Find students with any non-core course: $HasNonCore = \pi_{sid}(Completed \bowtie NonCore)$. The final answer is $AllCore - HasNonCore$. Both operands have schema $(sid)$.
+Next isolate non-core services: $NonCore = \pi_{service\_id}(Service) - Core$ (both schema $(service\_id)$). Find nodes with any non-core service: $HasNonCore = \pi_{node\_id}(Active \bowtie NonCore)$. The final answer is $AllCore - HasNonCore$. Both operands have schema $(node\_id)$.
 
 </ExerciseSolution>
 

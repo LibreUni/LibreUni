@@ -2,8 +2,8 @@ import { getCollection } from 'astro:content';
 import type { CollectionEntry } from 'astro:content';
 import { loadCourseStructure } from '../lib/courseStructure.mjs';
 
-export type PageKind = 'lesson' | 'lab' | 'problems' | 'recap' | 'practice' | 'exam';
-export type ModuleKind = 'chapter' | 'practice' | 'exam' | 'reference';
+export type PageKind = 'lesson' | 'lab' | 'problems' | 'recap' | 'practice';
+export type ModuleKind = 'chapter' | 'practice' | 'reference';
 
 type LessonEntry = CollectionEntry<'lessons'>;
 

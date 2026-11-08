@@ -1,6 +1,6 @@
-# Lesson Exemplar Specification (10-ECTS Reference Standard)
+# Lesson Exemplar Specification (Upper-Division Reference Standard)
 
-This document defines the canonical specification and acceptance rubric for reference-grade lessons in LibreUni. Every work unit authored by writers and audited by the Synthetic Student and Independent Verifier must be evaluated against this contract.
+This document defines the canonical specification and acceptance criteria for reference-grade lessons in LibreUni. Every work unit authored by writers and audited by the Synthetic Auditor and Independent Verifier must be evaluated against this contract.
 
 ---
 
@@ -42,8 +42,8 @@ Every acceptable lesson adheres to the structural grammar defined in [`docs/agen
 - Multi-tier exercises:
   1. *Application*: Directly exercising the derived formula/trace.
   2. *Transfer*: Applying the mechanism under altered constraints or an unfamiliar architecture.
-  3. *Synthesis / Proof*: Requiring the student to construct an invariant, write a C kernel routine, or formulate a proof.
-- Complete worked solutions or formal verification rubrics.
+  3. *Synthesis / Proof*: Requiring the learner to construct an invariant, write a C kernel routine, or formulate a proof.
+- Complete worked solutions or formal verification criteria.
 
 ### G. Scope Boundaries & Further Reading
 - Declare concise scope boundaries in the frontmatter `omissions` field (rendered inside the collapsible `Lesson brief`), rather than adding a standalone boilerplate omissions section at the end of the lesson body.
@@ -57,7 +57,7 @@ Every acceptable lesson adheres to the structural grammar defined in [`docs/agen
 
 ## 3. Reviewer Verification Checklist (Evidence Packet)
 
-When auditing a lesson, the Independent Verifier and Synthetic Student must complete this scorecard:
+When auditing a lesson, the Independent Verifier and Synthetic Auditor must complete this scorecard:
 
 | Criterion | Requirement | Verified (Yes/No) | Defect / Notes |
 |---|---|:---:|---|

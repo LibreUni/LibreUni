@@ -4,7 +4,7 @@ This document is mandatory reading for every agent or contributor who creates, r
 
 ## Standard of work
 
-Write to the standard of a demanding upper-division course at MIT, Stanford, Cambridge, or ETH Zürich. Courses are public scholarly work and will be reviewed by professors who teach the subject. Treat superficial coverage, unjustified claims, missing prerequisites, and fake exercises as publication-blocking defects.
+Write to the standard of a demanding upper-division course at leading institutions (e.g. MIT, Stanford, Cambridge, or ETH Zürich). Courses are public scholarly work and will be scrutinized by senior domain specialists and researchers who teach or practice the subject. Treat superficial coverage, unjustified claims, missing prerequisites, and fake exercises as publication-blocking defects.
 
 The course must be competitive with the strongest openly available university courses on its subject. Reconstruct its expected content before design or major revision from 3–5 respected university syllabi, 2–3 canonical textbooks, and relevant professional or curricular standards where applicable. Record the research in a curriculum crosswalk containing:
 
@@ -30,9 +30,11 @@ Every acceptable lesson contains, at the appropriate scale:
 5. a counterexample, failure mode, or limitation;
 6. connections to prerequisites and subsequent concepts;
 7. exercises at recall, application, transfer, and synthesis levels;
-8. complete solutions or usable grading criteria;
+8. complete solutions or objective verification criteria;
 9. sources supporting material claims; and
 10. an explicit account of what was deliberately omitted.
+
+> **Open Digital Learning Contract (D-0017):** LibreUni is an open digital curriculum platform, not a physical university simulation. Learners are self-directed, asynchronous, and non-sequential. Never use administrative university terminology ("students", "professors", "instructors", "TAs", "office hours", "semesters", "academic year", "deliverables", "submitting", "submissions", "grading rubrics", "oral defense", "human reviewer", "passing grade"). Capstone practice uses interactive algorithmic problem generators (`<PracticeGenerator>`) rather than timed examination halls or countdown clocks. Topics are reference units accessible in any order.
 
 For each major concept, check that the draft answers:
 
