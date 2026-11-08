@@ -15,7 +15,9 @@ estimatedMinutes: 420
 assessment: Given a report requirement and seed rows, write a PostgreSQL query, predict its result for NULL and no-match cases, and explain each clause's role.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import CodeExercise from '../../../components/CodeExercise';
 import JoinPredicatePlayground from '../../../components/playgrounds/JoinPredicatePlayground';
 import SqlRunner from '../../../components/SqlRunner';
@@ -123,16 +125,35 @@ Offerings 11 and 12 disappear. Offering 11's only matching enrollment is `droppe
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Count a different right-side condition"
-  question="A report must retain every current-term offering but count only enrollment rows with grade at least 70. Where should those two conditions go in a single LEFT JOIN query?"
+  title="Outer join predicate placement and null survival"
+  question="A report must retain every current-term offering from Offering while counting only matching Enrollment rows where grade >= 70. Evaluate each assertion regarding predicate placement in a LEFT JOIN query:"
   options={[
-    "Place both the term and grade predicates in WHERE after the join",
-    "Place grade in ON to limit matches and term in WHERE to select offerings",
-    "Place both predicates in ON and rely on COUNT(*) to remove old offerings",
-    "Use an inner join and discard offerings that have no passing grade"
+    {
+      id: "claim-on-grade",
+      text: "Placing 'e.grade >= 70' in the ON clause preserves offerings with no matching enrollments while suppressing non-passing grades.",
+      isCorrect: true,
+      feedback: "Correct. In a LEFT JOIN, conditions in ON restrict which right-side rows match without eliminating left-side offerings."
+    },
+    {
+      id: "claim-where-term",
+      text: "Placing 'o.term = 2026S' in the WHERE clause discards offerings from earlier academic terms after joining.",
+      isCorrect: true,
+      feedback: "Correct. Post-join WHERE filtering eliminates non-qualifying left rows, including any null-extended results from prior terms."
+    },
+    {
+      id: "claim-where-grade",
+      text: "Placing 'e.grade >= 70' in the WHERE clause preserves current offerings that have zero passing enrollments.",
+      isCorrect: false,
+      feedback: "Incorrect. In null-extended rows, e.grade is NULL, so 'e.grade >= 70' evaluates to UNKNOWN and WHERE discards the entire offering."
+    },
+    {
+      id: "claim-count-star",
+      text: "Replacing 'COUNT(e.student_id)' with 'COUNT(*)' correctly reports zero enrollments for offerings lacking passing grades.",
+      isCorrect: false,
+      feedback: "Incorrect. COUNT(*) counts every emitted row including null-extended rows, incorrectly yielding a count of 1."
+    }
   ]}
-  correctIndex={1}
-  explanation="The grade qualifies right-side matches, so ON preserves a current offering even when no grade qualifies. The term selects left-side offerings and belongs in WHERE. COUNT of a non-null right-side key—not COUNT(*)—then yields zero for null-extended rows."
+  explanation="Conditions in ON determine which right rows qualify as matches, leaving unmatched left rows null-extended. Conditions in WHERE filter the final combined rows. Aggregating with COUNT(column) ignores nulls, while COUNT(*) counts the row itself."
 />
 
 <CodeExercise
@@ -225,22 +246,84 @@ Suppose a data-quality bug produces an enrollment row with `student_id = NULL`. 
 The `NOT IN` condition is equivalent to a chain of inequalities. One comparison to `NULL` becomes `UNKNOWN`, so the whole predicate may fail to become true for every student. `NOT EXISTS` tests only whether a correlated row with equal non-null ID and enrolled status exists; an unrelated null ID does not make that condition true.
 </ExerciseSolution>
 
-## Transfer task: make the contract executable
+<ExerciseSet>
 
-> **Remark.** Preserve the left relation's required rows first; then make each count's membership rule explicit. A report with two status counts is not a reason to let an unqualified join choose the result grain.
+<Exercise id="ex-sql-predicate-placement" type="describe" level="recall" title="ON versus WHERE Predicate Placement Semantics">
 
-Write a PostgreSQL query for: “For each 2026S offering, return its code, the number of enrolled students, and a Boolean `is_full`; include empty offerings; return only offerings whose capacity is at least 1; order by code.” The earlier runner fixture has no capacity field; use the registration fixture in the SQL lab or extend a disposable local fixture before executing this task. Before writing SQL, state:
+Explain how moving an outer join filter predicate from the `ON` clause to the `WHERE` clause changes query semantics for null-extended rows. Give a concrete example where an offering with zero enrollments is erroneously discarded.
 
-1. the output grain;
-2. which predicate belongs in `ON`, `WHERE`, and `HAVING` (if any);
-3. two seed rows that would expose a misplaced predicate.
+<ExerciseSolution hint="A LEFT JOIN produces NULL values for right attributes when no match occurs. WHERE filters after that generation.">
 
-<ExerciseSolution hint="The capacity condition is about an Offering row. Enrollment status decides a right-side match. `is_full` is computed after the group count.">
+In a `LEFT JOIN`, conditions in the `ON` clause decide whether right-side rows match, preserving all left rows. If the filter condition is moved to `WHERE`, it is evaluated on the joined result where right attributes are `NULL`. Comparisons against `NULL` evaluate to `UNKNOWN` in SQL's three-valued logic, which `WHERE` treats as false, eliminating unmatched left-side rows and inadvertently converting the outer join into an inner join.
 
-The grain is one 2026S offering with positive capacity. Put `e.status = 'enrolled'` in `ON`; put `o.term = '2026S'` and `o.capacity >= 1` in `WHERE`; no `HAVING` is required unless the report later filters counts. Compute `COUNT(e.student_id) >= o.capacity` as `is_full` after grouping. Seed an offering with capacity 5 and no enrollments, plus one with only a dropped enrollment: both must remain with count zero. Those rows reveal the error of moving the status predicate to `WHERE`.
 </ExerciseSolution>
 
-## References
+</Exercise>
+
+<Exercise id="ex-sql-anti-join-null-hazard" type="verify" level="application" title="Anti-Join NULL Semantics: NOT EXISTS vs. NOT IN">
+
+Suppose an `Enrollment` table contains a single row with `student_id = NULL`. Verify why `WHERE s.student_id NOT IN (SELECT student_id FROM Enrollment)` returns zero students, while a correlated `NOT EXISTS` query correctly identifies students without enrollments.
+
+<ExerciseSolution hint="Evaluate the logical expansion of NOT IN with a NULL in the candidate set.">
+
+`s.student_id NOT IN (e1, e2, ..., NULL)` expands to `(s.id <> e1) AND (s.id <> e2) AND ... AND (s.id <> NULL)`. In SQL, `s.id <> NULL` yields `UNKNOWN`. Because `TRUE AND UNKNOWN` is `UNKNOWN`, the entire predicate evaluates to `UNKNOWN` for every student, discarding all rows. In contrast, `NOT EXISTS` checks whether the subquery returns any row; a row with `NULL` matching condition `e.student_id = s.student_id` evaluates to `UNKNOWN` and is not returned, leaving `NOT EXISTS` true.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-sql-aggregation-grain" type="construct" level="application" title="Grouped Aggregation with Post-Filter Specification">
+
+Write a PostgreSQL query against `Offering(offering_id, code, term)` and `Enrollment(student_id, offering_id, status)` that returns the course code and enrolled student count for all 2026S offerings having strictly more than 10 enrolled students.
+
+<ExerciseSolution hint="Use WHERE to filter offerings by term, ON for enrollment status, and HAVING for aggregate thresholds.">
+
+```sql
+SELECT o.code,
+       COUNT(e.student_id) AS enrolled_count
+FROM Offering AS o
+JOIN Enrollment AS e
+  ON e.offering_id = o.offering_id
+ AND e.status = 'enrolled'
+WHERE o.term = '2026S'
+GROUP BY o.offering_id, o.code
+HAVING COUNT(e.student_id) > 10
+ORDER BY o.code;
+```
+Because the threshold requires `> 10` students, an inner join is sufficient. `GROUP BY` includes `offering_id` to guarantee uniqueness per offering section.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-sql-zero-safe-report-transfer" type="generalise" level="transfer" title="Zero-Safe Offering Report with Computed Boolean Status">
+
+Construct a query returning `(code, enrolled_count, is_full)` for all offerings in term `2026S` with `capacity >= 1`. Offerings with zero enrollments must appear with count 0 and `is_full = false`. Explain how the grain is preserved.
+
+<ExerciseSolution hint="Preserve unmatched offerings with LEFT JOIN and count non-null student IDs.">
+
+```sql
+SELECT o.code,
+       COUNT(e.student_id) AS enrolled_count,
+       COUNT(e.student_id) >= o.capacity AS is_full
+FROM Offering AS o
+LEFT JOIN Enrollment AS e
+  ON e.offering_id = o.offering_id
+ AND e.status = 'enrolled'
+WHERE o.term = '2026S'
+  AND o.capacity >= 1
+GROUP BY o.offering_id, o.code, o.capacity
+ORDER BY o.code;
+```
+The grain is one positive-capacity offering in 2026S. Placing `e.status = 'enrolled'` in `ON` allows offerings without active enrollments to survive as null-extended rows, which `COUNT(e.student_id)` aggregates to 0.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
 
 - [PostgreSQL: `SELECT`](https://www.postgresql.org/docs/current/sql-select.html)
 - [PostgreSQL: Table Expressions and Joins](https://www.postgresql.org/docs/current/queries-table-expressions.html)

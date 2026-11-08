@@ -45,8 +45,32 @@ npm run check:e2e
 npm run check:ux
 npm run check:lighthouse
 npm run check:visual
+npm run figures:preview
 npm run test:report
 ```
+
+### Mathematical Figure & Page Kind Validation
+
+Mathematical figures and page contracts are verified on every test run:
+
+- **Mathematical figure checks (`node --test tests/figures.test.mjs`, part of `check:content`):**
+  - **A1:** Every figure spec has positive numeric `window`, valid series `fn`, and valid styling.
+  - **A2:** Discontinuities (such as asymptotes or jumps) do not emit artificial vertical connector segments.
+  - **A3:** Series monotonic on an interval strictly maintain monotonicity under adaptive sampling.
+  - **A4:** Every mark, point, label anchor, and tangent segment stays within viewport bounds.
+  - **A5:** Labels and text elements do not overlap each other or anchor curves.
+  - **A6:** Cartesian axes intersect at $(0, 0)$ when zero lies within the viewing window.
+  - **A7:** Fill order: Darboux lower/upper sums and shaded areas render underneath plotted curves.
+  - **A8:** Custom domain assertions in `spec.checks` all evaluate to `true`.
+  - **A9:** Every `<Figure id>` reference in MDX resolves to an existing spec in the same course, and every spec is used.
+- **Figure preview contact sheets (`npm run figures:preview`):**
+  - Generates standalone SVGs and contact sheet in `reports/figures/<course>/index.html`.
+- **Platform consistency lint rules (`scripts/lint_platform_consistency.mjs`):**
+  - `LINT-00`: Validates frontmatter by page `kind` (`lesson`, `lab`, `problems`, `recap`, `exam`).
+  - `LINT-08`: Forbids hardcoded `number=` attributes on `<Exercise>`, `<Problem>`, `<ExamQuestion>`, and `<Figure>`.
+  - `LINT-09`: Forbids fragile function plots in `<TikZ>` using `plot`, `controls`, or coordinate curves.
+  - `LINT-10`: Enforces that `<MathStatement>` is declared solely on `lesson` and `lab` pages.
+  - `LINT-11`: Enforces bidirectional figure resolution (no missing specs, no orphaned specs).
 
 The course integrity audit is intentionally separate from `course_stats.py`. Smoke tests answer “is the content mechanically valid?”; integrity checks answer “does the source show signs of padding, duplication, generic artifacts, or uncovered structured sections?” Neither command certifies pedagogical quality. A strict integrity failure must be investigated rather than bypassed by changing thresholds or adding placeholder text.
 

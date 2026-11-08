@@ -18,6 +18,8 @@ estimatedMinutes: 360
 assessment: Given an unfamiliar kernel critical section and a weak-memory execution, state the protected invariant, identify missing atomicity or ordering edges, select a context-safe lock design, and give both a preservation argument and a contention counterexample.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
 import Quiz from '../../../components/Quiz';
@@ -88,16 +90,15 @@ $$
 The arithmetic proof is incomplete without an ownership clause: the new slot must contain a fully initialized item before another thread may observe the increased count. That publication obligation leads directly to memory ordering.
 
 <Quiz client:load
-  title="The publication boundary and unlocked reads"
-  question="A queue protects its state with lock L. A producer initializes buffer[tail], updates tail, and increments count while holding L. A consumer attempts an optimization: it checks if (count > 0) without acquiring L, and only if true does it acquire L to dequeue. Why is this unlocked check unsafe on a weakly ordered multiprocessor?"
+  title="Memory Publication and Lock Ordering Matrix"
+  question="A queue protects state with lock L. A producer initializes buffer[tail] and increments count while holding L. A consumer reads count without L. Evaluate each statement:"
   options={[
-    "The consumer can observe the updated count > 0 before the producer's stores to buffer[tail] become globally visible, reading uninitialized or stale data.",
-    "Reading an integer variable like count without holding a mutex causes a hardware machine-check fault.",
-    "The producer's mutex release operation deadlocks if another thread reads count concurrently.",
-    "Reading count without a lock flushes the CPU cache on the producer core, destroying throughput."
+    { id: "opt-lock-weak-ordering", text: "Without acquiring lock L, the consumer can observe updated count > 0 before buffer initialization stores arrive.", isCorrect: true },
+    { id: "opt-lock-acquire-release", text: "Acquire and release memory semantics establish visibility edges only between threads synchronizing on the same lock.", isCorrect: true },
+    { id: "opt-lock-hardware-fault", text: "Reading an integer memory location without holding a mutual exclusion lock triggers a CPU hardware machine check.", isCorrect: false },
+    { id: "opt-lock-deadlock-read", text: "A concurrent unsynchronized read of count causes the producer thread release operation to deadlock permanently.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="Lock acquisition and release provide acquire/release memory ordering edges only between threads that synchronize on the same lock. An unlocked read of count has no acquire edge with respect to the producer's release; on weakly ordered hardware (and under compiler reordering), memory operations may be observed out of order, allowing the consumer to observe the updated count before the item stored in buffer[tail] is visible."
+  explanation="Acquire/release memory ordering establishes synchronization only across paired acquire and release operations on the same lock variable. An unsynchronized read has no acquire edge and can observe out-of-order writes on weakly ordered memory architectures."
 />
 
 ## A spin lock needs one indivisible winner
@@ -308,28 +309,96 @@ Fine-grained locks can introduce:
 
 The right comparison measures throughput and tail latency against a named workload while retaining invariant checks. “More locks scales better” is not a theorem.
 
-## Review protocol
+<ExerciseSet>
 
-Use this sequence in a kernel code review:
+<Exercise id="ex-lock-enqueue-invariant-derivation" type="formalise" level="application" title="Ring Buffer Invariant Derivation and Pointer Wraparound">
 
-1. Write $I_L$ and list every field it relates.
-2. Find every read and write whose meaning depends on $I_L$.
-3. Identify the event that elects one owner; reject split check/set protocols.
-4. Identify the visibility edge from the previous release to the next acquire.
-5. Audit every exit, error, callback, sleep, fault, and interrupt path while ownership is held.
-6. Draw the lock-order edges introduced by nested acquisition.
-7. Construct a contention workload and a rare long-hold workload.
-8. Separate correctness evidence from performance evidence.
+Consider a bounded FIFO queue of capacity $N$ protected by mutex $L$. Formulate the mathematical invariants governing `head`, `tail`, and `count` modulo $N$. Show why updates to `count` and buffer entries require mutual exclusion.
 
-<ExerciseSolution title="Synthesis exercise and rubric">
+<ExerciseSolution hint="Relate head, tail, and count with modulo arithmetic and state slot ownership boundaries.">
 
-A kernel table uses one spin lock. Lookup holds the lock while comparing a variable-length user-supplied key and may fault while copying that key. Inserts are rare; lookups dominate on 32 cores. Propose a repair.
-
-A defensible answer first moves untrusted copying and any faulting operation outside the spin-locked region, into owned kernel memory with checked length. It then states the table invariant and evaluates alternatives: a blocking mutex if faulting must remain; bucket locks with a total order for resize; an immutable/versioned read path with explicit reclamation; or per-CPU caching if staleness is acceptable. It names revalidation after reacquisition and tests a concurrent resize, duplicate insert, fault during copy, and hot-bucket contention.
-
-Rubric: invariant/access-path audit 25%; context-safe repair 25%; acquire/release and lifetime reasoning 20%; adversarial correctness tests 15%; workload and tail-latency evaluation 10%; explicit omissions 5%.
+The queue invariant $I_L$ requires:
+1. $0 \le count \le N$.
+2. $tail \equiv (head + count) \pmod N$.
+3. When $count > 0$, buffer slots at indices $(head + i) \pmod N$ for $0 \le i < count$ contain valid initialized elements; all other $N - count$ slots are available for allocation.
+If a thread enqueues without holding $L$, concurrent readers can observe $count > 0$ before the buffer slot is written, or concurrent writers can compute the same `tail` offset and overwrite each other's data, corrupting the modulo relationship and lost elements.
 
 </ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-lock-test-and-set-spin-loop" type="construct" level="application" title="Test-and-Set Spinlock Implementation and Interrupt Disabling">
+
+Write the C/assembly implementation of `acquire()` and `release()` for a basic spinlock using the atomic exchange primitive `__sync_lock_test_and_set`. Explain why kernel spinlocks must disable local CPU interrupts before spinning.
+
+<ExerciseSolution hint="Trace the deadlock that occurs if an interrupt handler on the same CPU attempts to acquire the lock.">
+
+```c
+void acquire(struct spinlock *lk) {
+    push_off(); // disable local CPU interrupts
+    if (holding(lk))
+        panic("acquire");
+    while (__sync_lock_test_and_set(&lk->locked, 1) != 0)
+        ; // spin
+    __sync_synchronize(); // memory fence (acquire)
+    lk->cpu = mycpu();
+}
+
+void release(struct spinlock *lk) {
+    if (!holding(lk))
+        panic("release");
+    lk->cpu = 0;
+    __sync_synchronize(); // memory fence (release)
+    __sync_lock_release(&lk->locked);
+    pop_off(); // restore interrupt state
+}
+```
+If a CPU core acquires lock $L$ with interrupts enabled, a device or timer interrupt can fire on that same CPU. If the interrupt service routine attempts to acquire $L$, it will spin waiting for $L$ to be released. However, because the interrupted thread holding $L$ is frozen on the same CPU, the lock is never released, causing an instantaneous, unrecoverable deadlock.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-lock-acquire-release-publication" type="describe" level="transfer" title="Message Passing Publication with Acquire-Release Fences">
+
+A producer thread initializes payload data in array `data[0..1023]` and sets `flag = 1`. A consumer thread spins waiting for `flag == 1` and then reads `data[0..1023]`. Describe how modern relaxed hardware can violate correctness without memory barriers, and state the exact placement of release and acquire barriers.
+
+<ExerciseSolution hint="Explain store buffering and speculative load reordering across memory locations.">
+
+On weakly-ordered architectures (such as ARM or RISC-V RVWMO), memory stores to independent addresses may drain from the CPU write buffer out of program order. Without barriers, the store `flag = 1` may become globally visible in cache while stores to `data` are still buffered locally. Concurrently, the consumer CPU may speculatively load `data` before reading `flag == 1`.
+Placement:
+- Producer: Store payload into `data`; execute a **release barrier** (`atomic_store_explicit(..., memory_order_release)` or `fence rw, w`); store `flag = 1`.
+- Consumer: Load `flag` with an **acquire barrier** (`atomic_load_explicit(..., memory_order_acquire)` or `fence r, rw`); read payload from `data`.
+This guarantees that all stores preceding the release are visible to any thread that executes the matching acquire.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-lock-interrupt-deadlock-inversion" type="verify" level="transfer" title="Deadlock Hazard When Acquiring Held Spinlocks in Interrupt Handlers">
+
+Identify three independent kernel operations that are strictly prohibited while holding a spinlock in an operating system kernel.
+
+<ExerciseSolution hint="Consider operations that yield the CPU, sleep, allocate unbounded memory, or cross privilege modes.">
+
+1. Sleeping or blocking: A thread holding a spinlock must never call `sleep()`, wait on a condition variable, or perform blocking disk I/O. If the thread sleeps, other CPU cores spinning on that lock waste processor cycles waiting for a sleeping thread, and if a waiting thread runs on the same CPU, deadlocks occur.
+2. Dereferencing unpinned user-space pointers: Accessing unpinned user memory can trigger a demand-paging page fault. If the page fault handler sleeps waiting for disk reads, it violates the rule against sleeping with spinlocks held.
+3. Enabling interrupts without saving depth: Arbitrarily re-enabling interrupts while inside a nested spinlock critical section exposes the CPU to nested interrupt deadlocks.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-lock-kernel-table-scalability" type="construct" level="synthesis" title="Replacing Contended Global Spinlocks with Sharded Table Structures">
+
+A multi-tenant database server runs on a 64-core system. A global process/connection lookup table protected by a single spinlock experiences severe cache-line bouncing and lock contention under high query rates. Propose a scalable architectural redesign.
+
+<ExerciseSolution hint="Consider hash partitioning, fine-grained bucket locks, and read-copy-update mechanisms.">
+
+1. Hash sharding: Partition the single global table into $K$ independent buckets (e.g., $K = 256$, where $K \ge \text{number of cores}$). Each bucket has its own dedicated spinlock and cache-aligned memory boundary to prevent false sharing.
+2. Read-dominated optimization: If lookups vastly outnumber insertions/deletions, employ a Read-Copy-Update (RCU) or versioned pointer architecture. Readers traverse pointers lock-free without atomic operations or write invalidations. Writers allocate a new node copy, update pointers atomically with release semantics, and defer memory reclamation until a grace period passes.
+3. Measurable validation: Benchmark throughput and $99\text{th}$-percentile latency under uniform and skewed zipfian lookup distributions, measuring L1/L2 cache-miss invalidation rates with hardware performance counters.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

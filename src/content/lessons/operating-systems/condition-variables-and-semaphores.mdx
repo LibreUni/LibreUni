@@ -18,6 +18,8 @@ estimatedMinutes: 360
 assessment: Given an unseen wait protocol, identify its predicate and mutex, construct a lost-wakeup or stale-predicate schedule if one exists, repair it, and verify safety and progress for both condition-variable and semaphore formulations.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
@@ -117,16 +119,15 @@ Consumer A's dequeue is the event that makes the predicate false before B reacqu
 Signal one waiter when one unit of progress became possible. Broadcast when a transition can satisfy several different predicates, when all waiters must observe shutdown/configuration change, or when the implementation cannot identify the relevant waiter. Broadcast can create a **thundering herd**: many threads wake, contend for one mutex, discover false predicates, and sleep again. That is a performance failure, not permission to weaken the loop.
 
 <Quiz client:load
-  title="Why the loop survives a signal"
-  question="Under Mesa semantics a producer signals not_empty and then releases the mutex. Why must the consumer test count == 0 in a while loop rather than an if?"
+  title="Condition Variable Mesa Semantics Matrix"
+  question="Under Mesa semantics, a producer thread signals not_empty and releases the mutex. Evaluate each statement regarding why waiters must loop on wait():"
   options={[
-    "Because signal may wake a waiter that never tested the predicate.",
-    "Because another thread may consume the resource before the woken waiter reacquires the mutex, so the predicate must be rechecked.",
-    "Because the mutex is released inside wait and reacquired before the predicate is tested.",
-    "Because broadcast, not signal, is required to wake the correct waiter."
+    { id: "opt-cv-intervening-thread", text: "Another thread can acquire the mutex and consume the resource before the woken waiter reacquires the lock.", isCorrect: true },
+    { id: "opt-cv-spurious-wakeup", text: "Operating systems and threading runtimes may permit spurious wakeups even when no thread signaled the variable.", isCorrect: true },
+    { id: "opt-cv-immediate-handoff", text: "Signaling under Mesa semantics immediately yields CPU execution and transfers the lock directly to the waiter.", isCorrect: false },
+    { id: "opt-cv-single-check", text: "Testing the condition predicate in an if statement is safe provided the producer signals rather than broadcasts.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="Mesa signaling is a scheduling hint, not a transfer of the resource; the signaler keeps running until it releases the mutex. By the time the woken waiter reacquires, another thread may have consumed the resource, and implementations may also permit spurious wakeups, so the loop is the contract."
+  explanation="Under Mesa monitor semantics, signal() only transitions a waiter to runnable; it does not atomically hand off the CPU or lock. An intervening thread or spurious wakeup can invalidate the predicate before reacquisition."
 />
 
 ## Predicate updates define the notification protocol
@@ -235,25 +236,109 @@ stop
 
 Holding C while entering `sleep` forever would block the producer that needs C to make the predicate true. Releasing C before the sleep protocol owns P would reopen the lost-wakeup gap. The handoff must ensure the waiter owns one lock or the other across the vulnerable interval.
 
-## Synthesis studio: one queue, two formulations
+<ExerciseSet>
 
-Design a capacity-4 work queue with multiple producers, multiple consumers, close semantics, and cancellation of waiting consumers. Submit:
+<Exercise id="ex-cv-lost-wakeup-gap" type="describe" level="application" title="Lost-Wakeup Race Condition When Releasing Mutex Before Sleeping">
 
-1. a condition-variable formulation with exact predicates and signal/broadcast decisions;
-2. a semaphore formulation that explains how close wakes waiters without inventing phantom jobs;
-3. one lost-wakeup trace that the correct condition formulation excludes;
-4. one deadlock trace caused by acquiring a queue mutex before waiting for a permit; and
-5. an invariant that accounts for queue entries, permits, and in-flight reservations.
+Explain why an implementation of `cond_wait(cv, mutex)` that executes `mutex_unlock(mutex)` and then separately executes `thread_sleep(cv)` possesses a fatal lost-wakeup race condition. Trace the exact interleaving with a concurrent signaler.
 
-<ExerciseSolution title="Rubric and design boundary">
+<ExerciseSolution hint="Trace what happens if a signal arrives between mutex_unlock and thread_sleep.">
 
-Condition formulation: protect `count`, `closed`, head/tail, and slots with one mutex; consumers wait while empty and open; producers wait while full and open; close broadcasts to both wait sets. Cancellation cleanup must leave the mutex and queue invariant in a specified state.
-
-A plain full-item semaphore does not naturally broadcast “closed” without either posting synthetic permits or adding a separately synchronized close event. A sound semaphore design can use a close flag plus a waiter registry/event mechanism, or represent queue messages as a tagged union including one shutdown token per consumer when that application policy is valid. The answer must state whether shutdown drains queued jobs and whether consumer count is stable. Posting one phantom `full` permit without a corresponding queue entry violates the representation.
-
-Rubric: predicates and protected fields 25%; atomic wait/handoff reasoning 20%; permit/reservation invariant 20%; close/cancellation semantics 15%; adversarial traces 15%; explicit assumptions 5%.
+If unlocking and sleeping are not atomic:
+1. Waiter acquires `mutex`, tests condition `count == 0`, and decides to sleep.
+2. Waiter executes `mutex_unlock(mutex)`.
+3. Before the waiter executes `thread_sleep(cv)`, a context switch occurs.
+4. Producer acquires `mutex`, inserts an item into the queue, executes `cond_signal(cv)`, and releases `mutex`.
+5. Because the waiter is not yet enqueued on `cv`'s wait set, the signal is lost into the void.
+6. Waiter resumes and executes `thread_sleep(cv)`, blocking indefinitely even though the queue is non-empty.
+`cond_wait` must atomically release the mutex and enroll the thread into the wait queue.
 
 </ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cv-mesa-loop-recheck" type="verify" level="application" title="Mesa Semantics and Spurious Wakeup Invariants">
+
+Contrast Hoare monitor semantics with Mesa monitor semantics. Explain why Mesa semantics require condition wait calls to be placed inside a `while (!predicate)` loop rather than an `if (!predicate)` block.
+
+<ExerciseSolution hint="Analyze whether signaling hands off lock ownership immediately or merely marks the waiter runnable.">
+
+Under Hoare semantics, signaling immediately transfers the monitor lock and CPU execution directly to the awakened waiter; thus, the predicate is guaranteed to remain true when the waiter resumes.
+Under Mesa semantics, `cond_signal` merely transitions a waiting thread from sleeping to runnable; the signaler retains the lock until it explicitly releases it. Between the signal and the moment the awakened waiter reacquires the lock, a third intervening thread can execute, acquire the lock, and invalidate the predicate. Furthermore, POSIX permits spurious wakeups (e.g., due to kernel interrupt signals). Wrapping `pthread_cond_wait` inside a `while` loop ensures the predicate is perpetually verified under mutual exclusion before proceeding.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cv-bounded-buffer-semaphores" type="construct" level="transfer" title="Bounded Buffer Synchronization Using Counting Semaphores">
+
+Write the pseudocode for a concurrent bounded FIFO queue of capacity $N$ using counting semaphores `empty_slots`, `full_items`, and a binary semaphore `mutex`. Explain why `sem_wait(&empty_slots)` must precede `sem_wait(&mutex)`.
+
+<ExerciseSolution hint="Inverting the semaphore acquisition order creates an instant deadlock when the queue is full.">
+
+```text
+semaphore empty_slots = N;
+semaphore full_items = 0;
+semaphore mutex = 1;
+
+void enqueue(item):
+    sem_wait(&empty_slots);  // wait for space
+    sem_wait(&mutex);        // acquire buffer access
+    buffer[tail] = item;
+    tail = (tail + 1) % N;
+    sem_post(&mutex);
+    sem_post(&full_items);
+
+item dequeue():
+    sem_wait(&full_items);   // wait for an item
+    sem_wait(&mutex);        // acquire buffer access
+    item = buffer[head];
+    head = (head + 1) % N;
+    sem_post(&mutex);
+    sem_post(&empty_slots);
+    return item;
+```
+If a producer executes `sem_wait(&mutex)` before `sem_wait(&empty_slots)` when the buffer is completely full (`empty_slots == 0`), the producer acquires `mutex` and then blocks on `empty_slots`. A consumer attempting to dequeue blocks immediately on `mutex`, creating an instant deadlock where the consumer cannot free a slot and the producer will never release the mutex.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cv-thundering-herd-broadcast" type="describe" level="transfer" title="Thundering Herd Performance Degradation vs Targeted Signaling">
+
+Explain the performance phenomenon known as the "thundering herd" problem when `pthread_cond_broadcast()` is invoked on a condition variable with 100 waiting worker threads, only one of which can successfully claim the newly available work item.
+
+<ExerciseSolution hint="Trace the lock contention and context-switching overhead among the 99 unsuccessful waiters.">
+
+When a producer broadcasts on a condition variable with 100 waiting threads, the kernel wakes all 100 threads, placing them on the runnable queue. However, all 100 threads immediately contend for the single mutex protecting the queue. One winner acquires the lock, drains the work item, and releases the lock. The remaining 99 threads sequentially acquire the lock, recheck their `while (count == 0)` loop, observe the predicate is false, and re-enter `cond_wait()`. This results in 99 redundant context switches, severe CPU cache-line bouncing, and high scheduling latency with zero forward progress. Targeted `cond_signal()` should be preferred when exactly one waiter can make progress.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cv-queue-cancellation-shutdown" type="construct" level="synthesis" title="Designing Graceful Queue Shutdown and Waiter Cancellation">
+
+Design a thread-safe multi-producer multi-consumer work queue supporting a `close()` operation that gracefully unblocks all current and future waiting consumers with an `END_OF_STREAM` status without leaking memory or dropping enqueued items.
+
+<ExerciseSolution hint="Add a closed boolean flag under the mutex and broadcast to all waiters upon shutdown.">
+
+1. Shared state: Add `bool closed = false` under the queue mutex, alongside `cond_var not_empty` and `cond_var not_full`.
+2. Enqueue: Producers wait `while (count == N && !closed)`. If `closed`, enqueue immediately returns `-ESHUTDOWN`.
+3. Dequeue: Consumers wait `while (count == 0 && !closed)`. Upon waking:
+   - If `count > 0`: dequeue item and return success (draining pre-existing work).
+   - If `count == 0 && closed`: return `-EPIPE` / `END_OF_STREAM`.
+4. Close operation:
+   ```c
+   void queue_close(struct Queue *q) {
+       pthread_mutex_lock(&q->mutex);
+       q->closed = true;
+       pthread_cond_broadcast(&q->not_empty);
+       pthread_cond_broadcast(&q->not_full);
+       pthread_mutex_unlock(&q->mutex);
+   }
+   ```
+   Broadcasting ensures every blocked consumer and producer awakens, observes `closed == true`, and exits without blocking forever.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

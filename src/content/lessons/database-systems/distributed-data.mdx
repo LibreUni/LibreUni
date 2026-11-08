@@ -18,7 +18,9 @@ estimatedMinutes: 420
 assessment: Given a distributed order or authorization workflow under a partition, choose a consistency contract, trace the durable decision and client response, and defend the availability trade-off with a counterexample.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
 import ReplicationQuorumPlayground from '../../../components/playgrounds/ReplicationQuorumPlayground';
@@ -86,15 +88,34 @@ R = 2, because 2 + 2 > 3. A read of two replicas intersects a completed two-repl
 
 <Quiz client:load
   title="Quorum intersection and freshness"
-  question="For N = 5 replicas, choose R = 2 and W = 3. What can be concluded about their intersection and read freshness?"
+  question="For an N = 5 node replica cluster, an architect configures read quorum R = 2 and write quorum W = 3. Evaluate which statements regarding quorum intersection and consistency are correct:"
   options={[
-    "Every read quorum intersects every write quorum, so every read is linearizable",
-    "Read and write quorums can be disjoint; freshness is not guaranteed",
-    "Every pair of write quorums can be disjoint because 2W exceeds N",
-    "The choice guarantees a fresh read whenever all five replicas are reachable"
+    {
+      id: "claim-disjoint-danger",
+      text: "Because R + W = 5 <= N, a read of 2 nodes can miss all 3 nodes written by the previous write, returning stale data.",
+      isCorrect: true,
+      feedback: "Correct. Strong quorum consistency strictly requires R + W > N to mathematically guarantee at least one overlapping node."
+    },
+    {
+      id: "claim-monotonic-read",
+      text: "Monotonic read consistency is not guaranteed without client session stickiness or version tracking across queries.",
+      isCorrect: true,
+      feedback: "Correct. A client querying different non-intersecting nodes can observe values that appear to regress backward in time."
+    },
+    {
+      id: "claim-linearizability-guarantee",
+      text: "Every read quorum intersects every write quorum in this configuration, guaranteeing strict linearizable read behavior.",
+      isCorrect: false,
+      feedback: "Incorrect. R + W = 5 does not exceed N = 5, meaning read and write sets may be completely disjoint."
+    },
+    {
+      id: "claim-partition-availability",
+      text: "During any network partition splitting 5 nodes into 2 and 3, both isolated partitions can continue accepting write quorums.",
+      isCorrect: false,
+      feedback: "Incorrect. Accepting a write requires W = 3 nodes; only the majority partition with 3 nodes can commit writes."
+    }
   ]}
-  correctIndex={1}
-  explanation="Here R + W = N, so a read of two replicas may avoid all three replicas in a completed write quorum. Even with an intersecting choice, a protocol still needs version selection, durability and fencing rules; availability alone does not establish freshness."
+  explanation="Strict quorum intersection requires R + W > N. When R + W = N, read and write quorums may be disjoint, permitting stale reads unless additional version reconciliation is performed."
 />
 
 ## Coordination has a blocking and repair cost
@@ -146,6 +167,63 @@ A cross-region transfer must never be visible as two independent halves, and the
 <ExerciseSolution hint="A non-blocking design cannot also promise a single instantaneous cross-region commit without a stronger coordination substrate.">
 It must give up either non-blocking atomic commit or the claim of an instantaneous single decision. A durable outbox plus idempotent steps can keep serving, but the client sees an intermediate state such as “authorized, pending settlement.” A consensus-backed ledger can provide an ordered decision, but it may wait for a quorum and must expose a truthful pending status on timeout. Claiming both non-blocking operation and atomic cross-region success without naming the coordination mechanism is false.
 </ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-dist-quorum-overlap" type="verify" level="application" title="Quorum Overlap Inequality Verification">
+
+Referring to <Ref id="quorum-intersection" />, evaluate a distributed cluster with $N = 7$ nodes configured with write quorum $W = 4$ and read quorum $R = 4$. Verify whether every read is guaranteed to observe at least one node containing the latest committed write.
+
+<ExerciseSolution hint="Check the condition R + W > N.">
+
+Here $R + W = 4 + 4 = 8$. Because $8 > 7$ ($R + W > N$), by the Pigeonhole Principle the intersection of any read quorum of 4 nodes and any write quorum of 4 nodes contains at least $4 + 4 - 7 = 1$ node. Thus, every read quorum is mathematically guaranteed to contact at least one node that participated in the most recent successful write.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-dist-cap-partition-tradeoff" type="describe" level="recall" title="CAP Theorem Partition Tolerance and Availability Boundaries">
+
+Explain why a distributed data store experiencing a network partition between two data centers must choose between consistency (rejecting writes in the minority partition) and availability (accepting conflicting writes in both partitions).
+
+<ExerciseSolution hint="Nodes in separated partitions cannot communicate state updates synchronously.">
+
+During a network partition, nodes in partition $A$ cannot communicate with nodes in partition $B$. If the system chooses Availability, it must allow both partitions to accept writes independently, resulting in divergent states and violating linearizable Consistency. If the system chooses Consistency, nodes in the partition unable to contact a majority must refuse writes, sacrificing Availability for clients connected to that partition.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-dist-2pc-blocking-hazard" type="construct" level="application" title="Two-Phase Commit Coordinator Failure Analysis">
+
+In a two-phase commit protocol across three database nodes, participant $P_1$ votes `YES` during the prepare phase. The coordinator crashes before logging or broadcasting the commit/abort decision. Explain why $P_1$ remains blocked holding locks and cannot unilaterally decide to abort or commit.
+
+<ExerciseSolution hint="P1 does not know if other participants voted NO or if the coordinator already told another node to commit.">
+
+$P_1$ cannot unilaterally abort because the coordinator might have received `YES` from all nodes and committed the transaction before crashing (or communicated commit to $P_2$). $P_1$ cannot unilaterally commit because another participant might have voted `NO`, causing the coordinator to abort. Consequently, $P_1$ must remain in the `PREPARED` state holding locks until the coordinator recovers or an election-based cooperative termination protocol resolves the outcome.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-dist-cross-region-saga-transfer" type="generalise" level="transfer" title="Asynchronous Saga and Outbox Pattern Design for Multi-Region Workflows">
+
+An e-commerce order workflow requires debiting a customer's account in region `us-east` and reserving warehouse stock in region `eu-central`. Network latency and transient partitions make 2PC unacceptable. Design a resilient asynchronous saga using transactional outboxes and compensating actions to handle stock exhaustion.
+
+<ExerciseSolution hint="Use local database transactions in each region with an explicit intermediate state machine.">
+
+1. Region `us-east`: In a single local transaction, record `order(id, status='pending')`, deduct balance, and write an `outbox` event `OrderPlaced`. Commit.
+2. Message transport: An outbox worker reliably delivers `OrderPlaced` to an idempotent queue consumed by `eu-central`.
+3. Region `eu-central`: Attempts stock reservation in a local transaction.
+   - If stock is available: Mark reserved and emit `StockReserved`.
+   - If stock is exhausted: Emit `StockFailed`.
+4. Compensation: Upon consuming `StockFailed`, `us-east` executes a compensating transaction that refunds the customer's balance and transitions the order state to `cancelled`. Intermediate states (`pending`) are visible to users.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

@@ -449,3 +449,106 @@ test('every course PDF is available as a downloadable document', async ({ reques
   expect(response.ok()).toBe(true);
   expect(response.headers()['content-type']).toMatch(/^application\/pdf/);
 });
+
+test('calculus practice generator creates randomized questions and preserves state across refresh', async ({ page }) => {
+  await page.goto('http://127.0.0.1:4321/lessons/calculus-intro/calculus-practice.html', { waitUntil: 'networkidle' });
+
+  // Initially empty state
+  const emptyState = page.locator('#practice-empty-state');
+  await expect(emptyState).toBeVisible();
+
+  // Generate question
+  const generateBtn = page.locator('#generate-question-btn');
+  await generateBtn.click();
+
+  // Question card appears
+  const questionCard = page.locator('#generated-questions-list > div').first();
+  await expect(questionCard).toBeVisible();
+
+  // Hint button reveals hint
+  const hintBtn = questionCard.getByRole('button', { name: /Get Hint/i });
+  await expect(hintBtn).toBeVisible();
+  await hintBtn.click();
+  await expect(questionCard.getByText(/Hint 1 of/i)).toBeVisible();
+
+  // Solution button reveals solution
+  const solutionBtn = questionCard.getByRole('button', { name: /Show Solution/i });
+  await solutionBtn.click();
+  await expect(questionCard.getByText(/Worked Solution/i)).toBeVisible();
+
+  // Verify zero KaTeX errors or red error spans exist
+  await expect(page.locator('.katex-error')).toHaveCount(0);
+  // Verify answer is rendered via KaTeX without raw LaTeX leak
+  const answerBadge = questionCard.getByText(/Answer:/i);
+  await expect(answerBadge).toBeVisible();
+  const answerText = await answerBadge.innerText();
+  expect(answerText).not.toMatch(/\\frac/);
+
+  // Verify page copy is free of prompt boilerplate
+  const pageContent = await page.content();
+  expect(pageContent).not.toMatch(/without teacher|no timers|artificial time limits/i);
+
+  // Reload page and verify state persistence across refresh
+  await page.reload({ waitUntil: 'networkidle' });
+  const reloadedCard = page.locator('#generated-questions-list > div').first();
+  await expect(reloadedCard).toBeVisible();
+  await expect(reloadedCard.getByText(/Hint 1 of/i)).toBeVisible();
+  await expect(reloadedCard.getByText(/Worked Solution/i)).toBeVisible();
+  await expect(page.locator('.katex-error')).toHaveCount(0);
+});
+
+test('calculus practice generator automatically heals and renders legacy questions saved in localStorage', async ({ page }) => {
+  // Pre-seed localStorage with the exact legacy broken question from earlier versions
+  await page.addInitScript(() => {
+    const legacyQ = [{
+      id: 'legacy-broken-q-22',
+      templateId: 'integral-area-curves',
+      topicId: 'integrals',
+      topicName: 'Integration & Accumulation',
+      difficulty: 'intermediate',
+      title: 'Area Enclosed Between Two Curves',
+      questionMath: 'Compute the exact area of the planar region bounded between the line $y = 2x$ and the parabola $y = x^2$.',
+      hints: [
+        'Find the $x$-coordinates of the intersection points by solving $x^2 = 2x$.',
+        'Determine which curve lies above the other on the interval between the intersection points. Set up the integral $\\int_{x_1}^{x_2} (y_{\\text{top}} - y_{\\text{bottom}})\\,dx$.',
+      ],
+      solutionMath:
+        '1. **Find Intersection Points:**\n$$x^2 = 2x \\implies x(x - 2) = 0 \\implies x = 0 \\quad \\text{and} \\quad x = 2$$\n\n2. **Identify Upper and Lower Curves:**\nFor any test point in $(0, 2)$, such as $x = 1$, we have $y = 2(1) = 2$ and $y = 1^2 = 1$. Since 2 > 1$, the line $y = 2x$ is above the parabola $y = x^2.\n\n3. **Set Up Area Integral:**\n$$A = \\int_0^{2} (2x - x^2)\\,dx$$\n\n4. **Evaluate Antiderivative:**\n$$A = \\left[ \\frac{2}{2}x^2 - \\frac{x^3}{3} \\right]_0^{2} = \\left( \\frac{2}{2}(2)^2 - \\frac{(2)^3}{3} \\right) - 0$$\n$$A = \\frac{2^3}{2} - \\frac{2^3}{3} = \\frac{8}{6} = \\frac{4}{3}$$\n\nThe exact area is \\frac{4}{3}$.',
+      keyAnswer: '\\frac{4}{3}',
+      generatedAt: '2026-11-08T10:00:00.000Z',
+      revealedHintsCount: 1,
+      showSolution: true,
+      isMastered: false,
+    }];
+    localStorage.setItem('libreuni-practice-calculus-intro', JSON.stringify(legacyQ));
+  });
+
+  await page.goto('http://127.0.0.1:4321/lessons/calculus-intro/calculus-practice.html', { waitUntil: 'networkidle' });
+
+  // The question card is rendered
+  const questionCard = page.locator('#generated-questions-list > div').first();
+  await expect(questionCard).toBeVisible();
+  await expect(questionCard.getByText('Area Enclosed Between Two Curves')).toBeVisible();
+
+  // Solution is visible and contains 0 KaTeX red errors
+  await expect(questionCard.getByText(/Worked Solution/i)).toBeVisible();
+  await expect(page.locator('.katex-error')).toHaveCount(0);
+
+  // Verify markdown double asterisks are parsed into bold <strong> tags, not displayed as literal **
+  const strongHeaders = questionCard.locator('strong');
+  await expect(strongHeaders.filter({ hasText: 'Find Intersection Points:' })).toBeVisible();
+  await expect(strongHeaders.filter({ hasText: 'Identify Upper and Lower Curves:' })).toBeVisible();
+  const solutionText = await questionCard.innerText();
+  expect(solutionText).not.toContain('**');
+
+  // Answer badge is formatted properly
+  const answerBadge = questionCard.getByText(/Answer:/i);
+  await expect(answerBadge).toBeVisible();
+  const answerText = await answerBadge.innerText();
+  expect(answerText).not.toMatch(/\\frac/);
+
+  // Verify localStorage has been healed
+  const storedJson = await page.evaluate(() => localStorage.getItem('libreuni-practice-calculus-intro'));
+  expect(storedJson).toContain('$y = x^2$.');
+  expect(storedJson).not.toContain('Since 2 > 1$,');
+});

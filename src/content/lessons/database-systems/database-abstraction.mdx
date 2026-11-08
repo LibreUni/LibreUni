@@ -15,14 +15,19 @@ estimatedMinutes: 420
 assessment: Given a reporting request and a proposed storage change, specify the unaffected contract, identify a boundary that can still change, and design a small equivalence check.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
 
 An application asks, “Which students are enrolled in each offering?” It should not need to know whether the database found those rows through a heap scan, an index, or a partition. It *does* need to know what one output row means, which rows it may see, and whether its requested order is guaranteed.
 
-> **Definition.** An abstraction contract states the meaning and permitted observations of data at one boundary. An external contract is what a client can request and observe; a logical contract is relations, attributes, and constraints; a physical contract is the layout and access methods that implement them.
+<MathStatement id="def-abstraction-contract" kind="definition" title="Database abstraction contract">
+An abstraction contract states the meaning and permitted observations of data at one boundary. An external contract is what a client can request and observe; a logical contract is relations, attributes, and constraints; a physical contract is the layout and access methods that implement them.
+</MathStatement>
 
 {/* Source tracking: The separation between user-visible data descriptions and internal representation is synthesized from E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (1970). */}
 
@@ -61,18 +66,9 @@ The same domain acquires a different, sharper meaning at each layer.
 
 > **Worked example.** The relationship in the diagram becomes `Enrollment(student_id, offering_id, status)`. Its grain is **one student's enrollment in one offering**. Its primary key can be `(student_id, offering_id)` if a student has at most one current enrollment per offering. Both columns are foreign keys. A client-facing view may join the three relations and omit identifiers, but it must preserve that stated grain.
 
-> **Invariant.** Physical data independence means that if only the physical design changes, every permitted logical query and constraint has the same meaning. Cost, lock timing, and an undocumented incidental row order may change; specified semantics may not.
-
-### Predict before reading the answer
-
-The registration office adds an index on `Enrollment(offering_id, student_id)`. A report asks for the count of enrolled students per offering but contains no `ORDER BY`.
-
-Which observations must be unchanged, and which observation must not be inferred from a successful test run?
-
-<ExerciseSolution hint="Separate the requested result from the way rows were found.">
-
-The count and the set of grouped offerings must be unchanged if the index is correct. The chosen plan, page reads, and emitted row sequence need not be unchanged. Because the query has no `ORDER BY`, a test must not treat the observed output order as part of its contract.
-</ExerciseSolution>
+<MathStatement id="inv-physical-independence" kind="invariant" title="Physical data independence">
+Physical data independence means that if only the physical design changes, every permitted logical query and constraint has the same meaning. Cost, lock timing, and an undocumented incidental row order may change; specified semantics may not.
+</MathStatement>
 
 ## A view is an interface, not decoration
 
@@ -91,23 +87,13 @@ Suppose a reporting client needs “one row per active enrollment.” This is an
 
 > **Counterexample.** Replacing `Offering.course_code` with a nullable free-text column may be a logical-schema change, not merely a physical one. A view that promised a non-null, validated course code now has a broken contract even if every query still parses.
 
-### Work through a compatibility test
-
-An existing view exposes `student_name`, `course_code`, and `term`. The team wants to split `Offering` into `Course(course_code, title)` and `Section(offering_id, course_code, term)`.
-
-1. State a compatible view definition in words.
-2. Name one test case that catches a broken migration.
-
-<ExerciseSolution hint="The client should still see the same grain and column meanings. Look for an offering whose course lookup is missing.">
-
-The compatible view still has one row per active enrollment and obtains `course_code` by joining `Section` to `Course` through the validated code. Test an enrollment whose section exists but whose course row is accidentally absent after migration: an inner join would silently drop the client row. Compare old and new view results, including this case, rather than comparing table counts alone.
-</ExerciseSolution>
-
 ## Declarative request, physical plan
 
 SQL describes a requested result. The DBMS can choose a sequential scan, an index scan, a hash join, a sort, or another operator tree to produce it. Those choices are cost decisions, not promises made by ordinary SQL text.
 
-> **Definition.** The logical result is the rows, values, duplicates, and any explicitly requested ordering prescribed by the query semantics and the database constraints. A plan is one implementation of that result.
+<MathStatement id="def-logical-result" kind="definition" title="Logical result vs. physical plan">
+The logical result is the rows, values, duplicates, and any explicitly requested ordering prescribed by the query semantics and the database constraints. A plan is one implementation of that result.
+</MathStatement>
 
 > **Worked example.** For a tenant dashboard, the query predicate is `tenant_id = ? AND created_at >= ?`. A composite index on `(tenant_id, created_at, order_id)` may avoid scanning unrelated tenant rows. The proof obligation is two-part: compare query results and constraint outcomes before/after the index, then measure latency, writes, and plan behavior on representative data.
 
@@ -115,43 +101,27 @@ SQL describes a requested result. The DBMS can choose a sequential scan, an inde
 
 Do not overstate the boundary. Adding an index can raise write cost. Partitioning can complicate uniqueness or cross-partition operations. A query rewrite that is safe for an inner join can be wrong for an outer join. A physical change preserves *logical* behavior only within the documented dialect, transaction, and authorization semantics.
 
-<ExerciseSolution title="Why plans still matter">
-
-An abstraction is not a performance guarantee. Statistics, data skew, memory, concurrent load, and cache state affect the selected plan. Inspect a plan when performance matters, but make application correctness depend on the logical contract rather than on a particular operator tree.
-
-</ExerciseSolution>
-
 <Quiz client:load
   title="Logical result versus physical plan"
-  question="A team adds a composite index and the dashboard becomes faster. The rows and columns returned are unchanged. Which statement best describes the change?"
+  question="A team adds a composite index on (tenant_id, created_at) to accelerate dashboard filtering. The rows and columns returned are identical. Evaluate each claim:"
   options={[
-    "The logical contract changed because the query now has a different meaning",
-    "The physical access path changed while the logical result stayed fixed, and write cost may have changed",
-    "The database proved the query correct by choosing an index",
-    "The index removes the need to state the query's output grain"
+    { id: '1', text: 'The physical access path changed while the logical query semantics and result set remain invariant.', isCorrect: true },
+    { id: '2', text: 'Index maintenance increases write and storage costs on subsequent insert, update, and delete operations.', isCorrect: true },
+    { id: '3', text: 'The presence of the index proves query correctness and removes the requirement to verify output grain.', isCorrect: false },
+    { id: '4', text: 'The logical relational contract changed because the query optimizer chose an index scan over a heap scan.', isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="An index is one physical implementation of the same logical result. It can reduce read work while raising write and storage cost. Correctness still rests on the query's grain, predicates, constraints, and authorization, not on the chosen operator tree."
+  explanation="An index is a physical access method that preserves logical query semantics while altering read, write, and storage trade-offs."
 />
 
 ## Constraints make the logical layer enforceable
 
 Keys, foreign keys, `CHECK` constraints, and `UNIQUE` constraints place facts at the database boundary so every client is checked by the same rule.
 
-> **Definition.** Referential integrity means that if `Enrollment.student_id` is non-null and refers to `Student(student_id)`, then a matching student row must exist when the foreign-key constraint is checked. A deferred foreign key postpones that check; it does not waive it at commit.
+<MathStatement id="def-referential-integrity" kind="definition" title="Referential integrity constraint">
+Referential integrity means that if `Enrollment.student_id` is non-null and refers to `Student(student_id)`, then a matching student row must exist when the foreign-key constraint is checked. A deferred foreign key postpones that check; it does not waive it at commit.
+</MathStatement>
 
 > **Worked example.** Two web requests both see one open seat and both attempt to enroll a student. An application-side “count first, then insert” check can race. The schema can at least enforce uniqueness of a student's enrollment; a capacity rule requires an atomic transaction design, which is a later topic. The abstraction lesson's point is the boundary: a constraint is checked centrally, while a client-only observation is not.
-
-### Apply it to a new request
-
-A mobile application wants a view called `MySchedule`. It must show each signed-in student only their enrolled offerings, omit dropped enrollments, and display a stable time order.
-
-Write the four contract clauses you would insist on before anyone optimizes it.
-
-<ExerciseSolution hint="Use grain, authority, access, and ordering; avoid naming an index.">
-
-One sound contract is: (1) one row per enrolled offering for the authenticated student; (2) `Enrollment.status = 'enrolled'` determines inclusion; (3) authorization binds the authenticated student to `Enrollment.student_id` and does not trust a client-supplied identifier; (4) rows are ordered by the documented meeting start time and then `offering_id`. An index might help later, but it is not part of this client contract.
-</ExerciseSolution>
 
 ## Change evidence: preserve meaning, measure cost
 
@@ -166,20 +136,59 @@ Use two separate checklists for a physical redesign.
 
 > **Warning.** A database rollback can undo rows it controls. It cannot automatically unsend an email or reverse an API call. Connect such effects through an explicit idempotent protocol, such as an outbox, when later transaction material introduces that pattern.
 
-### Transfer task
+<ExerciseSet>
 
-Your team proposes partitioning `Enrollment` by `term` because reports usually filter by term. Produce a one-page design note with:
+<Exercise id="ex-predict-order" type="verify" level="recall" title="Physical Indexing and Output Ordering">
 
-1. the logical rows and constraints that must remain true;
-2. one query-result differential test and one authorization test;
-3. two operational measurements that could make the proposal a bad trade-off.
+The registration office adds an index on `Enrollment(offering_id, student_id)`. A report asks for the count of enrolled students per offering but contains no `ORDER BY`. Which observations must be unchanged, and which observation must not be inferred from a successful test run?
+
+<ExerciseSolution hint="Separate the requested result from the way rows were found.">
+
+The count and the set of grouped offerings must be unchanged if the index is correct. The chosen plan, page reads, and emitted row sequence need not be unchanged. Because the query has no `ORDER BY`, a test must not treat the observed output order as part of its contract.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-view-compat" type="construct" level="application" title="Schema Migration and View Grain Preservation">
+
+An existing view exposes `student_name`, `course_code`, and `term`. The team wants to split `Offering` into `Course(course_code, title)` and `Section(offering_id, course_code, term)`. State a compatible view definition and name one test case that catches a broken migration.
+
+<ExerciseSolution hint="The client should still see the same grain and column meanings. Look for an offering whose course lookup is missing.">
+
+The compatible view still has one row per active enrollment and obtains `course_code` by joining `Section` to `Course` through the validated code. Test an enrollment whose section exists but whose course row is accidentally absent after migration: an inner join would silently drop the client row. Compare old and new view results, including this case, rather than comparing table counts alone.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-myschedule-contract" type="formalise" level="application" title="Declarative Client Contract Specification">
+
+A mobile application wants a view called `MySchedule`. It must show each signed-in student only their enrolled offerings, omit dropped enrollments, and display a stable time order. Specify the four contract clauses required before physical optimization.
+
+<ExerciseSolution hint="Use grain, authority, access, and ordering; avoid naming an index.">
+
+One sound contract is: (1) one row per enrolled offering for the authenticated student; (2) `Enrollment.status = 'enrolled'` determines inclusion; (3) authorization binds the authenticated student to `Enrollment.student_id` and does not trust a client-supplied identifier; (4) rows are ordered by the documented meeting start time and then `offering_id`. An index might help later, but it is not part of this client contract.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-partition-tradeoff" type="generalise" level="transfer" title="Table Partitioning Correctness and Operational Trade-Offs">
+
+Your team proposes partitioning `Enrollment` by `term` because reports usually filter by term. Produce a design note specifying the logical rows and constraints that must remain true, one query differential test, and two operational measurements that could reveal an unfavorable trade-off.
 
 <ExerciseSolution hint="A partition key is physical. Start from the enrollment relation's grain and foreign keys, then name costs that are not logical errors.">
 
 The note should preserve one enrollment per permitted `(student_id, offering_id)` pair and every checked foreign-key relationship. It can compare the old and new `CurrentEnrollment` view over boundary terms, plus test that a student cannot read another student's schedule. Useful operational measurements include cross-term query cost, insert/delete cost, lock or migration duration, and backup/restore behavior. A slower write path can reject the proposal even when every logical result matches.
+
 </ExerciseSolution>
 
-## References
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
 
 - [E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (IBM Research, 1970)](https://research.ibm.com/publications/a-relational-model-of-data-for-large-shared-data-banks)
 - [Selinger et al., “Access Path Selection in a Relational Database Management System” (IBM Research, 1979)](https://research.ibm.com/publications/access-path-selection-in-a-relational-database-management-system)

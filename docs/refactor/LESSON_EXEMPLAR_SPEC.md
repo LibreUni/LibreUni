@@ -14,7 +14,7 @@ This document defines the canonical specification and acceptance rubric for refe
 
 ## 2. Mandatory Structural Components
 
-Every acceptable lesson contains:
+Every acceptable lesson adheres to the structural grammar defined in [`docs/agent-rules/COURSE_STRUCTURE.md`](../agent-rules/COURSE_STRUCTURE.md) and contains:
 
 ### A. Motivating Problem & Formal Statement
 - A concrete system failure, mathematical paradox, or architectural bottleneck that makes the concept strictly necessary.
@@ -45,8 +45,9 @@ Every acceptable lesson contains:
   3. *Synthesis / Proof*: Requiring the student to construct an invariant, write a C kernel routine, or formulate a proof.
 - Complete worked solutions or formal verification rubrics.
 
-### G. Scope Boundaries & Deliberate Omissions
-- An explicit statement at the conclusion detailing advanced extensions, vendor-specific quirks, or related topics intentionally omitted to maintain depth over shallow breadth.
+### G. Scope Boundaries & Further Reading
+- Declare concise scope boundaries in the frontmatter `omissions` field (rendered inside the collapsible `Lesson brief`), rather than adding a standalone boilerplate omissions section at the end of the lesson body.
+- Place substantive mathematical or architectural boundary remarks inline beside the concept they qualify, and fold pointers to advanced extensions directly into annotated `## References & Further Reading` entries.
 
 ### H. Claim-Level Primary Sourcing
 - Zero generic root URLs (e.g., no plain links to `kernel.org` or `mit.edu`).

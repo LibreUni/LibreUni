@@ -17,6 +17,8 @@ estimatedMinutes: 330
 assessment: Given an unseen two- or three-thread implementation, state the invariant, derive the event constraints, enumerate or bound reachable outcomes, identify the first violating event, and defend one repair with a schedule that distinguishes it from a named wrong repair.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
@@ -140,16 +142,15 @@ In ISO C, a data race has undefined behavior. The sequentially consistent lost-u
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Classify before repairing"
-  question="Thread T prints a shared counter using an atomic load while thread U concurrently increments the same counter with an atomic fetch-add. The printed value is either the pre- or post-increment value. Which classification is warranted?"
+  title="Concurrent Access Classification Matrix"
+  question="Thread T loads a shared counter with atomic_load while Thread U concurrently executes atomic_fetch_add on the same variable. Evaluate each classification:"
   options={[
-    "An ISO C data race, because two threads touch one location with no happens-before edge.",
-    "An atomicity violation, because the load can occur between the increment's read and its write.",
-    "Neither a data race nor an atomicity violation; the printed value is nondeterministic but each outcome is legal.",
-    "A determinism failure that must be repaired with a lock around both accesses."
+    { id: "opt-atom-linear-legal", text: "Each atomic access executes indivisibly at a single linearization point, producing a legally serialized history.", isCorrect: true },
+    { id: "opt-atom-nondet-ok", text: "Reading either the pre-increment or post-increment value reflects valid concurrency nondeterminism, not an error.", isCorrect: true },
+    { id: "opt-atom-data-race", text: "Concurrent execution constitutes an ISO C data race because two threads access one memory location without mutexes.", isCorrect: false },
+    { id: "opt-atom-atomicity-viol", text: "An atomicity violation occurs because the read access can observe a torn intermediate half-written integer value.", isCorrect: false }
   ]}
-  correctIndex={2}
-  explanation="Atomic accesses do not race even without a happens-before edge, and each atomic access occupies one indivisible point, so no observer sees a partial effect. The variation in the printed value is allowed nondeterminism, not a defect that requires a lock."
+  explanation="Atomic accesses do not race under ISO C, and each atomic operation occupies a single indivisible point in time. Observing either pre- or post-increment values is legitimate nondeterminism."
 />
 
 ## Invariants turn schedules into proof obligations
@@ -218,59 +219,107 @@ Random stress can discover a violating schedule but cannot establish that no sch
 
 Dynamic race detectors answer a different question: whether an execution contains unsynchronized conflicting memory accesses under their model. They can miss unexecuted races and cannot prove a higher-level queue or filesystem protocol correct.
 
-## Synthesis studio: kill the check-then-act repair
-
-A proposed allocator repair changes this code:
-
-```text
-if free_list is not empty:
-    block = free_list.head
-    free_list.head = block.next
-    return block
-```
-
-to this:
-
-```text
-if atomic_load(free_list) is not null:
-    block = atomic_load(free_list)
-    atomic_store(free_list, block.next)
-    return block
-```
-
-Produce a review note with four parts:
-
-1. the abstract free-list invariant, including uniqueness of returned blocks;
-2. the shortest history in which two allocators return the same block;
-3. why making the individual loads and store atomic does not make the three-event protocol atomic; and
-4. one repair candidate and the event you would attempt to prove is its linearization point.
-
-<ExerciseSolution title="Review rubric and diagnostic schedule">
-
-A complete invariant says every free block is reachable exactly once from the head, no allocated block is reachable, and each successful allocation removes and returns exactly one block that was reachable in the pre-state.
-
-With list `X → Y`, A loads non-null and loads X. B loads non-null and loads X. A stores Y and returns X. B stores Y and returns X. Each memory action can be atomic while the compound allocation is not.
-
-A lock around check, read, update, and ownership transfer is one repair. A compare-and-exchange loop is another: load head X, compute Y, then atomically replace X with Y only if head still equals X; retry on failure. The successful exchange is a candidate linearization point. A production lock-free design must also address memory reclamation and ABA; those concerns are intentionally outside this lesson.
-
-Score the note on invariant precision (30%), legal event trace (25%), distinction between atomic accesses and an atomic operation (20%), repair argument (20%), and explicit boundary such as ABA/reclamation (5%).
-
-</ExerciseSolution>
-
-## Connections and limits
-
 > **Remark.** A concurrency mechanism is justified only by the bad histories it excludes and the progress histories it preserves. Naming a primitive is not a correctness argument.
 
-Interleaving reasoning supplies the problem statement for the rest of the course:
+<ExerciseSet>
 
-- locks will exclude histories that violate an invariant;
-- acquire/release ordering will constrain which writes a reader may observe;
-- condition variables will make “wait until predicate” atomic with releasing a mutex;
-- deadlock analysis will ask whether those constraints leave any progress path;
-- page faults and interrupts will insert blocking and re-entry points into apparently local kernel code; and
-- crash consistency will replace thread events with durable writes and power-loss cuts.
+<Exercise id="ex-atom-interleaving-bound" type="verify" level="application" title="Counting Legal Interleavings for Concurrent Instructions">
 
-The method remains the same: define allowed events, state the invariant, enumerate adversarial orders, and show why the mechanism excludes every bad history without excluding required progress.
+Two threads each execute an instruction sequence: Thread 1 executes $m$ sequential instructions, and Thread 2 executes $n$ sequential instructions. Derive the total number of distinct interleaved instruction execution histories, and evaluate this count for $m = 3$ and $n = 3$.
+
+<ExerciseSolution hint="Recall combinations of m steps chosen from m + n total positions.">
+
+Any valid interleaving is a sequence of length $m + n$ where $m$ steps belong to Thread 1 and $n$ steps belong to Thread 2, preserving their respective intra-thread program orders. The total number of distinct interleavings is given by the binomial coefficient:
+$$
+\binom{m + n}{m} = \frac{(m + n)!}{m! \, n!}.
+$$
+For $m = 3$ and $n = 3$:
+$$
+\binom{6}{3} = \frac{6 \times 5 \times 4}{3 \times 2 \times 1} = 20 \text{ distinct interleavings.}
+$$
+Even for very short code sequences, testing a few arbitrary thread orders explores only a small fraction of the possible interleaving space.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-atom-lost-update-schedule" type="construct" level="application" title="Lost-Update History for Non-Atomic Fetch-Add">
+
+Two threads concurrently execute `counter++` on a shared integer initialized to 0. In assembly, each increment consists of: `L: load r, [counter]`; `A: add r, r, 1`; `S: store [counter], r`. Construct an interleaving schedule of these 6 operations that produces a final counter value of 1 instead of 2.
+
+<ExerciseSolution hint="Interleave the loads so both threads read the initial value 0 before either stores.">
+
+Schedule:
+1. $T_1$: `L` $\implies r_1 = 0$.
+2. $T_2$: `L` $\implies r_2 = 0$.
+3. $T_1$: `A` $\implies r_1 = 1$.
+4. $T_1$: `S` $\implies \text{counter} = 1$.
+5. $T_2$: `A` $\implies r_2 = 1$.
+6. $T_2$: `S` $\implies \text{counter} = 1$.
+Both threads read the initial value 0. $T_2$'s store overwrites $T_1$'s update with the identical value 1, resulting in a classic lost update anomaly.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-atom-check-then-act-freelist" type="describe" level="transfer" title="Check-Then-Act Race Condition in Naive Lock-Free Allocator">
+
+An engineer replaces a mutex-protected free list with atomic operations: `if (atomic_load(&head) != NULL) { block = atomic_load(&head); atomic_store(&head, block->next); return block; }`. Demonstrate an interleaving where two concurrent threads allocate and return the exact same memory block.
+
+<ExerciseSolution hint="Trace two threads executing the atomic loads concurrently before either performs the atomic store.">
+
+Assume the free list contains two blocks: $X \to Y \to \mathrm{NULL}$.
+1. Thread $A$ executes `atomic_load(&head)`: observes $X \ne \mathrm{NULL}$.
+2. Thread $B$ executes `atomic_load(&head)`: observes $X \ne \mathrm{NULL}$.
+3. Thread $A$ executes `block_A = atomic_load(&head)`: receives pointer to $X$.
+4. Thread $B$ executes `block_B = atomic_load(&head)`: receives pointer to $X$.
+5. Thread $A$ executes `atomic_store(&head, block_A->next)`: updates `head` to $Y$ and returns $X$.
+6. Thread $B$ executes `atomic_store(&head, block_B->next)`: updates `head` to $Y$ and returns $X$.
+Both threads return block $X$ simultaneously, violating allocator uniqueness and corrupting application memory. Making individual loads and stores atomic does not make the compound multi-step protocol atomic.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-atom-toctou-filesystem-race" type="verify" level="transfer" title="Time-of-Check to Time-of-Use Pathname Races">
+
+A setuid root utility checks file permissions: `if (access(path, W_OK) == 0) { fd = open(path, O_WRONLY); write(fd, data, len); }`. Construct an adversarial race condition that allows an unprivileged user to overwrite `/etc/passwd`.
+
+<ExerciseSolution hint="Exploit the time gap between access() and open() by substituting a symlink.">
+
+The time gap between `access()` (check) and `open()` (act) creates a Time-of-Check to Time-of-Use (TOCTOU) vulnerability.
+1. The unprivileged user creates a harmless temporary file `/tmp/target` that they own.
+2. The user runs the privileged program passing `path = "/tmp/target"`.
+3. The kernel executes `access("/tmp/target", W_OK)`. Because the user owns the file, `access()` returns 0 (permission granted).
+4. Before `open()` executes, the user process rapidly replaces `/tmp/target` with a symbolic link: `unlink("/tmp/target"); symlink("/etc/passwd", "/tmp/target");`.
+5. The privileged utility calls `open("/tmp/target", O_WRONLY)`. The kernel follows the symlink with root privileges, opening `/etc/passwd` and truncating or overwriting critical system data.
+Repair: Avoid path-based check-then-act sequences; use file descriptor handles and `open(..., O_NOFOLLOW | O_CREAT)` with dropped privileges.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-atom-linearization-cas-loop" type="construct" level="synthesis" title="Designing Compare-and-Swap Loops with Linearization Points">
+
+Design a correct concurrent stack `push()` operation using an atomic compare-and-swap primitive (`atomic_compare_exchange_weak`). Identify the exact linearization point of the operation and explain how failure retries preserve safety.
+
+<ExerciseSolution hint="Snapshot the current top pointer and retry if another thread modified it before the swap.">
+
+```c
+struct Node {
+    void *data;
+    struct Node *next;
+};
+
+void push(atomic_ptr *top, struct Node *new_node) {
+    struct Node *old_top = atomic_load(top);
+    do {
+        new_node->next = old_top;
+    } while (!atomic_compare_exchange_weak(top, &old_top, new_node));
+}
+```
+Linearization point: The single clock cycle where `atomic_compare_exchange_weak` succeeds. At that precise instant, `top` transitions from `old_top` to `new_node`, making `new_node` atomically visible to all concurrent push and pop operations. If another thread prepends a node in the interim, the CAS returns false, updates `old_top` with the new value, and repeats the loop without modifying shared memory, guaranteeing safety.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

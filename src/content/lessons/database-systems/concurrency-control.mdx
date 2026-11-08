@@ -18,7 +18,9 @@ estimatedMinutes: 480
 assessment: Given an unseen schedule, lock table, or read/write-set trace, identify the protocol's decision point, prove or refute the intended serial order, and propose a bounded retry or deadlock repair.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
@@ -39,15 +41,34 @@ This schedule also shows why the repair must match the invariant. A conditional 
 
 <Quiz client:load
   title="Why two commits are not enough"
-  question="Both transactions in the lost-update schedule commit successfully. What exactly is wrong?"
+  question="Both transactions in the lost-update schedule commit successfully without error. Evaluate which assertions regarding this concurrent execution are correct:"
   options={[
-    "The database might have written the same value twice, so one write was ignored",
-    "The interleaving sold one unit twice; local commit success does not prove a serializable history",
-    "The second transaction should have retried until it observed a different value",
-    "The problem is only performance, because both transactions touched the same row"
+    {
+      id: "claim-serial-violation",
+      text: "The concurrent execution sold two units from one in stock, producing a history that is not equivalent to any serial ordering.",
+      isCorrect: true,
+      feedback: "Correct. In any serial execution, the second transaction would observe available = 0 and fail to complete the sale."
+    },
+    {
+      id: "claim-local-vs-global",
+      text: "Local transaction commit success under weak isolation does not guarantee preservation of global business invariants.",
+      isCorrect: true,
+      feedback: "Correct. Read Committed permits lost updates because each statement reads a fresh snapshot without locking across statements."
+    },
+    {
+      id: "claim-retry-cure",
+      text: "Automatic retries on application commit errors would have naturally prevented this lost update anomaly without code changes.",
+      isCorrect: false,
+      feedback: "Incorrect. Because neither transaction encountered a conflict or error, no commit failure occurred to trigger a retry."
+    },
+    {
+      id: "claim-performance-only",
+      text: "This lost update is purely a transient performance degradation caused by row lock contention rather than an integrity failure.",
+      isCorrect: false,
+      feedback: "Incorrect. The anomaly is a permanent semantic integrity failure where committed stock disagrees with actual goods sold."
+    }
   ]}
-  correctIndex={1}
-  explanation="Each transaction's local outcome is valid in isolation, but the history is not equivalent to either serial order: both read 1 and both sold the same unit. Concurrency control must reject one operation, serialize the pair, or require an atomic conditional update that tests the invariant in the same statement. A retry does not repair a history that has already lost the update, and contention alone is not a correctness failure."
+  explanation="Each transaction's local operations were valid in isolation, but their interleaving produced a non-serializable history. Concurrency control must serialize operations, reject conflicting updates, or require atomic conditional expressions."
 />
 
 {/* Source tracking: Locking, waits-for graphs, MVCC, and transaction-control trade-offs are synthesized from PostgreSQL's explicit-locking and transaction-isolation documentation and CMU 15-445/645 materials. Protocol traces and examples are original. */}
@@ -136,11 +157,7 @@ Timestamp ordering and optimistic control do not make conflicts disappear: they 
 
 **Worked example — snapshot isolation permits write skew.** Two doctors are on call, and the invariant is “at least one doctor remains on call.” T1 reads the on-call set $\{\text{Alice},\text{Bob}\}$ and removes Alice; T2 concurrently reads the same set and removes Bob. Under snapshot isolation each transaction reads a consistent snapshot and writes a different row, so neither write conflicts with the other. Both commit, and the invariant is false. The conflict is on the predicate “the on-call set has size at least two,” not on a single row. Repairs include serializable isolation with predicate or summary-row protection, a constraint enforced by a coordinated operation, or a design that makes the aggregate a versioned object. Retrying one transaction after commit is insufficient because neither transaction observed a write conflict.
 
-<ExerciseSolution title="Why can “retry on serialization failure” still be unsafe?">
-
-The database transaction can be retried only if its inputs are still valid and it has not already produced an irreversible effect. Put an idempotency key in the committed database state, defer messages through an outbox, and make the consumer deduplicate. A retry loop without a limit, backoff, or idempotency boundary turns contention into duplication.
-
-</ExerciseSolution>
+> **Remark (Why unconditional retry on serialization failure is unsafe).** The database transaction can be retried only if its inputs are still valid and it has not already produced an irreversible effect. Put an idempotency key in the committed database state, defer messages through an outbox, and make the consumer deduplicate. A retry loop without a limit, backoff, or idempotency boundary turns contention into duplication.
 
 ## Granularity must match the invariant
 
@@ -160,6 +177,64 @@ A service records one million page views per minute and must display an approxim
 <ExerciseSolution hint="Separate the semantic requirement from the shared data shape.">
 Page-view counters can be sharded, buffered, or eventually aggregated when a bounded delay/error is acceptable. Money transfers require an exact invariant at commit and need a transaction/constraint boundary that prevents overdraft. Applying exact locking to every page view wastes concurrency; applying approximate aggregation to balances changes the financial contract.
 </ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-cc-2pl-deadlock-detection" type="verify" level="application" title="Strict 2PL Deadlock Precedence Cycle Detection">
+
+Consider two transactions under strict two-phase locking: $T_1$ holds an exclusive lock on row $A$ and requests an exclusive lock on row $B$; $T_2$ holds an exclusive lock on row $B$ and requests an exclusive lock on row $A$. Construct the wait-for graph, verify why this state is a deadlock, and describe how the engine resolves it.
+
+<ExerciseSolution hint="Draw directed edges from the waiting transaction to the lock-holding transaction.">
+
+The wait-for graph contains directed edges: $T_1 \to T_2$ (since $T_1$ waits for $B$ held by $T_2$) and $T_2 \to T_1$ (since $T_2$ waits for $A$ held by $T_1$). The resulting cycle $T_1 \to T_2 \to T_1$ represents a circular wait where neither transaction can progress. The engine's deadlock detector identifies the cycle and aborts one transaction (the victim), rolling back its operations and releasing its locks so the other can proceed.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cc-lock-granularity-limits" type="describe" level="recall" title="Row-Level Lock Inadequacy for Predicate Constraints">
+
+Explain why executing `SELECT * FROM Doctor WHERE on_call = true FOR UPDATE;` in PostgreSQL fails to protect against phantom inserts that violate predicate-level business invariants.
+
+<ExerciseSolution hint="Row locks attach only to currently existing tuples returned by the query.">
+
+`SELECT ... FOR UPDATE` acquires row-level locks strictly on existing physical tuples matching the predicate at query execution time. It cannot lock nonexistent rows. A concurrent transaction can insert a brand new `Doctor` record that satisfies the predicate, committing without waiting on existing row locks. Preventing phantom violations requires true predicate locks (SSI), table-level locking, or explicit locks on a parent anchor row.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cc-conditional-update-design" type="construct" level="application" title="Atomic Conditional Write for Inventory Reservation">
+
+Write an atomic SQL update statement that decrements inventory item 42 by 1 while strictly guaranteeing that available stock never drops below zero, without requiring an explicit application-side lock or prior select.
+
+<ExerciseSolution hint="Include the non-negative invariant directly in the WHERE clause and inspect row count.">
+
+```sql
+UPDATE inventory
+SET available = available - 1
+WHERE item_id = 42
+  AND available >= 1;
+```
+If the statement affects 1 row, the reservation succeeded atomically within single-statement execution. If it affects 0 rows, stock was exhausted, and the application safely rejects the purchase without race conditions.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cc-contention-sharding-transfer" type="generalise" level="transfer" title="Workload-Aware Concurrency Control: Exact vs. Commutative Aggregation">
+
+A social platform handles 100,000 post like increments per second and 500 bank balance transfers per second. Contrast how concurrency control should be architected for the like counter versus the bank balance.
+
+<ExerciseSolution hint="Determine whether operation order matters and whether intermediate states violate invariant constraints.">
+
+Like increments are commutative ($+1$ can be applied in any order) and tolerate eventual consistency: they should be sharded into $N$ counter slots per post or buffered in an in-memory queue and flushed in batches, avoiding single-row lock serialization. In contrast, bank balance transfers are non-commutative with zero error tolerance: an account must never overdraw, requiring strict serializable isolation or row-level `FOR UPDATE` serialization on account balances at commit time.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

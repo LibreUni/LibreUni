@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 330
 assessment: Given two processes, a finite physical-memory map, and an unseen translation scheme, derive the translation function, trace valid and invalid accesses, design one intentional shared mapping, quantify fragmentation, and defend the isolation invariant against an overflow or aliasing attack.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -87,15 +89,14 @@ Identity and virtual address select a candidate mapping, but authority is operat
 
 <Quiz client:load
   title="Address translation and operation authority"
-  question="Process A has an address-space segment with Base = 0x20000, Bound = 0x4000, mapped with read-only permission. It attempts a load at virtual address 0x3800 and a store at virtual address 0x3800. What is the outcome?"
+  question="Evaluate each statement regarding virtual address translation, memory isolation, and paging invariants:"
   options={[
-    "Both the load and the store succeed because 0x3800 is within the valid bound 0x4000.",
-    "The load succeeds at physical address 0x23800, but the store faults because authority is operation-specific.",
-    "The load faults because virtual addresses must match physical addresses, while the store succeeds.",
-    "Both the load and store fault because user virtual addresses cannot exceed 0x2000."
+    { id: "opt-addr-perm-check", text: "Address translation checks operation permissions so read-only segments permit loads but trigger faults on stores.", isCorrect: true },
+    { id: "opt-addr-alias-share", text: "Two distinct virtual page numbers in different address spaces can intentionally map to the same physical page frame.", isCorrect: true },
+    { id: "opt-addr-vpn-offset", text: "Virtual address translation alters the lower page offset bits when mapping a virtual page to its physical frame.", isCorrect: false },
+    { id: "opt-addr-valid-store", text: "A valid page table entry always guarantees that user-mode stores will succeed without raising a CPU fault.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="In base-and-bound translation, the hardware verifies that the virtual address falls within the limit (0x3800 < 0x4000). The physical address is computed as Base + v = 0x20000 + 0x3800 = 0x23800. However, address translation also checks operation-specific permissions: read-only status permits the load but causes the store to fault."
+  explanation="Address translation validates operation permissions independently from address validity. Shared memory allows distinct virtual pages to reference identical physical frames. Paging preserves the exact intra-page offset, and valid entries may still reject user stores if write permissions or supervisor restrictions intervene."
 />
 
 ## Relocation by base and bound
@@ -309,58 +310,112 @@ Mapping one physical frame writable through one alias and executable through ano
 
 </ExerciseSolution>
 
-## Synthesis assessment: a translation contract under attack
+> **Remark.** Address translation is modeled as an architecturally precise function $\mathrm{VA} \mapsto \mathrm{PA} \cup \{\text{fault}\}$, cleanly separating abstract $\mathrm{VPN} \mapsto \mathrm{PFN}$ mappings from hardware radix-tree encoding (covered in Page Tables and TLBs) and microarchitectural transient execution.
 
-A 24-bit machine uses 1 KiB pages. Process A has:
+<ExerciseSet>
 
-- VPNs `0x000–0x003` mapped read/execute to PFNs `0x120–0x123`;
-- VPNs `0x010–0x012` mapped read/write to PFNs `0x2F0`, `0x080`, `0x191`;
-- VPN `0x03F` mapped read-only to shared PFN `0x055`;
-- no other user mappings.
+<Exercise id="ex-addr-vpn-offset-decomposition" type="verify" level="application" title="Virtual Page Number and Offset Bitwise Decomposition">
 
-Process B maps shared PFN `0x055` read-only at VPN `0x008`; its private data uses other frames. Evaluate these operations and defend every result:
+A processor uses 32-bit virtual addresses with a 4 KiB page size ($2^{12}$ bytes). Given the virtual address `0x0045A8C4`, determine:
+1. The page offset in hexadecimal.
+2. The Virtual Page Number (VPN) in hexadecimal.
+3. The resulting 32-bit physical address if the page table maps this VPN to Physical Frame Number (PFN) `0x1B02`.
 
-1. A executes virtual `0x000C44`.
-2. A writes virtual `0x0043A0`.
-3. A reads virtual `0x00FE10`.
-4. B reads the byte in shared PFN `0x055` at offset `0x210`; construct a valid virtual address.
-5. A kernel optimization proposes reusing PFN `0x055` immediately after deleting A's PTE, without coordinating with B or cached translations. Identify both violated assumptions.
+<ExerciseSolution hint="With 4 KiB pages, the lower 12 bits form the offset, while the upper 20 bits form the VPN.">
 
-Then redesign the map so B can update the shared object while A retains a read-only view. State whether this enforces object-level integrity against B.
-
-<ExerciseSolution title="Reveal reference solution and rubric">
-
-With 1 KiB pages, the offset is ten bits.
-
-1. `0x000C44 / 0x400` gives VPN `0x003`, offset `0x044`. PFN `0x123` is executable, so the physical address is `0x123 × 0x400 + 0x044 = 0x48C44`.
-2. `0x0043A0` gives VPN `0x010`, offset `0x3A0`. PFN `0x2F0` is writable, so the physical address is `0xBC3A0`.
-3. `0x00FE10` gives VPN `0x03F`, offset `0x210`; A reads PFN `0x055`, physical `0x15610`.
-4. B uses VPN `0x008` with offset `0x210`: virtual `0x02210`.
-5. Deleting A's PTE does not remove B's live mapping, and neither deletion alone proves cached translations are gone. PFN reuse would violate both shared-object lifetime and translation-revocation requirements.
-
-B's PTE may grant write while A's remains read-only. This enforces access-specific authority for A, but it does not protect the shared object's contents from B: A will observe B's authorized updates. Object-level integrity would require a protocol, validation, immutability, or a private copy rather than PTE permissions alone.
-
-Rubric, 20 points:
-
-- 6 points: correct VPN/offset decomposition and all physical addresses;
-- 4 points: permission checks precede translation completion;
-- 3 points: valid B alias constructed from its own VPN;
-- 4 points: both lifetime and stale-translation defects identified;
-- 3 points: redesign separates per-mapping authority from trust in shared contents.
-
-An answer that gives only numeric addresses earns at most 8 points because the assessment target is the translation-and-authority contract.
+1. **Page offset:** With a 4 KiB page size, the offset width is $\log_2(4096) = 12$ bits (the lowest 3 hex nybbles). For `0x0045A8C4`, the lowest 12 bits are `0x8C4`.
+2. **Virtual Page Number (VPN):** Shifting right by 12 bits ($\mathrm{VA} \gg 12$) extracts the upper 20 bits:
+   $$
+   \mathrm{VPN} = \lfloor \mathtt{0x0045A8C4} / 4096 \rfloor = \mathtt{0x0045A}.
+   $$
+3. **Physical address calculation:**
+   Paging preserves the page offset exactly. Substituting PFN `0x1B02` into the upper 20 bits gives:
+   $$
+   \mathrm{PA} = (\mathrm{PFN} \ll 12) \mid \text{offset} = (\mathtt{0x1B02} \ll 12) \mid \mathtt{0x8C4} = \mathtt{0x01B028C4}.
+   $$
 
 </ExerciseSolution>
+</Exercise>
 
-## Deliberate boundary and source trail
+<Exercise id="ex-addr-base-bound-protection" type="construct" level="application" title="Address Translation under Base-and-Bound Protection Registers">
 
-> **Remark.** This lesson treats address translation as an architecturally precise function $\mathrm{VA} \mapsto \mathrm{PA} \cup \{\text{fault}\}$ and intentionally separates the abstract $\mathrm{VPN} \mapsto \mathrm{PFN}$ mapping from hardware radix-tree representation (covered in Page Tables and TLBs) and microarchitectural transient execution (such as Meltdown-class speculative loads across supervisor permission bits).
+A system implements hardware base-and-bound memory relocation. A process is assigned a base register of `0x00300000` and a bound (limit) register of `0x00028000`.
+1. Compute the translated physical address for a load instruction at virtual address `0x00014A00`.
+2. Determine the hardware response for a load instruction at virtual address `0x00028000`.
+3. Explain why the boundary check must use strict inequality ($v < \text{Bound}$) rather than weak inequality ($v \le \text{Bound}$).
 
-The analysis treats translation as architecturally precise and ignores speculative accesses that may leave microarchitectural traces after an architecturally denied operation. It also postpones multilevel page-table encoding, translation-cache timing, page replacement, NUMA placement, and device address spaces. Those mechanisms require additional state and cannot be compressed into the VPN→PFN function without hiding their failure modes.
+<ExerciseSolution hint="The bound defines the total length of the segment, so valid offsets range from 0 to Bound - 1.">
 
-{/* Source tracking: The translation and protection model follows the RISC-V Privileged Architecture's supervisor address-translation rules; no specification text is copied. */}
-{/* Source tracking: Mapping, MAP_PRIVATE/MAP_SHARED, protection, and object-boundary claims were verified against POSIX.1-2024 mmap() and fork(). */}
-{/* Source tracking: The xv6-specific address-space examples were checked against the official xv6-riscv rev5 book and source at tag xv6-riscv-rev5. */}
+1. **Valid load:**
+   The virtual offset $v = \mathtt{0x00014A00}$ is strictly less than the bound $\mathtt{0x00028000}$. Hardware translates the address by addition:
+   $$
+   \mathrm{PA} = \mathrm{Base} + v = \mathtt{0x00300000} + \mathtt{0x00014A00} = \mathtt{0x00314A00}.
+   $$
+2. **Boundary check:**
+   The access at $v = \mathtt{0x00028000}$ satisfies $v = \text{Bound}$, so $v \not< \text{Bound}$. The MMU hardware raises a segmentation fault or memory protection exception prior to executing the bus cycle.
+3. **Strict inequality rationale:**
+   A segment of length $L = \text{Bound}$ bytes occupies offsets $0, 1, 2, \dots, L - 1$. An access at offset $L$ falls exactly one byte beyond the authorized allocated range. Using $v \le \text{Bound}$ would expose an unallocated or neighboring byte, violating memory isolation.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-addr-intentional-shared-aliasing" type="construct" level="transfer" title="Constructing Dual Virtual Mappings to a Shared Physical Frame">
+
+Two processes $P_1$ and $P_2$ share an inter-process communication ring buffer allocated at physical frame `0x04A0`. $P_1$ maps the buffer as read-write at virtual page `0x100`, while $P_2$ maps the buffer as read-only at virtual page `0x500`.
+1. Construct the respective page table entry (PTE) fields (VPN, PFN, Read, Write, User) for both processes.
+2. If $P_1$ writes the value `0xDEADBEEF` at virtual address `0x100040`, what virtual address does $P_2$ read to observe this update?
+3. What occurs if $P_2$ executes a store instruction to its mapped address?
+
+<ExerciseSolution hint="The two processes use different virtual page numbers that translate to the identical physical frame.">
+
+1. **PTE configuration:**
+   - For $P_1$: $\mathrm{VPN} = \mathtt{0x100} \mapsto \mathrm{PFN} = \mathtt{0x04A0}$, with permissions $\mathrm{R}=1, \mathrm{W}=1, \mathrm{X}=0, \mathrm{U}=1$.
+   - For $P_2$: $\mathrm{VPN} = \mathtt{0x500} \mapsto \mathrm{PFN} = \mathtt{0x04A0}$, with permissions $\mathrm{R}=1, \mathrm{W}=0, \mathrm{X}=0, \mathrm{U}=1$.
+2. **Aliased read:**
+   The write from $P_1$ occurs at intra-page offset `0x040` (since `0x100040` has VPN `0x100` and offset `0x040`), modifying physical address $(\mathtt{0x04A0} \ll 12) + \mathtt{0x040} = \mathtt{0x004A0040}$.
+   To read the same physical byte, $P_2$ accesses VPN `0x500` with the identical offset `0x040`:
+   $$
+   \mathrm{VA}_{P2} = (\mathtt{0x500} \ll 12) + \mathtt{0x040} = \mathtt{0x00500040}.
+   $$
+3. **Protection enforcement:**
+   When $P_2$ attempts a store to $\mathrm{VA}_{P2}$, the MMU validates the operation against $P_2$'s PTE. Because $W = 0$, the MMU aborts the store and raises a page-protection fault exception to the kernel, preserving the read-only contract.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-addr-sparse-layout-isolation" type="verify" level="synthesis" title="Isolation Invariant Defense in Sparse Address Space Layouts">
+
+A 64-bit operating system places a 4 KiB non-mapped guard page immediately below each thread stack and immediately above the process heap.
+1. Formulate the isolation invariant that explains how unmapped guard pages detect stack overflow and heap overrun.
+2. Suppose an application bug causes an unchecked pointer increment of 64 KiB in a single step, jumping over the 4 KiB guard page into adjacent valid data. Explain why guard pages cannot prevent this corruption.
+
+<ExerciseSolution hint="A guard page traps accesses whose stride is strictly smaller than the guard page thickness.">
+
+1. **Isolation invariant for guard pages:**
+   Let virtual page $g$ be unmapped ($\mathrm{valid} = 0$). Any instruction accessing $v \in [\mathrm{page\_start}(g), \mathrm{page\_end}(g)]$ immediately triggers an unhandled page fault exception before modifying memory. When stack frames grow sequentially by small increments ($< 4\text{ KiB}$), the stack pointer inevitably references page $g$ on overflow, allowing the kernel to terminate the offending thread or expand the stack safely without silent memory corruption.
+2. **Large-stride failure:**
+   Guard pages rely on continuous, localized traversal. If an allocation or array access strides by 64 KiB, the calculated target virtual address $v_{\text{target}} = v_{\text{stack}} - 65536$ skips entirely past the 4 KiB range of $g$ and lands directly on an active, mapped virtual page belonging to another segment. Because $v_{\text{target}}$ possesses a valid PTE with write permissions, the hardware executes the store without faulting, silently corrupting unrelated data.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-addr-internal-external-fragmentation" type="describe" level="application" title="Contrasting Paging Internal Fragmentation and Contiguous External Fragmentation">
+
+Contrast the origin and manifestation of internal fragmentation in fixed-size paging with external fragmentation in variable-size contiguous memory allocation. State why modern operating systems accept internal fragmentation in exchange for eliminating external fragmentation.
+
+<ExerciseSolution hint="Consider unused space inside allocated units versus unallocatable scattered free space between units.">
+
+- **Internal fragmentation:**
+  Occurs when memory is allocated in fixed-size discrete units (e.g., 4 KiB pages). If a process requests 5 KiB of heap space, the operating system must allocate two 4 KiB pages (8 KiB total). The remaining 3 KiB within the second page is allocated to the process but unused, representing internal waste. The average internal fragmentation per mapped segment is half a page ($P/2$).
+- **External fragmentation:**
+  Occurs in variable-size contiguous allocation schemes (such as pure segmentation or unpaged physical placement). As processes allocate, deallocate, and terminate at varying lifetimes, free physical memory becomes checkerboarded into small non-contiguous blocks. Total free memory may exceed a request, but no single contiguous chunk is large enough to satisfy it, requiring expensive memory compaction.
+- **Architectural tradeoff:**
+  Paging completely eliminates external fragmentation at the physical level because any free physical frame can satisfy any virtual page request, regardless of physical location. Operating systems accept bounded internal fragmentation (at most a fraction of a page per region) because it avoids compaction overhead and enables non-contiguous, demand-paged allocation.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

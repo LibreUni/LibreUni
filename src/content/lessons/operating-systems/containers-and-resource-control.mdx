@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 330
 assessment: Given an unfamiliar multi-tenant workload, derive namespace views and cgroup behavior, identify the first shared trusted layer under compromise or overload, and defend a layered containment policy with testable failure states.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -63,16 +65,15 @@ VM:        application -> guest kernel -> VMM/hypervisor -> hardware
 A VM's guest kernel is inside the VM boundary, but the VMM and hardware remain trusted dependencies. A container's kernel is the host kernel itself.
 
 <Quiz client:load
-  title="Namespaces versus resource limits"
-  question="An untrusted program runs inside a container configured with private PID, mount, and network namespaces, but no cgroup limits are configured. The program executes a rapid fork bomb (while(1) fork()). What is the impact on the host system?"
+  title="Namespaces, cgroups, and container boundaries"
+  question="Evaluate each statement regarding Linux namespaces, cgroups v2, and container isolation models:"
   options={[
-    "The fork bomb can exhaust the host kernel's global process and thread table, denying service to host processes and other containers.",
-    "The fork bomb is strictly confined to the container's PID namespace and cannot affect host process creation.",
-    "The container runtime automatically detects the rapid process creation and throttles fork system calls.",
-    "The untrusted program crashes with an illegal instruction fault because fork is disallowed inside private PID namespaces."
+    { id: "opt-cnt-pids-exhaust", text: "Without cgroup process limits, a fork bomb in a private PID namespace can exhaust host kernel task capacity.", isCorrect: true },
+    { id: "opt-cnt-mem-reclaim", text: "In cgroups v2, memory.high acts as a throttle triggering background reclaim before hard memory.max termination.", isCorrect: true },
+    { id: "opt-cnt-chroot-secure", text: "Running a process inside a classic chroot jail provides comprehensive network and inter-process isolation.", isCorrect: false },
+    { id: "opt-cnt-userns-kernel", text: "User namespaces isolate container root users into a distinct guest kernel with an independent memory map.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="Namespaces provide isolation of names and visibility (which PIDs or mounts a process can see), not resource quotas. Without a control group (cgroup) limit such as pids.max, all containerized processes allocate tasks from the host kernel's global process table. A fork bomb inside an unconstrained container exhausts host task capacity, demonstrating why namespace isolation without cgroups cannot guarantee resource containment."
+  explanation="PID namespaces isolate only process identifier visibility, so without pids.max, forks exhaust global kernel task tables. In cgroups v2, memory.high throttles processes and triggers asynchronous reclaim while memory.max triggers OOM kills. Classic chroot isolates only pathname lookups, and user namespaces map UIDs on the shared host kernel rather than running a guest kernel."
 />
 
 ## Namespaces alter views and identities
@@ -239,41 +240,116 @@ It reduces the parser's reachable syscall interface to the allowed set under the
 | User namespaces alone | Maps container UID 0 to unprivileged host UID | Container processes still possess namespaced capabilities and expose reachable kernel attack surfaces |
 | Seccomp BPF alone | Restricts permitted syscall numbers and registers | Cannot validate deep pointer payloads, unmediated open descriptors, or CPU/memory quotas |
 
-## Synthesis: contain a hostile build
+<ExerciseSet>
 
-Design a container execution profile for untrusted source builds. Requirements: 2 CPU-equivalent shares under load, 2 GiB memory, 256 processes, 10 GiB scratch, read-only toolchain, no outbound network except a dependency proxy, and complete cleanup after 20 minutes.
+<Exercise id="ex-cnt-pid-namespace-init" type="verify" level="application" title="Process Namespace Hierarchies and PID 1 Orphan Reaping">
 
-Submit:
+In a Linux container created with `CLONE_NEWPID`, the entrypoint process is assigned virtual PID 1 inside the namespace while holding PID 14,200 on the host.
+1. Explain the special lifecycle responsibilities of PID 1 inside a PID namespace regarding orphaned child processes.
+2. What occurs if PID 1 inside the container exits or is terminated by `SIGKILL`?
 
-- namespace and UID/GID mapping;
-- filesystem mounts and inherited-descriptor policy;
-- cgroup controller values and overload behavior;
-- dropped Linux capabilities and syscall/LSM policy rationale;
-- network mediation path;
-- supervisor authority and timeout protocol;
-- tests for fork bomb, memory pressure, filesystem exhaustion, malformed syscall, kernel panic boundary, and cleanup; and
-- measured interference experiment against one co-tenant.
+<ExerciseSolution hint="PID 1 must reap orphaned children; terminating PID 1 destroys all namespace members.">
 
-<ExerciseSolution title="Reveal the transparent rubric">
-
-- **Execution model, 15%.** Treats the build as host tasks sharing the kernel; identifies runtime, kernel, and hardware trust.
-- **Namespace policy, 15%.** Specifies PID, mount, network, IPC, UTS, and user mappings only where each serves a stated goal; mounts a matching procfs view.
-- **Resource control, 20%.** Distinguishes weight from cap, `memory.high` from hard maximum, process limit from memory limit, and defines OOM/timeout cleanup.
-- **Authority reduction, 20%.** Uses descriptor allowlisting, read-only mounts, mapped unprivileged identity, bounded network broker, reduced capability sets, and justified syscall/LSM policy.
-- **Adversarial evidence, 20%.** Tests every required failure and measures co-tenant tail behavior with raw data and a baseline.
-- **Boundary honesty, 10%.** States residual shared-kernel, cache, bandwidth, device, firmware, and side-channel dependencies; does not report modeled CPU shares as measurements.
-
-Automatic configuration validation can check declared settings and tests. It cannot certify that the threat model is complete or that a live defense is authored and understood by the learner.
+1. **Orphan reaping duties:**
+   In Unix systems, when a parent process terminates before its children, those children are automatically reparented to PID 1 (`init`) of the containing PID namespace.
+   PID 1 must continuously call `waitpid()` in a loop to reap zombies and collect their exit status codes. If PID 1 does not implement orphan reaping (e.g., if a naive application binary runs directly as container PID 1), zombie processes accumulate in the host kernel's process table, eventually exhausting host process slots (`pids.max`).
+2. **Termination cascade:**
+   POSIX and Linux specify that if PID 1 in a PID namespace terminates for any reason, the kernel automatically sends `SIGKILL` to all remaining processes belonging to that PID namespace.
+   The entire container process tree is dismantled, and the PID namespace is destroyed.
 
 </ExerciseSolution>
+</Exercise>
 
-## Connections and deliberate boundary
+<Exercise id="ex-cnt-cgroup-v2-limits" type="construct" level="application" title="Sizing cgroup v2 Memory and CPU Controller Quotas">
 
-> **Remark.** Container isolation composes three orthogonal Linux kernel mechanisms—namespaces (identifier translation), cgroups v2 (resource accounting and throttling), and credential/seccomp mediation (authority reduction)—within a single host kernel; workloads requiring a separate kernel fault domain must cross the virtual-machine boundary studied in Virtual Machines.
+A container group is configured under `/sys/fs/cgroup/build_worker`:
+- Hard memory limit: 2 GiB ($2{,}147{,}483{,}648\text{ bytes}$).
+- Soft throttle threshold: 1.8 GiB ($1{,}932{,}735{,}283\text{ bytes}$).
+- CPU bandwidth: capped at 2.5 CPU cores per $100\text{ ms}$ scheduling period.
 
-Process semantics explain descriptor inheritance and PID 1 behavior. Filesystems explain mount views and shared kernel parsers. Protection explains namespaced credentials, authority, and syscall mediation. Scheduling and memory management explain controller interactions. Virtual machines supply a distinct guest-kernel boundary when the shared-kernel risk is unacceptable. Multicore observability is required to measure residual co-tenant interference.
+1. State the exact cgroup v2 controller filenames and parameter values required to enforce these three constraints.
+2. Contrast the kernel reaction when consumption crosses the soft throttle threshold versus the hard limit.
 
-Image provenance, OCI distribution, orchestration, cluster scheduling, overlay-filesystem internals, service meshes, and confidential containers are omitted. They do not change the central result: namespaces virtualize views, cgroups account and constrain resources, and containers rely on one host kernel.
+<ExerciseSolution hint="Use memory.high for throttle, memory.max for OOM kill, and cpu.max for quota and period.">
+
+1. **Cgroup v2 configuration files:**
+   - Soft memory threshold: `echo 1932735283 > /sys/fs/cgroup/build_worker/memory.high`
+   - Hard memory ceiling: `echo 2147483648 > /sys/fs/cgroup/build_worker/memory.max`
+   - CPU bandwidth quota ($2.5 \times 100{,}000\ \mu\text{s} = 250{,}000\ \mu\text{s}$ per $100{,}000\ \mu\text{s}$ period):
+     `echo "250000 100000" > /sys/fs/cgroup/build_worker/cpu.max`
+2. **Enforcement behavior:**
+   - **Crossing `memory.high`:** The kernel does not kill the process. Instead, it throttles the container's threads (delaying syscall return) and activates asynchronous direct page reclaim to force memory usage back below 1.8 GiB without abrupt process termination.
+   - **Crossing `memory.max`:** The kernel executes synchronous reclaim. If reclaim fails to free memory below 2 GiB, the kernel invokes the cgroup-scoped Out-Of-Memory (OOM) killer to terminate one or more container processes (`oom_score`).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cnt-user-namespace-id-mapping" type="construct" level="transfer" title="Mapping Container Root to Unprivileged Host UIDs">
+
+A container uses user namespaces (`CLONE_NEWUSER`). The container runtime configures `/proc/[pid]/uid_map` with:
+`0 100000 65536`
+1. Explain the meaning of the three numbers in this UID mapping entry.
+2. What host UID owns a file created inside the container by `root` (UID 0)?
+3. If container root executes `mknod /dev/sda1 b 8 1`, explain why the host kernel rejects the system call even though the process has effective `UID 0` and `CAP_MKNOD` in its namespace.
+
+<ExerciseSolution hint="The mapping format is: container_start host_start length. Device node creation requires global root authority.">
+
+1. **Mapping specification:**
+   - `0`: The starting UID inside the container namespace.
+   - `100000`: The starting host UID on the underlying system.
+   - `65536`: The contiguous range of mapped UIDs.
+   Container UID $k \in [0, 65535]$ maps to host UID $100000 + k$.
+2. **File creation ownership:**
+   When container `root` (UID 0) creates a file, the host kernel stores the physical on-disk inode owner as host UID 100,000. On the host, the file is owned by unprivileged user 100,000, possessing zero superuser access to host resources.
+3. **Rejection of `mknod`:**
+   In Linux user namespaces, capabilities are namespaced. The container process possesses `CAP_MKNOD` only within its private user namespace. Creating real block device nodes exposes raw host disk storage; therefore, the kernel's VFS explicitly requires `CAP_MKNOD` in the *initial root namespace* (host namespace). Since host UID 100,000 lacks global superuser capabilities, `mknod()` returns `-EPERM`.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cnt-seccomp-descriptor-leak" type="prove" level="synthesis" title="Proving Confinement Failure Under Inherited Host File Descriptors">
+
+A container is confined using a strict seccomp-BPF filter that allows only `read()`, `write()`, `close()`, and `exit()`. A bug in the container launcher leaves host file descriptor 3 open, connected to `/etc/shadow` with read permissions.
+1. Prove that seccomp-BPF cannot prevent the sandboxed container process from reading password hashes through descriptor 3.
+2. Specify the process creation invariant required to prevent descriptor leakage into containers.
+
+<ExerciseSolution hint="Seccomp checks syscall numbers and register arguments, not whether an open descriptor refers to a sensitive file.">
+
+1. **Proof of confinement failure:**
+   - Seccomp-BPF operates as an instruction filter on system call invocation: it inspects the system call number (`__NR_read`), architecture, and scalar register values (file descriptor integer `3`, user buffer pointer `buf`, length `count`).
+   - Seccomp cannot inspect the underlying kernel object to which descriptor 3 points; it only observes the integer `3`.
+   - Because `read()` is explicitly allowed by the policy filter, the seccomp filter returns `SECCOMP_RET_ALLOW`.
+   - The kernel VFS executes `vfs_read(file_table[3], buf, count)`. Because the descriptor was opened on `/etc/shadow` before container creation, the read succeeds, disclosing confidential password hashes.
+   Seccomp restricts syscall APIs, not ambient object capabilities carried by open descriptors.
+2. **Process creation invariant:**
+   The container runtime must enforce:
+   $$
+   \forall \text{fd} > 2, \quad \text{close}(\text{fd}) \lor \text{fcntl}(\text{fd}, \text{F\_SETFD}, \text{FD\_CLOEXEC})
+   $$
+   prior to invoking `execve()`, ensuring that only explicitly whitelisted standard I/O descriptors (0, 1, 2) cross the containment boundary.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cnt-shared-kernel-threat-model" type="describe" level="synthesis" title="Evaluating the Shared-Kernel Threat Boundary in Multi-Tenant Containers">
+
+Compare the isolation boundary of multi-tenant containers with hardware-isolated virtual machines. Explain why a single local kernel privilege escalation exploit (e.g., a vulnerability in an allowed ioctl, socket protocol, or eBPF verifier) breaks all co-tenant containers on the host.
+
+<ExerciseSolution hint="Containers share a single kernel address space and monolithic execution path.">
+
+- **The shared-kernel vulnerability:**
+  In containerized environments, every container executes system calls directly against the same running host kernel. There is only one kernel text, one page table mapping supervisor memory, and one set of kernel locks.
+  If an attacker in Container $A$ triggers an unpatched kernel bug (such as a use-after-free in `netfilter`, a race condition in `io_uring`, or an integer overflow in a filesystem driver):
+  1. The exploit executes arbitrary shellcode in CPU supervisor/kernel mode.
+  2. Once in supervisor mode, the exploit completely overrides all namespace data structures, cgroup accounting limits, and seccomp filters.
+  3. The attacker can read and write all host physical memory, inspect processes in Container $B$, access host disks, and achieve full system takeover.
+- **Contrast with Virtual Machines:**
+  In virtual machines, the guest operating system kernel runs in a separate hardware virtualization mode (Guest Supervisor) below the hypervisor (Host Root). A guest kernel vulnerability gives the attacker control over only that guest's virtual machine. Escaping to the host requires finding and chaining a secondary hypervisor breakout exploit (e.g., in QEMU device emulation or KVM exit handling). VMs provide two independent layers of defense-in-depth.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

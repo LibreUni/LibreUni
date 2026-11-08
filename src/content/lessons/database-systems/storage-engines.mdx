@@ -18,7 +18,10 @@ estimatedMinutes: 480
 assessment: Given an unseen page trace and workload, identify the first violated storage invariant, repair the buffer/log protocol, and justify a layout choice under a changed workload.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
@@ -149,20 +152,41 @@ Not by itself. A row-oriented primary with an order-ID index can fetch and updat
 
 <Quiz client:load
   title="Columnar layout and late materialization"
-  question="An analytical query evaluates SELECT AVG(revenue) FROM orders WHERE status = 'delivered' AND date >= '2026-01-01'. The table has 40 columns. How does a column store with late materialization minimize I/O compared to a row store?"
+  question="An analytical query evaluates SELECT AVG(revenue) FROM orders WHERE status = 'delivered' AND date >= '2026-01-01'. The table has 40 columns. Evaluate which statements regarding columnar storage and execution are correct:"
   options={[
-    "It scans and filters only the compressed status and date columns first, and fetches revenue column segments only for qualifying row positions.",
-    "It reconstructs all 40 columns of every row in memory before evaluating the WHERE clause filters.",
-    "It eliminates I/O because all columns in a columnar database are maintained in memory without disk persistence.",
-    "It converts all 40 attributes into integer indices to allow sorting in a single CPU cycle."
+    {
+      id: "claim-column-io",
+      text: "Scanning and filtering only compressed status and date column segments avoids reading the remaining 37 unreferenced attributes from disk.",
+      isCorrect: true,
+      feedback: "Correct. Column stores read only the segments required by the query, dramatically reducing I/O compared to full-tuple row scans."
+    },
+    {
+      id: "claim-late-mat",
+      text: "Late materialization evaluates predicates to form qualifying row-id bitsets before fetching matching revenue segment values.",
+      isCorrect: true,
+      feedback: "Correct. Deferring attribute retrieval until after filter evaluation prevents loading payload columns for non-qualifying rows."
+    },
+    {
+      id: "claim-tuple-decomp",
+      text: "Late materialization requires the query engine to immediately reconstruct full 40-attribute tuples in memory before filtering.",
+      isCorrect: false,
+      feedback: "Incorrect. Immediate reconstruction (early materialization) negates columnar advantages; late materialization delays tuple formation."
+    },
+    {
+      id: "claim-oltp-point",
+      text: "A columnar layout is universally superior to a row store for OLTP workloads consisting of high-frequency single-tuple point updates.",
+      isCorrect: false,
+      feedback: "Incorrect. Updating a single tuple across 40 distinct columnar segments incurs substantial write amplification compared to row pages."
+    }
   ]}
-  correctIndex={0}
-  explanation="In a column store, attributes reside in separate contiguous column segments. With late materialization, the engine first scans and evaluates filters on the status and date columns alone, constructing a bitset of matching row positions. It then retrieves only the revenue column for matching positions, avoiding I/O and cache pollution for the remaining 37 unused attributes as well as non-qualifying revenue values."
+  explanation="Column stores optimize analytical queries by reading only referenced columns and using late materialization to minimize payload retrieval. In contrast, high-frequency point updates incur high write amplification across columnar segments."
 />
 
 ## A log makes a dirty page recoverable
 
-> **Theorem.** Under write-ahead logging, the log record describing a page change must be durable before the changed data page can be written to durable storage. A commit acknowledgement requires the commit record's durability under the stated failure model.
+<MathStatement id="thm-wal-protocol" kind="theorem" title="Write-Ahead Logging Protocol Invariant">
+Under write-ahead logging (WAL), the log record describing an update to a database page must be written to non-volatile storage before the modified data page itself may be flushed to disk. Furthermore, a transaction commit acknowledgement requires the corresponding commit log record to be durable.
+</MathStatement>
 
 For the `paid_at` update, write a log record with LSN 911, change the in-memory page, mark its page LSN 911, then flush the log through 911 before flushing page 42. After a crash, recovery compares the durable log with page LSNs: a page missing a logged update can be redone; an uncommitted update can be undone or made invisible according to the system's recovery design. Writing the page first risks a durable change with no durable explanation.
 
@@ -172,9 +196,62 @@ For the `paid_at` update, write a log record with LSN 911, change the in-memory 
 
 The log is durable through LSN 910. Page 42 has been changed in memory to page LSN 911, but neither the log record 911 nor the page is flushed. The machine loses power. What may recovery expose?
 
-<ExerciseSolution>
+<ExerciseSolution hint="Check whether any durable record of LSN 911 reached non-volatile storage.">
 Nothing from LSN 911 may be exposed, because neither its log record nor its page image was durable. If the page had reached storage before the log record, recovery could find an unexplained update and could not rely on WAL redo/undo reasoning. The safe result follows from the ordering condition, not from hoping the device flushes in a convenient order.
 </ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-storage-wal-invariant" type="verify" level="application" title="Write-Ahead Logging Flushing Order Verification">
+
+A storage engine flushes dirty data page 42 (containing uncommitted update with page LSN 911) to persistent disk while the WAL buffer is durable only through LSN 910. Referring to <Ref id="thm-wal-protocol" />, identify why this flush violates the write-ahead logging invariant and what failure mode ensues if power is lost immediately afterward.
+
+<ExerciseSolution hint="Examine whether recovery can reconstruct the transaction status of changes on page 42.">
+
+The flush violates <Ref id="thm-wal-protocol" /> because the data page modification reached disk before its explanatory log record was durable. If power is lost immediately afterward, recovery encounters a page containing an uncommitted modification without a durable undo log record, leaving persistent storage in an unrecoverable, inconsistent state.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-storage-page-layout-framing" type="describe" level="recall" title="Slotted-Page Architecture and Item Pointer Indirection">
+
+Describe how a slotted-page architecture uses an array of item pointers (line pointers) at the start of the page to decouple index pointers from physical byte offsets during record updates.
+
+<ExerciseSolution hint="Indexes store (page_number, slot_index) pairs rather than raw byte offsets.">
+
+In a slotted page, indexes reference a tuple by its tuple ID `(page_number, slot_index)`. The slot array grows forward from the page header while variable-length tuple records are packed from the end of the page upward. When a tuple is updated or defragmented within the page, only its offset in the slot array changes; index references to the stable slot index remain completely untouched.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-storage-row-vs-column-cost" type="construct" level="application" title="Row vs. Column I/O Calculation on Filtered Scans">
+
+Consider a table with 1,000,000 rows and 50 fixed-width 8-byte columns (400 bytes per row, 20 rows per 8 KB page, total 50,000 pages). An analytical query computes the average of one column for rows matching a predicate on another column, with 1% selectivity. Compare the raw I/O volume between a full row-store table scan and a column store using late materialization (assuming 8-byte uncompressed column segments).
+
+<ExerciseSolution hint="Row store must read all 50,000 pages. Column store reads only the filter and target columns.">
+
+1. Row store: Scans all 50,000 pages = $50{,}000 \times 8\text{ KB} = 400\text{ MB}$.
+2. Column store: The filter column requires $1{,}000{,}000 \times 8\text{ B} = 8\text{ MB}$ (1,000 pages). The matching 1% (10,000 rows) requires reading target column segments for those positions ($10{,}000 \times 8\text{ B} = 80\text{ KB}$, spanning at most 1,000 pages if contiguous or fetched selectively). Total columnar I/O is at most $8\text{ MB} + 8\text{ MB} = 16\text{ MB}$, a $25\times$ reduction in data transferred.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-storage-workload-transition-transfer" type="generalise" level="transfer" title="Layout Selection under Shifting Analytical-OLTP Workloads">
+
+An engineering team migrates a financial fraud system from batch nightly reporting (2-column scans over 50 columns) to real-time transactional scoring (1,000 updates/sec touching all 50 attributes by customer ID). Contrast the physical trade-offs of retaining a pure columnar store versus switching to a row-oriented primary engine with an asynchronous columnar replica.
+
+<ExerciseSolution hint="Analyze write amplification and lock granularity for point updates across 50 separate column files.">
+
+A pure columnar engine suffers extreme write amplification under 1,000 point updates/second: each single-row update must modify or append to 50 independent column segments, incurring heavy I/O, lock contention, and fragmentation. Switching to a row-oriented primary engine isolates each update to a single slotted page with minimal write amplification and microsecond index lookups. Analytical queries can be offloaded to an asynchronous columnar replica (e.g. via change data capture), decoupling write throughput from scan optimization.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

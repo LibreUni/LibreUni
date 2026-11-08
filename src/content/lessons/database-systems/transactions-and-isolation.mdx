@@ -18,7 +18,9 @@ estimatedMinutes: 480
 assessment: Given an unseen concurrent history and application invariant, classify the anomaly, derive the serializability evidence, and propose a correct repair with its retry and external-effect boundary.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
 import IsolationSchedulePlayground from '../../../components/playgrounds/IsolationSchedulePlayground';
@@ -135,6 +137,68 @@ You are told a service uses “repeatable read.” Give the smallest experiment 
 <ExerciseSolution hint="Run the two disjoint writes concurrently and retain outcome evidence, not just the final rows.">
 Create two on-call rows, begin two transactions at the claimed level, have both read the predicate, have each disable a different doctor, then commit. Record blocking, errors, commits, and the final predicate. If both commit with no doctor on call, the level does not protect this invariant; add a serializable/summary/predicate-based repair and rerun the same schedule.
 </ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-tx-conflict-serializability" type="verify" level="application" title="Conflict-Serializability Precedence Graph Construction">
+
+Consider history $H = r_1(A)\; r_2(B)\; w_1(B)\; w_2(A)\; c_1\; c_2$. Using <Ref id="conflict-serializable" />, construct the serialization graph and verify whether $H$ is conflict-serializable.
+
+<ExerciseSolution hint="Identify conflicting operation pairs on the same data item and draw directed edges.">
+
+The conflicting pairs are:
+1. $r_2(B)$ precedes $w_1(B)$ on item $B$, inducing directed edge $T_2 \to T_1$.
+2. $r_1(A)$ precedes $w_2(A)$ on item $A$, inducing directed edge $T_1 \to T_2$.
+The serialization graph contains the cycle $T_1 \to T_2 \to T_1$. By <Ref id="conflict-serializable" />, because the graph contains a directed cycle, the history $H$ is not conflict-serializable.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-tx-write-skew-anomaly" type="describe" level="recall" title="Write Skew Anomaly under Snapshot Isolation">
+
+Explain why snapshot isolation permits write skew in the classic hospital on-call problem (where at least one doctor must remain active) while preventing dirty reads, non-repeatable reads, and lost updates.
+
+<ExerciseSolution hint="Each transaction reads the shared active count but modifies disjoint doctor rows.">
+
+Under snapshot isolation, transactions read from a consistent snapshot taken at start and check for write conflicts only on the specific rows they update (first-committer-wins). In write skew, transaction $T_1$ updates doctor $A$ while $T_2$ updates doctor $B$. Because their write sets $\{A\}$ and $\{B\}$ are disjoint, no write-write conflict is detected, and both commit. However, their commit decisions depended on each other's state, violating the multi-row invariant.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-tx-aggregate-limit-repair" type="construct" level="application" title="Multi-Invoice Aggregate Credit Limit Protection">
+
+A business requires that the total of all unpaid invoices for a tenant cannot exceed credit limit $L$. Two concurrent transactions attempt to insert new invoices for tenant 12. Specify two alternative architectural mechanisms to prevent exceeding $L$ under concurrent execution.
+
+<ExerciseSolution hint="Consider explicit lock serialization on a parent row versus serializable snapshot isolation.">
+
+1. Explicit parent row lock: Each transaction begins by executing `SELECT * FROM Tenant WHERE tenant_id = 12 FOR UPDATE;`. This serializes all invoice additions for tenant 12, forcing each transaction to read the committed sum of prior transactions before inserting.
+2. Serializable isolation: Run both transactions at `SERIALIZABLE` isolation. The database tracks predicate read dependencies and aborts one transaction with a serialization error (`40001`), requiring the application to retry.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-tx-isolation-test-transfer" type="generalise" level="transfer" title="Empirical Isolation Level Validation Harness">
+
+Design an automated test harness to empirically verify whether a database's declared `REPEATABLE READ` isolation level is vulnerable to write skew. Define the initial database fixture, the interleaved operations of two concurrent sessions, and the assertion that detects invariant violation.
+
+<ExerciseSolution hint="Seed two doctors on call, have two concurrent threads each take one doctor off call, then assert final count.">
+
+1. Fixture: Insert `Doctor(id, on_call)` with rows `(1, true)` and `(2, true)`. Invariant: `COUNT(*) FILTER (WHERE on_call) >= 1`.
+2. Schedule:
+   - Session 1: `BEGIN ISOLATION LEVEL REPEATABLE READ;` reads active count (2).
+   - Session 2: `BEGIN ISOLATION LEVEL REPEATABLE READ;` reads active count (2).
+   - Session 1: `UPDATE Doctor SET on_call = false WHERE id = 1; COMMIT;`
+   - Session 2: `UPDATE Doctor SET on_call = false WHERE id = 2; COMMIT;`
+3. Assertion: Query `SELECT COUNT(*) FROM Doctor WHERE on_call = true;`. If count is 0, both committed and write skew occurred, proving the level is snapshot isolation rather than true serializability.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

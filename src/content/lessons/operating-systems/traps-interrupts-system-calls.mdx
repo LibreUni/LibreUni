@@ -19,6 +19,8 @@ estimatedMinutes: 330
 assessment: Given an unseen RISC-V trap snapshot and kernel entry sketch, classify the event, reconstruct saved and unsaved state, identify the first unsafe transition, and specify a validated return path with one failure test.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import SystemCallPathPlayground from '../../../components/playgrounds/SystemCallPathPlayground';
@@ -210,16 +212,15 @@ The four defects concern range, arithmetic, authority, and execution context. On
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Reject overflow before forming the sum"
-  question="A syscall must validate the user range `[u, u+n)` before copying. Which test rejects every overflow and out-of-range case without depending on wrap-around behavior?"
+  title="System Call Address Range Validation Matrix"
+  question="Evaluate each statement regarding how kernel entry code validates a user address range [u, u+n) before copying:"
   options={[
-    "Test `u + n <= limit` using wrapping unsigned addition",
-    "Test `u <= limit`, then test `n <= limit - u`",
-    "Test `u < limit`, then copy the whole range in one unchecked call",
-    "Test `n <= limit` and `u <= limit` independently"
+    { id: "opt-trap-sub-check", text: "Checking u <= limit followed by n <= limit - u prevents arithmetic wraparound without forming u + n.", isCorrect: true },
+    { id: "opt-trap-mmu-walk", text: "Validating user memory requires verifying page-table presence and write permissions across every page.", isCorrect: true },
+    { id: "opt-trap-add-wrap", text: "Testing u + n <= limit using wrapping unsigned addition safely detects all integer overflow conditions.", isCorrect: false },
+    { id: "opt-trap-start-only", text: "Verifying only that starting address u lies within user space guarantees that all u + n bytes are valid.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="Wrapping addition can carry `u + n` to a small value, so `u + n <= limit` accepts a range that extends past `limit`. The subtraction form establishes `u <= limit` first, then checks `n <= limit - u` without ever forming `u + n`. Testing only the start address ignores the rest of the range, and bounding `u` and `n` separately does not constrain their sum."
+  explanation="Directly evaluating u + n can overflow to a small value and bypass bounds checks. Subtraction bounds (n <= limit - u) prevent wraparound, and page permissions must be validated across the entire span."
 />
 
 ## Worked trace: a recoverable load page fault
@@ -270,45 +271,71 @@ Suppose `usertrap()` enables supervisor interrupts before changing `stvec` away 
 A timer can arrive while supervisor code is running but `stvec` still names the user-entry trampoline. That entry assumes a user trapframe and transition context; it can overwrite saved user state or load stale process metadata while already on a kernel path. The safe design disables interrupts during the ambiguous interval, points kernel-origin traps at a handler that assumes a kernel page table and stack, and enables interrupts only after trap CSRs needed for classification have been consumed or saved.
 </ExerciseSolution>
 
-## Boundary design studio: `copy_digest`
+> **Remark.** Reusing trap entry does not unify event policy: system calls advance, recoverable faults retry, and interrupts resume unless a scheduler selects another saved context.
 
-Design a syscall
+<ExerciseSet>
 
-```text
-copy_digest(in_ptr, length, out_ptr, flags) -> bytes_consumed or -error
-```
+<Exercise id="ex-trap-arch-hardware-handoff" type="describe" level="application" title="Hardware Trap Transition and Software Invariants">
 
-that hashes a user range into a fixed 32-byte user output. Address these cases: zero length, `in_ptr+length` overflow, input/output overlap, output crossing an unmapped page, interruption after partial input, unknown flags, and concurrent mutation of the input by another thread.
+Identify what architectural state transitions are performed automatically by RISC-V hardware on an `ecall` trap into supervisor mode, and contrast them with the responsibilities that must be performed by software in `trampoline.S`.
 
-Your submission must include:
+<ExerciseSolution hint="Distinguish hardware CSR updates from software stack selection and register saving.">
 
-- a raw-argument decoding table;
-- a validation order with an explanation for every ordering dependency;
-- one copy strategy and its snapshot semantics;
-- a trap-return rule for success, recoverable interruption, and fatal process state;
-- tests that kill a start-only range check and a direct-user-pointer dereference.
-
-**Rubric (20 points).** Architectural trap reconstruction 4; validation completeness and overflow reasoning 5; snapshot/concurrency semantics 4; error and restart behavior 3; adversarial tests 3; explicit omissions 1.
-
-<ExerciseSolution title="Reveal diagnostic reference design">
-
-Reject unknown flags first. Establish `length` and both raw addresses without dereferencing them. Accept zero-length input without reading `in_ptr`, but still require a writable 32-byte output if the interface promises a digest. Prove `in_ptr <= limit` and `length <= limit-in_ptr`; validate/copy the output through the caller's page table rather than writing it directly. Copy input into bounded kernel chunks and update kernel-owned digest state. This defines a sequential snapshot only per copied chunk; if whole-range snapshot semantics are required, pin pages and prevent writes or copy the complete range before hashing. Compute the digest in kernel memory, then perform one checked 32-byte copyout. Overlap is harmless under the bounded-copy design because output is written only after input consumption; document that ordering. On interruption, either return a documented restartable error before output commit or finish atomically from the interface perspective. Advancing past `ecall` is correct for every completed syscall return; retry policy belongs to the user ABI or signal machinery, not to blindly re-executing `ecall` with hidden partial state.
-
-A design that validates a range and later dereferences the user virtual address directly has not established that the kernel page table maps it. A design that copies the digest before all fallible work can expose partial output.
+Hardware automatically saves the faulting/call PC to `sepc`, writes the trap cause code to `scause`, captures previous privilege mode and interrupt enables in `sstatus`, disables interrupts in supervisor mode, and sets PC to `stvec`. Hardware does NOT switch the stack pointer (`sp`), does NOT switch the page table (`satp`), and does NOT save general-purpose registers (`x1..x31`). Software entry code (`trampoline.S`) must exchange `sp` with the per-process trapframe, save all integer registers, configure the kernel stack pointer, and switch `satp` to the kernel page table before entering C code.
 
 </ExerciseSolution>
+</Exercise>
 
-## Connections and boundaries
+<Exercise id="ex-trap-overflow-range-validation" type="verify" level="application" title="Subtraction-Based Range Validation Against Wraparound">
 
-- **Process state:** a trapframe captures user architectural state; a scheduler context captures a suspended kernel continuation. They are related but not interchangeable.
-- **Scheduling:** timer interrupts provide preemption points, while scheduling policy chooses the next runnable context.
-- **Virtual memory:** page faults reuse trap entry but require address-space policy and translation-cache correctness.
-- **Devices:** external interrupts report completion; a driver must validate device state just as a syscall path validates user state.
-- **Signals:** POSIX signal delivery modifies a saved user continuation; it is not “running a handler inside the interrupt controller.”
+A kernel system call receives user address `u` and length `n`. Prove that the condition `u + n <= limit` fails to detect integer wraparound in modular arithmetic, and explain why the ordered check `u <= limit && n <= limit - u` is sound.
 
-Hypervisor delegation, interrupt priorities, direct versus vectored performance, user-level interrupt extensions, and formal verification of entry assembly are omitted. The lesson also does not claim all kernels switch page tables on entry; xv6 does, while other designs map kernel regions differently. These distinctions are deferred because the controlled-entry proof is already complete without surveying every architecture.
+<ExerciseSolution hint="Consider boundary values where u + n exceeds the maximum 64-bit integer.">
 
-> **Remark.** Reusing trap entry does not unify event policy: system calls advance, recoverable faults retry, and interrupts resume unless a scheduler selects another saved context.
+In fixed-width unsigned arithmetic modulo $2^{64}$, if `u = 0xFFFFFFFFFFFFFF00` and `n = 0x200`, the sum wraps around to `0x100`. Testing `u + n <= limit` succeeds because $256 \le \mathrm{limit}$, even though the buffer spans across memory into invalid or kernel space. By contrast, testing `u <= limit` first establishes that `limit - u` is non-negative and mathematically bounded without overflow. The subsequent check `n <= limit - u` ensures that the entire span $[u, u + n)$ fits below `limit` without ever computing the wrapping sum.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-trap-page-fault-retry-trace" type="describe" level="transfer" title="Synchronous Recoverable Page Fault Execution Trace">
+
+Trace the control flow, CSR state, and page-table modifications when a process triggers a recoverable demand-paging load fault at instruction PC `0x2088` accessing virtual address `0x40001000`.
+
+<ExerciseSolution hint="Trace why sepc remains at the faulting load instruction rather than incrementing by 4.">
+
+The load instruction triggers a synchronous exception. Hardware writes `sepc = 0x2088`, sets `scause` to load page fault (cause 13), writes `stval = 0x40001000`, and jumps to `stvec`. The kernel trapframe preserves user registers. The VM fault handler verifies that `0x40001000` lies within a valid VMA, allocates a physical frame, maps it with read permissions, and flushes the TLB (`sfence.vma`). Crucially, `sepc` is NOT incremented; on `sret`, execution returns to `0x2088` to re-execute the load instruction, which now hits the valid translation.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-trap-early-interrupt-hazard" type="construct" level="transfer" title="Stale Trampoline Interrupts and Trap Vector Swapping">
+
+Explain the failure mode if supervisor interrupts are re-enabled inside kernel mode while `stvec` still points to the user-mode trampoline entry vector.
+
+<ExerciseSolution hint="Consider what trapframe stvec dereferences when an interrupt occurs while already on the kernel stack.">
+
+If an asynchronous timer or device interrupt arrives while `stvec` points to the user trampoline, the CPU executes the user entry code while already in supervisor mode. The trampoline attempts to read `sscratch` (which now points to the kernel or contains user register data), swaps the stack pointer to an invalid state, and overwrites the active user trapframe with kernel register values. To prevent state corruption, kernel entry must switch `stvec` to `kernelvec` before enabling interrupts, and disable interrupts before switching `stvec` back to `uservec` on exit.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-trap-copy-digest-design" type="construct" level="synthesis" title="Complete Boundary Protocol and Snapshot Semantics for copy_digest">
+
+Design the complete validation sequence for a system call `copy_digest(in_ptr, length, out_ptr, flags)`. Specify the argument decoding order, memory bounds validation, chunked copy strategy, and error reporting.
+
+<ExerciseSolution hint="Reject invalid flags first, validate non-wrapping bounds, copy into bounded kernel buffers, and protect against concurrent modification.">
+
+1. Decode and reject unknown flags immediately with `-EINVAL`.
+2. Check range bounds: verify `in_ptr <= USER_MAX && length <= USER_MAX - in_ptr`, and verify `out_ptr <= USER_MAX && 32 <= USER_MAX - out_ptr`.
+3. Accept zero length without reading `in_ptr`, but still verify that `out_ptr` is writable.
+4. Process input in bounded kernel-allocated chunks (e.g., 4 KiB buffers) via `copyin`, feeding each chunk into a kernel cryptographic digest context. This bounds kernel memory usage and prevents unbounded locks.
+5. Once hashing completes, write the 32-byte digest to `out_ptr` via `copyout`. If a fault occurs during `copyout`, return `-EFAULT`.
+6. Advance `sepc += 4` before executing `sret` so the user process resumes at the instruction following `ecall`.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

@@ -1,13 +1,14 @@
 # Reference curriculum
 
-Accepted scope: 2026-09-14. Computer Architecture, Operating Systems, and Database Systems are the only active courses. Their purpose is to establish reusable examples of substantive teaching, meaningful diagrams and interaction, and demanding assessment before the catalog grows again. Selection is not certification that every lesson has reached that standard.
+Accepted scope: 2026-09-14 (updated 2026-10-06 via D-0008). Computer Architecture, Operating Systems, Database Systems, and Introduction to Calculus are the active courses. Their purpose is to establish reusable examples of substantive teaching, meaningful diagrams and interaction, and demanding assessment before the catalog grows again. Selection is not certification that every lesson has reached that standard.
 
 The former ten-course computing-core design and retired course/path source are preserved in [`archive/curriculum/2026-09-14`](../../archive/curriculum/2026-09-14/README.md), including uncommitted edits present when archived. Nothing under that directory is part of the site, search, books, or active-course validation.
 
-## Three complementary reference courses
+## Active reference courses
 
 | Course | Central question | Course design and sources | Evidence, not a widget quota |
 | --- | --- | --- | --- |
+| Introduction to Calculus | How do limits resolve the $0/0$ rate and infinite-sum paradoxes into rigorous continuous mathematics? | [Calculus recovery & design](../refactor/CALCULUS_RECOVERY.md) | Single-claim interactive playgrounds with static twins; epsilon-delta proofs; theorem-driven derivation; complete diagnostic solutions |
 | Computer Architecture | How does a machine execute a program, and what limits its performance? | [Architecture crosswalk](COMPUTER_ARCHITECTURE.md) | Representation and instruction traces; pipeline hazards; cache mapping; quantitative design with stated limits |
 | Operating Systems | How does concurrent privileged code provide protected, persistent abstractions? | [OS crosswalk](OPERATING_SYSTEMS.md) | Pinned kernel labs; schedule and memory traces; device ownership; crash-state analysis and a defended change |
 | Database Systems | Which facts survive queries, concurrent updates, failures, and hostile access? | [Database crosswalk](DATABASE_SYSTEMS.md) | Exact query results; schema/invariant reasoning; plans and cost models; transaction/recovery traces and an adversarial capstone |

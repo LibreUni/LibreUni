@@ -18,6 +18,8 @@ omissions:
 estimatedMinutes: 720
 assessment: An xv6 branch descended from official revision-5 commit 7d7adbb must preserve prior cumulative labs and upstream tests, negotiate indirect descriptors only when offered, pass the mutation and fault matrix, demonstrate bounded request ownership under concurrency, report reproducible direct-versus-indirect measurements, and survive a design-memo review plus defense questions.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -167,16 +169,15 @@ Full credit requires a causally ordered trace, not a list of function names. A r
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Direction from the device's view"
-  question="In the baseline xv6 block path, a bread request sets VRING_DESC_F_WRITE on the data descriptor. Why?"
+  title="Virtio descriptor flags and queue invariants"
+  question="Evaluate each statement regarding Virtio descriptor flags, queue operations, and buffer directions in xv6:"
   options={[
-    "Because the driver writes the fetched block into the buffer before the device reads it.",
-    "Because the device writes into memory, so the descriptor must be device-writable.",
-    "Because the one-byte status entry is written by the device at completion.",
-    "Because indirect descriptors require the write flag on every data entry."
+    { id: "opt-virt-read-direction", text: "In block read operations the data descriptor sets the device-write flag because peripheral hardware fills memory.", isCorrect: true },
+    { id: "opt-virt-indirect-cap", text: "Indirect descriptors allow an 8-entry virtqueue to support up to 8 in-flight requests instead of the 2-request limit.", isCorrect: true },
+    { id: "opt-virt-write-flag", text: "In block write operations the data descriptor must set the device-write flag to permit DMA read access from host RAM.", isCorrect: false },
+    { id: "opt-virt-used-head", text: "Virtio used ring entries return the driver software generation counter rather than the descriptor chain head index.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="The flag is named from the device's perspective: on a read the device fills the buffer, so the entry must be device-writable, while on a write the device consumes the buffer and the flag is absent. Confusing the driver's requested operation with the direction of the device's memory access reverses the descriptor permissions."
+  explanation="On disk reads, the device writes to host RAM so VRING_DESC_F_WRITE must be set; on writes, the device reads RAM so the flag is clear. Indirect descriptors raise capacity from floor(8/3)=2 to 8 requests. Used ring entries return descriptor chain head IDs rather than software generation counters."
 />
 
 ## Milestone A — isolate negotiation from queue layout
@@ -651,15 +652,127 @@ Extensions are considered only after the core reaches 100-point behavior:
 
 Each extension needs new mutants and failure oracles. Feature count is not quality evidence.
 
-## Deliberate boundary and source trail
-
 > **Remark.** This lab bounds its scope to split virtqueues and MMIO transport in xv6-riscv rev5 under QEMU so every descriptor state transition is directly inspectable; production drivers must additionally coordinate IOMMU page tables, MSI-X per-queue interrupts, and transport-level bus reset protocols.
 
-The core lab targets QEMU's Virtio MMIO block device and xv6-riscv revision 5. It improves descriptor capacity, observability, and lifecycle validation but deliberately stops at fail-stop handling for protocol corruption and timeout. It does not claim production recovery, hardware performance, IOMMU isolation, or a complete error-propagating storage stack.
+<ExerciseSet>
 
-{/* Source tracking: Baseline source facts were verified by checking out official tag xv6-riscv-rev5 at commit 7d7adbb and inspecting kernel/virtio_disk.c, kernel/virtio.h, kernel/trap.c, kernel/plic.c, kernel/bio.c, kernel/buf.h, kernel/riscv.h, and Makefile. */}
-{/* Source tracking: Indirect-descriptor layout, split-ring publication, feature negotiation, used-ring identity, and reset boundaries were verified against OASIS Virtio 1.3. The milestone design, fault modes, mutants, tests, memo, and rubric are original LibreUni work. */}
-{/* Source tracking: Interrupt/driver context and the revision-5 teaching scope were checked against the official xv6-riscv revision-5 book, Chapter 5. */}
+<Exercise id="ex-drvlab-negotiation-features-ok" type="verify" level="application" title="Verifying Features-OK in Virtio MMIO Negotiation">
+
+Trace the feature negotiation sequence mandated by the OASIS Virtio 1.3 specification for MMIO transport. Explain why reading the `STATUS` register immediately after setting `FEATURES_OK` is required before asserting `DRIVER_OK`.
+
+<ExerciseSolution hint="The device clears FEATURES_OK if the subset of negotiated features is unacceptable.">
+
+The negotiation protocol requires:
+1. Driver resets device by writing 0 to `STATUS`.
+2. Driver sets the `ACKNOWLEDGE` status bit (1).
+3. Driver sets the `DRIVER` status bit (2).
+4. Driver reads the device-offered feature bits from `DEVICE_FEATURES`.
+5. Driver writes the accepted feature subset (e.g., enabling `VIRTIO_RING_F_INDIRECT_DESC` only if offered and supported) into `DRIVER_FEATURES`.
+6. Driver sets the `FEATURES_OK` status bit (8).
+7. **Verification step:** Driver immediately reads `STATUS`. The specification dictates that if the device does not accept the requested feature combination, it clears `FEATURES_OK`. If the read shows `FEATURES_OK` is clear, the driver must abort initialization, as the device refuses to operate with that feature set.
+8. Only if `FEATURES_OK` remains set does the driver proceed to configure queues and write `DRIVER_OK` (4).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-drvlab-indirect-descriptor-layout" type="construct" level="application" title="Constructing 3-Entry Indirect Descriptor Tables">
+
+Construct the 3-entry indirect descriptor table used for a Virtio block read in xv6.
+Specify the fields (`addr`, `len`, `flags`, `next`) for each entry:
+1. Entry 0: Request header (`struct virtio_blk_req`).
+2. Entry 1: Data payload buffer (512 bytes).
+3. Entry 2: One-byte status response (`uint8 status`).
+
+<ExerciseSolution hint="Header and status are device-writable/readable according to protocol; chained with VRING_DESC_F_NEXT.">
+
+The indirect table is a contiguous array of three `struct virtq_desc`:
+
+1. **Entry 0 (Header):**
+   - `addr`: Physical address of `struct virtio_blk_req` (specifying type `VIRTIO_BLK_T_IN` and sector number).
+   - `len`: `sizeof(struct virtio_blk_req)` (16 bytes).
+   - `flags`: `VRING_DESC_F_NEXT` (device reads the header, points to next entry).
+   - `next`: 1.
+2. **Entry 1 (Data payload):**
+   - `addr`: Physical address of target disk buffer `b->data`.
+   - `len`: 512 bytes (BSIZE).
+   - `flags`: `VRING_DESC_F_WRITE | VRING_DESC_F_NEXT` (on a read, the device writes data into memory; points to next).
+   - `next`: 2.
+3. **Entry 2 (Status byte):**
+   - `addr`: Physical address of 1-byte completion status `info[idx].status`.
+   - `len`: 1 byte.
+   - `flags`: `VRING_DESC_F_WRITE` (device writes completion status; no `NEXT` flag, terminating chain).
+   - `next`: 0.
+
+The single descriptor placed in the main virtqueue table has `flags = VRING_DESC_F_INDIRECT`, pointing to this 3-entry table.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-drvlab-barrier-ordering-available" type="prove" level="synthesis" title="Proving Safe Available Ring Memory Barrier Publication">
+
+Let `avail->ring[avail->idx % N] = head_id` and `avail->idx++`. Prove that an architecture memory fence (`__sync_synchronize()` or `dma_wmb()`) is strictly necessary between populating the descriptor/ring entry and incrementing `avail->idx`.
+
+<ExerciseSolution hint="Show that out-of-order execution allows the peripheral to read uncommitted descriptor data.">
+
+Assume for contradiction that the memory barrier is omitted:
+1. On modern superscalar or weakly ordered processors (such as multi-core RISC-V or ARM), independent memory writes can retire out of program order to memory.
+2. The store updating `avail->idx` (which signals to the device that a new request exists) may become visible to the Virtio MMIO peripheral before the stores writing the descriptor contents or `avail->ring[...]` entry commit to RAM.
+3. The device observes the incremented `avail->idx`, reads `avail->ring[...]`, and fetches the referenced descriptor table.
+4. Because the descriptor table writes are still buffered in processor store queues, the device reads uninitialized memory or stale pointers from a prior request.
+5. The device executes DMA against an invalid host memory address, causing silent memory corruption or bus faults.
+
+Therefore, an explicit release barrier:
+$$
+\text{Write}(\text{Descriptor Table}) \prec \text{Write}(\text{Avail Ring}) \prec \text{wmb}() \prec \text{Write}(\text{Avail Idx})
+$$
+is strictly mandatory.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-drvlab-request-lifecycle-state-machine" type="formalise" level="transfer" title="Formalizing the Driver Request Lifecycle State Machine">
+
+Formalize the state machine for driver request slots:
+$$
+S \in \{\text{FREE}, \text{PREPARED}, \text{IN\_FLIGHT}, \text{COMPLETED}, \text{REAPED}\}.
+$$
+Specify the legal transitions, triggering events, and the invariant that prevents duplicate interrupt completions from corrupting driver state.
+
+<ExerciseSolution hint="Define transitions: allocate -> prepare -> submit -> interrupt/done -> wait_reap -> free.">
+
+- **State set:**
+  $\mathcal{S} = \{\text{FREE}, \text{PREPARED}, \text{IN\_FLIGHT}, \text{COMPLETED}, \text{REAPED}\}$.
+- **Transitions:**
+  1. $\text{FREE} \xrightarrow{\text{alloc}} \text{PREPARED}$: Driver allocates a free request index and populates indirect descriptors.
+  2. $\text{PREPARED} \xrightarrow{\text{submit}} \text{IN\_FLIGHT}$: Descriptors published to available ring, doorbell notified.
+  3. $\text{IN\_FLIGHT} \xrightarrow{\text{interrupt}} \text{COMPLETED}$: Device places ID in used ring and triggers interrupt; handler verifies `state == IN_FLIGHT`, records status, marks `COMPLETED`, and wakes waiter.
+  4. $\text{COMPLETED} \xrightarrow{\text{reap}} \text{REAPED}$: Sleeping waiter awakens, reads status, reclaims buffer, and marks `REAPED`.
+  5. $\text{REAPED} \xrightarrow{\text{free}} \text{FREE}$: Slot returned to allocator pool with incremented generation.
+- **Duplicate completion defense:**
+  If an interrupt arrives with descriptor ID $i$ when $\text{state}[i] \ne \text{IN\_FLIGHT}$ (for instance, if $i$ is already `COMPLETED` or `FREE`), the driver detects a protocol violation or duplicate interrupt. It ignores the spurious notification and flags an error without waking waiters or double-releasing buffers.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-drvlab-quiescence-before-buffer-reuse" type="describe" level="synthesis" title="Establishing Hardware Quiescence Before Buffer Reclaim">
+
+Explain why a driver cannot safely free a DMA buffer when a timeout expires in `virtio_disk_rw()`. Detail the sequence of hardware reset operations required to achieve verified device quiescence before memory reclamation.
+
+<ExerciseSolution hint="The device engine may still access host memory unless reset to 0 and verified.">
+
+- **The hazard:**
+  A software timeout indicates that the host has waited longer than its deadline. It provides zero guarantees regarding device controller state. If the driver frees the kernel buffer `struct buf *b` or returns it to the buffer cache while the device DMA engine is still active, the device may write 512 bytes into the buffer milliseconds later, corrupting whatever new file block or page table now occupies that memory.
+- **Quiescence protocol:**
+  To safely reclaim memory after a timeout or catastrophic device hang:
+  1. Driver writes `0` to the MMIO `STATUS` register to initiate a full device reset.
+  2. Driver polls `STATUS` until reading `0`, confirming the hardware reset has completed and all internal DMA pipelines are aborted.
+  3. Driver unmaps or revokes all IOMMU mappings associated with outstanding virtqueue requests.
+  4. Only after reset is acknowledged as complete is it safe to mark in-flight request slots as failed and release data buffers.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

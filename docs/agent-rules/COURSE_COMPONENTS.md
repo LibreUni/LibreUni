@@ -17,6 +17,7 @@ Import from `src/components/` with a relative MDX import and add `client:load` t
 | `Quiz` | A focused knowledge check or misconception check | `question`, `options`, `correctIndex`, `explanation` |
 | `CodeRunner` | A small, runnable demonstration the learner should modify or execute | `code`, optionally `output`, `language`, `title` |
 | `CodeExercise` | Fill-in-the-blank code practice | `code`, `answers`, `explanation`, `title` |
+| `FillInExercise` | Fill-in-the-blank practice for prose, formulas, or conceptual steps | `prompt` (or `text`), `answers`, `explanation`, `title` |
 | `CaseStudy` | A contextual decision or scenario with an analyzable trade-off | `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title` |
 | `SqlRunner` | Execute read-only SQL against a fixed, in-browser SQLite fixture | `schema`, `initialQuery`, optional `title`, `description` |
 
@@ -58,7 +59,9 @@ print(sum(values))`}
 
 ### CodeExercise
 
-Use when the learner must supply a small number of syntactically meaningful tokens. Mark each gap with `[!blank!]`; provide one answer per gap. Keep the surrounding code complete enough that the intended reasoning is visible.
+Use when the learner must supply a small number of syntactically meaningful tokens in executable code. Mark each gap with `[!blank!]`; provide one answer per gap. Keep the surrounding code complete enough that the intended reasoning is visible.
+
+Never use `CodeExercise` for prose questions or mathematical derivations formatted as comments (e.g. all lines starting with `#` or `//`); `CodeExercise` rejects comment-only code as an anti-pattern. Use `FillInExercise` instead.
 
 ```mdx
 import CodeExercise from '../../../components/CodeExercise';
@@ -68,6 +71,23 @@ import CodeExercise from '../../../components/CodeExercise';
   code={`positive = [x for x in values if x [!blank!] 0]`}
   answers={[">"]}
   explanation="The predicate retains values strictly greater than zero."
+/>
+```
+
+### FillInExercise
+
+Use when the learner must supply a small number of keywords, mathematical terms, or proof steps in prose or LaTeX notation, independent of executable code. Mark each gap with `[!blank!]` or `___`; provide expected answer string(s) in `answers`. `answers` accepts either strings or arrays of alternative valid forms for each blank.
+
+```mdx
+import FillInExercise from '../../../components/FillInExercise';
+
+<FillInExercise client:load
+  title="Complete the Integration by Parts formula"
+  prompt={`We know the product rule: $\\frac{d}{dx}(u \\cdot v) = u' \\cdot v + u \\cdot v'$.
+Integrating both sides and rearranging:
+$\\int (u \\cdot v')\\,dx = u \\cdot v - $ [!blank!]`}
+  answers={["\\int (u' \\cdot v)\\,dx"]}
+  explanation="Follows directly by integrating both sides of the product rule."
 />
 ```
 
@@ -136,15 +156,81 @@ These are Astro components and do not need `client:load`.
 
 | Component | Use it for | Props |
 | --- | --- | --- |
+| `Figure` | Build-time verified mathematical SVG plot for real functions (mandatory for function graphs per D-0014) | `id`, optional `size` (`'normal'` \| `'thumb'`), `collapsed`, `summary`, `caption` |
 | `PlantUML` | UML, architecture, sequence, state, and other structural diagrams | `code`, optional `theme` |
 | `PythonDiagram` | A Python-generated SVG/PNG visualization where the figure is part of the explanation | `code`, optional `format`, `title` |
-| `TikZ` | Precise mathematical or geometric diagrams | `code`, optional `packages` |
+| `TikZ` | Precise mathematical or geometric diagrams (not function plots) | `code`, optional `packages` |
 | `Math` | A KaTeX-rendered inline or display formula | `math`, optional `block` |
-| `MathStatement` | A semantic definition, lemma, theorem, proposition, corollary, example, or remark with stable linking | `id`, `title`, optional `kind`, `number`, `proofId`, `dependsOn` |
+| `MathStatement` | A semantic definition, lemma, theorem, proposition, corollary, invariant, example, or remark with stable linking | `id`, `title`, optional `kind`, `proofId`, `dependsOn` |
 | `MathProof` | A proof linked back to its statement, optionally collapsible | `id`, `for`, optional `title`, `collapsible`, `open` |
+| `Ref` | Dynamic semantic link with hover popover preview to any statement, exercise, problem, figure, or exam question | `id` |
+| `ExerciseSet` | Concluding exercise set on lesson/lab pages (4–8 items) | slot |
+| `Exercise` | Practice exercise item on lesson/lab pages | `id`, `title`, optional `type`, `level`, `challenge` |
+| `ProblemSet` | Problem set container on chapter `problems` pages (10–20 items) | slot |
+| `Problem` | Practice problem item on `problems` pages | `id`, `title`, optional `type`, `level`, `challenge`, `covers` |
+| `PracticeGenerator` | Interactive question generator with parameter randomization, progressive hints, and worked solutions | `client:load`, `courseId` |
+| `ExamAttempt` | Interactive island controlling timed examination attempt, state persistence, and isolated marking reveal | `client:load` |
+| `ExamQuestion` | Examination question card | `id`, `points`, `covers` |
+| `MarkingScheme` | Isolated scoring breakdown and model answer inside `ExamQuestion` (revealed only upon finishing attempt) | slot |
 | `ExerciseSolution` | Collapsible solution card with optional hint disclosure for self-checks | optional `hint`, `title`, `hintTitle` |
 
-Prefer a diagram when it communicates relationships more clearly than prose. Keep source code deterministic and bounded. A diagram is not a substitute for explaining the model it represents.
+Prefer a diagram or figure when it communicates relationships more clearly than prose. Keep source code deterministic and bounded. A diagram is not a substitute for explaining the model it represents.
+
+### Verified Mathematical Figures (`<Figure>`)
+
+Use `<Figure id="..." />` whenever graphing a real function. Function curves must never be hand-drawn with Bézier controls or coordinate approximations in TikZ (`LINT-09`). All figures are defined in `src/figures/<course>/<id>.mjs` and verified through Node tests (`tests/figures.test.mjs` A1–A9).
+
+- Standard full-width figure: `<Figure id="fig-name" />`
+- Thumbnail for recaps and exercises: `<Figure id="fig-name" size="thumb" />`
+- Collapsible disclosure for hints and solutions: `<Figure id="fig-name" collapsed summary="Show graph" />`
+
+### Self-Paced Practice Generator (`<PracticeGenerator>`)
+
+Use on `practice` pages. The `<PracticeGenerator client:load courseId="..." />` component provides self-paced practice without timers, exams, or pressure. It enables learners to select topics and difficulty levels, generates fresh problems with algorithmically randomized parameters, reveals progressive hints, and renders complete step-by-step worked solutions. All generated questions and learner progress persist in local storage across browser refreshes.
+
+```mdx
+import PracticeGenerator from '../../../components/PracticeGenerator';
+
+<PracticeGenerator client:load courseId="calculus-intro" />
+```
+
+### Problem Sets and Problems (`<ProblemSet>`, `<Problem>`)
+
+Use on `problems` pages to organize 10–20 chapter problems spanning recall, application, transfer, and synthesis. `Problem` automatically receives its dynamic chapter-scoped number (`m.P.i`) from the block registry and embeds `<ExerciseSolution>`.
+
+```mdx
+import ProblemSet from '../../../components/ProblemSet.astro';
+import Problem from '../../../components/Problem.astro';
+
+<ProblemSet>
+  <Problem id="prob-darboux-step" title="Step Function Integrability" type="proof" level="transfer" covers={["integration"]}>
+    Problem statement...
+    <ExerciseSolution>
+      <div slot="hint">Hint text...</div>
+      Solution text...
+    </ExerciseSolution>
+  </Problem>
+</ProblemSet>
+```
+
+### Examinations and Isolated Marking Schemes (`<ExamAttempt>`, `<ExamQuestion>`, `<MarkingScheme>`)
+
+Use on `exam` pages. The `<ExamAttempt client:load />` island manages the attempt lifecycle (*not started → in progress → finished*). In strict adherence to D-0012, marking schemes are server-rendered with `hidden` and become visible **only on that exam page after the learner confirms "Finish attempt"**.
+
+```mdx
+import ExamAttempt from '../../../components/ExamAttempt';
+import ExamQuestion from '../../../components/ExamQuestion.astro';
+import MarkingScheme from '../../../components/MarkingScheme.astro';
+
+<ExamAttempt client:load />
+
+<ExamQuestion id="q1-proof" points={15} covers={["limits"]}>
+  Question prompt...
+  <MarkingScheme>
+    Point breakdown and model answer...
+  </MarkingScheme>
+</ExamQuestion>
+```
 
 ### Interconnected mathematical statements and proofs
 
@@ -221,8 +307,8 @@ Not every teaching feature is a React component. Lessons can also use semantic M
 | Primitive | Use it for | Authoring pattern |
 | --- | --- | --- |
 | Headings, lists, and tables | Structure, ordered procedures, comparisons, and compact reference material | Ordinary Markdown; keep tables narrow enough for the PDF |
-| Labeled blockquote | A visually distinct definition, lemma, theorem, proposition, proof idea, warning, or important note | `> **Lemma.** If ...` followed by the explanation or proof in ordinary prose |
-| `<details>` / `<summary>` | Optional hints, solutions, retrieval answers, or secondary derivations | Put a precise action in `<summary>` such as `Reveal hint`, and make the expanded content readable in sequence |
+| Labeled blockquote | A visually distinct definition, lemma, theorem, proposition, proof idea, warning, or important note | `> **Lemma (Title).** If ...` compiles automatically to an addressable Statement card |
+| `ExerciseSolution` | Optional hints, worked solutions, and retrieval answers | Use `<ExerciseSolution>` with `hint` and slot content (raw `<details>` is forbidden per D-0012) |
 | `BookOnly` | Print-specific framing, references, or a static explanation of an interaction | Wrap only content that belongs in the book |
 | `ScreenOnly` | Interactive controls or screen-specific navigation | Wrap only content that is genuinely unavailable or disruptive in print |
 | Inline and display math | Notation, equations, and short formal expressions | Use `$...$` inline and `$$...$$` for display math, or the `Math` component when explicit props are useful |
@@ -230,11 +316,9 @@ Not every teaching feature is a React component. Lessons can also use semantic M
 
 ### Callouts and theorem-style content
 
-The repository currently has no dedicated `Callout`, `Theorem`, `Lemma`, `Definition`, or `Proof` component. Do not invent imports for them. Use a labeled blockquote for a short highlighted statement and ordinary headings plus prose for a substantial proof or derivation. Keep labels consistent within a course—for example, `Definition`, `Lemma`, `Theorem`, `Proof`, `Warning`, `Example`, and `Remark`—so learners can scan the visual structure.
+Use `MathStatement` or labeled blockquotes for formal statements, definitions, theorems, lemmas, propositions, corollaries, invariants, examples, and warnings. Use `MathProof` for step-by-step proofs and derivations. Do not invent custom component names such as `<Callout>`, `<Theorem>`, `<Lemma>`, `<Definition>`, or `<Proof>` — use `<MathStatement kind="theorem" ...>` (or the blockquote sugar `> **Theorem.**`) and `<MathProof for="...">` (D-0012, D-0013). Keep labels consistent across a course so learners can scan the visual structure.
 
-Use a callout-like block only when the distinction carries meaning. A lemma should identify the claim and its role; a proof should expose the reasoning; a warning should state the failure mode; and an example should connect the statement to a concrete case. Do not hide required definitions or core explanations inside a collapsed disclosure. Solutions and hints may be collapsible, but their expanded text must also read correctly in the PDF, where `<details>` content is shown without the interactive control.
-
-If a course would materially benefit from reusable variants such as semantic theorem cards, warning/tip callouts, tabbed comparisons, or richer proof blocks, record that as a component gap and propose or implement a component separately. Until such a component exists, prefer the supported semantic primitives above over ad-hoc classes or unsupported JSX.
+Use a callout-like block only when the distinction carries meaning. A lemma should identify the claim and its role; a proof should expose the reasoning; a warning should state the failure mode; and an example should connect the statement to a concrete case. Do not hide required definitions or core explanations inside a collapsed disclosure. Solutions and hints may be collapsible via `<ExerciseSolution>`, but their expanded text must also read correctly in the PDF.
 
 ## Required authoring-surface audit
 
@@ -242,7 +326,7 @@ For every new, repaired, or substantially revised lesson, record a brief decisio
 
 - existing React components: `Quiz`, `CodeRunner`, `CodeExercise`, and `CaseStudy`;
 - existing Astro/rendered components: `PlantUML`, `PythonDiagram`, `TikZ`, `Math`, `MathStatement`, `MathProof`, and `ExerciseSolution`;
-- MDX and Astro primitives: semantic headings, tables, labeled blockquotes, `<details>`, `BookOnly`, `ScreenOnly`, math, and fenced code;
+- MDX and Astro primitives: semantic headings, tables, labeled blockquotes, `BookOnly`, `ScreenOnly`, math, and fenced code;
 - diagram families: flow/activity, sequence, state, class/domain, component/deployment, use-case/context, mathematical/geometric, quantitative, and custom conceptual/network; and
 - a small custom Astro or React component when the current surface cannot express a necessary teaching interaction or semantic structure.
 

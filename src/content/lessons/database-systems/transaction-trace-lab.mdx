@@ -18,7 +18,9 @@ estimatedMinutes: 720
 assessment: Given an unfamiliar interleaving with a crash or retry, produce a complete trace, classify its anomaly or recovery state, repair the invariant at the correct boundary, and explain what evidence a production test must retain.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
@@ -89,15 +91,34 @@ T1 changes 20 to 13. T2 sees 13, and its condition **stock >= 7** remains true, 
 
 <Quiz client:load
   title="Evidence beyond the final value"
-  question="A support log shows stock = 13 after two requests for 7 units, starting from 20. Which additional evidence best distinguishes a lost update from a correct serial execution with compensation?"
+  question="A support log shows stock = 13 after two requests for 7 units, starting from initial stock = 20. Evaluate which evidence sources reliably diagnose whether an anomaly occurred:"
   options={[
-    "The final row value alone, because 13 cannot result from a serial execution",
-    "The read versions, statement outcomes, commit order, and any compensating events",
-    "The number of application servers that received the requests",
-    "The database's configured isolation level, without the actual schedule"
+    {
+      id: "claim-trace-evidence",
+      text: "Read versions, statement row-count outcomes, and commit timestamps distinguish a lost update from a serialized retry.",
+      isCorrect: true,
+      feedback: "Correct. Detailed operation traces establish visibility and execution order, which the final scalar value completely obscures."
+    },
+    {
+      id: "claim-audit-compensations",
+      text: "Audit logs showing compensating supplier restocks explain why a serialized execution could legitimately terminate at stock 13.",
+      isCorrect: true,
+      feedback: "Correct. An intervening restock event (+7) followed by two serialized sales (-7, -7) also results in 13."
+    },
+    {
+      id: "claim-scalar-proof",
+      text: "The final scalar value 13 alone mathematically proves that a lost update occurred during concurrent execution.",
+      isCorrect: false,
+      feedback: "Incorrect. The final value 13 could arise from a single sale succeeding while the second was rejected or compensated."
+    },
+    {
+      id: "claim-config-guarantee",
+      text: "A database configured for repeatable read guarantees that no interleaving anomaly could have occurred during execution.",
+      isCorrect: false,
+      feedback: "Incorrect. Configuration labels do not prove runtime safety: write skew and application-level race conditions can still manifest."
+    }
   ]}
-  correctIndex={1}
-  explanation="Final state discards order and visibility. A lost update and a serialized execution plus a compensating restock can both end at 13. The trace must show what each transaction read, which writes affected rows, when commits became durable, and what intervening events occurred. The isolation setting constrains admissible schedules but does not prove which schedule ran."
+  explanation="Final database state discards order, visibility, and side effects. Diagnostic proof requires an execution trace showing statements, row counts, commit timestamps, and external compensations."
 />
 
 ## Trace write skew as a predicate failure
@@ -139,11 +160,7 @@ Locking A only is insufficient because T2 changes B. Locking both rows can work 
 | 3 | waits for X(stock 9) |  | T1 → T2 |
 | 4 |  | waits for X(order 7) | T1 ↔ T2 |
 
-<ExerciseSolution title="Victim selection is not a correctness proof.">
-
-Aborting T2 releases stock 9 and lets T1 proceed, but the policy should consider rollback work and age. More importantly, the aborted transaction may need a retry protocol that avoids repeating a notification or payment that already escaped the database boundary.
-
-</ExerciseSolution>
+> **Remark (Victim selection is not a correctness proof).** Aborting T2 releases stock 9 and lets T1 proceed, but the policy should consider rollback work and age. More importantly, the aborted transaction may need a retry protocol that avoids repeating a notification or payment that already escaped the database boundary.
 
 ### Transfer — order, crash, and webhook retry
 
@@ -152,6 +169,65 @@ Design the event order for: reserve stock, write an order, charge a provider, an
 <ExerciseSolution hint="Make the database state transition and the retry key durable before depending on external delivery.">
 In one transaction, insert the order in a pending state, reserve stock conditionally, store a unique provider-event/idempotency key, and insert an outbox record; then commit. A worker invokes the provider with that key and records only legal monotonic payment transitions in later transactions. Deduplicate webhook IDs with a unique constraint, and send confirmation from a committed outbox. Recovery can replay unclaimed outbox records; it must not infer a payment from a network timeout.
 </ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-trace-lost-update-distinction" type="describe" level="recall" title="Differentiating Lost Updates from Serial Compensations">
+
+Given a log indicating an inventory record transitions from 20 to 13 after two customer purchase requests for 7 units, describe what specific timeline artifacts are required to definitively prove whether a lost update occurred.
+
+<ExerciseSolution hint="Inspect read timestamps, statement outcomes, and external audit logs.">
+
+To prove whether a lost update occurred, the timeline must establish: (1) whether transaction $T_2$ read the initial value 20 (lost update) or the committed value 13; (2) whether $T_2$'s decrement statement actually affected a row or was rejected by a conditional check (`rows affected = 0`); and (3) whether an external supplier restock event (+7 units) occurred between two serialized sales. Scalar end-state alone is ambiguous.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-trace-write-skew-witness" type="verify" level="application" title="Write Skew Interleaving Trace Verification">
+
+Consider transactions $T_1$ and $T_2$ operating under snapshot isolation on rows $A=\text{true}$ and $B=\text{true}$ with invariant $A \lor B$. Verify why schedule $r_1(A, B)\; r_2(A, B)\; w_1(A=\text{false})\; w_2(B=\text{false})\; c_1\; c_2$ violates the invariant despite zero lock or write-write conflicts.
+
+<ExerciseSolution hint="Trace the disjoint write sets against the joint invariant predicate.">
+
+Under snapshot isolation, $T_1$ reads snapshot $\{A=\text{true}, B=\text{true}\}$ and decides it is safe to set $A=\text{false}$ because $B$ is true. Concurrently, $T_2$ reads the identical snapshot and sets $B=\text{false}$ because $A$ is true. Because $T_1$ modifies item $A$ and $T_2$ modifies item $B$, their write sets $\{A\}$ and $\{B\}$ are completely disjoint. Both commit without error, leaving $A=\text{false}$ and $B=\text{false}$, directly violating $A \lor B$.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-trace-deadlock-victim-recovery" type="construct" level="application" title="Deadlock Wait-For Graph and Victim Selection Policy">
+
+Construct a 4-step execution trace involving transactions $T_1$ and $T_2$ and resources `order_7` and `stock_9` that produces a circular wait under strict 2PL. Specify a heuristic for victim selection that minimizes aborted work.
+
+<ExerciseSolution hint="Have each transaction acquire one resource and subsequently request the resource held by the other.">
+
+Trace:
+1. $T_1$ acquires exclusive lock $X(\text{order\_7})$.
+2. $T_2$ acquires exclusive lock $X(\text{stock\_9})$.
+3. $T_1$ requests $X(\text{stock\_9})$ and blocks ($T_1 \to T_2$).
+4. $T_2$ requests $X(\text{order\_7})$ and blocks ($T_2 \to T_1$).
+The wait-for graph has cycle $T_1 \leftrightarrow T_2$. A sound victim selection policy aborts the younger transaction or the transaction that has generated fewer write-ahead log bytes, minimizing rollback work and lock churn.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-trace-idempotent-outbox-transfer" type="generalise" level="transfer" title="Crash-Safe Payment and Webhook Event Choreography">
+
+Design an idempotent, crash-safe transaction sequence that coordinates reserving local inventory, writing an order, calling an external payment gateway, and handling duplicate out-of-order webhook notifications.
+
+<ExerciseSolution hint="Commit local state and outbox record before external network calls; deduplicate incoming webhooks.">
+
+1. Local transaction: In a single database transaction, insert `orders(id, status='pending')`, execute conditional stock reservation `UPDATE inventory SET stock = stock - 1 WHERE stock >= 1`, generate an idempotency key `k`, and insert an `outbox` task record with `k`. Commit.
+2. Gateway invocation: A worker reads the outbox task and dispatches the payment charge with key `k`.
+3. Webhook handling: Incoming payment webhooks carry key `k`. The endpoint attempts `INSERT INTO processed_events (event_id, idempotency_key) VALUES (...)`. If a unique-key collision occurs, it immediately returns HTTP 200 without reprocessing. Otherwise, it updates `orders` status to `paid` within an atomic transaction.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

@@ -21,6 +21,8 @@ estimatedMinutes: 600
 assessment: A clean-room xv6 patch, public/adversarial test suite, raw measurement data, design memo, failure analysis, and live or written defense graded against behavior, invariants, test discrimination, and evidence—not token presence.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
@@ -68,16 +70,15 @@ Missing rules include initialization, child placement at $\max(v_{parent}, floor
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Charge virtual time, not wall time"
-  question="Under WVT, a process of weight $w=4$ runs for $\Delta t = 6$ baseline timer intervals. What does $v \leftarrow v + \max(1, \lfloor \Delta t / w \rfloor)$ add to its virtual runtime?"
+  title="Virtual Time Debt Accumulation Matrix"
+  question="Under Weighted Virtual Time (WVT), a process with weight w = 4 runs for delta_t = 6 timer ticks. Evaluate each statement regarding vruntime updating:"
   options={[
-    "$6$, because virtual runtime tracks the physical time consumed",
-    "$1$, because the floor of $6/4$ is $1$",
-    "$24$, because weight multiplies the accumulated debt",
-    "$1.5$, because $6/4$ is fractional and is charged exactly"
+    { id: "opt-wvt-charge-floor", text: "The update formula v = v + max(1, floor(delta_t / w)) adds exactly 1 unit of virtual runtime debt.", isCorrect: true },
+    { id: "opt-wvt-weight-rate", text: "Higher weight processes accumulate virtual debt at a lower rate per unit of physical execution time.", isCorrect: true },
+    { id: "opt-wvt-charge-wall", text: "Virtual runtime tracks physical wall-clock time directly by adding delta_t = 6 ticks regardless of weight.", isCorrect: false },
+    { id: "opt-wvt-mult-weight", text: "Virtual runtime scales inversely with priority by multiplying elapsed physical ticks by weight (6 * 4 = 24).", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="Weight changes the rate of debt accumulation, not the physical time in the interval, so the charge is $\lfloor 6/4 \rfloor = 1$, and the $\max(1, \cdot)$ floor prevents a zero charge. Tracking physical time or multiplying by weight reverses the fairness effect, and virtual runtime is an integer, not a fraction."
+  explanation="Weight determines the rate of virtual debt accumulation. Here floor(6 / 4) = 1, so 1 tick of virtual runtime is added. Higher weights accumulate debt more slowly, receiving proportionally more physical CPU time."
 />
 
 ## Reproducible setup
@@ -547,11 +548,71 @@ Passing requires at least 70 overall **and** no publication blocker. Performance
 | Accounting invariant | Monotonic single-read sample time | Verified log where $\Delta \text{sample} - \sum \Delta \text{states} = 0$ |
 | Clean release binary | Zero debug prints and hooks in production build | Binary symbol check confirming hooks compiled out |
 
-## Deliberate omissions
-
-WVT is not Linux EEVDF or CFS. It has no eligibility lag, requested latency, hierarchy, CPU affinity, migration cost, load balancing, cgroups, realtime class, deadline admission, priority inheritance, energy model, or security policy. Single-hart weighted-share measurements do not establish multicore fairness. QEMU timing does not predict hardware cache behavior. These omissions are part of the defense: extending the policy without new invariants and tests would lower quality.
-
 > **Remark.** The implementation may be correct inside this contract while remaining unsuitable for production; the memo must preserve that distinction.
+
+<ExerciseSet>
+
+<Exercise id="ex-schedlab-transition-accounting" type="verify" level="application" title="Monotonic State Accounting and Time Sampling">
+
+Explain the sampling rule that prevents a process from having its runtime attributed to multiple states or missed entirely during a state transition in xv6. State the algebraic invariant linking delta sample time to state accumulators.
+
+<ExerciseSolution hint="Sample the hardware monotonic timer once at state transition and charge delta time atomically.">
+
+The accounting invariant requires: $\Delta \text{sample} - \sum \Delta \text{states} = 0$. At every state transition (e.g., inside `sleep()`, `yield()`, or `exit()`), the kernel reads the hardware monotonic clock exactly once into a local variable $t_{\mathrm{now}}$. The elapsed interval $\Delta t = t_{\mathrm{now}} - p\to\text{last\_sample}$ is calculated and credited to the old state accumulator before updating $p\to\text{state}$ and setting $p\to\text{last\_sample} = t_{\mathrm{now}}$. Re-reading the hardware timer twice or outside locks creates non-monotonic intervals or double-counts time.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-schedlab-checked-abi" type="construct" level="application" title="Checked User-Space System Call ABI for Priority Weights">
+
+Design the system call `sys_setweight(int weight)` validating user-supplied scheduling weights against the course policy $[1, 16]$. State the error handling and lock acquisition order required.
+
+<ExerciseSolution hint="Check bounds before acquiring the process lock to prevent lock holding on error.">
+
+1. Read integer argument using `argint(0, &weight)`.
+2. Validate bounds: if `weight < 1 || weight > 16`, return `-1` with `EINVAL` without modifying any state.
+3. Acquire `p->lock` protecting the calling process struct.
+4. Update `p->weight = weight`.
+5. Release `p->lock` and return 0 for success.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-schedlab-fork-placement-floor" type="formalise" level="transfer" title="Child Fork Placement at Max of Parent and Queue Floor">
+
+In Weighted Virtual Time (WVT), explain why initializing a newly forked child with $v_{\mathrm{child}} = 0$ enables a fork-bomb denial-of-service attack, and prove why setting $v_{\mathrm{child}} = \max(v_{\mathrm{parent}}, \text{queue\_floor})$ preserves fairness.
+
+<ExerciseSolution hint="Analyze how zero virtual runtime grants newly created processes an unfair monopoly over the CPU.">
+
+If a child is initialized with $v = 0$ while existing processes have accumulated virtual runtime $v \gg 0$, the scheduler strictly selects the process with the smallest $vruntime$. A parent process can repeatedly call `fork()`, generating an infinite stream of children with $v = 0$ that starve all pre-existing processes on the system. Initializing $v_{\mathrm{child}} = \max(v_{\mathrm{parent}}, \text{queue\_floor})$ ensures the child cannot gain an unfair head-start over either its parent or the currently active runnable cohort.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-schedlab-wakeup-overflow-bounds" type="construct" level="transfer" title="Sleeping Wakeup Placement and Integer Wraparound Invariants">
+
+A process sleeps on a long I/O operation while competing processes accumulate millions of virtual runtime ticks. Explain the starvation hazard upon wakeup if its $vruntime$ is unchanged, and detail how clamping $v \leftarrow \max(v, \text{queue\_floor} - \text{latency\_target})$ protects against starvation while bounding interactive latency.
+
+<ExerciseSolution hint="Prevent a sleeping process from waking up with an ancient virtual runtime that monopolizes the CPU for seconds.">
+
+If a process sleeps for hours, its stored $vruntime$ remains frozen at an ancient small value. When it wakes, it would monopolize the CPU for millions of consecutive ticks before competing processes ever get scheduled, causing massive starvation. Conversely, setting $v = \text{queue\_floor}$ erases all interactive credit. Clamping $v \leftarrow \max(v, \text{queue\_floor} - \Delta_{\mathrm{bonus}})$ allows the interactive task to preempt and run briefly ahead of batch tasks while strictly bounding its unfair monopolization.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-schedlab-adversarial-mutant-suite" type="verify" level="synthesis" title="Adversarial Test Suite Rejecting Broken Schedulers (W1–W9)">
+
+Describe the design of an automated test oracle that differentiates a correct WVT implementation from mutant W3 (child initialized with $v=0$) and mutant W5 (weights multiplied instead of divided).
+
+<ExerciseSolution hint="Construct workloads whose output completion ratios differ quantitatively under mutant logic.">
+
+1. Mutant W3 detector: Launch a long-running batch process that runs for 500 ticks so its $vruntime$ reaches hundreds. Then, fork a series of short child jobs. Under correct placement ($v = \max(v_{\mathrm{parent}}, floor)$), the children and parent share CPU time proportionally. Under Mutant W3, the children starve the parent completely until their runtimes catch up. The test measures parent progress during child execution and asserts parent makes non-zero forward progress.
+2. Mutant W5 detector: Run two CPU-bound tasks with weights $w_A = 1$ and $w_B = 4$. Under correct division, task $B$ receives approximately $4\times$ the CPU time of task $A$. Under Mutant W5 (multiplication), task $A$ accumulates debt slower and receives $4\times$ the CPU time of task $B$. The test measures ticks elapsed and asserts $\text{ticks}(B) > 3 \times \text{ticks}(A)$.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

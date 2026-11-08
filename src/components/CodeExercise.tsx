@@ -17,6 +17,50 @@ function normalizeAnswer(value: string) {
     .trim();
 }
 
+export function isCodeAllComments(code: string): boolean {
+  if (!code || typeof code !== 'string') return true;
+  const lines = code.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  if (lines.length === 0) return true;
+
+  let inBlockComment = false;
+  for (const line of lines) {
+    if (inBlockComment) {
+      if (line.includes('*/') || line.includes('-->')) {
+        inBlockComment = false;
+      }
+      continue;
+    }
+    if (line.startsWith('/*')) {
+      if (!line.includes('*/')) inBlockComment = true;
+      continue;
+    }
+    if (line.startsWith('<!--')) {
+      if (!line.includes('-->')) inBlockComment = true;
+      continue;
+    }
+    if (
+      line.startsWith('#') ||
+      line.startsWith('//') ||
+      line.startsWith('--') ||
+      line.startsWith(';') ||
+      line.startsWith('%') ||
+      line.startsWith('*')
+    ) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+export function validateCodeExercise(code: string): void {
+  if (isCodeAllComments(code)) {
+    throw new Error(
+      'CodeExercise anti-pattern: code consists entirely of comments. Use FillInExercise for text, formula, or conceptual fill-in exercises instead of CodeExercise.'
+    );
+  }
+}
+
 export default function CodeExercise({
   title = 'Complete the Code',
   code,
@@ -24,6 +68,7 @@ export default function CodeExercise({
   explanation,
 }: CodeExerciseProps) {
   const actualCode = code || '';
+  validateCodeExercise(actualCode);
   const actualAnswers = answers || [];
 
   const parts = actualCode.split(/\[!blank!]|_{3,}/);

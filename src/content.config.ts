@@ -23,20 +23,68 @@ const courses = defineCollection({
   }),
 });
 
+const baseLessonSchema = z.object({
+  title: z.string().min(1),
+  course: z.string().min(1),
+  module: z.string().optional(),
+  order: z.number().int().nonnegative().optional(),
+  description: z.string().min(10),
+  estimatedMinutes: z.number().int().positive(),
+});
+
+const standardLessonSchema = baseLessonSchema.extend({
+  kind: z.literal('lesson').default('lesson'),
+  prerequisites: z.array(z.string().min(1)).min(1),
+  outcomes: z.array(z.string().min(5)).min(1),
+  omissions: z.array(z.string().min(3)).min(1),
+  assessment: z.string().min(10),
+});
+
+const labLessonSchema = baseLessonSchema.extend({
+  kind: z.literal('lab'),
+  prerequisites: z.array(z.string().min(1)).min(1),
+  outcomes: z.array(z.string().min(5)).min(1),
+  omissions: z.array(z.string().min(3)).min(1),
+  assessment: z.string().min(10),
+});
+
+const problemsLessonSchema = baseLessonSchema.extend({
+  kind: z.literal('problems'),
+  covers: z.array(z.string().min(1)).min(1),
+  outcomes: z.array(z.string().min(5)).min(1),
+});
+
+const recapLessonSchema = baseLessonSchema.extend({
+  kind: z.literal('recap'),
+  covers: z.array(z.string().min(1)).min(1),
+  omitStatements: z.array(z.object({ id: z.string(), reason: z.string() })).optional(),
+});
+
+const practiceLessonSchema = baseLessonSchema.extend({
+  kind: z.literal('practice'),
+  covers: z.array(z.string().min(1)).min(1),
+  outcomes: z.array(z.string().min(5)).optional(),
+});
+
+const examLessonSchema = baseLessonSchema.extend({
+  kind: z.literal('exam'),
+  covers: z.array(z.string().min(1)).min(1),
+  durationMinutes: z.number().int().positive().optional(),
+  totalPoints: z.number().int().positive().optional(),
+  allowedMaterials: z.array(z.string()).optional(),
+  passMark: z.number().int().positive().optional(),
+});
+
 const lessons = defineCollection({
   loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/lessons' }),
-  schema: z.object({
-    title: z.string().min(1),
-    course: z.string().min(1),
-    module: z.string().optional(),
-    order: z.number().int().nonnegative().optional(),
-    description: z.string().min(10),
-    prerequisites: z.array(z.string().min(1)).min(1),
-    outcomes: z.array(z.string().min(5)).min(1),
-    omissions: z.array(z.string().min(3)).min(1),
-    estimatedMinutes: z.number().int().positive(),
-    assessment: z.string().min(10),
-  }),
+  schema: z.discriminatedUnion('kind', [
+    standardLessonSchema,
+    labLessonSchema,
+    problemsLessonSchema,
+    recapLessonSchema,
+    practiceLessonSchema,
+    examLessonSchema,
+  ]),
 });
 
 const careers = defineCollection({

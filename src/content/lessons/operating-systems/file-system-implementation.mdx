@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 360
 assessment: Given an unfamiliar compact filesystem layout and operation trace, compute every touched structure, justify lock and reference transitions, and identify the first violated invariant in a faulty implementation.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -145,16 +147,15 @@ A response giving `BPB=4096` has counted bytes rather than bits. A response trea
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Locate inode and bitmap"
-  question="With 1024-byte blocks, 64-byte inodes, inodeStart = 32, and bitmapStart = 48, where are inode 20 and data block 8192 represented?"
+  title="On-disk layout arithmetic and inode invariants"
+  question="With 1024-byte blocks, 64-byte inodes, inodeStart = 32, and bitmapStart = 48, evaluate each structural mapping claim:"
   options={[
-    "inode block 33, slot 4; bitmap block 49, bit 0",
-    "inode block 32, slot 20; bitmap block 48, bit 8192",
-    "inode block 33, slot 5; bitmap block 49, bit 1",
-    "inode block 34, slot 4; bitmap block 50, bit 0"
+    { id: "opt-fsimpl-inode-loc", text: "Inode 20 resides in disk block 33 at slot index 4 within that block because sixteen inodes fit per block.", isCorrect: true },
+    { id: "opt-fsimpl-bitmap-loc", text: "Data block 8192 is tracked by bitmap block 49 at bit offset 0 because each 1024-byte bitmap block tracks 8192 bits.", isCorrect: true },
+    { id: "opt-fsimpl-inode-direct", text: "Inode 20 resides directly in disk block 32 at slot index 20 without requiring division by the inode block factor.", isCorrect: false },
+    { id: "opt-fsimpl-bmap-byte", text: "Data block 8192 is tracked by bitmap block 48 at byte offset 8192 because bitmap blocks store byte counters.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="IPB = 1024/64 = 16, so inode 20 lies in block 32 + floor(20/16) = 33 at slot 20 mod 16 = 4. BPB = 8 x 1024 = 8192, so data block 8192 lies in bitmap block 48 + floor(8192/8192) = 49 at bit 0. The distractors use the inode number directly, count bitmap bytes instead of bits, or ignore the block-boundary transition."
+  explanation="With 16 inodes per block (1024/64), inode 20 is at block 32 + floor(20/16) = 33, slot 20 mod 16 = 4. With 8192 bits per block (8 x 1024), block 8192 is tracked by bitmap block 48 + floor(8192/8192) = 49, bit 0."
 />
 
 ## Inodes split identity from residency
@@ -318,39 +319,148 @@ On compact xv6, ordinary writes copy caller bytes into the written range, and it
 
 </ExerciseSolution>
 
-## Synthesis: audit an append implementation
-
-Audit a candidate `writei`/`bmap` path for the one-byte indirect append. Produce:
-
-- a state table listing inode, indirect block, bitmap block or blocks, and data block before and after;
-- the lock protecting each transition;
-- the maximum unique dirty-block count;
-- the behavior on allocation exhaustion at each allocation point;
-- the cleanup or rollback obligation; and
-- one test for each branch boundary and one concurrent test.
-
-<ExerciseSolution title="Reveal the grading rubric">
-
-Full-credit work demonstrates all of the following:
-
-- **Mapping (20%)** — computes logical block 12, indirect entry 0, and the exact representable-size boundary.
-- **Ownership (20%)** — never publishes an uninitialized block, never assigns a block twice, and handles the two-allocation partial-failure case without a silent leak or dangling pointer.
-- **Cache and locking (20%)** — identifies cache-identity protection separately from per-inode and per-buffer byte protection; does not sleep while holding a spinlock that forbids it.
-- **Mutation set (15%)** — counts unique dirty blocks rather than helper calls, proves rev5 uses one bitmap block, and explains how the bound changes for a larger image spanning several bitmap blocks.
-- **Tests (15%)** — covers last direct byte, first indirect byte, full file, out-of-space at both allocations, and concurrent growth of one inode.
-- **Limits (10%)** — states that a successful in-memory trace proves neither crash consistency nor production scalability.
-
-A patch that returns the expected bytes but cannot explain its partial-allocation and concurrent states does not meet the invariant requirement.
-
-</ExerciseSolution>
-
-## Connections and deliberate boundary
-
 > **Remark.** Although production filesystems replace xv6's fixed direct/indirect block array and linear directory scans with extent trees (e.g., ext4, XFS) and B-tree/HTree directories, they must preserve the exact same structural invariants between namespace edges, link counts, open-inode references, and allocation bitmaps.
 
-Path interfaces determine the graph this implementation must preserve. Recovery mechanisms constrain when changed blocks may become authoritative. Protection mechanisms constrain every path edge and open operation. Multicore design determines whether cache identity and allocation locks remain correct and scalable. These connections are causal; replacing an inode map with an extent tree does not remove them.
+<ExerciseSet>
 
-The compact model omits extents, indexed directories, delayed allocation, page-cache/writeback integration, checksums, RAID interactions, reflinks, online resize, and flash translation layers. It is complete for deriving the named invariants and traces, not a compressed survey of those omitted mechanisms.
+<Exercise id="ex-fsimpl-block-math" type="verify" level="application" title="Calculating Inode and Bitmap Block Locations">
+
+A filesystem layout defines:
+- Block size: $B = 1024\text{ bytes}$.
+- On-disk inode size: $64\text{ bytes}$.
+- Superblock specifies: `inodestart = 32`, `bmapstart = 48`.
+
+1. Calculate the number of inodes per block ($\text{IPB}$) and the number of bits tracked per bitmap block ($\text{BPB}$).
+2. Determine the exact disk block number and intra-block slot index for inode 45.
+3. Determine the exact bitmap disk block number and intra-block bit offset for data block 18,432.
+
+<ExerciseSolution hint="Use integer division and modulo with IPB and BPB.">
+
+1. **Parameters:**
+   - Inodes per block: $\text{IPB} = \frac{1024}{64} = 16$.
+   - Bits per bitmap block: $\text{BPB} = 8 \times 1024 = 8192\text{ bits}$.
+2. **Inode 45 location:**
+   - Inode block number:
+     $$
+     \text{block} = \text{inodestart} + \left\lfloor \frac{45}{16} \right\rfloor = 32 + 2 = 34.
+     $$
+   - Inode slot index within block 34:
+     $$
+     \text{slot} = 45 \bmod 16 = 13.
+     $$
+3. **Data block 18,432 bitmap location:**
+   - Bitmap block number:
+     $$
+     \text{block} = \text{bmapstart} + \left\lfloor \frac{18432}{8192} \right\rfloor = 48 + 2 = 50.
+     $$
+   - Bit offset within block 50:
+     $$
+     \text{bit} = 18432 \bmod 8192 = 2048.
+     $$
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fsimpl-indirect-capacity" type="construct" level="application" title="Maximum Representable File Size Under Direct and Indirect Pointers">
+
+An on-disk inode structure contains 12 direct block pointers and 1 singly-indirect block pointer. Block size is $B = 1024\text{ bytes}$, and disk block addresses are 32-bit ($4\text{ bytes}$) unsigned integers.
+1. Calculate the maximum number of data blocks that can be addressed by a single file.
+2. Calculate the maximum file size in KiB and bytes.
+3. If an engineer adds 1 doubly-indirect block pointer to the inode, calculate the new maximum file size.
+
+<ExerciseSolution hint="One indirect block contains B / 4 pointers = 256 block addresses.">
+
+1. **Maximum blocks with singly-indirect pointer:**
+   - Direct pointers: 12 blocks.
+   - Singly-indirect pointers: $\frac{1024\text{ bytes}}{4\text{ bytes/pointer}} = 256$ blocks.
+   - Total blocks: $12 + 256 = 268\text{ blocks}$.
+2. **Maximum file size:**
+   $$
+   \text{Size} = 268 \times 1024\text{ bytes} = 274{,}432\text{ bytes} = 268\text{ KiB}.
+   $$
+3. **With doubly-indirect pointer added:**
+   - Doubly-indirect pointer addresses $256 \times 256 = 65{,}536$ data blocks.
+   - Total blocks = $12 + 256 + 65{,}536 = 65{,}804\text{ blocks}$.
+   - New maximum file size:
+     $$
+     65{,}804 \times 1024\text{ bytes} = 67{,}383{,}296\text{ bytes} \approx 64.26\text{ MiB}.
+     $$
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fsimpl-bmap-traversal" type="construct" level="transfer" title="Tracing Logical File Offsets to Physical Disk Blocks via bmap">
+
+A process writes to file offset byte 15,000 on an xv6 filesystem with 1024-byte blocks.
+The inode contains direct pointers $[500, 501, \dots, 511]$ and indirect block pointer 700.
+Indirect block 700 contains entries $[800, 801, 802, \dots]$.
+1. Determine the logical block index and intra-block byte offset corresponding to byte offset 15,000.
+2. State whether this logical block is direct or indirect, and identify its entry index.
+3. Compute the physical disk block number where this byte will be written.
+
+<ExerciseSolution hint="Divide byte offset by 1024. Direct blocks cover indices 0 to 11.">
+
+1. **Logical block and offset:**
+   - Logical block index:
+     $$
+     bn = \left\lfloor \frac{15000}{1024} \right\rfloor = 14.
+     $$
+   - In-block byte offset:
+     $$
+     \text{offset} = 15000 \bmod 1024 = 15000 - (14 \times 1024) = 15000 - 14336 = 664.
+     $$
+2. **Direct vs Indirect lookup:**
+   - Indices $0 \dots 11$ (12 blocks) are direct.
+   - Since $bn = 14 \ge 12$, the block resides in the indirect range.
+   - Indirect entry index: $14 - 12 = 2$.
+3. **Physical block translation:**
+   - The kernel fetches indirect block 700.
+   - It reads entry at index 2, which contains physical block pointer 802.
+   - The byte is written to physical block 802 at byte offset 664.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fsimpl-buffer-cache-uniqueness" type="prove" level="synthesis" title="Proving Buffer Cache Uniqueness and Preventing Split-Brain Aliasing">
+
+Prove that the operating system buffer cache must enforce the invariant:
+$$
+\forall (dev, blk), \quad \text{count}(\text{resident buffers matching } (dev, blk)) \le 1.
+$$
+Show how allowing two concurrent in-memory `struct buf` instances for the same disk block causes split-brain data loss.
+
+<ExerciseSolution hint="Show that two threads modifying different fields in separate buffer copies overwrite each other on writeback.">
+
+Assume for contradiction that two distinct in-memory buffer instances $B_1$ and $B_2$ exist simultaneously in the buffer cache for the identical disk block $(dev, blk)$:
+1. Suppose Thread 1 acquires $B_1$ to update directory entry $D_1$ within block $(dev, blk)$ and writes its changes into $B_1$'s memory.
+2. Concurrently, Thread 2 acquires $B_2$ to update directory entry $D_2$ in the same block $(dev, blk)$ and writes its changes into $B_2$'s memory.
+3. Thread 1 commits its modification: the buffer cache writes $B_1$'s 1024 bytes to disk. The disk block now contains updated $D_1$ but stale $D_2$.
+4. Subsequently, Thread 2 commits its modification: the buffer cache writes $B_2$'s 1024 bytes to disk.
+5. Because $B_2$ was modified independently without observing $B_1$'s changes, $B_2$'s writeback completely overwrites the physical disk block, silently destroying Thread 1's update to $D_1$.
+
+Therefore, the buffer cache must maintain a global lock across lookup and allocation (`bcache.lock`) ensuring that any request for $(dev, blk)$ returns a pointer to the single existing in-memory buffer, incrementing its reference count rather than instantiating a duplicate.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fsimpl-zeroing-confidentiality" type="describe" level="application" title="Data Block Zeroing and Elimination of Residual Data Leaks">
+
+Explain why the block allocator `balloc()` must synchronously zero newly allocated disk blocks before attaching them to an inode block map. Describe the security vulnerability that arises if a newly allocated block is published to user space with uninitialized contents.
+
+<ExerciseSolution hint="Consider prior file deletions leaving unencrypted sensitive data on deallocated blocks.">
+
+- **The confidentiality vulnerability:**
+  When a file is deleted, the filesystem marks its blocks free in the bitmap (`bfree()`) but does not immediately wipe the physical bytes on magnetic media or flash chips to avoid disk write latency. As a result, freed blocks retain residual data (e.g., plaintext passwords, private cryptographic keys, user emails, or database records).
+  If a newly created file allocates a block and attaches it to its inode without zeroing:
+  1. An unprivileged user can create a large file, immediately extend its length or read its contents without writing, and read the raw residual bytes left behind by prior processes or administrative files.
+  2. This constitutes an information disclosure vulnerability (residual data leakage across security domains).
+- **Enforcement:**
+  `balloc()` acquires a buffer for the allocated block, executes `memset(bp->data, 0, BSIZE)`, dirties the buffer in the active log transaction, and commits it. This guarantees that user-mode readers observe only zeroes until authorized writes occur.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 300
 assessment: Given a workload and threat model, produce mechanism-level traces for at least three concrete systems, identify trusted and measured paths, then defend a design choice against a changed requirement.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -55,16 +57,15 @@ Pathname lookup is a whole-system service, not an seL4 kernel primitive. The rep
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Driver fault isolation and the hardware boundary"
-  question="In a microkernel architecture, a network device driver crashes due to an illegal memory access inside a user-level driver task. If the hardware platform lacks an IOMMU, what limits the driver's ability to compromise the system?"
+  title="Kernel architectural boundaries and hardware isolation"
+  question="Evaluate each statement regarding kernel architectural models, device isolation, and hardware authority:"
   options={[
-    "The CPU MMU prevents the driver's own instructions from writing to kernel memory, but the network card's unconstrained DMA can overwrite arbitrary physical memory.",
-    "The microkernel software layer automatically intercepts and filters all hardware bus transactions without hardware assistance.",
-    "Running in user space completely isolates physical RAM because DMA transfers cannot bypass CPU page tables.",
-    "The crash of a user-level driver task immediately corrupts the microkernel address space because interrupt routines share a single kernel stack."
+    { id: "opt-kern-mmu-dma-split", text: "User-space driver isolation prevents illegal CPU writes but requires an IOMMU to prevent malicious peripheral DMA writes.", isCorrect: true },
+    { id: "opt-kern-sel4-capabilities", text: "An seL4 microkernel system enforces all spatial authority and resource allocation through unforgeable capability tokens.", isCorrect: true },
+    { id: "opt-kern-monolithic-scale", text: "Monolithic kernels are fundamentally unable to achieve multicore scalability across concurrent file lookup operations.", isCorrect: false },
+    { id: "opt-kern-formal-magic", text: "Formally verifying a microkernel proof mathematically guarantees that misconfigured user servers cannot corrupt each other.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="Address space separation isolates CPU instructions executed by the driver: the driver cannot directly load or store into kernel pages. However, without an IOMMU to restrict direct memory access by peripherals, a compromised or malfunctioning device controlled by that driver can issue DMA writes to arbitrary physical addresses. Full driver fault containment requires both address space isolation and an IOMMU."
+  explanation="User-space drivers protect CPU memory via MMUs but need IOMMUs to restrict peripheral DMA. seL4 mediates all resources via capabilities. Monolithic kernels scale path lookups effectively via RCU, and formal kernel verification guarantees kernel correctness but does not prevent user server logic errors."
 />
 
 ## A comparison protocol
@@ -291,45 +292,92 @@ If one system batches 100 lookups per IPC while another issues one syscall per l
 
 The comparison target is always the end-to-end trusted and executed path.
 
-## Synthesis: select a mechanism configuration
+> **Remark.** This lesson restricts comparative claims to four inspectable reference architectures (xv6-riscv rev5, Linux, XNU, and seL4) under fixed workload models so every mechanism claim can be traced to concrete source files or formal specifications rather than marketing taxonomies. Chronology and product popularity are excluded because neither explains a mechanism; alternative kernel paradigms deserve the same source-backed configuration treatment.
 
-Choose a system configuration for one scenario:
+<ExerciseSet>
 
-**Scenario 1 — safety controller.** Four isolated components, bounded synchronous messages, one device, strict authority review, modest throughput, and a requirement for high-assurance kernel isolation.
+<Exercise id="ex-kern-monolithic-vs-microkernel" type="verify" level="application" title="Contrasting Monolithic and Microkernel Control Transfer Paths">
+A user application invokes a file read operation (`read(fd, buf, 4096)`). Compare the sequence of privilege transitions, context switches, and cache effects under:
+1. A monolithic kernel (such as Linux or xv6), and
+2. A classical microkernel (such as seL4 or Mach) where the file system executes in an independent user-space server task.
+Count the minimum number of user-kernel boundary crossings and address-space switches incurred by each architecture.
 
-**Scenario 2 — local build server.** Thousands of concurrent filesystem operations, broad hardware support, container and VM workloads, aggressive page cache, and deep production observability.
+<ExerciseSolution hint="In a monolithic kernel, the syscall handler executes within the kernel address space. In a microkernel, client IPC to server and server reply to client each pass through the kernel.">
+1. **Monolithic path:**
+   - Client executes a trap instruction (`ecall` / `syscall`): User $\to$ Kernel transition.
+   - The kernel resolves the descriptor, accesses the page cache / VFS in kernel mode, copies 4096 bytes directly to user buffer `buf`.
+   - Kernel executes `sret` / `sysret`: Kernel $\to$ User transition.
+   - **Metrics:** Exactly 2 privilege transitions (`U -> K -> U`), 0 address-space context switches (page table root register `satp` / `CR3` does not change), minimal TLB invalidations.
 
-**Scenario 3 — packet appliance.** Millions of small requests, untrusted control plane, trusted bounded data plane, recoverable driver process, and strict p99 budget.
-
-Submit a comparison across at least three reference configurations with:
-
-- exact workload and non-negotiable contract;
-- mechanism/control-flow trace;
-- authority and failure boundary;
-- predicted costs labeled as hypotheses;
-- implementation and verification burden;
-- discriminating measurements and adversarial tests;
-- one requirement change that reverses or weakens the decision; and
-- deliberate omissions.
-
-<ExerciseSolution title="Reveal the grading rubric">
-
-- **Workload precision, 15%.** Fixes operation mix, state/cache assumptions, concurrency, data sizes, and failure model.
-- **Mechanism depth, 25%.** Traces actual primitives and component placement; does not use kernel-family labels as mechanisms.
-- **Authority/failure, 20%.** Identifies CPU and DMA boundaries, capability/descriptor flow, restart state, and trusted components.
-- **Evidence plan, 20%.** Selects correctness tests, failure injection, traces/counters, and reproducible measurements able to discriminate claims.
-- **Decision and reversal, 10%.** Ranks requirements and shows which changed assumption would alter the selection.
-- **Intellectual honesty, 10%.** Refuses unsupported timing, verification, or security generalizations and distinguishes kernel from whole system.
-
-There is no universally correct system choice. There are correct and incorrect arguments under a stated scenario.
-
+2. **Microkernel path:**
+   - Client sends synchronous IPC to VFS server: User $\to$ Kernel trap (Transition 1).
+   - Microkernel transfers IPC message, switches address space from Client to VFS Server: `satp`/`CR3` switch (Switch 1), resumes VFS server in user space (Transition 2).
+   - VFS server processes request, accesses buffer/disk, and sends IPC reply: User $\to$ Kernel trap (Transition 3).
+   - Microkernel transfers reply data, switches address space from VFS Server back to Client: `satp`/`CR3` switch (Switch 2), resumes Client in user space (Transition 4).
+   - **Metrics:** At least 4 privilege transitions (`U -> K -> U -> K -> U`), 2 full address-space context switches, and potential TLB/cache eviction overhead depending on tagged TLB hardware support.
 </ExerciseSolution>
+</Exercise>
 
-## Deliberate boundary
+<Exercise id="ex-kern-capability-ipc-transfer" type="construct" level="application" title="Tracing seL4 Capability Invocation and IPC Message Transfer">
+In seL4, all kernel services are invoked via capabilities stored in per-thread C-nodes. Describe how a client thread initiates a synchronous rendezvous IPC with a server thread listening on an Endpoint object:
+1. The capability token checked by the kernel,
+2. The transfer of small message payloads via hardware CPU registers, and
+3. The generation and transmission of an unforgeable Reply capability to the server.
 
-> **Remark.** This lesson restricts comparative claims to four inspectable reference architectures (xv6-riscv rev5, Linux, XNU, and seL4) under fixed workload models so every mechanism claim can be traced to concrete source files or formal specifications rather than marketing taxonomies.
+<ExerciseSolution hint="Explain how the kernel validates the Endpoint capability rights, copies register-sized arguments directly, and creates a single-use Reply capability.">
+1. **Capability validation:** The client loads an Endpoint capability index from its C-space into a CPU register and invokes `seL4_Call(ep_cap, msg_info)`. The kernel trap handler decodes the capability: it verifies that `ep_cap` points to a valid kernel Endpoint object and possesses the `Write` (or `Call`) right. If invalid or rights are missing, the kernel faults or returns an error.
+2. **Direct register message passing:** If the server is already blocked waiting on the Endpoint (`seL4_Recv`), the kernel performs a direct thread switch. For short messages (up to 4–8 words depending on ISA), the kernel transfers the message words directly across CPU argument registers (`a2`-`a7` on RISC-V) without copying through kernel memory buffers.
+3. **Reply capability issuance:** Because the client invoked `seL4_Call` (a call-reply pattern), the kernel transitions the client to the `BlockedOnReply` state and automatically mints a transient, single-use `Reply` capability placed into the server thread's designated C-slot. When the server finishes processing, it invokes `seL4_Send` on that Reply capability, waking the client, returning the result, and invalidating the Reply capability.
+</ExerciseSolution>
+</Exercise>
 
-The comparison excludes chronology and product popularity because neither explains a mechanism. Windows NT, FreeBSD, QNX, Fuchsia, real-time kernels, unikernels, formally verified user stacks, and distributed operating systems deserve the same source-backed configuration treatment; adding one paragraph per name would reduce quality.
+<Exercise id="ex-kern-tcb-size-tradeoff" type="describe" level="application" title="Comparing Trusted Computing Base Footprints and Verification Tractability">
+Evaluate the trade-off between Trusted Computing Base (TCB) size and system verification feasibility:
+1. Compare the lines of code (LoC) of the seL4 microkernel (~10,000 lines) with a general-purpose Linux kernel (~30+ million lines).
+2. Explain why end-to-end formal verification (such as the Isabelle/HOL functional correctness, integrity, and confidentiality proofs achieved for seL4) is tractable for seL4 but intractable for monolithic production kernels.
+3. Discuss what remains outside the verified boundary in a complete running seL4-based operating system.
+
+<ExerciseSolution hint="Focus on state space explosion, concurrency complexity, device driver volume, and user-space policy servers.">
+1. **TCB scale difference:** seL4 comprises approximately 10,000 lines of verified C code and assembly, maintaining a strictly minimized kernel state space. In contrast, a typical Linux distribution kernel exceeds 30 million lines of C, where drivers, filesystems, network protocols, and scheduling policies all reside in supervisor mode.
+2. **Verification tractability:**
+   - Formal verification requires constructing mathematical proofs of refinement from abstract specification to executable binary. State space explosion makes automated and interactive theorem proving scale non-linearly with lines of code, concurrency interleavings, and unstructured pointers.
+   - seL4 is deliberately single-threaded in the kernel (with event-driven preemption points or fine-grained multicore models), restricts dynamic memory allocation to capability retyping of user-provided untyped memory, and avoids in-kernel complexity.
+   - In Linux, complex preemptible RCU subsystems, dynamic locking graphs, heterogeneous device drivers, and continuous code churn render complete formal proof mathematically intractable with current proof technology.
+3. **Unverified residual boundary:** Formal proof of seL4 guarantees only that the microkernel binary adheres to its specification under the assumed hardware model. It does not verify: hardware errata / CPU microarchitectural side-channels, board firmware / bootloaders, device firmware, or the application/server logic running in user space (for example, a buggy user-space file server can still leak its own files).
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-kern-unikernel-isolation" type="formalise" level="transfer" title="Analyzing Unikernel Attack Surfaces and Single-Address-Space Boundaries">
+A unikernel (such as MirageOS or OSv) compiles a single specialized application together with minimal operating system library routines into a single binary running in a single address space at Ring 0 inside a hardware virtual machine (VM).
+1. Formalize the isolation boundary: what protects two distinct unikernel instances running on the same physical host?
+2. Compare the attack surface of an application running as a Linux container versus the same application running as a unikernel within a type-1 hypervisor.
+3. State one major operational disadvantage of unikernels regarding observability and debugging.
+
+<ExerciseSolution hint="Contrast hardware hypervisor VM isolation (EPT/NPT) against Linux kernel system call attack surfaces, and note the absence of user/kernel boundary tools like gdb or ptrace.">
+1. **Formal isolation boundary:** Within the unikernel instance, there is no spatial or privilege boundary: application logic and kernel library code execute at the identical privilege level (e.g., Ring 0 / S-mode) sharing one page table. Isolation between distinct unikernel instances is enforced entirely by the underlying hardware hypervisor (Type-1 or Type-2) using Second-Level Address Translation (Intel EPT / AMD NPT) and VMCS/VMCB hardware virtualization controls.
+2. **Attack surface comparison:**
+   - In a Linux container, all containers share a single host kernel image. A vulnerability in any of the ~400+ host system calls, ioctl handlers, or network stack parsers allows container breakout to the host kernel.
+   - In a unikernel, the guest cannot attack host kernel system calls because no host system call interface exists inside the guest. The hypervisor exposes a drastically narrower hypercall interface and virtual device emulation layer, substantially reducing the breakout attack surface.
+3. **Operational disadvantage:** Because a unikernel lacks multi-process abstractions, interactive shells (`bash`), and standard debugging infrastructure (`ptrace`, `gdb`, `ps`, `/proc`), inspecting runtime state, attaching debuggers, or applying live hot-patches is extremely difficult. Diagnosing production crashes requires external hypervisor memory inspection or rebuilding the whole binary.
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-kern-fault-isolation-proof" type="prove" level="synthesis" title="Proving Subsystem Fault Isolation in Microkernel Architectures">
+Let a system consist of microkernel $K$, user application process $A$, file system server $F$, and device driver $D$, each residing in distinct address spaces $S_K, S_A, S_F, S_D$. Communication occurs solely via message passing across kernel endpoints $E_{AF}$ and $E_{FD}$. Hardware includes an MMU and an IOMMU configured such that peripheral $P$ controlled by $D$ can only DMA into memory mapped within $S_D$.
+1. Prove that an arbitrary control-flow hijack or fatal memory fault in driver $D$ cannot alter the persistent file metadata state maintained in $S_F$ without transmitting a semantically valid IPC message across $E_{FD}$.
+2. Specify the exact failure mode that occurs if the IOMMU is absent or disabled.
+
+<ExerciseSolution hint="Formulate the invariants enforced by the MMU page tables, IOMMU DMA translation, and kernel capability enforcement.">
+1. **Proof of subsystem isolation:**
+   - **Spatial CPU isolation:** By MMU construction, the CPU page table for $S_D$ maps only memory frames allocated to $D$. Frames backing $S_F$ and $S_K$ are either unmapped or marked invalid in $D$'s page table. Therefore, no CPU instruction executed by $D$ (even under arbitrary control-flow hijacking) can read or write memory in $S_F$ directly via load/store instructions.
+   - **DMA peripheral isolation:** Because the IOMMU translation tables for peripheral $P$ map only the DMA buffer frames assigned to $S_D$, peripheral $P$ cannot write to $S_F$ frames via direct memory access over the system bus.
+   - **Kernel control isolation:** Control transfers between $S_D$ and $S_F$ are mediated exclusively by microkernel $K$ via endpoint $E_{FD}$. The kernel delivers messages to $F$ only if $D$ executes a valid kernel trap with a valid capability to $E_{FD}$.
+   - **Conclusion:** Because $D$'s instructions cannot access $S_F$'s memory directly and $D$'s peripheral cannot DMA into $S_F$'s memory, the internal state of $F$ can change solely in response to messages received through $E_{FD}$. If $F$'s protocol rejects malformed or unauthenticated requests, corrupted state in $D$ cannot arbitrarily corrupt $F$'s metadata.
+2. **Absence of IOMMU failure mode:** If the IOMMU is absent, peripheral $P$ issues DMA writes with raw physical bus addresses. A compromised or malfunctioning driver $D$ can program $P$'s DMA target register to point directly to physical frames holding $S_F$ or $S_K$ memory, completely bypassing CPU MMU protections and corrupting file metadata or kernel code without sending any IPC message.
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

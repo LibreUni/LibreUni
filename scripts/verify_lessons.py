@@ -35,6 +35,7 @@ COMPONENT_PROPS = {
     "Quiz": ["question", "options", "correctIndex", "explanation", "questions", "title", "client:load"],
     "CodeRunner": ["code", "output", "language", "title", "client:load"],
     "CodeExercise": ["code", "answers", "explanation", "title", "description", "client:load"],
+    "FillInExercise": ["prompt", "text", "statement", "code", "answers", "explanation", "title", "description", "client:load"],
     "CaseStudy": ["scenario", "question", "options", "correctIndex", "explanation", "tradeoffs", "title", "client:load"],
     "SqlRunner": ["schema", "initialQuery", "title", "description", "client:load"]
 }
@@ -55,7 +56,8 @@ STRUCTURAL_SECTION_RE = re.compile(
     r"summary|key takeaways?|assessment(?: standard)?|grading criteria|"
     r"(?:lab\s+)?tasks?|proof obligations?|"
     r"required (?:submission|invariant checker)|"
-    r"deliverables?(?:\s+.*)?"
+    r"deliverables?(?:\s+.*)?|"
+    r"definitions and results|method chooser|hypothesis checklist|typical errors"
     r")\s*$",
     re.IGNORECASE,
 )
@@ -65,7 +67,7 @@ STRUCTURAL_SECTION_RE = re.compile(
 # evidence before reporting a missing example.
 EXAMPLE_SIGNAL_RE = re.compile(
     r"```[a-zA-Z0-9+-]+"
-    r"|<(?:MathStatement|MathProof|PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|ExerciseSolution|details)\b"
+    r"|<(?:MathStatement|MathProof|PlantUML|PythonDiagram|TikZ|Figure|Quiz|CodeRunner|CodeExercise|FillInExercise|CaseStudy|ExerciseSolution|details)\b"
     r"|\b(?:example|case|demonstrat|scenario|worked|trace|deriv|proof|counterexample)\b"
     r"|^\|.+\|\s*$"
     r"|^\$\$",
@@ -73,7 +75,7 @@ EXAMPLE_SIGNAL_RE = re.compile(
 )
 
 EXERCISE_SIGNAL_RE = re.compile(
-    r"<(?:Quiz|CodeExercise|CodeRunner|CaseStudy|ExerciseSolution|details)\b"
+    r"<(?:Quiz|CodeExercise|FillInExercise|CodeRunner|CaseStudy|ExerciseSolution|details)\b"
     r"|\b(?:exercise|practice|try|quiz|lab|checkpoint|prediction|synthesis)\b",
     re.IGNORECASE,
 )

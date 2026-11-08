@@ -18,6 +18,8 @@ omissions:
 estimatedMinutes: 720
 assessment: A recoverable xv6 regular-file rename extension, invariant checker, crash matrix, adversarial tests, design memo, and live defense; automated tests provide evidence but do not certify authorship or engineering judgment.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -100,16 +102,15 @@ The tag was chosen because the filesystem constants and paths used by the course
 Cumulative checkpoint patches may change a touched syscall table, inode path, lock order, log bound, disk format, or test ABI. Treat any failed patch application, changed invariant, expanded dirty set, or altered source line as an integration incompatibility: preserve the conflict, record it in `REPORT.md`, adapt the lab-only patch deliberately, and rerun every affected checkpoint test. Do not resolve a conflict by copying a clean-tree file over cumulative work.
 
 <Quiz client:load
-  title="Bound the dirty set, not the calls"
-  question="The lab requires proving that one rename dirties at most MAXOPBLOCKS = 10 unique blocks. Why is counting log_write calls the wrong measure?"
+  title="Log capacity and unique dirty block budgeting"
+  question="Evaluate each statement regarding log capacity, buffer absorption, and rename invariants in xv6:"
   options={[
-    "Because log_write can allocate additional log blocks whenever the reservation is exceeded.",
-    "Because repeated updates to one buffer collapse into a single log slot, while the unique-block set must still fit the reservation.",
-    "Because rev5 writes each modified block directly to its home location instead of logging it.",
-    "Because the log capacity is effectively unlimited, so only the call count matters."
+    { id: "opt-fslab-absorption-slot", text: "Multiple log_write calls modifying the identical disk block consume only a single physical log slot.", isCorrect: true },
+    { id: "opt-fslab-canonical-sort", text: "Acquiring two parent directory locks in ascending inum order mathematically prevents cross-directory deadlock.", isCorrect: true },
+    { id: "opt-fslab-log-call-count", text: "A transaction dirty budget must strictly count the total number of log_write invocations issued by the driver.", isCorrect: false },
+    { id: "opt-fslab-unlogged-home", text: "Writing modified directory entries directly to home disk blocks before log commit preserves crash recovery invariants.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="Log admission reserves space for distinct dirty blocks, and log_write absorbs repeated writes to one buffer into a single slot. A call count can overestimate the number of slots when the same block is written repeatedly; a budget must instead identify the distinct blocks that a permitted rename can dirty."
+  explanation="xv6 log_write absorbs repeated writes to the same block into a single transaction slot, so the budget depends on unique dirty blocks rather than call counts. Sorting parent inode locks by inum eliminates circular wait deadlocks, and writing directly to home blocks before commit violates write-ahead logging."
 />
 
 ## Required interface and bounded semantics
@@ -433,13 +434,120 @@ An evaluator selects two without advance disclosure:
 
 The defense is diagnostic. Failure to explain the submitted lock order or crash oracle triggers focused re-review; the website does not infer mastery from test output.
 
-## Scope boundary and handoff
-
 > **Remark.** Restricting the core lab to regular-file rename isolates two-parent canonical locking, worst-case log-slot accounting, and deferred open-inode reclamation; directory rename adds tree-cycle detection (verifying the source directory is not an ancestor of the destination parent) and `..` link-count maintenance.
 
-Directory rename requires cycle prevention, `..` updates, parent link-count changes, ancestor locking, and a stronger namespace model. Cross-filesystem rename requires a copy/delete protocol rather than one atomic local transaction. Symbolic-link policy changes path resolution and attacker control. None is an optional bonus hidden inside this brief; each needs a separately reviewed contract.
+<ExerciseSet>
 
-Before handoff, restore test hooks to disabled-by-default state, run the clean evaluator path from a new checkout, and have another person follow only `README.md`. Record every deviation. The final report must distinguish tests passed, claims argued from invariants, and claims left unproved.
+<Exercise id="ex-fslab-canonical-lock-order" type="prove" level="synthesis" title="Proving Deadlock Freedom in Cross-Directory Rename via Inode Sorting">
+
+Suppose Process 1 executes `rename("dirA/f", "dirB/f")` while Process 2 concurrently executes `rename("dirB/g", "dirA/g")`.
+1. Explain how locking parent directories in caller argument order creates an immediate circular wait deadlock.
+2. Prove that sorting parent directory acquisitions strictly by `(dev, inum)` mathematically eliminates deadlocks.
+
+<ExerciseSolution hint="Establish a strict total order on locks: lock(min(inumA, inumB)) before lock(max(inumA, inumB)).">
+
+1. **Deadlock in caller order:**
+   - Process 1 looks up `dirA` and `dirB`. Following argument order (`old_parent` then `new_parent`), Process 1 acquires `ilock(dirA)`.
+   - Concurrently, Process 2 looks up `dirB` and `dirA`. Following its argument order, Process 2 acquires `ilock(dirB)`.
+   - Process 1 attempts to acquire `ilock(dirB)` and blocks behind Process 2.
+   - Process 2 attempts to acquire `ilock(dirA)` and blocks behind Process 1.
+   Both processes hold one lock and wait for the other, forming a closed circular wait cycle ($T_1 \rightarrow \text{dirB} \rightarrow T_2 \rightarrow \text{dirA} \rightarrow T_1$)—an unrecoverable deadlock.
+2. **Proof of deadlock freedom via canonical sorting:**
+   Define a strict total order $\prec$ on directory inodes:
+   $$
+   I_1 \prec I_2 \iff (I_1.\text{dev} < I_2.\text{dev}) \lor (I_1.\text{dev} == I_2.\text{dev} \land I_1.\text{inum} < I_2.\text{inum}).
+   $$
+   Mandate that whenever two parent directories must be locked simultaneously:
+   - If $I_{\text{old}} == I_{\text{new}}$ (same-directory rename), lock the parent once.
+   - If $I_{\text{old}} \ne I_{\text{new}}$, let $I_{\text{first}} = \min_\prec(I_{\text{old}}, I_{\text{new}})$ and $I_{\text{second}} = \max_\prec(I_{\text{old}}, I_{\text{new}})$.
+   - The thread acquires `ilock(first)` then `ilock(second)`.
+   Because every thread acquires locks strictly in ascending order under total order $\prec$, no cycle of waiters can form. Circular wait is eliminated.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fslab-dirty-block-budget" type="verify" level="application" title="Computing Worst-Case Unique Dirty Blocks Against MAXOPBLOCKS">
+
+In xv6 revision 5, `MAXOPBLOCKS = 10`. An adversarial cross-directory rename replaces an existing file in `dirB`, causing `dirB` to allocate an indirect block.
+Enumerate all distinct disk blocks dirtied by this operation and verify that the total unique block count does not exceed `MAXOPBLOCKS`.
+
+<ExerciseSolution hint="Count unique disk blocks: bitmap, indirect, new directory block, destination inode, source directory block, source inode, target inode.">
+
+The worst-case cross-directory replacing rename dirties the following unique disk blocks:
+1. Destination directory inode block (`dinode` for `dirB`).
+2. Destination directory new data block (added to hold the new directory entry).
+3. Destination directory indirect block (if directory size crossed from 12 direct blocks to indirect entry 0).
+4. Free-space bitmap block (allocating the new directory block and indirect block; on xv6 `FSSIZE=2000`, one bitmap block covers all data blocks).
+5. Source directory data block (clearing the old directory entry).
+6. Source directory inode block (if in a different inode block from `dirB`).
+7. Displaced target inode block (decrementing `nlink` to 0).
+8. Target block bitmap block (if target blocks are freed; in xv6, block freeing is deferred until `iput()` when `ref` drops to 0).
+
+Summing the unique touched blocks yields at most 7 (or 8 with separate bitmap blocks).
+Because $7 \le \text{MAXOPBLOCKS} = 10$, the operation fits strictly within the transaction log reservation. Repeated updates to `dirB`'s inode or bitmap are absorbed into single log slots by `log_write()`.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fslab-displaced-inode-cleanup" type="construct" level="application" title="Decreasing Link Count and Deferring Inode Block Reclamation">
+
+Suppose `rename("dirA/f", "dirB/g")` overwrites an existing file `g` that is currently open by a background logging daemon with file descriptor 5.
+1. Trace the modifications to `g`'s on-disk and in-core state inside the rename transaction.
+2. Why must the rename transaction NOT immediately deallocate `g`'s data blocks?
+3. When and where are `g`'s data blocks finally returned to the free bitmap?
+
+<ExerciseSolution hint="Decrement nlink inside the transaction, but block deallocation occurs only when refcount drops to 0 in iput().">
+
+1. **Modifications inside the transaction:**
+   - The rename operation overwrites `dirB`'s directory entry for `"g"` to point to `f`'s inode number.
+   - The kernel acquires `ilock(g)`. It decrements `g->nlink` from 1 to 0 and logs the updated inode block via `iupdate(g)`.
+   - The transaction commits.
+2. **Deferred deallocation requirement:**
+   The logging daemon holds descriptor 5, which references `g` via an open file description (`g->ref > 0`). Deallocating `g`'s blocks immediately would cause the daemon's subsequent writes to overwrite blocks that might be reallocated to unrelated files, violating file isolation.
+3. **Final deallocation path:**
+   When the logging daemon calls `close(5)` (or terminates), the VFS executes `iput(g)`. Finding that `g->ref == 0` and `g->nlink == 0`, `iput()` begins a new transaction, invokes `itrunc(g)` to free all direct and indirect data blocks to the bitmap, clears `g->type`, and writes the free inode to disk.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fslab-crash-cut-commit-boundary" type="verify" level="transfer" title="Mapping Deterministic Crash Cuts to Log Commit States">
+
+An automated grading harness injects a power failure during a cross-directory rename.
+- Cut $C_1$: Power fails while writing journal block 3 (before the log commit record is written).
+- Cut $C_2$: Power fails after the log commit record is written, while installing the source directory block to its home disk location.
+
+1. State the post-reboot filesystem state observed for Cut $C_1$.
+2. State the post-reboot filesystem state observed for Cut $C_2$.
+
+<ExerciseSolution hint="Uncommitted transactions are discarded; committed transactions are completely replayed.">
+
+1. **Cut $C_1$ (Pre-commit failure):**
+   The log header on disk does not reflect a valid commit record for this transaction. During recovery upon reboot, `initlog()` inspects the log header, finds `n == 0` or uncommitted state, and skips replay. All home disk blocks remain in their exact pre-crash state: the source file remains in `dirA`, the destination file in `dirB` is untouched, and no partial or corrupt rename is visible.
+2. **Cut $C_2$ (Post-commit failure):**
+   The log header contains a valid committed transaction describing all modified blocks. During recovery, `install_trans()` reads every logged block from the journal and writes it to its home location, completing the installation. Upon mount, the filesystem reflects the complete post-rename state: `dirB/g` points to the new file, `dirA/f` is removed, and the displaced target's link count is decremented.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fslab-directory-rename-cycle-hazard" type="describe" level="application" title="Cycle Detection and Ancestor Validation in Directory Renaming">
+
+Explain why renaming a directory (`rename("dirA/sub", "dirB/target")`) requires an ancestor traversal check that regular-file renaming does not. Show how omitting this check can detach a subtree from the root directory.
+
+<ExerciseSolution hint="Check that new_parent is not inside the subtree rooted at old_dir to avoid creating an unreachable cycle.">
+
+- **The subtree cycle hazard:**
+  If an application executes `rename("dirA", "dirA/sub/nested")`:
+  - `dirA` is moved to become a child of `dirA/sub`.
+  - However, `sub` is already a child of `dirA`.
+  - Modifying the directory pointers without checking creates a closed directed cycle in the directory tree: `dirA` points to `sub`, and `sub` points to `dirA`.
+  - The entire directory subtree is now detached from the root directory `/`. No path from `/` can ever reach `dirA` or any file inside it, yet all inodes retain positive link counts. The entire subtree becomes orphaned, permanently leaking storage.
+- **The ancestor validation check:**
+  Before permitting a directory rename, the kernel must walk upward through parent pointers (`..`) starting from the destination parent directory `dirB` up to the root `/`. If `dirA` is encountered along this upward traversal path, the destination lies inside the source directory's own subtree. The kernel must abort the operation and return `-EINVAL`.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

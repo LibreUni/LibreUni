@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 360
 assessment: Given an unfamiliar throughput collapse, derive competing causal models, inspect a supplied counter/trace bundle, propose a correctness-preserving redesign, and specify the experiment needed to support or reject the claim.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -93,16 +95,15 @@ Thus $s+(1-s)/8=1/4$, so $8s+1-s=2$, $7s=1$, and $s=1/7\approx14.3\%$. This is a
 </ExerciseSolution>
 
 <Quiz client:load
-  title="A different observed speedup"
-  question="A fixed-work run gives $S(4)=2$ on four cores. Fitting the ideal Amdahl model, what fraction $s$ results and what does it establish about lock time?"
+  title="Amdahl scalability bounds and multicore contention"
+  question="Evaluate each statement regarding Amdahl scalability bounds, lock contention, and multicore kernel behavior:"
   options={[
-    "$s=1/4$; it proves one quarter of time was spent holding locks",
-    "$s=1/3$; it is an effective model fraction, not a direct lock-time measurement",
-    "$s=1/2$; it proves half the instructions were sequential",
-    "$s=2/3$; it establishes a universal speedup limit for every workload"
+    { id: "opt-multi-amdahl-bound", text: "Amdahl model establishes that the maximum speedup is strictly bounded by the inverse of the serialized fraction.", isCorrect: true },
+    { id: "opt-multi-false-sharing", text: "Independent CPU cores writing to distinct variables located on the same cache line incur cache invalidation stalls.", isCorrect: true },
+    { id: "opt-multi-speedup-linear", text: "Adding physical CPU cores always produces linear throughput scaling if all cores report 100 percent utilization.", isCorrect: false },
+    { id: "opt-multi-rcu-writer-free", text: "Read-copy update synchronization completely eliminates the need for locks or synchronization among writers.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="Solve $1/2=s+(1-s)/4$: $s=1/3$. This fitted fraction can absorb imbalance, memory stalls, scheduling, and coherence overhead. Instrumentation is needed to attribute any of it to a lock; neither the fit nor the bound applies universally to other workloads."
+  explanation="Amdahl limits speedup to 1/s. False sharing occurs when independent variables occupy the same 64-byte cache line, causing inter-core bounce. High CPU utilization often reflects lock spin contention rather than productive parallel work, and RCU eliminates reader locks but writers still serialize via locks."
 />
 
 ## Predict the analytical curves
@@ -337,38 +338,129 @@ A defensible experiment records:
 
 Instrumentation can perturb the schedule. First quantify no-trace versus trace overhead. High-rate tracing that drops events cannot support complete event counts unless loss is modeled.
 
-## Synthesis: diagnose and redesign
+> **Remark.** Amdahl model and lock-contention counters bound the maximum speedup of a serialized critical section, while hardware cache-coherence invalidations explain why even lock-free or sharded structures fail to scale when independent cores write to the same cache line. Synchronization defines correctness; cache coherence and topology define communication costs; scheduling defines waiter and interrupt placement; filesystems and networking supply shared kernel objects; containers and VMs change accounting and observation scope. Observability connects these mechanisms to evidence but cannot replace the mechanism argument.
 
-Given the illustrative table, design a review package for the global-lock hypothesis:
+<ExerciseSet>
 
-- derive the Amdahl curve that would fit one chosen serialized fraction;
-- explain why the fit is not causal evidence;
-- request a minimal counter/trace bundle;
-- propose one local and one structural redesign;
-- state the invariant each redesign risks;
-- define functional, stress, and failure tests; and
-- specify the scaling experiment and decision criterion.
+<Exercise id="ex-multi-amdahl-inversion" type="verify" level="application" title="Inverting Amdahl Model from Measured Multicore Speedup">
+A kernel benchmark executes on an 8-core symmetric multiprocessing system and achieves a measured speedup of $S(8) = 5.0$ compared to single-core execution on identical fixed work. Assuming the ideal Amdahl scalability equation $S(N) = \frac{1}{s + (1 - s)/N}$, derive the implied serial fraction $s$. Determine the theoretical maximum speedup attainable on an infinite number of cores ($N \to \infty$) under this model.
 
-<ExerciseSolution title="Reveal the grading rubric">
+<ExerciseSolution hint="Equate S(8) to 5.0 and solve for s algebraically before evaluating the limit 1/s.">
+Equate the observed speedup to the Amdahl equation:
 
-- **Model, 15%.** Defines fixed work/load, derives speedup and efficiency, and labels outputs as analytical.
-- **Mechanism trace, 20%.** Connects caller, wait queue or spin, owner, cache line, critical work, and handoff; includes a competing hypothesis.
-- **Correctness, 20%.** States cache identity, ownership, cross-shard ordering, or RCU lifetime invariants affected by each redesign.
-- **Observability, 15%.** Selects evidence that can discriminate hypotheses and records scope, event support, multiplexing, loss, and perturbation.
-- **Experiment, 20%.** Pins environment, controls topology/load, repeats, reports throughput and tails with uncertainty, and preserves raw data.
-- **Boundary, 10%.** Separates correlation, modeled limit, measured result, and production generalization; names NUMA, device, and workload omissions.
+$$
+\frac{1}{s + \frac{1 - s}{8}} = 5.0 \implies s + \frac{1 - s}{8} = \frac{1}{5} = 0.20
+$$
 
-Passing a throughput threshold without invariant tests or an explanation of measurement validity does not establish a successful kernel redesign.
+Multiply through by 8 to clear the denominator:
 
+$$
+8s + 1 - s = 1.6 \implies 7s = 0.6 \implies s = \frac{0.6}{7} = \frac{3}{35} \approx 0.0857 \text{ (8.57\%)}
+$$
+
+Under the ideal Amdahl model with $s = \frac{3}{35}$, the infinite-core asymptotic speedup limit is:
+
+$$
+S(\infty) = \lim_{N \to \infty} \frac{1}{s + \frac{1 - s}{N}} = \frac{1}{s} = \frac{35}{3} \approx 11.67\times
+$$
+
+Even with an infinite number of cores, execution time cannot fall below 8.57% of the original single-core execution time because the serialized component cannot be parallelized.
 </ExerciseSolution>
+</Exercise>
 
-## Connections and deliberate boundary
+<Exercise id="ex-multi-false-sharing-padding" type="construct" level="application" title="Eliminating False Sharing via Cache-Line Alignment and Padding">
+Consider an array of per-core statistics counters defined as `struct core_stats { uint64_t rx_packets; uint64_t tx_packets; } stats[64];` running on a 64-core system with standard 64-byte hardware cache lines. Explain why concurrent updates by different cores cause severe cache-line bouncing (false sharing). Rewrite the structure definition using cache-line alignment attributes or explicit padding to ensure each core writes to an isolated cache line.
 
-> **Remark.** Amdahl's law and lock-contention counters bound the maximum speedup of a serialized critical section, while hardware cache-coherence invalidations explain why even lock-free or sharded structures fail to scale when independent cores write to the same cache line.
+<ExerciseSolution hint="Calculate sizeof(struct core_stats) and compare to 64 bytes; apply __attribute__((aligned(64))).">
+In the initial definition, `sizeof(struct core_stats) = 16` bytes (two 8-byte integers). Consequently, $64 / 16 = 4$ distinct core structures pack into a single 64-byte cache line. When Core 0 increments `stats[0].rx_packets` and Core 1 concurrently increments `stats[1].rx_packets`, both cores execute read-for-ownership (RFO) requests, invalidating each other's L1/L2 cache lines repeatedly despite accessing distinct variables.
 
-Synchronization defines correctness; cache coherence and topology define communication costs; scheduling defines waiter and interrupt placement; filesystems and networking supply shared kernel objects; containers and VMs change accounting and observation scope. Observability connects these mechanisms to evidence but cannot replace the mechanism argument.
+To eliminate false sharing, pad or align each entry to 64 bytes:
 
-Weak-memory litmus proofs, lock-free reclamation beyond RCU, NUMA allocators, PMU programming catalogs, and real-time multicore guarantees are omitted. Each requires architecture- or policy-specific derivations beyond this bounded diagnosis workflow.
+```c
+struct alignas(64) core_stats {
+    uint64_t rx_packets;
+    uint64_t tx_packets;
+    uint8_t  _pad[48]; /* 16 bytes payload + 48 bytes padding = 64 bytes */
+};
+
+struct core_stats stats[64];
+```
+
+Or using GCC/Clang attribute syntax:
+
+```c
+struct core_stats {
+    uint64_t rx_packets;
+    uint64_t tx_packets;
+} __attribute__((aligned(64)));
+
+struct core_stats stats[64];
+```
+
+Each element occupies exactly one cache line (64 bytes), ensuring concurrent updates by distinct cores modify disjoint cache lines without generating coherence invalidations.
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-rcu-grace-period" type="construct" level="transfer" title="Tracing RCU Removal, Grace Period Detection, and Memory Reclamation">
+Explain how Read-Copy Update (RCU) decouples readers from writers in a linked list lookup table. Trace the exact sequence of steps when a writer deletes a node `N`:
+1. Pointer removal (`list_del_rcu`),
+2. Waiting for a grace period (`synchronize_rcu` or `call_rcu`), and
+3. Node deallocation (`kfree`).
+State what condition must be met on every active CPU core before the grace period ends and `kfree(N)` is safe.
+
+<ExerciseSolution hint="Recall that readers execute within rcu_read_lock/rcu_read_unlock without blocking writers; grace periods expire once all cores pass a quiescent state.">
+The sequence proceeds as follows:
+
+1. **Removal step:** The writer executes `list_del_rcu(N)` (or updates the preceding node's `next` pointer using an atomic store with release semantics). Node `N` is unlinked from the active list. Concurrent readers that entered their critical section before or during the update either see the old pointer or the new pointer; readers seeing `N` continue traversing it safely because `N` remains allocated in memory.
+2. **Grace period detection:** The writer initiates a grace period via `synchronize_rcu()` (blocking) or `call_rcu()` (asynchronous callback). The kernel tracks quiescent states across all CPU cores. In non-preemptible kernels, a quiescent state occurs whenever a core undergoes a context switch, enters the idle loop, or executes in user mode. Once every core has passed through at least one quiescent state, all readers that were inside `rcu_read_lock()` at the time of unlinking are guaranteed to have exited their read-side critical sections.
+3. **Reclamation step:** When the grace period completes, no reader retains a reference to node `N`. The callback or returning thread invokes `kfree(N)` safely without locks or memory corruption.
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-lockstat-diagnosis" type="describe" level="application" title="Diagnosing Lock Contention Bottlenecks with lockstat and perf">
+A 32-core database server experiences degraded transaction throughput accompanied by 85% system CPU utilization. Profiling with Linux kernel observability tools reveals that the time is spent in `native_queued_spin_lock_slowpath`. Describe how you would utilize `/proc/lock_stat` and `perf record -g -e lock:lock_acquire` to identify:
+1. The exact lock symbol exhibiting the highest contention,
+2. The ratio of contention events (`con-bounces`) to total acquisitions, and
+3. The specific kernel call chains responsible for holding the lock for the longest hold durations.
+
+<ExerciseSolution hint="Explain how lockstat tracks acquisition count, hold time, and wait time, and how perf record samples call stacks on lock events.">
+1. **Enabling and inspecting lockstat:** Enable lock statistics via `echo 1 > /proc/sys/kernel/lock_stat`. Run the workload, then inspect `/proc/lock_stat`. The output sorts locks by contention counts and wait times. Look for the top entry in the `contentious:` table to identify the lock data structure and symbolic name (for example, `&sb->s_umount` or `inode_hash_lock`).
+2. **Evaluating contention metrics:** Examine the acquisition columns: `acquisitions` (successful acquires), `contentions` (acquisitions that failed immediately and had to spin/block), and `waittime` (total and maximum nanoseconds spent waiting). If `contentions / acquisitions` approaches a substantial fraction (for example, > 20%), the lock is a primary scalability bottleneck.
+3. **Attributing hold time call stacks with perf:** To discover who holds the lock while others wait, record lock events with stack traces:
+   ```bash
+   perf record -g -e lock:lock_acquire -e lock:lock_acquired -- sleep 10
+   perf report
+   ```
+   Inspect call graphs under the lock hold events to pinpoint the kernel function executing inside the critical section. If hold time is dominated by heavy memory allocations or iterative scans under the lock, refactoring the algorithm outside the lock or sharding the protected state resolves the contention.
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-sharded-counter-invariant" type="prove" level="synthesis" title="Proving Consistency Invariants in Sharded Multicore Counters">
+To prevent global atomic contention, an operating system implements a sharded statistics counter with $K$ per-core slots: `int64_t slots[K]`. Updates execute locally on core $i$: `slots[i] += delta`. A global reader reads the total count by summing all slots: $T = \sum_{i=0}^{K-1} \text{slots}[i]$.
+1. Prove that without global locking, $T$ does not guarantee a linearizable snapshot across concurrent increments.
+2. Construct a concrete race trace where two increments of $+1$ on Core 0 and Core 1 occur concurrently with a reader summation, such that the reader returns a value that reflects neither the initial state nor the final state, yet satisfies monotonicity if increments are strictly non-negative.
+3. Formulate the correctness invariant guaranteed by this sharded counter design under relaxed reader execution.
+
+<ExerciseSolution hint="Consider the order in which the reader loop scans slot indices relative to concurrent writes; prove conservation of increments.">
+1. **Non-linearizability proof:** Linearizability requires each read operation to appear to take effect instantaneously at some point between its invocation and its return. Suppose Core 0 has completed incrementing `slots[0] = 1`, and the reader reads `slots[0] = 1`. Before the reader reads `slots[1]`, Core 1 transfers a count from `slots[1]` to `slots[0]` by subtracting 1 from `slots[1]` and adding 1 to `slots[0]`. The reader then reads `slots[1] = 0`. The reader computes total $T = 1 + 0 = 1$. However, the true total after the transfer was 2, and before the transfer was 2. The read observes an impossible intermediate state where one component was read post-transfer and the other pre-transfer, violating linearizable atomic snapshot semantics.
+2. **Concrete race trace:** Let initial state be `slots[0] = 0, slots[1] = 0`.
+   - Reader begins summation loop: reads `slots[0] = 0`.
+   - Core 0 executes `slots[0] += 1` (now `slots[0] = 1`).
+   - Core 1 executes `slots[1] += 1` (now `slots[1] = 1`).
+   - Reader advances loop to index 1: reads `slots[1] = 1`.
+   - Reader computes $T = 0 + 1 = 1$.
+   The true final state has total 2. The initial state had total 0. The reader observes total 1. If all updates are non-negative increments, the reader never reads a value exceeding the true final count or less than the state prior to invocation, preserving monotonic progress.
+3. **Guaranteed invariant (eventual conservation):** If all updates cease at time $t_0$, any reader whose execution begins strictly after $t_0$ evaluates:
+
+$$
+T = \sum_{i=0}^{K-1} \text{slots}[i] = \sum \Delta_{ij}
+$$
+
+which equals the exact sum of all committed deltas. Under concurrent execution with monotonically increasing deltas, the observed sum satisfies $T_{\text{invoc}} \le T_{\text{observed}} \le T_{\text{completion}}$, providing an admissible bounded approximation without serializing writers.
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

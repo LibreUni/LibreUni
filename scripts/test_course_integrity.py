@@ -9,6 +9,8 @@ from scripts.course_integrity import (
     artifact_in_section,
     GENERIC_DIAGRAM_LABELS,
     assessment_length_cues,
+    evaluate_assessments,
+    is_code_all_comments,
     heading_sections,
     paragraph_blocks,
     plantuml_fingerprint,
@@ -160,6 +162,57 @@ class CourseIntegrityTests(unittest.TestCase):
     def test_filler_lint_rejects_marketing_language(self):
         violations = find_filler_violations("This deep-dive makes the system incredibly fast.")
         self.assertTrue(violations)
+
+
+    def test_assessment_lint_detects_object_option_length_leakage(self):
+        body = '''<Quiz
+          client:load
+          question="What is the purpose of preliminary bound?"
+          options={[
+            { id: '1', text: 'To keep x away from zero.', isCorrect: false },
+            { id: '2', text: 'To guarantee that the factor is bounded by a constant, ensuring the overall estimate holds.', isCorrect: true },
+            { id: '3', text: 'To prevent x = c.', isCorrect: false }
+          ]}
+        />'''
+        cues = assessment_length_cues(body)
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0]["component"], "Quiz")
+        self.assertTrue(cues[0]["isLengthCue"])
+
+    def test_is_code_all_comments_detects_pure_comment_code(self):
+        self.assertTrue(is_code_all_comments("# line 1\n# line 2 [!blank!]"))
+        self.assertTrue(is_code_all_comments("// line 1\n// line 2"))
+        self.assertTrue(is_code_all_comments("/* block comment [!blank!] */"))
+        self.assertTrue(is_code_all_comments("-- sql comment\n-- another"))
+        self.assertTrue(is_code_all_comments(""))
+        self.assertTrue(is_code_all_comments("   \n  "))
+
+    def test_is_code_all_comments_accepts_executable_code(self):
+        self.assertFalse(is_code_all_comments("def f(x):\n  # comment\n  return [!blank!]"))
+        self.assertFalse(is_code_all_comments("uint8_t a = [!blank!];"))
+        self.assertFalse(is_code_all_comments("SELECT [!blank!] FROM t"))
+
+    def test_evaluate_assessments_detects_single_and_multi_correct(self):
+        single_body = '''<Quiz
+          options={[
+            { id: '1', text: 'A', isCorrect: true },
+            { id: '2', text: 'B', isCorrect: false }
+          ]}
+        />'''
+        multi_body = '''<Quiz
+          options={[
+            { id: '1', text: 'A', isCorrect: true },
+            { id: '2', text: 'B', isCorrect: true },
+            { id: '3', text: 'C', isCorrect: false }
+          ]}
+        />'''
+        eval_single = evaluate_assessments(single_body)
+        eval_multi = evaluate_assessments(multi_body)
+        self.assertEqual(len(eval_single), 1)
+        self.assertTrue(eval_single[0]["isSingleCorrect"])
+        self.assertEqual(len(eval_multi), 1)
+        self.assertFalse(eval_multi[0]["isSingleCorrect"])
+        self.assertEqual(eval_multi[0]["correctCount"], 2)
 
 
 if __name__ == "__main__":

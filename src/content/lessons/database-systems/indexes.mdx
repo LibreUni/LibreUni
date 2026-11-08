@@ -18,7 +18,9 @@ estimatedMinutes: 480
 assessment: Given an unfamiliar workload and candidate indexes, derive the supported key ranges, trace one update cost, and defend an access path or its rejection with a counterexample.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import BTreePlayground from '../../../components/playgrounds/BTreePlayground';
 
@@ -85,11 +87,7 @@ LIMIT 50;
 
 an index such as `(tenant_id, status, created_at DESC, id DESC) INCLUDE (error_code)` can align equality predicates with output order and may avoid a sort. It is useful only if failed rows per tenant are selective enough and the added write/space cost is justified. If `status` changes often, the same index can amplify a hot write path.
 
-<ExerciseSolution title="What makes this “covering” claim conditional?">
-
-All selected values may be present in the index, but an MVCC engine can still need a heap or visibility-map check before returning a tuple. An index-only scan is a plan opportunity, not a guarantee that heap I/O is zero.
-
-</ExerciseSolution>
+> **Remark (Conditions for index-only scans).** All selected values may be present in the index, but an MVCC engine can still need a heap or visibility-map check before returning a tuple. An index-only scan is a plan opportunity, not a guarantee that heap I/O is zero.
 
 ## Derived structures must preserve query semantics
 
@@ -123,9 +121,72 @@ Measure representative reads and writes, including warm and cold-cache assumptio
 
 A monthly archive table is append-only, queried once nightly by `WHERE created_at >= current_date - interval '30 days'`, and 95% of rows match. Should a B-tree on `created_at` be the default answer?
 
-<ExerciseSolution>
+<ExerciseSolution hint="Evaluate the I/O cost of random heap lookups when almost the entire table matches.">
 Not automatically. The predicate returns almost the entire relation, so a sequential scan can be cheaper than index navigation plus widespread tuple access. Time partitioning, zone maps/segment metadata, or a sequential aggregate may fit the actual workload better. The decisive evidence is selectivity and physical locality, not the existence of a date predicate.
 </ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-idx-covering-index-scan" type="describe" level="recall" title="Covering Indexes and Visibility Map Prerequisites">
+
+Explain why an index-only scan on a covering index `(tenant_id, status) INCLUDE (error_code)` may still perform random heap page reads in PostgreSQL MVCC execution.
+
+<ExerciseSolution hint="Consider transaction isolation and tuple visibility flags.">
+
+Under multi-version concurrency control (MVCC), index tuples do not store transaction commit status or row creation/expiry timestamps (`xmin`, `xmax`). To return an attribute directly from the index without visiting the heap, the engine checks the table's visibility map. If the target heap page is not marked all-visible to all active transactions, the engine must fetch the underlying heap page to verify tuple visibility.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-idx-selectivity-rejection" type="verify" level="application" title="Index Access Path Rejection on Low Selectivity">
+
+A query scans an archive table where predicate `created_at >= NOW() - INTERVAL '30 days'` matches 95% of total rows. Verify why the query planner rejects an existing unclustered B-tree index on `created_at` in favor of a sequential scan.
+
+<ExerciseSolution hint="Compare the cost of sequential page reads against random single-tuple heap page fetches.">
+
+With an unclustered B-tree index matching 95% of rows, fetching matching tuples through the index incurs random I/O for almost every page in the heap, reading nearly every heap page multiple times. A sequential table scan reads each heap page sequentially exactly once with hardware prefetching, resulting in substantially lower total cost despite evaluating non-matching rows.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-idx-partial-index-predicate" type="construct" level="application" title="Partial and Expression Index Specification">
+
+Specify PostgreSQL DDL for: (1) a partial index that optimizes queries looking up only deliveries in `status = 'failed'`, and (2) an expression index that enforces case-insensitive email uniqueness scoped by tenant.
+
+<ExerciseSolution hint="Use a WHERE clause in CREATE INDEX for partial indexes, and apply lower() for expression indexes.">
+
+```sql
+-- Partial index for failed deliveries
+CREATE INDEX idx_delivery_failed
+  ON delivery (tenant_id, created_at DESC, id DESC)
+  WHERE status = 'failed';
+
+-- Scoped case-insensitive unique constraint
+CREATE UNIQUE INDEX idx_user_tenant_email_ci
+  ON app_user (tenant_id, lower(email));
+```
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-idx-multi-tenant-unique-transfer" type="generalise" level="transfer" title="Case-Insensitive Multi-Tenant Unique Constraint Design">
+
+An engineering team must guarantee that no tenant can register duplicate user emails case-insensitively, while distinct tenants may legitimately register identical email addresses. Contrast `UNIQUE (email)`, `UNIQUE (tenant_id, email)`, and `UNIQUE (tenant_id, lower(email))` against this requirement.
+
+<ExerciseSolution hint="Check cross-tenant isolation and case normalization.">
+
+1. `UNIQUE (email)`: Incorrect. Prevents different tenants from registering the same email address, violating multi-tenant data isolation.
+2. `UNIQUE (tenant_id, email)`: Incomplete. Permits a single tenant to register both `User@example.com` and `user@example.com`, violating case-insensitivity.
+3. `UNIQUE (tenant_id, lower(email))`: Correct. Scopes uniqueness to the tenant and normalizes case uniformly, satisfying both isolation and case-insensitive identity invariants.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

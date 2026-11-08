@@ -4,7 +4,7 @@ Start with `AGENTS.md` and `BASELINE.md`, then read the packs below for every su
 
 | Affected work | Required pack | Add when applicable |
 | --- | --- | --- |
-| Course, module, lesson, manifest, assessment | `GENERAL.md`, `COURSE_STANDARD.md`, `COURSE_WORK.md` | `COURSE_PEDAGOGY.md` for authoring/audit; `COURSE_INTEGRITY.md` for content review; `COURSE_REPAIR.md` for repairs; `RESEARCH.md`, `UI.md`, or `PLANTUML.md` by surface |
+| Course, module, lesson, manifest, assessment | `GENERAL.md`, `COURSE_STANDARD.md`, `COURSE_STRUCTURE.md`, `COURSE_WORK.md` | `COURSE_PEDAGOGY.md` for authoring/audit; `COURSE_INTEGRITY.md` for content review; `COURSE_REPAIR.md` for repairs; `RESEARCH.md`, `UI.md`, or `PLANTUML.md` by surface |
 | Interactive course component | Course packs above | `COURSE_COMPONENTS.md`; `UI.md` for behavior, styling, or accessibility |
 | New facts, sources, explanations, or citations | `RESEARCH.md` | Course packs when the material belongs in a course |
 | UI, layout, styling, theme, interaction, accessibility | `UI.md` | `VALIDATION.md`; run visual capture when required by UI rules |

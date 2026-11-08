@@ -10,12 +10,16 @@ outcomes:
   - Decode encodings and trace an ABI-conforming sequence through registers, stack, memory order, and traps.
   - Separate ISA guarantees from implementation choices and construct a refinement test for an ISA extension.
 omissions:
-  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
+  - Dynamic binary translation and JIT compilation (Rosetta, QEMU TCG) between mismatched ISAs are omitted in favor of native execution.
+  - Hardware hypervisor extensions (nested stage-2 page tables, VM control blocks) are treated in advanced systems.
+  - Multistep microcode ROM sequencers are omitted to focus on hardwired RISC control logic.
 estimatedMinutes: 540
 assessment: Given an unfamiliar instruction encoding and memory-ordering rule, derive its architectural transition, trace a short program, and identify an implementation that violates the contract.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import PlantUML from '../../../components/PlantUML.astro';
@@ -23,6 +27,8 @@ import PlantUML from '../../../components/PlantUML.astro';
 An instruction-set architecture (ISA) is the stable contract presented by a processor to software. It specifies the programmer-visible state, instruction semantics, encodings, addressing rules, memory-access behavior, privilege boundaries, and exceptional events.
 
 A microarchitecture may execute instructions in one cycle, in a deep pipeline, out of order, or through translation into internal operations; as long as it preserves the ISA’s specified observations, it remains a valid implementation. This abstraction is what lets one binary run across generations of hardware and lets compilers target a machine without knowing its transistor-level organization.
+
+> **Remark (Scope boundary and microarchitectural refinement).** This lesson defines the functional ISA contract ($\sigma \to \sigma'$) that compilers target and hardware must refine; cycle-by-cycle datapath multiplexing, pipeline hazard forwarding, and out-of-order register renaming are microarchitectural realizations developed in subsequent datapath and pipeline lessons.
 
 The contract is narrower than “what the hardware happens to do.” Timing, cache size, branch-predictor state, and speculative execution are usually not architectural state, although they affect performance and can create side channels.
 
@@ -39,10 +45,34 @@ An instruction is a state transition. If architectural state before execution is
 **Worked example: load/store semantics.** A RISC-style load word `lw r1, 12(r2)` computes an effective address $EA=R[r2]+12$, checks alignment and access permission, reads four bytes according to the memory endianness, sign- or zero-extends the word as specified, writes it to `r1`, and advances the PC. A store computes the same kind of address but writes register data to memory and does not update a general-purpose destination. The assembler syntax is short; the architectural transition includes address arithmetic, width, alignment, permission, and exception behavior.
 
 <Quiz client:load title="Locate the abstraction"
-  question="What belongs to an ISA rather than a particular microarchitecture?"
-  options={["The number of stages used to execute each instruction", "Programmer-visible instruction semantics, encodings, registers, and exceptions", "The replacement policy used by one implementation's data cache", "The physical wire delay between decode and integer execution"]}
-  correctIndex={1}
-  explanation="An ISA specifies the contract software targets. Multiple implementations may realize the same semantics with different pipelines, caches, and internal structures."
+  question="Evaluate which elements belong strictly to the Instruction-Set Architecture (ISA) interface contract rather than a specific microarchitectural implementation:"
+  options={[
+    {
+      id: "claim-programmer-state",
+      text: "Programmer-visible register files, instruction encodings, memory semantics, and trap exception behaviors.",
+      isCorrect: true,
+      feedback: "Correct. The ISA defines the complete abstract machine state and behavior that compilers and software target."
+    },
+    {
+      id: "claim-effective-addressing",
+      text: "Formal addressing mode specifications, instruction byte widths, and architectural memory alignment contracts.",
+      isCorrect: true,
+      feedback: "Correct. Memory access addressing rules and structural alignment constraints are core ISA specifications."
+    },
+    {
+      id: "claim-pipeline-stages",
+      text: "The physical number of pipelined hardware stages configured to execute integer and branch operations.",
+      isCorrect: false,
+      feedback: "Incorrect. Pipeline depth is a microarchitectural design choice that varies across processor implementations."
+    },
+    {
+      id: "claim-cache-replacement",
+      text: "The specific set-associative replacement policy implemented inside the level-1 physical data cache.",
+      isCorrect: false,
+      feedback: "Incorrect. Cache hierarchies and replacement algorithms are transparent microarchitectural optimizations."
+    }
+  ]}
+  explanation="An ISA specifies the functional contract between software and hardware. Microarchitectures implement this specification using diverse pipeline depths, execution units, and cache designs."
 />
 
 ## RISC and CISC as design families
@@ -56,10 +86,34 @@ Instruction length presents a trade-off. Fixed-width encodings simplify fetch al
 <CaseStudy client:load
   title="Architectural state defines the instruction"
   scenario="Two implementations execute an ADD instruction differently internally. Both read the same operands, update the destination register, advance the PC, and raise identical exceptions."
-  question="What makes them implementations of the same ISA operation?"
-  options={["Their architectural state transitions and visible exceptions are identical", "Their internal pipelines use the same number of physical stages", "Their register files contain the same number of physical entries", "Their control units assert identical signals on every internal wire"]}
-  correctIndex={0}
-  explanation="An ISA specifies programmer-visible state and behavior. Microarchitectures may differ in pipelines, control, and physical resources while refining the same architectural transition."
+  question="Evaluate what establishes these two different processor designs as valid implementations of the same ISA operation:"
+  options={[
+    {
+      id: "claim-state-transition",
+      text: "Their externally observable architectural state transitions and precise exception side effects are mathematically identical.",
+      isCorrect: true,
+      feedback: "Correct. If two machines produce identical state transitions $\sigma \to \sigma'$ for every instruction, they implement the same ISA."
+    },
+    {
+      id: "claim-refinement-contract",
+      text: "Both microarchitectural execution paths refine the identical abstract state machine contract required by the specification.",
+      isCorrect: true,
+      feedback: "Correct. Microarchitectural refinement allows internal divergence as long as programmer-visible invariants hold."
+    },
+    {
+      id: "claim-stage-count",
+      text: "Both microarchitectures are required to implement identical pipeline stage counts and clock cycle latencies.",
+      isCorrect: false,
+      feedback: "Incorrect. Microarchitectures may use single-cycle, multi-cycle, in-order pipelined, or out-of-order execution engines."
+    },
+    {
+      id: "claim-internal-signals",
+      text: "The hardwired control units on both chips must assert identical binary control signals on every internal datapath wire.",
+      isCorrect: false,
+      feedback: "Incorrect. Internal control logic and datapath wiring are proprietary implementation details hidden beneath the ISA."
+    }
+  ]}
+  explanation="An ISA specifies programmer-visible state and functional behavior. Microarchitectures may differ radically in internal pipelines and resources while refining the identical architectural contract."
 />
 
 ## Encoding and decoding
@@ -106,11 +160,7 @@ S --> N : preserve other registers and memory
 
 **Transfer check.** Set `rs1=5`, `rs2=6`, `rd=5`, with initial `R[5]=0xffffffff` and `R[6]=2`. Determine the post-state and explain why destination/source aliasing does not change the operands.
 
-<ExerciseSolution title="Check the simultaneous state update">
-
-The mathematical sum is $2^{32}+1$, so `R[5]` becomes 1. `R[6]` and memory remain unchanged; PC advances by four bytes. Both operands came from the pre-state. Writing the result early and then rereading `R[5]` as an input would implement a different transition. No carry flag is updated because this hypothetical ISA has no flags.
-
-</ExerciseSolution>
+> **Remark (Simultaneous state update and operand isolation).** The mathematical sum is $2^{32}+1$, so `R[5]` becomes 1. `R[6]` and memory remain unchanged; PC advances by four bytes. Both operands came from the pre-state. Writing the result early and then rereading `R[5]` as an input would implement a different transition. No carry flag is updated because this hypothetical ISA has no flags.
 
 ## Addressing modes and memory consistency
 
@@ -207,88 +257,104 @@ Consider executing a 32-bit load `lw x5, 0(x1)` where `x1 = 0x0FFF_FFFE`.
    * **ISA Contract Guarantee**: This is why strict RISC ISAs specify that misaligned accesses either raise an Address-Misaligned Trap or are explicitly non-atomic across cache boundaries.
 
 
-## Independent practice
+<ExerciseSet>
 
-### Exercise 1: Signed load state transition
+<Exercise id="ex-isa-signed-load-transition" type="construct" level="application" title="Signed Load Architectural State Transition Specification">
 
-Specify the complete architectural transition for a signed load, including address calculation, alignment, permission, byte order, sign extension, PC update, and fault behavior.
+Specify the complete formal architectural state transition for a signed load instruction (e.g. `lw rd, offset(rs1)`), covering effective address arithmetic, privilege and alignment validation, byte endianness, sign extension into destination register `rd`, and precise exception handling.
 
 <ExerciseSolution hint="Trace effective address generation, alignment verification, memory read, and sign extension into destination.">
 
-Compute $EA$, check privilege and alignment, translate or fault, read the specified number of bytes in the specified order, sign-extend to the register width, commit the destination, and update PC. On a fault, the destination and later architectural effects must not commit, and the handler must receive a restartable PC and cause.
+Compute effective address $EA = R[rs1] + \text{sign\_extend}(offset)$. Verify user privilege level and that $EA \pmod 4 = 0$ (for 32-bit aligned accesses). If misaligned or access-violating, suppress destination update and trigger an Address-Misaligned or Load-Access-Fault trap saving faulting $PC$ in exception state. If valid, read 4 bytes starting at $EA$ according to machine endianness, sign-extend the 32-bit word to register width, write to $R[rd]$ (if $rd \ne x0$), and advance $PC \gets PC + 4$.
 
 </ExerciseSolution>
 
-### Exercise 2: Fixed-width 32-bit instruction encoding
+</Exercise>
 
-Design a 32-bit fixed-width encoding for an ISA with 32 general-purpose registers that supports: (a) 16 three-register (R-type) arithmetic/logic operations, (b) 8 two-register (I-type) operations with a 12-bit signed immediate, and (c) 8 two-register (B-type) word-aligned conditional branches with a 12-bit signed displacement. Account for every bit in all three formats and state what immediate/displacement range cannot fit.
+<Exercise id="ex-isa-fixed-width-encoding" type="construct" level="application" title="Fixed-Width 32-Bit Instruction Encoding Layout">
+
+Design a 32-bit fixed-width encoding scheme supporting: (1) 16 three-register R-type operations; (2) 8 two-register I-type operations with a 12-bit signed immediate; and (3) 8 two-register B-type word-aligned conditional branches with a 12-bit signed displacement. Allocate explicit bitfields for opcode, registers, and immediates.
 
 <ExerciseSolution hint="Allocate explicit bitfields for opcode, destination register, source registers, and immediate constants.">
 
-Three 5-bit register fields consume 15 bits, leaving 17 bits for opcode/function/immediate in a 32-bit word. A 12-bit immediate format can use five opcode bits and preserve room for mode bits; a branch displacement must additionally state alignment and PC base. There is no single correct allocation without an instruction inventory, but every allocation must account for every bit.
+Use a 7-bit primary opcode field `inst[6:0]` to distinguish instruction classes. For R-type: `rd[11:7]` (5 bits), `funct3[14:12]` (3 bits), `rs1[19:15]` (5 bits), `rs2[24:20]` (5 bits), `funct7[31:25]` (7 bits). For I-type: `rd[11:7]`, `funct3[14:12]`, `rs1[19:15]`, `imm[31:20]` (12 bits signed $[-2048, 2047]$). For B-type: `funct3[14:12]`, `rs1[19:15]`, `rs2[24:20]`, with displacement bits split across `inst[31]`, `inst[7]`, `inst[30:25]`, and `inst[11:8]` to encode a $\pm 4\text{ KB}$ word-aligned branch offset.
 
 </ExerciseSolution>
 
-### Exercise 3: Loop invariant inductive proof in assembly
+</Exercise>
 
-Prove the array-sum invariant for the assembly loop described above. Include the empty-array case and a length large enough to overflow a 32-bit accumulator.
+<Exercise id="ex-isa-loop-invariant-proof" type="prove" level="synthesis" title="Assembly Loop Invariant Inductive Proof">
+
+Prove the partial correctness of an assembly array-sum loop using mathematical induction over loop iterations $k$, demonstrating that the accumulator satisfies $\text{acc} = \sum_{i=0}^{k-1} A[i]$ at the loop header for arrays up to length $N$.
 
 <ExerciseSolution hint="Induct on array index $k$, showing that the accumulator equals $\sum_{i=0}^{k-1} A[i]$ at the loop header, and discuss modular integer overflow.">
 
-Initially $k=0$, the accumulator is the empty sum, and the pointer is the array base. One iteration adds element $k$, advances the pointer, and makes the invariant true for $k+1$. At termination, $k=n$, so the accumulator is the sum. If the accumulator wraps, the proof is valid only for modular arithmetic; a mathematical integer-sum specification requires widening or overflow detection.
+Base case ($k=0$): Before entering the loop, the accumulator is cleared to 0 and the base pointer references $A[0]$; the empty sum is 0, satisfying the invariant.
+Inductive step: Assume $\text{acc}_k = \sum_{i=0}^{k-1} A[i]$ at the start of iteration $k$. The loop body executes `lw t0, 0(ptr)`, `add acc, acc, t0`, and `addi ptr, ptr, 4`. At the end of the iteration, $\text{acc}_{k+1} = \text{acc}_k + A[k] = \sum_{i=0}^k A[i]$. When the branch condition $k = N$ terminates the loop, the accumulator contains $\sum_{i=0}^{N-1} A[i]$ under two's-complement modular arithmetic $\pmod{2^{32}}$.
 
 </ExerciseSolution>
 
-### Exercise 4: Memory consistency and litmus test synchronization
+</Exercise>
 
-Construct a short multiprocessor program whose result differs under sequential consistency and a weak ordering model. State the fence or atomic operation needed to establish the intended message-passing order.
+<Exercise id="ex-isa-memory-consistency-litmus" type="verify" level="application" title="Memory Consistency and Litmus Test Synchronization">
+
+In a multiprocessor system, thread 1 executes `data = 42; flag = 1;` while thread 2 executes `while (flag == 0); r1 = data;`. Verify why a weak memory model allows thread 2 to observe $r_1 = 0$, and insert the necessary ISA memory barrier instructions to guarantee sequentially consistent message passing.
 
 <ExerciseSolution hint="Write a classic 2-thread message passing pattern (data write, flag set vs flag check, data read) and insert memory fences or acquire/release operations.">
 
-A producer stores data then sets a flag; a consumer reads the flag then data. Weak ordering may expose the flag before the data unless a release store and acquire load, or an appropriate fence, orders the operations. The exact instruction depends on the ISA memory model.
+Under weak memory architectures (e.g. RISC-V or ARM), the hardware memory controller or out-of-order execution engine may reorder independent stores ($W(data)$ and $W(flag)$) or independent loads ($R(flag)$ and $R(data)$). If $W(flag)$ reaches cache before $W(data)$, thread 2 sees $flag = 1$ but reads stale $data = 0$. Inserting a release store (`s-fence` or `fence w,w`) on thread 1 and an acquire load (`l-fence` or `fence r,r`) on thread 2 forces visibility order.
 
 </ExerciseSolution>
 
-### Exercise 5: Precise exception constraints on speculative stores
+</Exercise>
 
-Explain why precise exceptions constrain out-of-order retirement. Give an example in which a younger store must not become architecturally visible before an older instruction faults.
+<Exercise id="ex-isa-precise-exceptions-speculative-stores" type="describe" level="recall" title="Precise Exception Constraints on Speculative Store Commits">
+
+Explain why an out-of-order processor cannot write speculative store results directly to the L1 data cache before an older floating-point divide instruction has completed without faulting.
 
 <ExerciseSolution hint="Explain how committing a younger store to cache or memory before an older instruction's fault status is determined violates precise state.">
 
-If an older load faults while a younger store has already changed memory, the handler observes a state that could not arise from sequential execution at the fault point. A reorder buffer or equivalent mechanism delays younger stores until all older instructions are known to retire successfully.
+Precise architectural exceptions require that when an exception occurs at instruction $I_k$, all instructions prior to $I_k$ have completely retired their state, and no instruction at or subsequent to $I_k$ has modified architectural registers or memory. If a younger store modifies cache before an older divide raises a divide-by-zero trap, persistent memory reflects side effects of instructions that should have been cancelled, destroying restartability and violating the ISA contract.
 
 </ExerciseSolution>
 
-### Exercise 6: Procedure calling convention and stack frame ABI design
+</Exercise>
 
-Design an ABI for a tiny language with integer arguments, a struct return value, recursion, and 16-byte stack alignment. State preservation rules and draw one stack frame.
+<Exercise id="ex-isa-abi-frame-design" type="construct" level="application" title="Procedure Calling Convention and ABI Stack Frame Design">
+
+Specify an ABI calling convention for an 8-register processor architecture that must support recursive function calls and 16-byte stack alignment. Partition registers and draw the resulting stack frame layout.
 
 <ExerciseSolution hint="Partition registers into argument, temporary (caller-saved), and preserved (callee-saved) sets, and allocate stack slots for spilled return addresses and frames.">
 
-A sound ABI assigns the first arguments to registers, returns small integers in a result register, places larger struct returns in caller-provided storage, saves return address and callee-saved registers in a frame, and rounds the stack pointer to 16 bytes. Recursion works because every invocation owns a distinct frame.
+Register allocation:
+- `r0`: Constant zero.
+- `r1`: Return address `ra` (caller-saved by leaf, callee-saved across calls).
+- `r2`: Stack pointer `sp`.
+- `r3, r4`: Arguments and return values `a0, a1` (caller-saved).
+- `r5`: Temporary `t0` (caller-saved).
+- `r6, r7`: Saved registers `s0, s1` (callee-saved).
+Stack frame: Prologue decrements `sp` by 16 bytes, storing `ra` at `8(sp)` and `s0` at `0(sp)`. Epilogue restores both and increments `sp` by 16 before `ret`.
 
 </ExerciseSolution>
 
-### Exercise 7: Differential testing of 12-bit immediate sign extension
+</Exercise>
 
-Create a differential-test suite for an instruction that sign-extends a 12-bit immediate. Include ordinary values, boundaries, negative values, and a random property.
+<Exercise id="ex-isa-immediate-differential-testing" type="generalise" level="transfer" title="Differential Testing of 12-Bit Immediate Sign Extension">
+
+Design a property-based differential test suite to verify that a hardware decoder and software emulator decode 12-bit signed immediates identically. Specify the boundary vectors and mathematical invariant property.
 
 <ExerciseSolution hint="Construct test vectors covering positive maximum ($+2047$), negative minimum ($-2048$), zero, $-1$, and property-based mathematical equivalence.">
 
-Test immediate 0, 1, -1, 2047, -2048, bit patterns with only the sign bit, and random 12-bit values. The property is that decoding bits $b$ equals $b$ for nonnegative values and $b-4096$ when the top bit is set, after extension to the destination width.
+Test vectors:
+- Boundary values: $0$, $+1$, $-1$ (`0xFFF`), $+2047$ (`0x7FF`, maximum positive), $-2048$ (`0x800`, minimum negative).
+- Bit-pattern isolates: single bit set at each position $0 \dots 11$.
+Property invariant: For all $b \in [0, 4095]$, if $b < 2048$, decoded value must equal $b$; if $b \ge 2048$, decoded value must equal $b - 4096$. Assert that hardware RTL simulation and software instruction emulator yield identical extended 64-bit integers across all 4096 inputs.
 
 </ExerciseSolution>
 
+</Exercise>
 
-
-## Deliberate Omissions & Scope Boundaries
-
-> **Remark.** This lesson defines the functional ISA contract ($\sigma \to \sigma'$) that compilers target and hardware must refine; cycle-by-cycle datapath multiplexing, pipeline hazard forwarding, and out-of-order register renaming are microarchitectural realizations developed in the subsequent datapath and pipeline lessons.
-
-* **Binary Translation & Dynamic JIT Compilation**: Software-managed dynamic binary translation (such as Rosetta or QEMU TCG) between mismatched ISAs is omitted in favor of native bare-metal execution.
-* **Hardware Hypervisor Extensions**: Virtual machine control blocks, nested page table walks (stage-2 translation), and hypervisor trap delegation are treated in advanced operating systems.
-* **Microcode ROM State Machines**: Legacy CISC multistep microcode sequencers are omitted to maintain focus on hardwired RISC control logic.
-
+</ExerciseSet>
 
 ## References & Further Reading
 

@@ -19,6 +19,8 @@ estimatedMinutes: 330
 assessment: Design and defend a three-process POSIX pipeline with redirection, error reporting, cancellation, and child reaping; submit descriptor/process traces that prove EOF and show a safe asynchronous notification path.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
@@ -114,16 +116,15 @@ The inherited descriptors refer to one open file description. Parent consumes by
 </ExerciseSolution>
 
 <Quiz client:load
-  title="One description, one offset"
-  question="A parent opens a file, forks, and then both processes read through the inherited descriptor. Which statement about the two reads is correct?"
+  title="File Descriptor and Description Sharing Matrix"
+  question="A parent opens a regular file, forks a child, and both read via the inherited descriptor. Evaluate each statement regarding file descriptor sharing:"
   options={[
-    "Each process holds its own open file description, so both reads begin at offset zero",
-    "Both descriptors refer to one open file description, so the reads share one advancing offset",
-    "The child inherits a private copy of the file, so its reads cannot affect the parent's offset",
-    "The kernel duplicates the open file description only after the child calls open"
+    { id: "opt-ipc-desc-shared", text: "Both child and parent descriptors refer to the same open file description, sharing one advancing file offset.", isCorrect: true },
+    { id: "opt-ipc-reopen-offset", text: "If the child independently calls open() on the pathname, it obtains a distinct file description and private offset.", isCorrect: true },
+    { id: "opt-ipc-fork-copies-file", text: "Executing fork() duplicates the underlying file content in storage, giving the child an isolated copy of data.", isCorrect: false },
+    { id: "opt-ipc-offset-in-fd", text: "The current read/write byte offset is stored directly inside the per-process integer file descriptor table index.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="fork() creates child descriptors that refer to the corresponding same open file descriptions, and the offset lives in the description rather than the descriptor. Sequential reads therefore advance a single shared offset. A child that calls open independently receives a new description with its own initial offset, which is a different situation."
+  explanation="File offsets reside in the system-wide open file description object, which child descriptors inherit by reference on fork(). Reopening via open() constructs a new description with an independent offset."
 />
 
 ## Worked trace: `sort < raw | uniq -c > counts`
@@ -299,38 +300,92 @@ Block `SIGCHLD` in the constructing thread before creating the child, install th
 
 POSIX specifies that a child of a multi-threaded `fork()` contains only the calling thread but inherits an address-space image that may contain mutexes held by vanished threads. Until a successful `exec`, the child is sharply constrained; calling code that acquires such a lock can deadlock. The portable construction should use only permitted async-signal-safe operations in that interval, or use `posix_spawn` under a separately studied contract.
 
-### Synthesis — make failure paths own their resources
-
-Design a launcher for `decrypt | parse | index` with one diagnostic pipe per child for pre-`exec` failures. Requirements:
-
-- input/output redirection;
-- no descriptor leaks into executed programs;
-- concurrent startup before waiting;
-- cancellation of remaining stages after a chosen failure policy;
-- `SIGCHLD` notification without event-count assumptions;
-- exact attribution of `fork`, redirection, `exec`, signal, and exit failures.
-
-Your artifact must include a process graph, descriptor table at four cuts, close matrix, wait-state table, and two injected failures: second `fork` fails; middle-stage `exec` fails.
-
-<ExerciseSolution title="Reveal diagnostic design constraints">
-
-Create all required pipes with close-on-exec atomically where the platform interface permits. Block `SIGCHLD` before construction. On each successful fork, record PID and stage before unblocking signals. A child closes diagnostic-pipe read ends, performs only the minimal descriptor transformations, and writes an `errno` record to its diagnostic pipe if redirection or `exec` fails, then calls `_exit`; successful `exec` closes that pipe so the parent observes EOF. Parent closes every data-pipe end it does not use immediately after the corresponding forks. If the second fork fails, close all data ends, apply the cancellation policy to the first child, and reap it. If the middle `exec` fails, its diagnostic record distinguishes construction from program exit; close propagation and cancellation must let neighbors leave blocked reads/writes. Reap in a loop and map each PID to a stage. A submission that sends `SIGKILL` without reaping, or waits before all consumers exist, fails lifecycle correctness.
-
-</ExerciseSolution>
-
-**Rubric (20 points).** Process/image semantics 3; descriptor/open-description graph 4; complete close/EOF proof 4; failure ownership 3; signal safety and coalescing reasoning 3; PID/status attribution 2; explicit portability boundary 1.
-
-## Connections and deliberate omissions
-
-System-call validation turns descriptor integers and user pointers into kernel objects. Process/context machinery explains where `fork` constructs a new continuation and where `exec` replaces only the image. Scheduling determines when blocked pipe readers and waiting parents run; it does not define EOF or child status. Synchronization is required to implement pipes, process tables, and signal state, but application code must already respect their public predicates and lifetimes.
-
-The implementation spine is xv6 rev5, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`: its `proc.c`, `file.c`, and `pipe.c` provide compact process, shared-file-reference, pipe-lifetime, and wait/wakeup contrasts. They are not the authority for the POSIX API above—rev5 does not implement `sigaction`, POSIX thread semantics, or the complete `waitpid` interface. Keeping that boundary explicit prevents a source trace from being mistaken for a portability guarantee.
-
-{/* Source tracking: The xv6 contrast was checked against the rev5 hash in `kernel/proc.c`, `kernel/file.c`, and `kernel/pipe.c`; portable interface claims remain sourced to POSIX.1-2024. */}
-
 > **Remark.** Each omitted IPC or process-control interface changes at least one graph—authority, descriptors, lifecycle, or asynchronous delivery—and therefore needs a new ownership trace.
 
-The lesson omits process groups, sessions, controlling terminals, shell grammar, job control, daemonization, shared memory, semaphores, sockets, message queues, `posix_spawn`, Linux `clone`/`pidfd`/`signalfd`, and realtime-signal queueing. These are not “more IPC options” to memorize; each changes an authority, lifetime, or race contract and needs a dedicated construction trace.
+<ExerciseSet>
+
+<Exercise id="ex-ipc-fd-vs-description" type="describe" level="application" title="Distinguishing Integer File Descriptors from Open File Descriptions">
+
+Explain the architectural distinction between a per-process integer file descriptor, a system-wide open file description (`struct file`), and an underlying filesystem inode. Trace how file offset updates are shared across processes after `fork()`.
+
+<ExerciseSolution hint="Trace the three-tier pointer chain from fd table index to struct file to struct inode.">
+
+An integer file descriptor is merely an index into the per-process file descriptor table (`proc->ofile[fd]`). That entry points to a system-wide open file description (`struct file`), which holds the current read/write byte offset, access mode flags (`O_RDONLY`, `O_WRONLY`), and a reference count. The open file description in turn points to an `inode` representing the physical file on storage. When a process calls `fork()`, the child inherits a copy of the parent's descriptor table; corresponding entries point to the *same* `struct file` instances with incremented reference counts. When either parent or child reads or writes, it updates the offset stored inside the shared `struct file`, so sequential operations naturally interleave across the single advancing stream.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ipc-pipeline-eof-propagation" type="construct" level="application" title="Descriptor Closing Invariants for Pipeline EOF Propagation">
+
+In a Unix pipeline `cmd1 | cmd2`, the shell creates a pipe `int p[2]`, forks both children, duplicates descriptors, and executes both commands. Explain why the shell itself must close `p[1]` after forking both children, and identify the failure mode if it remains open in the shell.
+
+<ExerciseSolution hint="Recall that read() on a pipe returns EOF (0 bytes) only when the write reference count reaches zero.">
+
+A pipe read end (`p[0]`) returns end-of-file (`read() == 0`) if and only if the pipe buffer is empty AND the kernel reference count for the write end of the pipe reaches zero. If the parent shell fails to close its inherited write descriptor `p[1]`, the write reference count remains at least 1 even after `cmd1` completes and closes its write end. Consequently, `cmd2` blocks indefinitely waiting for further input on `p[0]`, resulting in a pipeline hang / deadlock.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ipc-pipe-sigpipe-deadlock" type="verify" level="transfer" title="Bidirectional Pipe Deadlocks and SIGPIPE Generation">
+
+Two processes $A$ and $B$ communicate over two unidirectional pipes $P_1$ ($A \to B$) and $P_2$ ($B \to A$). Construct a deadlock schedule where both processes block, and explain what happens if process $B$ crashes while process $A$ attempts to write to $P_1$.
+
+<ExerciseSolution hint="Consider finite pipe buffer capacities and write operations to broken pipes without readers.">
+
+Deadlock occurs if both processes fill their outgoing pipe buffers without draining their incoming pipes. For example, $A$ writes 64 KiB to $P_1$ (filling the kernel buffer) and then blocks attempting to write more before reading from $P_2$. Concurrently, $B$ writes 64 KiB to $P_2$ and blocks attempting to write before reading from $P_1$. Both processes sleep waiting for write buffer space that will never be drained.
+If process $B$ crashes, all its descriptors (including the read end of $P_1$) are closed by the kernel. When process $A$ attempts to write to $P_1$ with zero active readers, the kernel generates a `SIGPIPE` signal to $A$ and sets `errno = EPIPE`. If `SIGPIPE` is ignored, the `write()` returns -1 with `EPIPE`.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ipc-signal-coalescing-sigchld" type="formalise" level="transfer" title="Standard Signal Coalescing and Non-Blocking Waitpid Loops">
+
+A parent process spawns 5 child processes. All 5 children exit almost simultaneously. Explain why a signal handler that executes `wait(NULL)` exactly once per `SIGCHLD` delivery can orphan child processes, and formulate the correct reaping loop.
+
+<ExerciseSolution hint="Standard POSIX signals represent pending bits that coalesce multiple arrivals into a single flag.">
+
+Standard POSIX signals (signals 1–31) are represented in the process struct as a single bitmask of pending signals without a FIFO queue. If multiple children exit while `SIGCHLD` is blocked or pending, the bit is set once; additional terminations are coalesced and lost. If the handler executes `wait(NULL)` only once, only the first child is reaped, leaving the remaining 4 children as permanent zombies until process termination. The correct handler implementation must reap in a non-blocking loop:
+```c
+void sigchld_handler(int sig) {
+    int saved_errno = errno;
+    while (waitpid(-1, NULL, WNOHANG) > 0) {}
+    errno = saved_errno;
+}
+```
+This reaps all exited children until `waitpid()` returns 0 (children still running) or -1 with `ECHILD` (no children left).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ipc-multithreaded-fork-deadlock" type="describe" level="synthesis" title="Async-Signal-Safety Constraints in Multi-Threaded Fork">
+
+POSIX specifies that after `fork()` in a multi-threaded process, the child process contains only the calling thread, but inherits all user-space heap memory and lock states. Explain why calling `malloc()` or `printf()` in the child before `exec()` can cause an unrecoverable deadlock.
+
+<ExerciseSolution hint="Consider a background thread that was inside a heap allocator mutex at the instant fork() was called.">
+
+In a multi-threaded process, standard library functions like `malloc()` and `printf()` acquire internal mutexes protecting the heap allocator free lists and stdio output buffers. If another thread in the parent process happened to hold the allocator lock at the precise instant `fork()` executed, the child process inherits that memory image with the lock marked held. Because other parent threads do not exist in the child, no thread will ever release that lock. If the child calls `malloc()`, it attempts to acquire the held lock and deadlocks permanently. Between `fork()` and `exec()`, the child must only execute async-signal-safe system calls (such as `close()`, `dup2()`, and `execve()`).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ipc-pipeline-launcher-faults" type="construct" level="synthesis" title="Multi-Stage Pipeline Launcher with Diagnostic Failure Handling">
+
+Design a robust Unix pipeline launcher for `cmd1 | cmd2 | cmd3` that detects and cleanly recovers from pre-`exec` redirection errors in child processes without leaking open file descriptors or leaving zombie processes.
+
+<ExerciseSolution hint="Use unidirectional diagnostic pipes with O_CLOEXEC to communicate exec errors back to the parent.">
+
+1. Create inter-process data pipes `p1[2]` and `p2[2]` with `pipe2(..., O_CLOEXEC)`.
+2. Create an auxiliary diagnostic pipe `diag[2]` with `O_CLOEXEC`.
+3. In each child:
+   - Use `dup2()` to bind `p[0]` to `STDIN_FILENO` and `p[1]` to `STDOUT_FILENO`.
+   - Call `execvp()`. If `execvp()` returns, an error occurred. The child writes the `errno` integer to `diag[1]` and immediately invokes `_exit(127)`.
+4. If `execvp()` succeeds, the kernel automatically closes `diag[1]` due to `O_CLOEXEC`, delivering EOF to the parent on `diag[0]`.
+5. The parent closes all data pipe write ends and reads from `diag[0]`. If it reads a non-zero integer, a child failed pre-`exec`; the parent terminates surviving children via `kill(SIGTERM)` and loops over `waitpid()` to reap all children cleanly.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

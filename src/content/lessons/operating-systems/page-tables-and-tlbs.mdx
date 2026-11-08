@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 360
 assessment: For an unseen Sv39 page-table snapshot and multicore execution trace, decode every index and PTE, classify the access, calculate translation cost, and produce an ordered revocation protocol whose safety argument forbids frame reuse before all stale translations are gone.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -79,16 +81,15 @@ Leaf entries may appear above level zero to create superpages. A level-1 leaf ma
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Superpage alignment and the architectural contract"
-  question="A supervisor kernel constructs a level-1 PTE in Sv39 intended to map a 2 MiB superpage. The entry has V=1, R=1, W=1, X=0, U=0, but PPN[0] is set to 3. What happens when supervisor software executes a store to an address translated by this PTE?"
+  title="Sv39 page tables and TLB management"
+  question="Evaluate each statement regarding RISC-V Sv39 radix page tables and TLB coherence:"
   options={[
-    "The hardware MMU raises a page-fault exception because 2 MiB superpages require PPN[0] = 0 for physical alignment.",
-    "The hardware MMU masks off PPN[0] to zero and silently completes the store to the aligned 2 MiB boundary.",
-    "The store succeeds at the unaligned physical address because modern RISC-V MMUs support unaligned superpages.",
-    "The entry is treated as a pointer to a level-0 table because PPN[0] != 0, ignoring the R and W permissions."
+    { id: "opt-pt-superpage-align", text: "A level-1 leaf PTE mapping a 2 MiB superpage triggers a page fault if its low physical page bits PPN[0] are non-zero.", isCorrect: true },
+    { id: "opt-pt-tlb-shootdown", text: "Multi-core systems must execute an inter-processor shootdown before freeing a physical frame to eliminate stale translations.", isCorrect: true },
+    { id: "opt-pt-valid-leaf", text: "Every page table entry with its valid bit set to one represents a leaf mapping rather than a pointer to a lower table.", isCorrect: false },
+    { id: "opt-pt-pte-immediate", text: "Writing a new permission into a page table in physical memory instantly revokes access on remote executing processor cores.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="In RISC-V Sv39, a superpage translation occurs when R=1 or X=1 at level 1 (mapping 2 MiB) or level 2 (mapping 1 GiB). For a 2 MiB level-1 leaf, the low 9 bits of the physical page number (PPN[0]) must be zero to ensure 2 MiB physical alignment. The RISC-V privileged architecture explicitly specifies that if any reserved low PPN bit is non-zero, the MMU must raise a page-fault exception rather than masking bits or performing an unaligned access."
+  explanation="In Sv39, superpages must be naturally aligned (PPN[0] must be zero for 2 MiB leaves). Stale translations cached in remote TLBs must be explicitly invalidated before physical frame reuse. Valid entries with R=W=X=0 are table pointers rather than leaf translations, and memory updates do not automatically invalidate cached translations on remote cores."
 />
 
 ## Execute a complete page-table walk
@@ -275,46 +276,135 @@ Track an address-space CPU mask that conservatively includes every hart that may
 | “Updating the PTE revokes access.” | remote hart retains writable TLB entry | authoritative table versus cached authority |
 | “More TLB entries give exactly proportional reach.” | set conflicts and mixed mappings | capacity bound versus effective coverage |
 
-## Synthesis assessment: walk, cost, and revocation
+> **Remark.** Baseline Sv39 radix trees and ASID-tagged TLBs provide the concrete hardware mechanism for process isolation; when a leaf PTE is marked invalid ($V=0$) or lacks write permission ($W=0$) for a legal region, control transfers to the trap handler studied in Page Faults, Copy-on-Write, and Memory-Mapped Files.
 
-Address space A has ASID 12 and an Sv39 `satp` root at `0x90000000`. A user load uses virtual address `0x0000000123456789`, with the same indices derived earlier. The root and level-1 PTEs point to `0x90100000` and `0x90200000`. The level-0 entry is `V=1, R=1, W=1, X=0, U=1`, PPN `0x34567`. Hart 3 has a TLB entry for this mapping tagged ASID 12.
+<ExerciseSet>
 
-Answer all parts:
+<Exercise id="ex-pt-sv39-walk-indices" type="verify" level="application" title="Extracting Sv39 Three-Level Virtual Page Number Indices">
 
-1. List the three PTE physical addresses and final data physical address.
-2. Classify a user load, store, and instruction fetch.
-3. Compute serial effective access time for `h=0.995`, `t_T=1.5 ns`, `t_M=70 ns`, and a three-level walk.
-4. The kernel unmaps A's VPN and plans to give PFN `0x34567` to another security domain as private memory. Produce the minimum safe event order for harts 0 and 3.
-5. Explain why a local `SFENCE.VMA` on hart 0 followed by immediate frame reuse fails even if hart 3 is currently in kernel mode.
+Given a 64-bit canonical virtual address `0x0000000123456789` in RISC-V Sv39:
+1. Verify whether the address is canonical.
+2. Extract the 12-bit intra-page byte offset.
+3. Extract the 9-bit indices for VPN[2] (root level), VPN[1] (middle level), and VPN[0] (leaf level) in hexadecimal and decimal.
 
-<ExerciseSolution title="Reveal reference solution and rubric">
+<ExerciseSolution hint="Sv39 requires bits 63:39 to equal bit 38, followed by three 9-bit VPN fields and a 12-bit offset.">
 
-1. PTE addresses are `0x90000020`, `0x901008D0`, and `0x902002B0`. The physical data address is `0x34567789`.
-2. Load and store are authorized; instruction fetch faults because `X=0`. `U=1` permits user privilege but does not replace operation permission.
-3. Hit path: `1.5 + 70 = 71.5 ns`. Miss path: `1.5 + 4 × 70 = 281.5 ns`. Therefore `0.995(71.5) + 0.005(281.5) = 72.55 ns`.
-4. Prevent A from resuming through the old address-space state; invalidate A's PTE for the VPN; perform required store ordering; request an ASID/range invalidation on hart 3; execute local invalidation on hart 0; make hart 3 execute its local invalidation and acknowledge; wait for acknowledgement; verify that no other mapping grants access and that ownership/lifetime references permit transfer; only then expose PFN `0x34567` as private memory in the new domain. A production protocol may batch or reorder independent local/remote requests, but the happens-before relation from PTE invalidation through every relevant translation invalidation and final alias/lifetime check to reuse must hold.
-5. Kernel mode does not prove hart 3's user TLB entry vanished. It may survive until A resumes. A stale translation is dangerous because the frame now has a different owner.
-
-Rubric, 24 points:
-
-- 6 points: exact index arithmetic and addresses;
-- 4 points: operation-specific classifications;
-- 4 points: cost equation, paths, and numeric result with assumptions;
-- 7 points: ordered multicore revocation ending before frame reuse;
-- 3 points: stale authority explained independently of current privilege mode.
-
-Treating the TLB as a data cache without permissions caps the score at 12 points because that model cannot justify revocation safety.
+1. **Canonical check:**
+   Bit 38 is the most significant bit of VPN[2]. For `0x0000000123456789`, bit 38 is 0. Bits 63:39 are all 0, matching bit 38. Hence, the address is canonical.
+2. **Page offset:**
+   The lowest 12 bits (bits 11:0) are `0x789` (decimal 1929).
+3. **VPN decomposition:**
+   Shift right by 12 bits to discard the offset: `0x0000000123456`.
+   - $\mathrm{VPN}[0] = \text{bits } 20:12 = \mathtt{0x123456} \ \& \ \mathtt{0x1FF} = \mathtt{0x056}$ (decimal 86).
+   - $\mathrm{VPN}[1] = \text{bits } 29:21 = (\mathtt{0x123456} \gg 9) \ \& \ \mathtt{0x1FF} = \mathtt{0x11A}$ (decimal 282).
+   - $\mathrm{VPN}[2] = \text{bits } 38:30 = (\mathtt{0x123456} \gg 18) \ \& \ \mathtt{0x1FF} = \mathtt{0x004}$ (decimal 4).
 
 </ExerciseSolution>
+</Exercise>
 
-## Deliberate boundary and source trail
+<Exercise id="ex-pt-leaf-vs-pointer" type="verify" level="application" title="Distinguishing Leaf Translations from Intermediate Radix Pointers">
 
-> **Remark.** Baseline Sv39 radix trees and ASID-tagged TLBs provide the concrete hardware mechanism for process isolation; when a leaf PTE is marked invalid (`V=0`) or lacks write permission (`W=0`) for a legal region, control transfers to the trap handler studied in Page Faults, Copy-on-Write, and Memory-Mapped Files.
+An operating system kernel traverses an Sv39 page table. At level 1, the MMU encounters a PTE with bit pattern `0x0000000080000A0B`.
+1. Decode the flag bits $V, R, W, X, U$.
+2. Determine whether this PTE is an invalid entry, a pointer to a level-0 page table, or a superpage leaf translation.
+3. If it is a leaf, state the page size mapped and verify if the physical alignment requirement is satisfied.
 
-The cost model excludes caches, page-walk caches, overlap, speculative execution, and page faults. The architectural analysis uses baseline Sv39 rather than Sv48/Sv57, hypervisor two-stage translation, or extension-specific A/D behavior. These omissions prevent a tractable walk from being misreported as a universal performance model.
+<ExerciseSolution hint="Inspect bits 0 (V), 1 (R), 2 (W), and 3 (X). For a leaf at level 1, PPN[0] must be zero.">
 
-{/* Source tracking: The xv6 comparison and root-page-table organization were checked against xv6-riscv rev5 Chapters 3 and 4 and kernel/vm.c at commit 7d7adbb. */}
-{/* Source tracking: Linux's requirement that page-table changes be followed by architecture-appropriate TLB flushing was checked against the kernel Cache and TLB Flushing documentation. */}
+1. **Flag decoding:**
+   The lowest byte is `0x0B` ($00001011_2$).
+   - Bit 0 ($V$) = 1 (valid).
+   - Bit 1 ($R$) = 1 (readable).
+   - Bit 2 ($W$) = 0 (not writable).
+   - Bit 3 ($X$) = 1 (executable).
+   - Bit 4 ($U$) = 0 (supervisor only).
+2. **Classification:**
+   Since $V=1$ and at least one of $R, W, X$ is set ($R=1, X=1$), this PTE is a leaf translation, not a next-level pointer (which would require $R=W=X=0$).
+3. **Superpage alignment:**
+   At level 1, a leaf maps a 2 MiB superpage ($2^9 \times 4\text{ KiB}$).
+   The physical page number occupies bits 53:10.
+   Shift right by 10 bits: $\mathtt{0x0000000080000A0B} \gg 10 = \mathtt{0x200002}$.
+   The lowest 9 bits of PPN ($\mathrm{PPN}[0]$) are $\mathtt{0x200002} \ \& \ \mathtt{0x1FF} = \mathtt{0x002} \ne 0$.
+   Because $\mathrm{PPN}[0] \ne 0$, the superpage is misaligned. Hardware will raise a page-fault exception on access rather than translating.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-pt-amat-tlb-cost" type="construct" level="application" title="Calculating Effective Memory Access Time with Multi-Level Walks">
+
+A system features a single-level TLB with hit access time $t_{\text{TLB}} = 1.2\text{ ns}$ and main memory access time $t_{\text{mem}} = 60\text{ ns}$. Address translation requires a 4-level page table walk in hardware on a TLB miss.
+1. Formulate the equation for Effective Memory Access Time ($\text{EMAT}$) given TLB hit rate $h$.
+2. Calculate $\text{EMAT}$ for $h = 0.98$.
+3. Calculate the minimum TLB hit rate required to keep translation overhead within 10% of bare memory access time ($66\text{ ns}$).
+
+<ExerciseSolution hint="On a TLB hit, time is t_TLB + t_mem. On a miss, time is t_TLB + 4 * t_mem + t_mem.">
+
+1. **EMAT formulation:**
+   - TLB hit: $T_{\text{hit}} = t_{\text{TLB}} + t_{\text{mem}}$.
+   - TLB miss (4 memory accesses for the walk plus 1 for the data): $T_{\text{miss}} = t_{\text{TLB}} + 4 \cdot t_{\text{mem}} + t_{\text{mem}} = t_{\text{TLB}} + 5 \cdot t_{\text{mem}}$.
+   - $\text{EMAT} = h \cdot T_{\text{hit}} + (1 - h) \cdot T_{\text{miss}} = t_{\text{TLB}} + t_{\text{mem}} + 4(1 - h)t_{\text{mem}}$.
+2. **Numeric evaluation for $h = 0.98$:**
+   $$
+   \text{EMAT} = 1.2 + 60 + 4(1 - 0.98)(60) = 61.2 + 4(0.02)(60) = 61.2 + 4.8 = 66.0\text{ ns}.
+   $$
+3. **Threshold hit rate:**
+   We require $\text{EMAT} \le 66\text{ ns}$:
+   $$
+   61.2 + 240(1 - h) \le 66 \implies 240(1 - h) \le 4.8 \implies 1 - h \le 0.02 \implies h \ge 0.98.
+   $$
+   A hit rate of at least 98.0% is required.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-pt-tlb-reach-superpages" type="construct" level="transfer" title="TLB Reach Expansion via Megapages and Gigapages">
+
+A processor TLB contains 512 entries.
+1. Compute the TLB reach using standard 4 KiB base pages.
+2. If an application database allocates 256 entries for 2 MiB superpages and 256 entries for standard 4 KiB pages, compute the new total TLB reach.
+3. Explain why using 2 MiB superpages for an irregular 12 KiB data structure is counterproductive.
+
+<ExerciseSolution hint="TLB reach is the number of entries multiplied by page size. Consider internal fragmentation for small structures.">
+
+1. **Base page reach:**
+   $$
+   \text{Reach}_{\text{base}} = 512 \times 4\text{ KiB} = 2048\text{ KiB} = 2\text{ MiB}.
+   $$
+2. **Mixed superpage reach:**
+   $$
+   \text{Reach}_{\text{mixed}} = (256 \times 4\text{ KiB}) + (256 \times 2\text{ MiB}) = 1\text{ MiB} + 512\text{ MiB} = 513\text{ MiB}.
+   $$
+   Using superpages expands the virtual address reach by more than 250$\times$ with identical hardware entry counts.
+3. **Fragmentation drawback:**
+   Mapping a 12 KiB structure with a 2 MiB superpage wastes $2048\text{ KiB} - 12\text{ KiB} = 2036\text{ KiB}$ ($> 99.4\%$) of contiguous physical RAM to internal fragmentation. Furthermore, page-out or dirty-tracking operations must move or mark the entire 2 MiB chunk, wasting memory bandwidth.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-pt-multicore-shootdown-race" type="prove" level="synthesis" title="Proving Correct Ordering in Multi-Core TLB Invalidation Protocols">
+
+Let Core 0 update a PTE to revoke write permissions on physical frame $F$, intending to reassign $F$ to an isolated process on Core 1. Prove that Core 0 must not allocate $F$ until all remote cores have completed and acknowledged their TLB shootdown.
+
+<ExerciseSolution hint="Show that a window exists where Core 1 writes through stale TLB authority if reuse precedes shootdown completion.">
+
+Assume for contradiction that Core 0 reallocates frame $F$ to Process $B$ before Core 1 acknowledges completion of the TLB invalidation.
+1. Prior to revocation, Core 1 executes Process $A$ and caches a valid, writable TLB entry: $(A, \mathrm{VPN}_A) \mapsto (F, \mathrm{RW})$.
+2. Core 0 modifies the memory PTE for $(A, \mathrm{VPN}_A)$ to set $W=0$ (or $V=0$), and issues an asynchronous Inter-Processor Interrupt (IPI) to Core 1.
+3. Without awaiting acknowledgment, Core 0 assigns frame $F$ to Process $B$ and begins initializing confidential data into $F$.
+4. Before Core 1 handles the IPI, Process $A$ on Core 1 executes a store instruction to $\mathrm{VPN}_A$.
+5. The MMU on Core 1 queries its local TLB, finds the cached translation with $W=1$, and commits the store directly into physical frame $F$ without walking the memory page table.
+6. Process $A$ has thus corrupted or observed Process $B$'s confidential memory, violating the fundamental memory isolation invariant.
+
+Therefore, the happens-before edge:
+$$
+\text{Remote TLB Invalidation} \prec \text{Remote Acknowledgment} \prec \text{Frame Reallocation}
+$$
+is strictly necessary for safety.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

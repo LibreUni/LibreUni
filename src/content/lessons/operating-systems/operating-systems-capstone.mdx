@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 1260
 assessment: A human-approved proposal, bounded kernel change, invariant-driven public tests, disclosed hidden-test categories, reproducible baseline comparison, design memo, demo and defense, and maintainable handoff; automated checks are evidence rather than proof of mastery or authorship.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -78,16 +80,15 @@ Completion without a crash demonstrates only that one execution reached its end.
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Keep the treatment separable"
-  question="A student builds the capstone on the cumulative checkpoint stack and also imports a driver fix from a newer upstream branch. Under the contract's definitions, what counts as the treatment?"
+  title="Capstone evaluation rigor and treatment boundaries"
+  question="Evaluate each statement regarding experimental controls, treatment isolation, and invariant testing in the capstone project:"
   options={[
-    "Only the submitted capstone change applied to the chosen start point",
-    "The capstone change plus every checkpoint and the imported driver fix",
-    "Every commit made after the clean rev5 course root",
-    "Only the imported driver fix, since it is unrelated to the capstone mechanism"
+    { id: "opt-cap-treatment-diff", text: "The treatment diff must contain solely the submitted mechanism change applied directly on top of the pinned baseline.", isCorrect: true },
+    { id: "opt-cap-negative-evidence", text: "A rigorous evaluation requires adversarial stress tests capable of failing if core invariants are deliberately violated.", isCorrect: true },
+    { id: "opt-cap-fast-median", text: "Achieving a faster median throughput in a microbenchmark compensates for unhandled race conditions on kernel exit paths.", isCorrect: false },
+    { id: "opt-cap-upstream-mix", text: "Importing unrelated bug fixes from modern branches into the treatment branch does not confound paired causal comparisons.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="The treatment is the baseline plus only the submitted capstone change; earlier checkpoints, upgrades, and unrelated refactors are explicitly excluded. Folding the newer upstream driver into the treatment would confound source change with the proposed mechanism, so it may appear only as a separately labeled sensitivity comparison."
+  explanation="The treatment must isolate only the evaluated mechanism. Correctness and invariant preservation strictly supersede throughput metrics. Confounding unrelated fixes corrupts causal inference, and adversarial tests must be capable of falsifying broken implementations."
 />
 
 ## Choose one bounded option
@@ -637,8 +638,6 @@ A complete answer separates correctness from performance. Contract and invariant
 
 </ExerciseSolution>
 
-## Connections and deliberate boundaries
-
 > **Remark.** By anchoring every project to pinned `xv6-riscv-rev5` commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`, the capstone trades production hardware breadth for complete mechanism inspectability across syscalls, synchronization, virtual memory, I/O, persistence, and observability.
 
 The chosen change must connect at least three mechanism layers without expanding into three projects:
@@ -653,7 +652,93 @@ The chosen change must connect at least three mechanism layers without expanding
 | protection | principal, authority conveyed by handle, confused-deputy risk, and revocation/lifetime |
 | observability | event definition, collection overhead, conservation, and causal link to metric |
 
-Do not claim production readiness. xv6 deliberately omits many defenses, device behaviors, storage guarantees, and scalability mechanisms. Formal verification, real-time schedulability, persistent memory, NUMA, speculative side channels, full POSIX compatibility, and deployment security require separate methods. State those boundaries where they affect the claim rather than placing them in a generic disclaimer.
+<ExerciseSet>
+
+<Exercise id="ex-cap-kernel-synthesis-review" type="verify" level="application" title="Synthesizing Privilege, Memory, and File System Subsystems">
+A process executes `mmap` to map an 8 KiB file into its address space with `PROT_READ | PROT_WRITE` and `MAP_SHARED`. It then modifies the first byte of the second page (`offset 4096`) and calls `msync(MS_SYNC)`. Trace how the operating system coordinates privilege transitions, virtual memory faults, the buffer cache/page cache, and disk write transactions to guarantee durability.
+
+<ExerciseSolution hint="Trace: initial VMA creation (unmapped page table entry), first access triggering page fault, allocation of physical frame and disk block read, PTE update with dirty bit, user-mode write, and msync dirty-page flush through journal transaction.">
+1. **VMA registration:** During `mmap`, the kernel validates arguments and allocates a Virtual Memory Area (VMA) recording range `[addr, addr + 8192)`, permissions (`PROT_READ | PROT_WRITE`), flag `MAP_SHARED`, and backing file/inode reference. The page table entries (PTEs) remain invalid (demand paging).
+2. **Page fault and cache lookup:** Accessing `offset 4096` triggers a hardware page fault trap (`scause = 13` or `15`). The kernel trap handler searches the process VMA list, discovers a valid shared mapping, and checks the page cache for file offset 4096.
+3. **PTE population:** If not in page cache, a frame is allocated and populated via device driver DMA. The kernel constructs a leaf PTE pointing to this frame with `R=1, W=1, U=1, V=1` and installs it in the process page table, followed by `sfence.vma`.
+4. **User-mode write:** The faulting instruction restarts in user mode, successfully modifying byte 4096 in memory. The hardware or OS tracks the dirty state on the page.
+5. **Durability via msync:** When the application calls `msync(..., MS_SYNC)`, the kernel traverses the VMA page table entries, identifies dirty pages, begins a file system log/journal transaction, copies the modified block into the buffer cache, issues barrier-ordered disk writes to persistent storage, and commits the transaction before returning to user space.
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cap-multi-subsystem-race" type="construct" level="application" title="Tracing Cross-Subsystem Invariant Races Between VM and VFS">
+Consider an asynchronous Direct I/O write (`aio_write` or `io_uring`) reading from a user memory buffer `B` and writing to disk, while another thread in the same process concurrently invokes `munmap(B, len)` or `fork()`.
+1. Identify the race condition if the kernel merely validates the user virtual address `B` at submission time without pinning the underlying physical pages.
+2. Describe the synchronization mechanism used by modern kernels (`get_user_pages` / page pinning and refcounting) to maintain memory safety throughout the asynchronous I/O lifecycle.
+
+<ExerciseSolution hint="Without page pinning, munmap can free physical frames back to the page allocator, allowing disk controllers to DMA stale or reassigned physical memory.">
+1. **The unpinned race condition:** If the kernel validates virtual address `B` at submission and starts an asynchronous DMA transfer, but does not pin the physical frames:
+   - Thread 2 executes `munmap(B, len)`. The kernel tears down the PTEs and returns the physical frames to the global page allocator.
+   - The allocator reassigns those frames to an unrelated sensitive process (e.g., storing cryptographic keys or kernel stacks).
+   - The storage controller executes DMA from the reassigned physical frames into the target file on disk, leaking sensitive foreign memory to persistent storage.
+2. **Resolution via page pinning (`GUP`):**
+   - At asynchronous I/O submission, the kernel calls `get_user_pages()`, which walks the page table, increments the reference count (`struct page->_refcount`) on each physical frame, and locks the pages against eviction.
+   - Even if `munmap` destroys the user page table mappings, the physical frames cannot be reclaimed by the page allocator because their reference count remains greater than zero.
+   - Once the storage controller signals DMA completion via hardware interrupt, the kernel decrements the frame reference counts (`put_page()`), allowing normal deallocation only after the hardware transfer completes.
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cap-crash-durability-audit" type="prove" level="synthesis" title="Proving End-to-End File Durability from Page Fault to Disk Platter">
+Let a persistent storage subsystem guarantee durability under Write-Ahead Logging (WAL) with storage cache flush commands.
+1. Formulate the two write-ordering invariants required to prevent corruption across sudden power loss:
+   - Invariant 1 (Log Record Order): Log descriptor and block writes must reach non-volatile media before the commit block.
+   - Invariant 2 (Checkpoint Order): The commit block must reach non-volatile media before in-place data blocks are overwritten.
+2. Prove that if the disk controller reorders writes across the commit block boundary (violating Invariant 1), a crash during checkpointing can leave the file system in an unrecoverable corrupted state.
+
+<ExerciseSolution hint="Show that an out-of-order write of the commit block followed by a power cut leaves an incomplete transaction marked as committed, causing replay of corrupt or partial blocks.">
+1. **Formal ordering invariants:**
+   - **Invariant 1 ($W_{\text{log}} \prec W_{\text{commit}}$):** For any transaction $T_i$, all journal log block writes $L_{i,1}, \dots, L_{i,k}$ must be completely flushed to persistent media before the commit record $C_i$ is persisted:
+     $$\forall k, \; \text{flushed}(L_{i,k}) \prec \text{flushed}(C_i)$$
+   - **Invariant 2 ($W_{\text{commit}} \prec W_{\text{checkpoint}}$):** The commit record $C_i$ must be completely flushed before any dirty metadata or data block is written in-place to its permanent location $P_{i,j}$:
+     $$\text{flushed}(C_i) \prec \text{flushed}(P_{i,j})$$
+
+2. **Proof of failure under Invariant 1 violation:**
+   - Suppose the disk controller reorders writes due to write-back volatile caching, writing $C_i$ to persistent media while log payload block $L_{i,1}$ is still volatile in controller RAM.
+   - Power fails immediately.
+   - Upon reboot, crash recovery scans the journal log. It inspects transaction $T_i$ and detects a valid $C_i$ on disk, concluding that $T_i$ was successfully committed.
+   - The recovery routine replays the transaction, copying the contents of $L_{i,1}$ into permanent location $P_{i,1}$.
+   - However, because $L_{i,1}$ was never persisted, the sector on disk contains random garbage or stale data from an earlier epoch.
+   - The file system overwrites valid in-place file system metadata (such as the root inode or allocation bitmap) with garbage, resulting in catastrophic metadata corruption that journal replay cannot rectify.
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cap-subsystem-scaling-eval" type="construct" level="transfer" title="Evaluating End-to-End Scalability Across Kernel Boundaries">
+An engineer optimizes an operating system kernel by replacing a coarse-grained central spinlock on the virtual memory subsystem with fine-grained per-VMA range locks. In a single-threaded benchmark, throughput drops by 4%. In a 64-core multi-threaded benchmark with disjoint memory mappings, throughput scales 38× higher.
+1. Account for the 4% single-threaded throughput regression in terms of instruction count, memory barriers, and lock acquisition overhead.
+2. Explain why the multi-threaded benchmark achieves near-linear speedup, identifying the hardware cache coherence mechanisms involved.
+3. Formulate the decision rule for when this kernel redesign should be accepted into production.
+
+<ExerciseSolution hint="Contrast lock instruction overhead on uncontended paths against cache-line bouncing (MESI invalidation) on contended global locks.">
+1. **Single-threaded overhead:** Acquiring and releasing multiple fine-grained locks requires executing atomic instructions (e.g., `lr`/`sc` or `cmpxchg`) and memory fence instructions for each individual VMA accessed, whereas a single coarse lock executed those atomic instructions once. On an uncontended single-core execution path, these extra instructions and pipeline flushes increase execution cycles, manifesting as a 4% latency overhead.
+2. **Multicore scaling mechanism:** With a global lock, all 64 cores compete for the identical 64-byte cache line containing the lock state. Under the MESI coherence protocol, every `lock acquire` issues a Read-For-Ownership (RFO) bus transaction, invalidating the cache line across all 63 other cores and stalling them on interconnect latency. With fine-grained per-VMA locks accessed by disjoint threads, each core modifies disjoint memory addresses residing in distinct cache lines in local `Exclusive` or `Modified` state, eliminating cross-core cache invalidations and allowing parallel progress.
+3. **Production decision rule:** Accept the redesign if the targeted deployment environments are predominantly concurrent multi-threaded workloads on multicore hardware where the throughput gains (up to 38×) vastly outweigh the modest 4% single-thread penalty, and where memory consumption overhead from per-VMA lock structures remains within bounded system limits.
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cap-trusted-computing-base" type="describe" level="synthesis" title="Auditing the Final Operating System Trusted Computing Base">
+At the completion of an operating system design, an architectural audit evaluates the Trusted Computing Base (TCB).
+1. Define the TCB of a computer system.
+2. For an xv6-based kernel running user processes, enumerate every hardware and software component included in the TCB.
+3. If an attacker discovers a vulnerability in the xv6 virtio disk driver, state the maximum privilege the attacker can achieve and explain how architectural redesign (such as driver privilege separation) could restrict that blast radius.
+
+<ExerciseSolution hint="The TCB includes all hardware, firmware, and software elements whose misbehavior can break the system security policy. In monolithic xv6, all kernel code executes in supervisor mode.">
+1. **TCB definition:** The Trusted Computing Base comprises the complete set of hardware, firmware, and software components that are critical to system security. If any component within the TCB contains a vulnerability or behaves maliciously, the security policy (confidentiality, integrity, availability) of the entire system can be compromised.
+2. **xv6 TCB components:**
+   - **Hardware:** Physical CPU core and MMU translation hardware, physical RAM, system bus, interrupt controllers (PLIC/CLINT), timer, and storage devices.
+   - **Firmware:** RISC-V machine-mode bootloader (OpenSBI / BIOS) executing at M-mode.
+   - **Software:** The entire xv6 kernel binary executing in supervisor mode (S-mode)—including the trap handler, scheduler, physical memory allocator, page table manager, system call dispatcher, VFS and file system, and device drivers (UART, VirtIO disk).
+3. **Driver exploit blast radius and containment:**
+   - In xv6, device drivers execute directly within supervisor mode with full access to kernel address space and page tables. A vulnerability in the virtio driver allows arbitrary code execution in S-mode, granting complete authority to alter kernel code, disable page protection, inspect arbitrary process memory, or bypass authentication entirely.
+   - To contain this blast radius, the architecture can isolate device drivers in unprivileged user-mode address spaces (as in microkernels) mediated by an IOMMU. Under this redesign, a compromised driver can corrupt only its own user space and device buffers; it cannot access kernel memory or other processes without passing through capability-checked IPC endpoints.
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

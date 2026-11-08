@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 330
 assessment: Given an unfamiliar virtualized execution trace, identify every privilege and translation boundary, predict exits and faults, then defend a VMM design and measurement plan under explicit hardware and threat assumptions.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -119,16 +121,15 @@ Answers that label every privileged-looking guest operation an exit have ignored
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Two-stage translation and memory protection"
-  question="Under hardware nested paging (two-stage translation), a guest OS maps guest-virtual page 0x1000 to guest-physical page 0x5000 with read/write permissions. The hypervisor's second-stage page table maps guest-physical page 0x5000 to host-physical page 0x9000 as read-only. What happens when a user thread in the guest attempts to write to virtual address 0x1000?"
+  title="Two-stage translation and VM execution invariants"
+  question="Evaluate each statement regarding hardware-assisted virtualization and two-stage address translation:"
   options={[
-    "Stage-1 translation succeeds, but stage 2 raises a stage-2 permission violation that triggers a VM exit to the hypervisor.",
-    "The CPU delivers an architectural page fault directly to the guest kernel without hypervisor intervention.",
-    "The store succeeds at host-physical address 0x9000 because guest-level write permissions override host permissions.",
-    "The hardware MMU faults only if the guest page table has W=0, because second-stage tables validate only execute rights."
+    { id: "opt-vm-perm-intersect", text: "Effective memory permissions in virtual machines are the strict intersection of stage-1 and stage-2 permissions.", isCorrect: true },
+    { id: "opt-vm-stage2-vmexit", text: "A stage-2 translation fault raises a VM exit to the hypervisor rather than delivering a trap directly to the guest.", isCorrect: true },
+    { id: "opt-vm-guest-override", text: "Guest-level write permissions in stage-1 tables override read-only restrictions imposed by stage-2 page tables.", isCorrect: false },
+    { id: "opt-vm-exitless-all", text: "Hardware nested paging eliminates all VM exits by allowing guests to manipulate physical memory frames directly.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="Effective permissions under two-stage address translation are the intersection of stage 1 (guest page tables) and stage 2 (hypervisor EPT/NPT). Even though the guest kernel grants write authority in stage 1, the hardware walker detects the write violation at stage 2. Stage-2 translation faults cannot be handled by the guest kernel; hardware triggers a VM exit to the hypervisor, guaranteeing host memory isolation."
+  explanation="Effective permissions are the logical intersection of both stages: if either stage forbids an access, hardware faults. Stage-2 translation faults exit to the hypervisor to preserve host resource control. Guests cannot override host stage-2 restrictions, and nested paging replaces software shadow page tables while retaining VM exits for I/O and unmapped pages."
 />
 
 ## Two-stage address translation
@@ -264,38 +265,139 @@ A VM has a separate guest kernel, unlike a container. It does not remove the VMM
 
 > **Counterexample.** “The guest cannot map host memory through its page tables” proves only that the guest-controlled translation stage is subordinate. It does not prove that an emulated device lacks an out-of-bounds write into VMM memory.
 
-## Synthesis: defend a virtual platform
+<ExerciseSet>
 
-Design a VM platform for mutually distrustful build jobs. Each job needs two vCPUs, 4 GiB RAM, a read-only base image, a writable scratch disk, network access only to one artifact service, and a 15-minute deadline. Produce:
+<Exercise id="ex-vm-popek-goldberg-theorem" type="verify" level="application" title="Evaluating the Popek-Goldberg Virtualizability Criterion">
 
-- the virtual CPU, memory, device, clock, and shutdown contracts;
-- the guest-to-host authority boundary;
-- a two-stage translation and page-reuse protocol;
-- a virtual-device choice and its trusted-code impact;
-- resource limits and overload behavior;
-- functional and adversarial tests; and
-- a measurement plan separating exits, translation, I/O, and host scheduling.
+State the classical Popek-Goldberg theorem regarding instruction set virtualizability. Explain why early x86 architectures (e.g., IA-32 with non-faulting `POPF`, `PUSHF`, and `SGDT` in user mode) were not classically virtualizable without binary translation or paravirtualization.
 
-<ExerciseSolution title="Reveal the grading rubric">
+<ExerciseSolution hint="Sensitive instructions must be a subset of privileged instructions.">
 
-- **Platform contract, 20%.** Specifies exposed ISA/features, clock semantics, device interfaces, interrupt behavior, and deadline termination.
-- **Memory safety, 20%.** States permission intersection, remote invalidation before page reuse, zeroing, and DMA/IOMMU obligations.
-- **Authority and isolation, 20%.** Constrains artifact network access, identifies VMM/device model/host/hardware dependencies, and does not claim side-channel elimination without evidence.
-- **Failure behavior, 15%.** Handles malformed descriptors, guest reset during I/O, host overcommit, lost device backend, and deadline expiry.
-- **Evidence, 15%.** Uses event counts and traces to test hypotheses, includes a native or no-change baseline, repeats measurements, and reports uncertainty.
-- **Boundary, 10%.** Separates modeled outcomes from measured results and names omitted nested, migration, confidential-computing, and passthrough concerns.
-
-A design that states “use KVM for security and performance” without a device, memory-reuse, and threat trace has not supplied a mechanism argument.
+- **Popek-Goldberg Virtualizability Theorem (1974):**
+  An architecture is strictly virtualizable under trap-and-emulate if and only if all **sensitive instructions** are a subset of **privileged instructions**:
+  $$
+  I_{\text{sensitive}} \subseteq I_{\text{privileged}}.
+  $$
+  - *Sensitive instructions:* Instructions that manipulate hardware configuration (control registers, interrupt masks, MMU state) or behave differently depending on the execution privilege mode.
+  - *Privileged instructions:* Instructions that trap to the supervisor/monitor when executed in user mode.
+- **The x86 virtualization hole:**
+  On early 32-bit x86, approximately 17 sensitive instructions failed this criterion. For instance, `POPF` (Push/Pop to Interrupt Flags) silently ignored modifications to the interrupt flag when executed in unprivileged Ring 1 without trapping. `SGDT` (Store Global Descriptor Table) allowed unprivileged code to read the CPU's global descriptor table base address without trapping, exposing host hardware state.
+  Because these instructions failed silently instead of trapping, a VMM could not intercept and emulate them, necessitating expensive dynamic binary translation (pioneered by VMware) or paravirtualization (Xen) until hardware virtualization extensions (Intel VT-x, AMD-V) were introduced.
 
 </ExerciseSolution>
+</Exercise>
 
-## Connections and deliberate boundary
+<Exercise id="ex-vm-two-stage-walk-arithmetic" type="construct" level="application" title="Calculating Address Translation Overhead in Two-Stage Paging">
 
-> **Remark.** Virtual machines provide a separate guest-kernel fault domain at the cost of a two-stage translation hierarchy and VM-exit mediation, whereas containers (studied in Containers and Resource Control) execute directly on a single shared host kernel using namespaces and cgroups.
+Consider hardware nested paging (two-stage address translation) on a 64-bit architecture where both guest and host use 4-level page tables with standard 4 KiB pages:
+$$
+\text{Guest: GVA} \rightarrow \text{GPA (4 levels)}, \quad \text{Host: GPA} \rightarrow \text{HPA (4 levels)}.
+$$
+1. In the worst case where the TLB is completely cold (no GVA or GPA translations cached), compute the total number of physical memory accesses required to translate a single guest virtual address.
+2. If host physical memory access latency is $t_{\text{mem}} = 50\text{ ns}$, calculate the total translation latency.
+3. Explain how configuring 1 GiB host superpages for the second stage drastically reduces this page-walk multiplier.
 
-Virtual memory supplies the first translation stage; scheduling supplies vCPU time; device I/O supplies exit and completion paths; protection supplies authority over host resources; containers may isolate VMM processes but still share the host kernel; observability supplies event and latency evidence. VM design is the composition of those mechanisms.
+<ExerciseSolution hint="Each guest page table access is a GPA that itself requires a full 4-level host translation walk.">
 
-Nested virtualization, live migration, post-copy faults, confidential-VM attestation, direct device assignment, and microarchitectural side-channel defenses are omitted because each changes a core proof obligation. Their names are not substitutes for those proofs.
+1. **Total physical accesses:**
+   A 4-level guest walk accesses 4 guest page table entries (level 4, 3, 2, 1) plus the final guest data access (1 access).
+   However, every guest page table page resides in guest-physical memory ($\text{GPA}$), which itself must be translated through the 4-level host page table ($\text{HPA}$).
+   - Guest Level 4 PTE lookup: requires 4 host memory accesses + 1 memory read = 5 accesses.
+   - Guest Level 3 PTE lookup: requires 4 host accesses + 1 read = 5 accesses.
+   - Guest Level 2 PTE lookup: requires 4 host accesses + 1 read = 5 accesses.
+   - Guest Level 1 PTE lookup: requires 4 host accesses + 1 read = 5 accesses.
+   - Final Guest Data lookup: requires 4 host accesses to resolve the data $\text{HPA}$.
+   Total physical memory accesses:
+   $$
+   4 \times (4 + 1) + 4 = 4 \times 5 + 4 = 24\text{ memory accesses}.
+   $$
+   In general, for $n$-level guest and $m$-level host tables, total accesses $= n \cdot (m + 1) + m = 4(5) + 4 = 24$.
+2. **Translation latency:**
+   $$
+   T_{\text{walk}} = 24 \times 50\text{ ns} = 1200\text{ ns} = 1.2\ \mu\text{s}.
+   $$
+3. **Superpage reduction:**
+   If the host maps guest memory with 1 GiB superpages (level 2 leaves), the host walk requires only 2 levels ($m = 2$) instead of 4.
+   Total accesses drop to $4 \times (2 + 1) + 2 = 12 + 2 = 14$ accesses, cutting memory bus latency by more than 40%.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-paravirtual-virtio-efficiency" type="describe" level="application" title="Comparing Emulated MMIO Device Exits with Virtio Paravirtualization">
+
+Contrast the runtime overhead of an emulated legacy IDE controller with a paravirtualized Virtio block device. Detail why Virtio reduces VM exits by orders of magnitude during high-throughput I/O.
+
+<ExerciseSolution hint="Legacy devices trap on every register access; Virtio batches requests into shared ring buffers with single doorbells.">
+
+- **Legacy hardware emulation overhead:**
+  An emulated IDE or realtek network controller reproduces physical register-level hardware behavior. Every read and write to an I/O port or MMIO register triggers a VM exit. For a single block transfer:
+  1. The guest issues 8–16 register writes to setup sector, cylinder, head, and count (8–16 VM exits).
+  2. If using programmed I/O, the CPU reads data words through port `0x1F0`, generating 256 VM exits per 512-byte sector.
+  Each VM exit costs $1000\text{--}3000\text{ CPU cycles}$ for hardware context saving and VMM trap handling, causing massive CPU overhead.
+- **Virtio paravirtualization efficiency:**
+  Virtio uses cooperative shared-memory queues (`virtqueues`) agreed between guest and hypervisor:
+  1. The guest populates descriptors in shared RAM without any VM exits.
+  2. Multiple I/O requests (e.g., 64 disk blocks) are enqueued in batch.
+  3. The guest writes to a single doorbell MMIO register once to notify the hypervisor (1 VM exit for the entire batch).
+  4. The hypervisor processes all 64 requests and injects a single virtual interrupt.
+  By amortizing the exit cost across large batches, Virtio achieves near-native I/O throughput.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-virtual-time-skew" type="formalise" level="transfer" title="Formalizing Virtual Time and Clock Skew Under vCPU Descheduling">
+
+Let $t_{\text{host}}$ represent host monotonic wall time, and let $\tau(t_{\text{host}})$ represent the virtual time experienced by a vCPU.
+1. Formulate the relationship between $\tau$ and $t_{\text{host}}$ when a vCPU is descheduled by the host scheduler during time interval $[t_1, t_2]$.
+2. Explain why a guest operating system using an unadjusted TSC (Time Stamp Counter) experiences spurious network timeouts or incorrect TCP retransmissions after a descheduling event.
+
+<ExerciseSolution hint="During descheduling, tau stops while t_host advances; TSC jumps forward relative to instructions executed.">
+
+1. **Virtual time formulation:**
+   Let $S(t) \in \{0, 1\}$ indicate whether the vCPU thread is actively scheduled on a physical CPU core at host time $t$.
+   Virtual execution time $\tau$ is the integral of scheduled execution:
+   $$
+   \tau(t_{\text{host}}) = \int_0^{t_{\text{host}}} S(u) \, du.
+   $$
+   If the vCPU is descheduled during $[t_1, t_2]$ ($S(u) = 0$ for $u \in [t_1, t_2]$):
+   $$
+   \tau(t_2) = \tau(t_1), \quad \text{while } t_{\text{host}} \text{ has advanced by } \Delta t = t_2 - t_1.
+   $$
+2. **Clock skew and protocol failure:**
+   If the guest reads the raw physical hardware TSC, it observes an abrupt leap of $\Delta t = 200\text{ ms}$ across zero guest instructions.
+   - TCP retransmission timers fire spuriously, assuming round-trip packet drop.
+   - Internal scheduler runqueues observe apparent massive task CPU starvation.
+   - Watchdog timers (e.g., lockup detectors) trigger false kernel panics.
+   To prevent this, paravirtual clock protocols (such as `kvm-clock`) publish explicit stolen-time offsets and paused-state notifications so the guest adjusts time-accounting structures.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-isolation-breakout-defense" type="prove" level="synthesis" title="Proving Isolation Boundaries Against Device-Model Buffer Overflows">
+
+Suppose a guest kernel exploits a buffer overflow in an emulated USB device model running within the hypervisor userspace process (e.g., QEMU).
+1. Prove that hardware nested paging (EPT/NPT) cannot prevent the compromised device model from writing to host memory.
+2. Formulate the principle of privilege separation applied to VMM architecture (e.g., modern micro-VMMs like Cloud Hypervisor or Firecracker) to contain device model compromises.
+
+<ExerciseSolution hint="EPT restricts guest CPU execution; device models run with host process privileges on the host.">
+
+1. **Failure of EPT against userspace device bugs:**
+   Hardware nested paging (EPT/NPT) applies strictly to guest-mode memory accesses executed by the vCPU hardware pipeline.
+   When a device model runs in the host hypervisor process:
+   - The device model executes in host user mode (or host kernel mode) on host physical CPU cores.
+   - Its memory accesses are governed by host page tables, NOT guest EPT page tables.
+   - If an adversarial guest triggers an out-of-bounds write inside the QEMU device emulator, the exploit writes directly into host process heap or stack space.
+   - EPT hardware does not intercept these host-level stores. The attacker achieves arbitrary code execution within the host VMM process, breaking out of the guest VM.
+2. **Architectural privilege separation defense:**
+   To contain device vulnerabilities:
+   - **Minimalist attack surface:** Eliminate legacy emulated devices entirely, replacing them with minimal Virtio implementations written in memory-safe languages (e.g., Rust in Firecracker/crosvm).
+   - **Process sandboxing:** Run each device backend in a separate, unprivileged host process confined with `seccomp-bpf` (forbidding all unauthorized host syscalls), separate mount/PID namespaces, and read-only host filesystem views.
+   - **Restricted shared memory:** Grant the device process access only to the guest's allocated RAM via explicit file descriptor passing, preventing access to the hypervisor's control structures.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

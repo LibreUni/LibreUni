@@ -9,31 +9,39 @@ import { getLessonsByCourse, type OrderedLesson } from '../../utils/lessons';
 export async function getStaticPaths() {
   const lessons = await getCollection('lessons');
   const courses = await getCollection('courses');
-  
+
   // Pre-calculate course data to avoid expensive lookups per page
   const courseMap = Object.fromEntries(courses.map(c => [c.id, c]));
-  
+
   const courseLessonsMap = await getLessonsByCourse(lessons);
 
   const paths: any[] = [];
   for (const courseId in courseLessonsMap) {
     const courseLessons = courseLessonsMap[courseId];
     const course = courseMap[courseId];
-    
+
     courseLessons.forEach((lesson, index) => {
       paths.push({
         params: { slug: lesson.id },
-        props: { 
+        props: {
           lesson,
-          course, // Pass pre-fetched course data
+          course,
           courseLessons,
           nextLesson: courseLessons[index + 1] ? {
             slug: courseLessons[index + 1].id,
-            data: { title: courseLessons[index + 1].data.title }
+            data: {
+              title: courseLessons[index + 1].data.title,
+              kind: courseLessons[index + 1].data.kind,
+              label: courseLessons[index + 1].data.label,
+            }
           } : null,
           prevLesson: courseLessons[index - 1] ? {
             slug: courseLessons[index - 1].id,
-            data: { title: courseLessons[index - 1].data.title }
+            data: {
+              title: courseLessons[index - 1].data.title,
+              kind: courseLessons[index - 1].data.kind,
+              label: courseLessons[index - 1].data.label,
+            }
           } : null
         },
       });
@@ -46,14 +54,33 @@ interface Props {
   lesson: CollectionEntry<'lessons'>;
   course: CollectionEntry<'courses'>;
   courseLessons: OrderedLesson[];
-  nextLesson: { slug: string, data: { title: string } } | null;
-  prevLesson: { slug: string, data: { title: string } } | null;
+  nextLesson: { slug: string, data: { title: string; kind?: string; label?: string } } | null;
+  prevLesson: { slug: string, data: { title: string; kind?: string; label?: string } } | null;
 }
 
 const { lesson, course, courseLessons, nextLesson, prevLesson } = Astro.props;
 const { Content, headings } = await render(lesson);
 const lessonIndex = courseLessons.findIndex((item) => item.id === lesson.id);
 const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
+
+const KIND_NAMES: Record<string, string> = {
+  lesson: 'Lesson',
+  lab: 'Lab',
+  problems: 'Problem set',
+  recap: 'Recap sheet',
+  practice: 'Practice',
+  exam: 'Practice',
+};
+
+const pageKind = (lesson.data as any).kind || 'lesson';
+const isLessonOrLab = pageKind === 'lesson' || pageKind === 'lab';
+
+const resolveCoverLabel = (cov: string): string => {
+  const fullId = `${lesson.data.course}/${cov}`;
+  const match = courseLessons.find((item) => item.id === fullId || item.id === cov);
+  if (!match) return cov;
+  return match.data.label ? `${match.data.label} · ${match.data.title}` : match.data.title;
+};
 ---
 
 <Layout title={`${lesson.data.title} - ${course?.data.title}`}>
@@ -71,7 +98,7 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
 
                 {lessonPosition && (
                   <span class="text-xs font-semibold tabular-nums text-light-muted dark:text-dark-muted">
-                    Lesson {lessonPosition} of {courseLessons.length}
+                    Page {lessonPosition} of {courseLessons.length}
                   </span>
                 )}
             </div>
@@ -84,15 +111,122 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
             </div>
         </header>
 
-        <LessonBrief
-          module={lesson.data.module}
-          prerequisites={lesson.data.prerequisites}
-          outcomes={lesson.data.outcomes}
-          assessment={lesson.data.assessment}
-          omitted={lesson.data.omissions}
-          estimatedMinutes={lesson.data.estimatedMinutes}
-          headings={headings}
-        />
+        {isLessonOrLab && (
+          <LessonBrief
+            module={lesson.data.module}
+            prerequisites={(lesson.data as any).prerequisites}
+            outcomes={(lesson.data as any).outcomes}
+            assessment={(lesson.data as any).assessment}
+            omitted={(lesson.data as any).omissions}
+            estimatedMinutes={lesson.data.estimatedMinutes}
+            headings={headings}
+          />
+        )}
+
+        {pageKind === 'problems' && (
+          <div class="mb-10 rounded-2xl border border-light-border bg-light-surface p-6 dark:border-dark-border dark:bg-dark-surface not-prose">
+            <div class="flex flex-wrap items-baseline justify-between gap-3 pb-4 border-b border-light-border dark:border-dark-border">
+              <div>
+                <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Chapter problem set</p>
+                <h2 class="mt-1 text-2xl font-black text-light-text dark:text-dark-text">Deep and Challenge Problems</h2>
+              </div>
+              <span class="text-xs font-bold text-light-muted dark:text-dark-muted">
+                Estimated time: {lesson.data.estimatedMinutes} min
+              </span>
+            </div>
+            <div class="mt-4 grid gap-4 md:grid-cols-2">
+              <div>
+                <h3 class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Covers</h3>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  {((lesson.data as any).covers || []).map((cov: string) => (
+                    <a
+                      href={`${import.meta.env.BASE_URL}lessons/${lesson.data.course}/${cov}`}
+                      class="inline-flex items-center rounded-lg border border-light-border dark:border-dark-border bg-light-bg dark:bg-dark-bg px-2.5 py-1 text-xs font-bold text-primary hover:border-primary/50 transition-colors"
+                    >
+                      {resolveCoverLabel(cov)}
+                    </a>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Target Outcomes</h3>
+                <ul class="mt-2 list-disc space-y-1 pl-4 text-xs text-light-muted dark:text-dark-muted">
+                  {((lesson.data as any).outcomes || []).map((out: string) => (
+                    <li>{out}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div class="mt-4 pt-4 border-t border-light-border/60 dark:border-dark-border/60 flex flex-wrap items-center gap-4 text-xs font-semibold text-light-muted dark:text-dark-muted">
+              <span>Levels: recall · application · transfer · synthesis</span>
+              <span>★ = Challenge problem</span>
+            </div>
+          </div>
+        )}
+
+        {pageKind === 'recap' && (
+          <div class="mb-10 rounded-2xl border border-light-border bg-light-surface p-6 dark:border-dark-border dark:bg-dark-surface not-prose">
+            <div class="flex flex-wrap items-baseline justify-between gap-3 pb-4 border-b border-light-border dark:border-dark-border">
+              <div>
+                <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Chapter recap sheet</p>
+                <h2 class="mt-1 text-2xl font-black text-light-text dark:text-dark-text">Condensed Reference</h2>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary">
+                  A4 Printable Reference
+                </span>
+                <span class="text-xs font-bold text-light-muted dark:text-dark-muted">
+                  {lesson.data.estimatedMinutes} min review
+                </span>
+              </div>
+            </div>
+            <div class="mt-4">
+              <h3 class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Covered Lessons</h3>
+              <div class="mt-2 flex flex-wrap gap-2">
+                {((lesson.data as any).covers || []).map((cov: string) => (
+                  <a
+                    href={`${import.meta.env.BASE_URL}lessons/${lesson.data.course}/${cov}`}
+                    class="inline-flex items-center rounded-lg border border-light-border dark:border-dark-border bg-light-bg dark:bg-dark-bg px-2.5 py-1 text-xs font-bold text-primary hover:border-primary/50 transition-colors"
+                  >
+                    {resolveCoverLabel(cov)}
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {pageKind === 'practice' && (
+          <div class="mb-10 rounded-2xl border border-light-border bg-light-surface p-6 dark:border-dark-border dark:bg-dark-surface not-prose">
+            <div class="flex flex-wrap items-baseline justify-between gap-3 pb-4 border-b border-light-border dark:border-dark-border">
+              <div>
+                <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Comprehensive practice</p>
+                <h2 class="mt-1 text-2xl font-black text-light-text dark:text-dark-text">Problem Workshop</h2>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary">
+                  Interactive Generator
+                </span>
+                <span class="text-xs font-bold text-light-muted dark:text-dark-muted">
+                  {lesson.data.estimatedMinutes} min practice
+                </span>
+              </div>
+            </div>
+            <div class="mt-4">
+              <h3 class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Covered Topics</h3>
+              <div class="mt-2 flex flex-wrap gap-2">
+                {((lesson.data as any).covers || []).map((cov: string) => (
+                  <a
+                    href={`${import.meta.env.BASE_URL}lessons/${lesson.data.course}/${cov}`}
+                    class="inline-flex items-center rounded-lg border border-light-border dark:border-dark-border bg-light-bg dark:bg-dark-bg px-2.5 py-1 text-xs font-bold text-primary hover:border-primary/50 transition-colors"
+                  >
+                    {resolveCoverLabel(cov)}
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         <article data-lu-source={`src/content/lessons/${lesson.id}.mdx; rendered by src/pages/lessons/[...slug].astro:98`} class="prose prose-slate dark:prose-invert max-w-none
             prose-headings:text-light-text dark:prose-headings:text-dark-text prose-headings:font-black prose-headings:tracking-tight
@@ -111,17 +245,19 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
               <ListTree size={17} /> Course outline
             </a>
 
-            <button
-              id="mark-completed"
-              type="button"
-              aria-pressed="false"
-              class="group inline-flex min-h-11 items-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-500/5 px-4 text-sm font-bold text-emerald-700 transition-colors hover:bg-emerald-500/10 dark:text-emerald-300"
-            >
-              <span id="complete-icon" class="flex h-5 w-5 items-center justify-center rounded-full border-2 border-current">
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" class="hidden"><polyline points="20 6 9 17 4 12"/></svg>
-              </span>
-              <span id="complete-text">Mark complete</span>
-            </button>
+            {pageKind !== 'recap' && (
+              <button
+                id="mark-completed"
+                type="button"
+                aria-pressed="false"
+                class="group inline-flex min-h-11 items-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-500/5 px-4 text-sm font-bold text-emerald-700 transition-colors hover:bg-emerald-500/10 dark:text-emerald-300"
+              >
+                <span id="complete-icon" class="flex h-5 w-5 items-center justify-center rounded-full border-2 border-current">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" class="hidden"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+                <span id="complete-text">Mark complete</span>
+              </button>
+            )}
           </div>
 
           <div class="grid gap-3 sm:grid-cols-2">
@@ -129,7 +265,7 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
               <a href={`${import.meta.env.BASE_URL}lessons/${prevLesson.slug}`} class="group flex min-h-24 items-center gap-3 rounded-2xl border border-light-border bg-light-surface p-4 text-light-text transition-colors hover:border-primary/50 hover:text-primary dark:border-dark-border dark:bg-dark-surface dark:text-dark-text">
                 <ChevronLeft size={20} className="shrink-0" />
                 <span class="min-w-0">
-                  <span class="label-caps block">Previous</span>
+                  <span class="label-caps block">Previous · {KIND_NAMES[prevLesson.data.kind || 'lesson'] || 'Lesson'}{prevLesson.data.label ? ` · ${prevLesson.data.label}` : ''}</span>
                   <span class="mt-1 block font-bold leading-snug">{prevLesson.data.title}</span>
                 </span>
               </a>
@@ -138,7 +274,7 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
             {nextLesson ? (
               <a href={`${import.meta.env.BASE_URL}lessons/${nextLesson.slug}`} class="group flex min-h-24 items-center justify-between gap-3 rounded-2xl border border-primary/40 bg-primary/5 p-4 text-light-text transition-colors hover:bg-primary/10 dark:text-dark-text">
                 <span class="min-w-0 text-right sm:ml-auto">
-                  <span class="label-caps block text-primary">Next</span>
+                  <span class="label-caps block text-primary">Next · {KIND_NAMES[nextLesson.data.kind || 'lesson'] || 'Lesson'}{nextLesson.data.label ? ` · ${nextLesson.data.label}` : ''}</span>
                   <span class="mt-1 block font-bold leading-snug">{nextLesson.data.title}</span>
                 </span>
                 <ChevronRight size={20} className="shrink-0 text-primary" />
@@ -153,15 +289,13 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
 </Layout>
 
 <script is:inline define:vars={{ slug: lesson.id, courseId: lesson.data.course }}>
-  // Progress tracking logic
   const completeBtn = document.getElementById('mark-completed');
   const completeText = document.getElementById('complete-text');
   const completeIcon = document.getElementById('complete-icon');
-  
+
   const completedKey = `completed-${slug}`;
   const lastVisitedKey = `last-visited-${courseId}`;
 
-  // Mark as last visited
   localStorage.setItem(lastVisitedKey, slug);
 
   function updateButtonState() {
@@ -170,7 +304,7 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
       completeBtn.classList.add('bg-emerald-500', 'text-white', 'border-emerald-500');
       completeBtn.setAttribute('aria-pressed', 'true');
       completeText.innerText = 'Completed';
-      const checkSvg = completeIcon.querySelector('svg');
+      const checkSvg = completeIcon?.querySelector('svg');
       if (checkSvg) {
         checkSvg.classList.remove('hidden');
         checkSvg.classList.add('block');
@@ -188,17 +322,15 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
       completeBtn.classList.remove('bg-emerald-500', 'text-white', 'border-emerald-500');
       completeBtn.setAttribute('aria-pressed', 'false');
       completeText.innerText = 'Mark complete';
-      const checkSvg = completeIcon.querySelector('svg');
+      const checkSvg = completeIcon?.querySelector('svg');
       if (checkSvg) {
         checkSvg.classList.add('hidden');
         checkSvg.classList.remove('block');
       }
-      // Dispatch event to update sidebar even when unmarking
       window.dispatchEvent(new CustomEvent('lesson-completed', { detail: { slug, completed: false } }));
     } else {
       localStorage.setItem(completedKey, 'true');
       updateButtonState();
-      // Dispatch custom event for sidebar
       window.dispatchEvent(new CustomEvent('lesson-completed', { detail: { slug, completed: true } }));
     }
   });
@@ -206,7 +338,6 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
 
 <style is:global>
     @reference '../../styles/global.css';
-    /* Better defaults for code within the theme */
     .prose :where(pre):not(:where(.not-prose, .not-prose *)) {
         @apply bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border shadow-sm;
         padding: 1.5rem !important;
@@ -215,7 +346,6 @@ const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
     .prose :where(code):not(:where(.not-prose, .not-prose *)) {
         @apply text-primary font-bold;
     }
-    /* Don't apply the inline code background to code inside pre tags */
     .prose :where(pre):not(:where(.not-prose, .not-prose *)) code {
         background-color: transparent !important;
         color: inherit !important;

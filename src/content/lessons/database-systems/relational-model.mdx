@@ -10,19 +10,24 @@ outcomes:
   - Choose primary, unique, foreign-key, and check constraints for a registration domain.
   - Predict duplicate and NULL behavior that makes a SQL result differ from a pure set relation.
 omissions:
-  - Functional-dependency inference and normal-form decomposition are developed in later lessons.
+  - Functional-dependency inference, attribute closure, and normal-form decomposition (BCNF/3NF) are developed in subsequent lessons.
+  - Physical implementations of uniqueness (index structures) and multi-row aggregate capacity policies are deferred.
 estimatedMinutes: 420
 assessment: Given a prose requirement and sample rows, define relations and constraints, identify an invalid row, and explain one query result affected by duplicates or NULL.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
-
 “Store student registrations” is not a schema. First decide what one row is allowed to assert. Then make the database reject row combinations that would contradict that assertion.
 
-> **Definition.** A relation schema names attributes and their domains, such as `Enrollment(student_id, offering_id, status)`. A relation instance is the current collection of tuples permitted by that schema and its constraints. The **grain** states what one tuple represents.
+<MathStatement id="def-relation-schema" kind="definition" title="Relation schema, instance, and grain">
+A relation schema names attributes and their domains, such as `Enrollment(student_id, offering_id, status)`. A relation instance is the current collection of tuples permitted by that schema and its constraints. The **grain** states what one tuple represents.
+</MathStatement>
 
 {/* Source tracking: The relational vocabulary and separation of relations from their implementation are synthesized from E. F. Codd, “A Relational Model of Data for Large Shared Data Banks,” *Communications of the ACM* 13(6), pp. 377–387 (1970); key terminology follows Ramakrishnan & Gehrke, *Database Management Systems*, 3rd ed., §3.1. */}
 
@@ -100,16 +105,21 @@ Which rows can coexist if only `s17` and `o3` exist?
 
 <ExerciseSolution hint="Check the composite key first, then each foreign key.">
 
-The first row can exist. The second conflicts with the same composite primary key, even though its `status` differs. The third violates the `student_id` foreign key because `s99` has no matching `Student` row. A history requirement needs a different key and grain; changing `status` alone does not create a new current-enrollment fact.
+Only the first row `(s17, o3, 'enrolled')` can exist. The second row duplicates the existing candidate key `(s17, o3)`, while the third references absent student `s99` in violation of foreign key integrity.
+
 </ExerciseSolution>
 
 ## Keys identify, foreign keys connect
 
-> **Definition.** A superkey is a set of attributes that uniquely identifies a tuple in every legal instance. A candidate key is a minimal superkey: remove any one of its attributes and it no longer identifies tuples. A primary key is a chosen candidate key. (Ramakrishnan & Gehrke, *Database Management Systems*, 3rd ed., §3.2.1.)
+<MathStatement id="def-keys" kind="definition" title="Superkeys, candidate keys, and primary keys">
+A superkey is a set of attributes that uniquely identifies a tuple in every legal instance. A candidate key is a minimal superkey: remove any one of its attributes and it no longer identifies tuples. A primary key is a chosen candidate key. (Ramakrishnan & Gehrke, *Database Management Systems*, 3rd ed., §3.2.1.)
+</MathStatement>
 
 For `Enrollment`, `(student_id, offering_id)` is a candidate key under the stated rule. `(student_id, offering_id, status)` is a superkey but not a candidate key because `status` is unnecessary for identity. `(student_id, status)` is not even a superkey: a student may hold the same status in two different offerings, so it does not uniquely identify a tuple.
 
-> **Invariant.** A declared constraint must hold at its check point. By default SQL checks each constraint **immediately**, after every statement that could violate it. A constraint declared `DEFERRABLE INITIALLY DEFERRED` is checked at **commit** instead; the transaction may transiently violate it. Deferring never weakens the constraint—it only changes *when* the database checks it.
+<MathStatement id="inv-constraint-checkpoint" kind="invariant" title="Constraint check point and deferrability">
+A declared constraint must hold at its check point. By default SQL checks each constraint **immediately**, after every statement that could violate it. A constraint declared `DEFERRABLE INITIALLY DEFERRED` is checked at **commit** instead; the transaction may transiently violate it. Deferring never weakens the constraint—it only changes *when* the database checks it.
+</MathStatement>
 
 > **Worked example (deferred check point).** Constraint: “`Offering.term` is referenced by enrollments and each offering keeps a `successor_id` foreign key to the next term's offering.” Swapping two offerings' `successor_id` values with two `UPDATE` statements transiently breaks referential integrity if the constraint is immediate. Declaring it `DEFERRABLE INITIALLY DEFERRED` lets both updates commit only if, **at commit**, every referenced `successor_id` exists. Committing with the violation still fails—deferral moves the check, never removes it.
 
@@ -117,33 +127,18 @@ For `Enrollment`, `(student_id, offering_id)` is a candidate key under the state
 
 > **Counterexample.** `display_name` might look unique in a three-row sample, but two students can share it. An observed sample pattern is not a business rule. Declare a `UNIQUE` constraint only when the domain truly requires uniqueness, and say which `NULL` treatment you are relying on.
 
-### Apply the constraint vocabulary
-
-For each rule, choose the narrowest database constraint that directly expresses it.
-
-1. An offering cannot have negative capacity.
-2. A student cannot appear twice in the same current offering.
-3. Every enrollment names an existing offering.
-4. A status must be `enrolled`, `waitlisted`, or `dropped`.
-
-<ExerciseSolution hint="Use a check for a predicate, a key for identity, and a foreign key for a cross-relation reference.">
-
-Use `CHECK (capacity >= 0)`, a primary or unique key on `(student_id, offering_id)`, a foreign key from `Enrollment.offering_id` to `Offering.offering_id`, and a check or controlled status domain. These constraints do not by themselves enforce capacity across many enrollment rows; that is an aggregate rule requiring a transaction-aware design.
-</ExerciseSolution>
-
 {/* Source tracking: Constraint behavior (primary keys, unique constraints, checks, foreign keys, deferrable modes) follows PostgreSQL's constraint documentation, in particular the unique, check, foreign-key, and deferrable sections; the NULL treatment of UNIQUE follows the SQL standard's implementation-defined rule. */}
 
 <Quiz client:load
   title="Identity versus connection"
-  question="An enrollment row stores `student_id` and `offering_id`. Which description is correct?"
+  question="An enrollment row stores student_id and offering_id forming a composite primary key (student_id, offering_id). Evaluate each claim:"
   options={[
-    "Both columns are foreign keys, so neither participates in identifying the enrollment",
-    "The pair identifies one enrollment at the stated grain, while each single column is a foreign key connecting to another relation",
-    "A primary key must be a single column, so this design violates the relational model",
-    "A foreign key always prevents deleting the referenced row, regardless of its declared referential action"
+    { id: '1', text: 'The composite pair uniquely identifies one enrollment at the stated grain, while each component serves as a foreign key.', isCorrect: true },
+    { id: '2', text: 'A column may simultaneously serve as a foreign key reference and participate in a composite primary key.', isCorrect: true },
+    { id: '3', text: 'Relational algebra requires all primary keys to consist of exactly one single atomic column.', isCorrect: false },
+    { id: '4', text: 'Declaring a foreign key unconditionally blocks row deletion regardless of declared ON DELETE clauses.', isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="A composite primary key identifies the enrollment fact: one student in one offering. Each component is also a foreign key that connects the fact to a student or offering. Key identity and referential connection are different obligations. Deletion behavior depends on the declared referential action and the database's check semantics, not on the mere presence of a foreign key."
+  explanation="Key identity and referential connection are distinct constraints; composite keys routinely contain foreign-key attributes, and referential actions govern cascade or restrict behavior."
 />
 
 ## Relation semantics versus everyday SQL tables
@@ -156,34 +151,11 @@ The mathematical relational model treats a relation as a set of tuples. SQL is d
 | Is there a built-in row order? | No | No order is guaranteed without `ORDER BY` |
 | Can an attribute be missing? | Classical model has a value in its domain | SQL has `NULL`; predicates can evaluate to `UNKNOWN` |
 
-> **Warning.** `NULL` is not an ordinary value. In a `WHERE` condition, only `TRUE` retains a row. `FALSE` and `UNKNOWN` both remove it. Therefore `WHERE advisor_id <> 7` does not retain a row whose `advisor_id` is `NULL`: the comparison is `UNKNOWN`, not `TRUE`.
+<MathStatement id="warn-sql-null-ternary" kind="warning" title="Three-valued predicate logic and NULL semantics">
+`NULL` is not an ordinary value. In a `WHERE` condition, only `TRUE` retains a row. `FALSE` and `UNKNOWN` both remove it. Therefore `WHERE advisor_id <> 7` does not retain a row whose `advisor_id` is `NULL`: the comparison is `UNKNOWN`, not `TRUE`.
+</MathStatement>
 
 > **Worked example.** Suppose two enrollment rows project to the same `course_code` after joining with offerings. `SELECT course_code ...` can return the code twice; `SELECT DISTINCT course_code ...` returns it once. Neither query is universally “more relational”—the right one depends on whether the client wants offerings or enrollment occurrences.
-
-### Compare two projection contracts
-
-Start with these two enrollment occurrences after a course join.
-
-| Enrollment occurrence | `course_code` |
-| --- | --- |
-| Ada in DB101 | DB101 |
-| Bo in DB101 | DB101 |
-
-| Requested grain | Projection result |
-| --- | --- |
-| One enrollment occurrence | Two `DB101` occurrences are meaningful |
-| One course represented in the result | One `DB101` tuple is meaningful |
-
-The later algebra lesson makes this set/bag distinction interactive. Here, the point is schema review: decide the requested result grain before duplicate behavior chooses one for you.
-
-### Quick trace
-
-If an `Enrollment` relation contains two different students in `CS101`, what does projection to `course_code` produce under each interpretation?
-
-<ExerciseSolution hint="Projection removes attributes. Decide whether equal remaining tuples collapse.">
-
-With set semantics, the projection has one tuple `CS101`. With bag semantics, it has two occurrences of `CS101`. The source relation's grain was one enrollment; a result whose grain is one course should normally use distinctness deliberately rather than inherit duplicate behavior accidentally.
-</ExerciseSolution>
 
 ## From requirements to a legal instance
 
@@ -191,29 +163,63 @@ Schema review starts by separating facts from presentation.
 
 > **Example.** `StudentOffering(student_name, course_code, term, capacity, status)` mixes an offering fact (`capacity`) with an enrollment fact (`status`). If 30 students enroll, the same capacity appears 30 times and can disagree. Put capacity in `Offering`; put status in `Enrollment`; create a view when a screen needs both.
 
-> **Invariant.** Every constraint has a scope. A key constrains rows of one relation. A foreign key constrains a reference across relations. A view controls a presented shape. None automatically proves an aggregate policy such as “at most capacity enrolled.”
+<MathStatement id="inv-constraint-scope" kind="invariant" title="Constraint scope and enforcement boundaries">
+Every constraint has a scope. A key constrains rows of one relation. A foreign key constrains a reference across relations. A view controls a presented shape. None automatically proves an aggregate policy such as “at most capacity enrolled.”
+</MathStatement>
 
-### Transfer task
+<ExerciseSet>
 
-**Input.** A university offers the same course code in two sections in the same term (`DB101` in `2026S`, sections 1 and 2), students may be `waitlisted`, and the registry contains these sample facts: students `s1`, `s2`, `s17`; offerings `o1 = (DB101, 2026S, section 1, capacity 30)`, `o2 = (DB101, 2026S, section 2, capacity 25)`.
+<Exercise id="ex-rel-legal-instance" type="verify" level="recall" title="Candidate Key and Referential Integrity Validation">
 
-**Task.** Sketch a revised `Offering` and `Enrollment` schema. State the grain and candidate key of each relation, then give one row that your constraints must reject and one they must accept.
+Consider `Student(student_id, display_name)`, `Offering(offering_id, course_code, term, capacity)`, and `Enrollment(student_id, offering_id, status)` with primary key `(student_id, offering_id)`. Suppose only student `s17` and offering `o3` exist in the database. Examine these candidate rows: `(s17, o3, 'enrolled')`, `(s17, o3, 'dropped')`, and `(s99, o3, 'enrolled')`. Which rows can legally coexist?
 
-**Falsifiable rubric.** A solution fails if any of these checks fails:
+<ExerciseSolution hint="Check the composite key first, then each foreign key.">
 
-1. `Enrollment` rows named `(s17, o1)` and `(s17, o1)` with different statuses are both *accepted*—the key must reject the duplicate.
-2. A row `(s1, o9)` with no matching offering is accepted—referential integrity must reject it.
-3. `course_code` alone is claimed as a candidate key of `Offering`—two 2026S sections disprove that claim.
-4. A waitlist is represented without an explicit ordering attribute, yet waitlist *order* is asserted.
+The first row can exist. The second conflicts with the same composite primary key, even though its `status` differs. The third violates the `student_id` foreign key because `s99` has no matching `Student` row. A history requirement needs a different key and grain; changing `status` alone does not create a new current-enrollment fact.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rel-constraint-types" type="construct" level="application" title="Narrowest Constraint Domain Selection">
+
+For each requirement, specify the narrowest SQL constraint that directly enforces it: (1) An offering cannot have negative capacity; (2) A student cannot appear twice in the same current offering; (3) Every enrollment names an existing offering; (4) A status must be `enrolled`, `waitlisted`, or `dropped`.
+
+<ExerciseSolution hint="Use a check for a predicate, a key for identity, and a foreign key for a cross-relation reference.">
+
+Use `CHECK (capacity >= 0)`, a primary or unique key on `(student_id, offering_id)`, a foreign key from `Enrollment.offering_id` to `Offering.offering_id`, and a check constraint or controlled ENUM status domain. These constraints do not by themselves enforce multi-row capacity limits; that requires transaction-aware isolation.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rel-projection-grain" type="describe" level="application" title="Set vs. Bag Projection Semantics">
+
+If an `Enrollment` relation contains two different students in `CS101`, what does projecting onto `course_code` produce under pure relational set semantics versus SQL bag semantics? Explain how to align the result grain with application intent.
+
+<ExerciseSolution hint="Projection removes attributes. Decide whether equal remaining tuples collapse.">
+
+With set semantics, the projection has one tuple `CS101`. With bag semantics, it has two occurrences of `CS101`. The source relation's grain was one enrollment; a result whose grain is one course should normally use `DISTINCT` deliberately rather than inherit duplicate behavior accidentally.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rel-schema-transfer" type="generalise" level="transfer" title="Multi-Section Offering Schema and Rubric Validation">
+
+A university offers the same course code across multiple sections in one term (`DB101` in `2026S`, sections 1 and 2). Design a revised `Offering` and `Enrollment` schema. State the grain and candidate key of each relation, provide one row combination your constraints reject, and describe how waitlist ordering is formally modeled.
 
 <ExerciseSolution hint="Course code is no longer enough to identify an offering. Keep the enrollment fact separate from the offering fact.">
 
-One solution is `Offering(offering_id, course_code, term, section, capacity)` with candidate key `offering_id` and perhaps `UNIQUE(course_code, term, section)`, plus `Enrollment(student_id, offering_id, status)` with key `(student_id, offering_id)`. The schema must reject a duplicate enrollment for the same student and offering (rubric check 1), an enrollment whose offering does not exist (check 2), and must not claim `course_code` as a key (check 3). Whether two waitlist entries are allowed is a policy question; their ordering needs its own explicit attribute and rule (check 4), such as `Enrollment(student_id, offering_id, status, waitlist_rank)` keyed on `(student_id, offering_id)` with a partial uniqueness rule on `(offering_id)` where `status = 'waitlisted'` ordered by `waitlist_rank`.
+One sound solution is `Offering(offering_id, course_code, term, section, capacity)` with candidate key `offering_id` and unique constraint `UNIQUE(course_code, term, section)`, plus `Enrollment(student_id, offering_id, status)` with composite key `(student_id, offering_id)`. The schema rejects duplicate enrollments for the same student in one section and rejects non-existent offerings. Waitlist ordering requires an explicit ranking attribute such as `waitlist_rank` with a partial uniqueness constraint.
+
 </ExerciseSolution>
 
-> **Scope boundary — deliberately omitted.** This lesson models constraints but does not develop functional-dependency inference, closure, or normal-form decomposition (BCNF/3NF proofs); those are prerequisites for the normalization lessons and are omitted here to keep this lesson's grain on schema review. Physical implementations of uniqueness (index structures), multi-row aggregate policies such as “at most capacity enrolled,” and authorization constraints are also out of scope.
+</Exercise>
 
-## References
+</ExerciseSet>
+
+## References & Further Reading
 
 - E. F. Codd, “A Relational Model of Data for Large Shared Data Banks,” *Communications of the ACM* 13(6), pp. 377–387 (1970) — relational vocabulary, relations vs. implementation. [ACM DOI](https://doi.org/10.1145/362384.362685) · [IBM Research page](https://research.ibm.com/publications/a-relational-model-of-data-for-large-shared-data-banks)
 - Ramakrishnan & Gehrke, *Database Management Systems*, 3rd ed. (McGraw-Hill, 2003) — §3.2.1 superkeys and candidate keys; §3.1 relation schema and instance; §3.4 integrity constraints over instances.

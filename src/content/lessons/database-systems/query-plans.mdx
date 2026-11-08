@@ -18,7 +18,10 @@ estimatedMinutes: 480
 assessment: Given an unseen SQL query, table statistics, and two candidate plans, derive intermediate cardinalities, reject an unjustified plan choice, and explain how a changed data distribution reverses the decision.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Figure from '../../../components/Figure.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import MathStatement from '../../../components/MathStatement.astro';
 import QueryPlanCostPlayground from '../../../components/playgrounds/QueryPlanCostPlayground';
@@ -73,6 +76,8 @@ For a relation $R$ with $|R|$ rows and a predicate with selectivity $s$, a simpl
 
 Suppose `orders` contains 10,000,000 rows and 1% are failed. The filter estimate is 100,000 rows. If 80% of failures belong to one enterprise tenant, treating `tenant_id` and `status` as independent can underestimate that tenant's result by nearly two orders of magnitude. That error can turn a nested loop chosen for a tiny outer input into repeated expensive probes.
 
+<Figure id="fig-selectivity-cost" />
+
 <QueryPlanCostPlayground client:load />
 
 Vary selectivity and page count, then predict before revealing a plan. The model exposes a bounded scan/index/join trade-off; it does not claim a real DBMS uses its exact coefficients. Its value is making the hidden assumption visible: a selective access path becomes worse when the matching set approaches a scan.
@@ -81,11 +86,7 @@ Vary selectivity and page count, then predict before revealing a plan. The model
 
 Assume a 1,000-page `orders` table, a 20-page `customer` table, and a predicate that returns 2 orders. A nested-loop plan that probes an index for two customers may be excellent. If stale statistics estimate 2 but actual rows are 200,000, the same plan can perform 200,000 probes; a hash join with a 20-page customer build may dominate. The logical query did not change. The cardinality claim did.
 
-<ExerciseSolution title="What evidence distinguishes a bad estimate from a bad algorithm?">
-
-Compare `EXPLAIN` estimates with `EXPLAIN ANALYZE` actual rows at the first divergent node. If the estimate is wrong, inspect stale statistics, skew, correlation, parameter-sensitive values, and predicate semantics. If estimates are sound but the cost model still chooses poorly, measure its I/O, memory, and cache assumptions before forcing a plan.
-
-</ExerciseSolution>
+> **Remark (Distinguishing statistical error from algorithm selection).** Compare `EXPLAIN` estimates with `EXPLAIN ANALYZE` actual rows at the first divergent node. If the estimate is wrong, inspect stale statistics, skew, correlation, parameter-sensitive values, and predicate semantics. If estimates are sound but the cost model still chooses poorly, measure its I/O, memory, and cache assumptions before forcing a plan.
 
 ## Physical algorithms expose different failure modes
 
@@ -130,16 +131,35 @@ Volcano/Cascades optimizers search top-down instead. A **memo** stores equivalen
 > **Warning.** When a plan is bad, name which of three failures you are diagnosing: the optimizer never generated the useful equivalent plan, it generated and pruned it using a wrong cost, or it estimated the inputs incorrectly. “The optimizer is dumb” diagnoses none of them.
 
 <Quiz client:load
-  title="Search strategy versus cost model"
-  question="A query uses a nested loop. A filter estimates 50 rows but produces 50,000, causing many more inner probes than expected. Which diagnosis is best supported?"
+  title="Search strategy versus cost model diagnosis"
+  question="A query plan selects a nested loop with index probe. The planner estimates 50 outer rows, but execution observes 50,000 outer rows, causing severe probe degradation. Evaluate which diagnostic conclusions are sound:"
   options={[
-    "The optimizer's search space is missing left-deep trees",
-    "The cost model was applied to a cardinality estimate that the data contradicts",
-    "The query is semantically ambiguous and must be rewritten as a union",
-    "The database must be using a rule-based optimizer with no cost model"
+    {
+      id: "claim-cardinality-mismatch",
+      text: "The cost model was applied to an input cardinality estimate that the actual data distribution severely contradicts.",
+      isCorrect: true,
+      feedback: "Correct. A 1,000x underestimation of outer rows invalidates the nested loop cost calculation without implying optimizer design defects."
+    },
+    {
+      id: "claim-multivariate-skew",
+      text: "Correlated predicates or data skew across tenant attributes can cause standard single-column statistics to misestimate selectivity.",
+      isCorrect: true,
+      feedback: "Correct. Assuming column independence when attributes are correlated leads to compounding multiplicative estimation errors."
+    },
+    {
+      id: "claim-missing-left-deep",
+      text: "The execution degradation proves that the optimizer search engine lacks support for standard left-deep join tree enumeration.",
+      isCorrect: false,
+      feedback: "Incorrect. Nested loop joins are fundamental left-deep shapes; the defect is statistical estimation error, not search space omissions."
+    },
+    {
+      id: "claim-syntax-rewrite",
+      text: "This performance anomaly indicates the relational query is semantically ambiguous and must be converted into a UNION construct.",
+      isCorrect: false,
+      feedback: "Incorrect. The query semantics are mathematically unambiguous; physical execution slowdown is purely a cost and cardinality defect."
+    }
   ]}
-  correctIndex={1}
-  explanation="The estimate is 1,000 times smaller than the observed input. Inspect the first divergent node, statistics, skew, and correlation before attributing the choice to a missing plan shape or the absence of a cost model. A cardinality error is evidence, not by itself proof that correcting statistics will select the best plan."
+  explanation="When actual rows diverge sharply from estimates, inspect histograms, multivariate statistics, and predicate correlation before asserting optimizer engine defects."
 />
 
 ## Plans must be read as conditional evidence
@@ -163,6 +183,60 @@ A table has independent-looking global statistics: 1% `status='failed'`, 1% `reg
 <ExerciseSolution hint="The missing fact is correlation, not arithmetic competence.">
 Global independence predicts about $0.01\%$ of rows, while the north subset predicts about $0.9\%$ if north is 1% of the table. The response can include richer/multivariate statistics, a partition-aware estimate, a targeted index only if the workload supports it, and a regression query against the skew. Hard-coding one plan hides the data-distribution cause.
 </ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-qp-cardinality-independence" type="verify" level="application" title="Attribute Independence Assumption Failure in Cardinality Estimation">
+
+Referring to <Ref id="plan-cardinality" />, explain why estimating $|\sigma_{A=a \land B=b}(R)|$ as $s_A \cdot s_B \cdot |R|$ fails severely when $A$ and $B$ are strongly correlated, and describe how extended multivariate statistics repair the calculation.
+
+<ExerciseSolution hint="Multiplying independent probabilities understates joint selectivity when values co-occur.">
+
+The product rule $s_A \cdot s_B$ assumes statistical independence. If attribute $A$ implies or strongly concentrates attribute $B$ (e.g. city and zip code), joint occurrences are vastly higher than their independent product, causing the optimizer to severely underestimate cardinality. Creating multivariate extended statistics (such as n-distinct or dependency statistics) provides joint distribution frequencies directly to the planner.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-qp-selectivity-crossover" type="describe" level="recall" title="Index vs. Sequential Scan Cost Crossover Analysis">
+
+As visualized in the selectivity-cost crossover curve, describe the physical hardware reasons why an unclustered index scan becomes more expensive than a sequential heap scan once selectivity exceeds approximately 2% to 5%.
+
+<ExerciseSolution hint="Compare sequential read throughput with random page lookup overhead.">
+
+Sequential table scans read contiguous disk blocks with sequential read-ahead buffering and predictable page cache replacement. An unclustered index scan must dereference heap tuple IDs randomly across table pages. Once selectivity exceeds a few percent, the number of random heap page fetches approaches or exceeds the total pages in the relation, making the sequential scan faster.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-qp-join-enumeration-cost" type="construct" level="application" title="Dynamic Programming Join Order Cost Calculation">
+
+Given relations $A$ (100 rows), $B$ (1,000 rows), and $C$ (10 rows), with $|A \bowtie B| = 50$, $|B \bowtie C| = 100$, and cost formula $\text{Cost}(L \bowtie R) = |L| + |R|$. Calculate and compare the total join cost of plan $(A \bowtie B) \bowtie C$ versus $(B \bowtie C) \bowtie A$.
+
+<ExerciseSolution hint="Sum the cost of the first join and the subsequent join on the intermediate result.">
+
+1. Plan 1: First join $A \bowtie B$ has cost $100 + 1{,}000 = 1{,}100$, emitting 50 rows. Second join $(A \bowtie B) \bowtie C$ has cost $50 + 10 = 60$. Total cost = $1{,}100 + 60 = 1{,}160$.
+2. Plan 2: First join $B \bowtie C$ has cost $1{,}000 + 10 = 1{,}010$, emitting 100 rows. Second join $(B \bowtie C) \bowtie A$ has cost $100 + 100 = 200$. Total cost = $1{,}010 + 200 = 1{,}210$.
+Plan 1 is cheaper by 50 units because its first join generates a smaller intermediate cardinality.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-qp-correlated-skew-transfer" type="generalise" level="transfer" title="Multivariate Statistics and Skewed Tenant Distribution Transfer">
+
+A multi-tenant database contains 10,000,000 orders where tenant 42 owns 80% of all orders and 90% of all failed orders. Standard planner histograms treat `tenant_id` and `status` as uniformly distributed and independent. Predict the planner's access path choice under naive statistics versus observed execution, and propose the architectural resolution.
+
+<ExerciseSolution hint="Contrast the cost of nested loops using index probes against hash joins under massive skew.">
+
+Under naive independence, the planner predicts $0.01 \times 0.01 \times 10{,}000{,}000 = 1{,}000$ rows, selecting a nested loop join with index lookup. In reality, tenant 42 generates over 7,000,000 rows, turning the index probe into an catastrophic loop of millions of random disk reads. The resolution is to collect multivariate tenant-frequency statistics (`CREATE STATISTICS`) or partition the relation by tenant so large tenants receive dedicated, accurate local statistics.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

@@ -1,16 +1,47 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml } from 'yaml';
+import { loadCourseStructure } from '../src/lib/courseStructure.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const activeCourses = ['calculus-intro', 'computer-architecture', 'operating-systems', 'database-systems'];
 const failures = [];
-const componentNames = new Set(['Quiz', 'CodeRunner', 'CodeExercise', 'CaseStudy', 'PlantUML', 'PythonDiagram', 'TikZ', 'Math', 'MathStatement', 'MathProof', 'ExerciseSolution', ...fs.readdirSync(path.join(root, 'src/components/playgrounds')).filter((name) => name.endsWith('.tsx')).map((name) => path.basename(name, '.tsx'))]);
+const componentNames = new Set([
+  'Quiz',
+  'CodeRunner',
+  'CodeExercise',
+  'FillInExercise',
+  'CaseStudy',
+  'PlantUML',
+  'PythonDiagram',
+  'TikZ',
+  'Math',
+  'MathStatement',
+  'MathProof',
+  'ExerciseSolution',
+  'Exercise',
+  'ExerciseSet',
+  'Ref',
+  'SummaryTable',
+  'Figure',
+  'Problem',
+  'ProblemSet',
+  'ExamQuestion',
+  'ExamAttempt',
+  'PracticeGenerator',
+  'MarkingScheme',
+  ...fs.readdirSync(path.join(root, 'src/components/playgrounds')).filter((name) => name.endsWith('.tsx')).map((name) => path.basename(name, '.tsx')),
+]);
 
 for (const courseId of activeCourses) {
-  const manifest = parseYaml(fs.readFileSync(path.join(root, `src/data/course-manifests/${courseId}.yml`), 'utf8'));
-  const listed = new Set(manifest.modules.flatMap((module) => module.lessons));
+  let structure;
+  try {
+    structure = loadCourseStructure(courseId, { root });
+  } catch (err) {
+    failures.push(`Failed loading structure for ${courseId}: ${err.message}`);
+    continue;
+  }
+  const listed = new Set(structure.pages.map((page) => page.slug));
   const lessonDir = path.join(root, 'src/content/lessons', courseId);
   const files = fs.readdirSync(lessonDir).filter((name) => /\.mdx?$/.test(name));
   for (const fileName of files) {
@@ -28,7 +59,7 @@ for (const courseId of activeCourses) {
     }
     for (const match of source.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)) {
       const name = match[1];
-      if (componentNames.has(name) && /Playground$|^(Quiz|CodeRunner|CodeExercise|CaseStudy)$/.test(name)) {
+      if (componentNames.has(name) && /Playground$|^(Quiz|CodeRunner|CodeExercise|FillInExercise|CaseStudy)$/.test(name)) {
         const tail = source.slice(match.index, match.index + 500);
         if (!/client:load\b/.test(tail)) failures.push(`${courseId}/${fileName}: interactive ${name} must use client:load`);
       }

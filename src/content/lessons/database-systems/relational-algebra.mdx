@@ -15,9 +15,11 @@ estimatedMinutes: 420
 assessment: Given a registration dataset and a requirement involving all required courses, derive an algebra expression, trace it, and identify one unsafe rewrite under outer-join or bag semantics.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import MathProof from '../../../components/MathProof.astro';
 import MathStatement from '../../../components/MathStatement.astro';
+import Ref from '../../../components/Ref.astro';
 import RelationalAlgebraPlayground from '../../../components/playgrounds/RelationalAlgebraPlayground';
 
 
@@ -167,18 +169,76 @@ List the three facts you would check before accepting the rewrite.
 Check that the join is inner, the predicate reads only `R` attributes, and the intended semantics support the stated selection law (including how duplicate rows and `NULL` values are handled in the actual SQL dialect). Also confirm that `term` means the same thing at this point in the expression; an alias or prior rename can change that fact.
 </ExerciseSolution>
 
-## Transfer task: derive, then validate
+<ExerciseSet>
 
-> **Remark.** A universal requirement becomes an ordinary difference once you make the expected pairs explicit. Keep the candidate population, required set, and time scope visible in the expression.
+<Exercise id="ex-ra-intermediate-grain" type="describe" level="recall" title="Intermediate Schema and Tuple Projection">
 
-Define `Student(sid)`, `Course(cid)`, `Taken(sid, cid, term)`, and `Core(cid)`. Derive an expression for students who took every core course in `2026S` but no non-core course in that term. State the schema of each difference operand. Then test your expression against a three-student, two-course dataset of your own.
+Given relation schema $Enrollment(sid, cid, term)$ and selection $\sigma_{term = \text{'2026S'}}(Enrollment)$, determine the schema and result grain of $\pi_{sid,cid}\bigl(\sigma_{term = \text{'2026S'}}(Enrollment)\bigr)$. Explain why dropping $term$ affects subsequent multi-term queries.
 
-<ExerciseSolution hint="Reuse expected-minus-completed for the “every core” part. Build a second set of students with a non-core enrollment, then subtract it.">
+<ExerciseSolution hint="Selection preserves all attributes; projection then retains only sid and cid.">
 
-First project the current-term rows to the exact pair used by the expected relation: $Completed = \pi_{sid,cid}(\sigma_{term=\text{'2026S'}}(Taken))$. The projection is essential: `term` is a filter attribute, not part of the `(sid,cid)` difference schema. Then let $Expected = \pi_{sid}(Student) \times Core$, and $AllCore = \pi_{sid}(Student) - \pi_{sid}(Expected - Completed)$. For non-core courses, first make a course relation compatible with `Core`, such as $NonCore = \pi_{cid}(Course) - Core$, then compute $HasNonCore = \pi_{sid}(Completed \bowtie NonCore)$. The answer is $AllCore - HasNonCore$. In the two key differences, `(sid, cid)` is compatible with `(sid, cid)` and `(cid)` is compatible with `(cid)`.
+The output schema is $(sid, cid)$ with tuples representing students actively enrolled in a course during 2026S. Because $term$ is omitted from the projected schema, the output relation loses temporal context and cannot be directly intersected with other terms without reapplying a term qualifier.
+
 </ExerciseSolution>
 
-## References
+</Exercise>
+
+<Exercise id="ex-ra-pushdown-validation" type="verify" level="application" title="Inner-Join Pushdown Precondition Check">
+
+An engineer proposes rewriting $\sigma_{R.term = \text{'2026S'}}(R \bowtie_{R.sid = S.sid} S)$ into $\sigma_{R.term = \text{'2026S'}}(R) \bowtie_{R.sid = S.sid} S$. Referring to <Ref id="ra-pushdown" />, verify whether this rewrite is valid under two-valued set semantics, and identify one condition under which it fails for outer joins.
+
+<ExerciseSolution hint="Check predicate attribute dependency and outer-join null extension semantics.">
+
+Under two-valued set semantics, the rewrite is valid because the selection predicate references only attributes of $R$ and the join is an inner equijoin. For a left outer join where the predicate references $S$ instead (e.g. $S.flag = \text{'Y'}$), pushing the predicate into $S$ retains non-matching $R$ tuples with NULL padding, whereas the post-join filter eliminates them.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-ra-universal-derivation" type="construct" level="application" title="Universal Division via Difference Formulation">
+
+Let $Student(sid, cohort)$, $Required(cid)$, and $Enrollment(sid, cid, term)$ be set relations. Using relational algebra operators from <Ref id="ra-operators" />, construct an expression that returns all students in the `first_year` cohort who are enrolled in every course in $Required$ during term `2026S`.
+
+<ExerciseSolution hint="Restrict candidate students first before constructing the Cartesian product of expected pairs.">
+
+Define candidate first-year students and expected pairs:
+$$
+\begin{aligned}
+Eligible &= \sigma_{cohort = \text{'first\_year'}}(Student) \\
+Expected &= \pi_{sid}(Eligible) \times Required \\
+Enrolled &= \pi_{sid,cid}\bigl(\sigma_{term = \text{'2026S'}}(Enrollment)\bigr) \\
+Missing &= Expected - Enrolled \\
+Answer &= \pi_{sid}(Eligible) - \pi_{sid}(Missing)
+\end{aligned}
+$$
+Filtering candidates before forming the product avoids generating missing pairs for unrelated cohorts.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-ra-dual-difference-transfer" type="generalise" level="transfer" title="Constrained Core-Course Enrollment Derivation">
+
+Let $Student(sid)$, $Course(cid)$, $Taken(sid, cid, term)$, and $Core(cid)$ be set relations. Derive an algebra expression for students who took every core course in `2026S` but took no non-core course in that term. State the compatibility of schemas in every difference operation.
+
+<ExerciseSolution hint="Derive universal completion of Core, then subtract the set of students with non-core enrollments.">
+
+First isolate 2026S completions: $Completed = \pi_{sid,cid}(\sigma_{term = \text{'2026S'}}(Taken))$. Compute students completing all core courses:
+$$
+\begin{aligned}
+ExpectedCore &= \pi_{sid}(Student) \times Core \\
+AllCore &= \pi_{sid}(Student) - \pi_{sid}(ExpectedCore - Completed)
+\end{aligned}
+$$
+Next isolate non-core courses: $NonCore = \pi_{cid}(Course) - Core$ (both schema $(cid)$). Find students with any non-core course: $HasNonCore = \pi_{sid}(Completed \bowtie NonCore)$. The final answer is $AllCore - HasNonCore$. Both operands have schema $(sid)$.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
 
 - [E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (IBM Research, 1970)](https://research.ibm.com/publications/a-relational-model-of-data-for-large-shared-data-banks)
 - [Ramakrishnan and Gehrke, *Database Management Systems*: open-access contents](https://pages.cs.wisc.edu/~dbbook/openAccess/secondEdition/dbbook.toc.html)

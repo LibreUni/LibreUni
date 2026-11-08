@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { loadCourseStructure } from '../src/lib/courseStructure.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -26,6 +27,7 @@ test('agent router exposes the shared operating contract', () => {
   for (const relativePath of [
     'docs/agent-rules/BASELINE.md',
     'docs/agent-rules/TASKS.md',
+    'docs/agent-rules/COURSE_STRUCTURE.md',
     'docs/agent-rules/ROLES.md',
     'docs/agent-rules/SKILLS.md',
     'docs/agent-rules/VALIDATION.md',
@@ -80,17 +82,10 @@ test('course manifests are exact, ordered indexes rather than best-effort naviga
 
   for (const manifestName of fs.readdirSync(manifestDir).filter((name) => name.endsWith('.yml') && activeCourses.includes(path.basename(name, '.yml'))).sort()) {
     const courseId = path.basename(manifestName, '.yml');
-    const manifest = parseYaml(read(`src/data/course-manifests/${manifestName}`));
-    assert.ok(Array.isArray(manifest?.modules) && manifest.modules.length > 0, `${courseId} must declare non-empty modules`);
+    const structure = loadCourseStructure(courseId, { root });
+    assert.ok(structure.modules.length > 0, `${courseId} must declare non-empty modules`);
 
-    const listed = [];
-    for (const [moduleIndex, module] of manifest.modules.entries()) {
-      assert.equal(typeof module?.title, 'string', `${courseId} module ${moduleIndex + 1} needs a title`);
-      assert.ok(module.title.trim().length > 0, `${courseId} module ${moduleIndex + 1} title cannot be empty`);
-      assert.ok(Array.isArray(module.lessons) && module.lessons.length > 0, `${courseId}/${module.title} needs lessons`);
-      listed.push(...module.lessons);
-    }
-
+    const listed = structure.pages.map((p) => p.slug);
     assert.equal(new Set(listed).size, listed.length, `${courseId} manifest contains a duplicate lesson slug`);
 
     const lessonDir = path.join(lessonsRoot, courseId);
@@ -110,8 +105,8 @@ test('declared workload totals match every active course manifest', () => {
   const expectedHours = { 'calculus-intro': 28, 'computer-architecture': 187, 'operating-systems': 189.5, 'database-systems': 180 };
   for (const courseId of activeCourses) {
     const metadata = JSON.parse(read(`src/content/courses/${courseId}.json`));
-    const manifest = parseYaml(read(`src/data/course-manifests/${courseId}.yml`));
-    const listed = manifest.modules.flatMap((module) => module.lessons);
+    const structure = loadCourseStructure(courseId, { root });
+    const listed = structure.pages.map((p) => p.slug);
     const minutes = listed.map((slug) => Number(read(`src/content/lessons/${courseId}/${slug}.mdx`).match(/^estimatedMinutes:\s*([0-9]+(?:\.[0-9]+)?)\s*$/m)?.[1] ?? 0));
     assert.ok(minutes.every((value) => value > 0), `${courseId} lessons need positive workload estimates`);
     assert.equal(minutes.reduce((sum, value) => sum + value, 0) / 60, expectedHours[courseId], `${courseId} workload must match declared hours`);
@@ -186,8 +181,8 @@ test('Operating Systems uses concept-specific interactive models across every mo
     'containers-and-resource-control': 'IsolationBoundaryPlayground',
     'multicore-scalability-observability': 'LockScalabilityPlayground',
   };
-  const manifest = parseYaml(read('src/data/course-manifests/operating-systems.yml'));
-  const moduleByLesson = new Map(manifest.modules.flatMap((module, index) => module.lessons.map((slug) => [slug, index])));
+  const osStructure = loadCourseStructure('operating-systems', { root });
+  const moduleByLesson = new Map(osStructure.pages.map((page) => [page.slug, (page.moduleIndex ?? 1) - 1]));
   const coveredModules = new Set();
 
   for (const [slug, component] of Object.entries(expectedModels)) {

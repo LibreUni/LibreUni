@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 360
 assessment: Given an unfamiliar MMIO device, event rate, transfer-size distribution, ring snapshot, and injected failure, derive the I/O mechanism and ordering protocol, calculate CPU occupancy, trace ownership to completion, and reject any recovery that reuses a buffer while the device can still access it.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -61,16 +63,15 @@ Confusing these layers often produces code that passes on one machine because it
 </ExerciseSolution>
 
 <Quiz client:load
-  title="What volatile does not order"
-  question="A driver writes two MMIO command registers through volatile pointers. Which guarantee does volatile supply for the device?"
+  title="Device memory access and DMA ordering invariants"
+  question="Evaluate each statement regarding memory-mapped IO registers, volatile qualifiers, and DMA synchronization:"
   options={[
-    "It orders the two stores so that the device observes them in the intended program order.",
-    "It stops the compiler from removing or merging the access, but it creates no ordering for the device or another CPU.",
-    "It is equivalent to a device write barrier on every weakly ordered platform.",
-    "It creates a lock that the device also acquires before it reads the command registers."
+    { id: "opt-dma-volatile-scope", text: "The C volatile qualifier prevents compiler reordering but does not issue hardware memory barriers to devices.", isCorrect: true },
+    { id: "opt-dma-ownership-fence", text: "Drivers must execute a device write memory barrier before writing the doorbell to publish DMA descriptors.", isCorrect: true },
+    { id: "opt-dma-coherent-unfenced", text: "Hardware cache coherence eliminates the need for software memory barriers when publishing ring buffer entries.", isCorrect: false },
+    { id: "opt-dma-timeout-immediate", text: "When a DMA request times out, drivers can safely reallocate the buffer immediately without waiting for reset.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="volatile constrains only how the compiler treats the access; it neither serializes CPU threads nor orders CPU memory operations with respect to device observation. A device write barrier supplies the ordering, and a spinlock serializes CPUs but is not acquired by the device."
+  explanation="volatile informs only compiler optimizations, not CPU-device bus synchronization. A hardware write barrier ensures descriptors are completely visible in RAM before the doorbell is rung. Cache coherence keeps caches in sync but does not enforce operation ordering across out-of-order execution, and reusing a buffer before device quiescence invites memory corruption."
 />
 
 ## Polling and interrupts trade work for notification latency
@@ -281,63 +282,151 @@ Stop admitting new submissions; mark the device stopping; mask or route interrup
 
 </ExerciseSolution>
 
-## Synthesis assessment: design from an unfamiliar data sheet
-
-A sensor device exposes five 32-bit MMIO registers:
-
-- `DESC_LO` and `DESC_HI`: 64-bit DMA descriptor address, low half written first;
-- `CONTROL.START`: writing 1 transfers one descriptor;
-- `STATUS`: bit 0 `DONE`, bit 1 `ERROR`; reading does not clear;
-- `ACK`: writing the observed status bits clears them.
-
-The descriptor is `{ uint64_t data_addr; uint32_t len; uint32_t generation; }`. The device reads the descriptor, writes `len` bytes into the named buffer, and raises an interrupt, but `STATUS` returns neither the descriptor address nor its generation. The platform is DMA-coherent but weakly ordered. The driver offers two host paths: a staged path points the descriptor at a persistent, pre-mapped 8 KiB bounce buffer and copies completed bytes to the destination; a direct-DMA path maps the destination itself. A 3 GHz CPU pays 900 staged-path setup cycles, 1,500 interrupt cycles, and two cycles per CPU-copied byte. Direct-DMA setup costs 2,400 cycles instead of 900 and performs no CPU copy. Events arrive at 20,000/s with sizes 64 bytes (90%) and 8 KiB (10%). Only one request is current in this bounded interface model.
-
-Produce:
-
-1. weighted CPU occupancy for interrupt-driven CPU copy and for DMA;
-2. a justified per-size mechanism or one uniform mechanism;
-3. exact publication and completion ordering;
-4. lifecycle states that detect a duplicate notification before reap, plus an explanation of why private generation cannot authenticate a completion after descriptor reuse; and
-5. tests for publish-first, wake-before-state, invalid length, nonzero error, duplicate-before-reap, and timeout followed by late DMA.
-
-<ExerciseSolution title="Reveal reference solution and rubric">
-
-Expected size is `0.9×64 + 0.1×8192 = 876.8 bytes`.
-
-Interrupt-driven CPU copy work is `900 + 1500 + 2×876.8 = 4153.6 cycles/event`. At 20,000/s this is 83,072,000 cycles/s, or 2.77% of a 3 GHz CPU. DMA work is `2400 + 1500 = 3900 cycles/event`, or 2.60%. A uniform DMA policy barely wins CPU occupancy under the average model. A per-size policy uses CPU copy for 64-byte events (`2528` cycles versus `3900`) and DMA for 8 KiB (`18,784` versus `3900`), reducing expected work to `0.9×2528 + 0.1×3900 = 2665.2 cycles/event`, or 1.78% CPU. The conclusion excludes queueing and switching overhead between paths.
-
-Safe submission: reserve the persistent staging buffer or pin/map the direct destination → validate capacity and fill the descriptor, including the software generation → DMA/device write barrier → write descriptor address halves in documented order → barrier required before command → write `START`. Completion: read and retain the observed status bits → acknowledge those bits as specified → synchronize device-written data for CPU if the platform API requires it → require the one current request to be `IN_FLIGHT` and validate its recorded length and returned status → on the staged path, copy exactly that validated length from the bounce buffer to the destination → set terminal state under lock → wake → only then unmap/release and recycle after waiter ownership transfers.
-
-Lifecycle example: `FREE(g) → PREPARED(g) → IN_FLIGHT(g) → COMPLETED(g) → REAPED(g) → FREE(g+1)`. A second `DONE` notification while generation $g$ remains `COMPLETED` is a detectable pre-reap duplicate and must not cause a second transition or release. After reuse, however, the interface returns no identity that distinguishes a late completion for $g$ from a completion for $g+1$. The private generation supports software auditing; it does not authenticate `STATUS`. Reuse after an uncertain timeout therefore requires verified device quiescence/reset, or the buffer and descriptor must remain quarantined.
-
-Tests:
-
-- force `START` before descriptor visibility and require the harness to observe/reject stale fields;
-- schedule the waiter between wake and state in the mutant and require bounded completion in the correct build;
-- inject `len > buffer_capacity` and require no publication/DMA;
-- inject `STATUS.ERROR` and require an error, not success data;
-- inject a second `DONE` before reap and require duplicate-state detection with no second wake or release;
-- delay completion past the timeout and require that the buffer is not reused until quiescence/cancellation is proven.
-
-Rubric, 30 points:
-
-- 7 points: dimensional CPU calculations and workload weighting;
-- 4 points: mechanism choice tied to size distribution;
-- 7 points: publication/completion ordering with device-visible barriers;
-- 5 points: interface-aware lifecycle, pre-reap duplicate detection, and the post-reuse identity boundary;
-- 7 points: tests distinguish all six named wrong implementations or failure modes.
-
-Any design that frees a timed-out DMA buffer before quiescence violates the ownership invariant and cannot receive more than 15 points.
-
-</ExerciseSolution>
-
-## Deliberate boundary and source trail
-
 > **Remark.** This lesson establishes the fundamental producer-consumer ring and DMA ownership invariants required by the Device Driver Lab, deliberately deferring multi-queue interrupt steering (MSI-X), adaptive polling/interrupt switching (NAPI), and PCIe transaction-layer packet ordering to specialized systems references.
 
-The numerical model excludes queueing, cache misses, IOMMU costs, interrupt routing, power states, and device parallelism. The protocol model uses a generic ring plus Virtio as normative evidence; individual hardware requires its own data sheet. PCIe transaction layers, NAPI, MSI-X, IOMMU programming, and production reset flows remain bounded extensions.
+<ExerciseSet>
 
-{/* Source tracking: xv6's interrupt-driven Virtio block path and PLIC dispatch were checked at revision 5 in kernel/virtio_disk.c and kernel/trap.c; no xv6 code or assignment text is reproduced. */}
+<Exercise id="ex-dma-polling-interrupt-crossover" type="verify" level="application" title="Calculating the Polling versus Interrupt CPU Occupancy Crossover">
+
+A peripheral device produces I/O events at mean rate $\lambda$ events per second.
+- Polling implementation: The CPU polls every $P = 20\ \mu\text{s}$, with each poll requiring $C_p = 100\text{ ns}$ of CPU execution time.
+- Interrupt-driven implementation: Each event triggers a hardware interrupt requiring $C_i = 4\ \mu\text{s}$ of CPU service time (entry, context save, driver handler, EOI acknowledgment, context restore).
+
+1. Calculate the steady-state CPU occupancy of the polling driver ($U_{\text{poll}}$).
+2. Compute the event arrival rate $\lambda^*$ at which the interrupt-driven driver consumes identical CPU occupancy ($U_{\text{intr}} = U_{\text{poll}}$).
+3. If the actual arrival rate is $\lambda = 2500\text{ events/s}$, determine which notification strategy minimizes CPU overhead.
+
+<ExerciseSolution hint="Occupancy for polling is C_p / P; occupancy for interrupts is lambda * C_i.">
+
+1. **Polling occupancy:**
+   $$
+   U_{\text{poll}} = \frac{C_p}{P} = \frac{100\text{ ns}}{20\ \mu\text{s}} = \frac{0.1\ \mu\text{s}}{20\ \mu\text{s}} = 0.005 = 0.5\%.
+   $$
+2. **Crossover arrival rate $\lambda^*$:**
+   Set $U_{\text{intr}} = \lambda^* C_i = U_{\text{poll}}$:
+   $$
+   \lambda^* \times 4\ \mu\text{s} = 0.005 \implies \lambda^* = \frac{0.005}{4 \times 10^{-6}\text{ s}} = 1250\text{ events/s}.
+   $$
+3. **Evaluation at $\lambda = 2500\text{ events/s}$:**
+   $$
+   U_{\text{intr}} = 2500 \times (4 \times 10^{-6}\text{ s}) = 0.010 = 1.0\%.
+   $$
+   Because $\lambda = 2500 > \lambda^* = 1250$, polling consumes $0.5\%$ CPU whereas interrupts consume $1.0\%$. Polling minimizes CPU occupancy at this arrival rate.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-dma-descriptor-ring-ordering" type="construct" level="application" title="Memory Barrier Placement in Producer-Consumer Descriptor Rings">
+
+A driver submits a DMA packet by populating a ring descriptor `desc[idx]` in host RAM (fields: `buffer_pa`, `length`, `flags`) and subsequently ringing an MMIO doorbell register `DOORBELL = idx` to notify the network device.
+1. Explain the race condition that occurs if the CPU or compiler reorders the doorbell store before the descriptor field stores.
+2. Specify the exact memory barrier or fence required between the descriptor initialization and the MMIO doorbell write on weakly ordered architectures.
+
+<ExerciseSolution hint="The device starts fetching memory immediately upon receiving the doorbell write.">
+
+1. **Reordering race condition:**
+   If the MMIO store to `DOORBELL` reaches the peripheral before the writes to `desc[idx]` retire to coherent RAM or cache, the device immediately reads `desc[idx]`. The device observes uninitialized or stale descriptor values (e.g., an old buffer address or invalid length), causing the device to read or overwrite unauthorized host memory.
+2. **Barrier specification:**
+   The driver must place a release memory barrier or write memory barrier (`smp_wmb()` or `atomic_thread_fence(memory_order_release)`) immediately before the doorbell store:
+   ```c
+   desc[idx].buffer_pa = dma_addr;
+   desc[idx].length = packet_len;
+   desc[idx].flags = DESC_VALID;
+   dma_wmb(); /* guarantees memory writes precede MMIO writes */
+   mmio_write32(&dev->doorbell, idx);
+   ```
+   This enforces the happens-before relationship:
+   $$
+   \text{Write}(\text{Descriptor Fields}) \prec \text{Write}(\text{MMIO Doorbell}).
+   $$
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-dma-dma-vs-pio-cost-model" type="construct" level="transfer" title="Deriving Transfer-Size Thresholds for DMA versus Programmed I/O">
+
+A 2 GHz CPU executes programmed I/O (PIO) or direct memory access (DMA):
+- PIO setup is negligible, but copying requires 3 CPU cycles per transferred byte.
+- DMA setup requires pinning pages, setting up descriptors, and cache flushing/invalidation, costing a fixed $T_{\text{setup}} = 1800\text{ cycles}$. The DMA engine transfers data without CPU intervention.
+- Both schemes pay a fixed $T_{\text{intr}} = 1200\text{ cycles}$ for completion interrupt processing.
+
+1. Write the CPU cycle cost functions $C_{\text{PIO}}(B)$ and $C_{\text{DMA}}(B)$ for a transfer of $B$ bytes.
+2. Find the breakeven transfer size $B^*$ where DMA becomes strictly more efficient for CPU occupancy than PIO.
+
+<ExerciseSolution hint="Set C_PIO(B) = C_DMA(B) and solve for B.">
+
+1. **Cost functions:**
+   - For Programmed I/O: $C_{\text{PIO}}(B) = T_{\text{intr}} + 3 \cdot B = 1200 + 3B\text{ cycles}$.
+   - For DMA: $C_{\text{DMA}}(B) = T_{\text{setup}} + T_{\text{intr}} = 1800 + 1200 = 3000\text{ cycles}$.
+2. **Breakeven size $B^*$:**
+   $$
+   1200 + 3B^* = 3000 \implies 3B^* = 1800 \implies B^* = 600\text{ bytes}.
+   $$
+   For transfers strictly greater than 600 bytes, DMA is more CPU-efficient; for transfers smaller than 600 bytes (e.g., 64-byte control packets), PIO avoids the setup tax and reduces total CPU load.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-dma-timeout-quiescence-race" type="prove" level="synthesis" title="Proving Buffer Invariant Violations on Premature Timeout Reclamation">
+
+Suppose a disk driver submits a DMA read request for physical buffer $B$. After 5 seconds, the request has not completed, and a software timeout fires. Prove that unmapping $B$ and immediately reallocating it to an unrelated process violates the buffer-ownership invariant unless the device is proven quiesced.
+
+<ExerciseSolution hint="A timeout measures only software wait time, not device bus state; the device may commit transfer cycles later.">
+
+Assume for contradiction that the driver frees and reallocates buffer $B$ to Process $P_2$ immediately upon timeout expiration without issuing a hardware reset or awaiting device quiescence:
+1. The expiration of a software timer proves only that no completion interrupt was processed; it does not prove the peripheral hardware aborted its bus mastering activity.
+2. The device controller may be delayed due to internal queueing, bus contention, or high controller latency.
+3. Once buffer $B$ is reassigned to Process $P_2$, Process $P_2$ begins writing sensitive data into $B$.
+4. At $t = 5.2\text{ seconds}$, the delayed device DMA engine initiates or finishes writing its delayed disk block into physical address $B$.
+5. The device overwrites $P_2$'s active data, destroying memory contents and violating the buffer-ownership invariant:
+   $$
+   \forall t, \quad \operatorname{Owner}(B, t) \in \{\text{CPU}\} \oplus \{\text{Device}\}.
+   $$
+Therefore, buffer $B$ cannot be freed or reused until the driver executes a verified hardware reset, aborts the in-flight command on the controller, and confirms bus quiescence.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-dma-interrupt-wake-race" type="describe" level="synthesis" title="Eliminating Lost Wakeup Races in Asynchronous Driver Waiters">
+
+Analyze the following buggy driver completion sequence between an interrupt handler and a sleeping process:
+- Waiter: `while (req->status == PENDING) { sleep_on(&req->wq); }`
+- Handler: `wake_up(&req->wq); req->status = DONE;`
+
+Show how this order can cause an indefinite deadlock, and formulate the correct synchronized sequence.
+
+<ExerciseSolution hint="Show that the waiter can evaluate the condition right before the handler executes both lines.">
+
+- **Failure schedule:**
+  1. Waiter reads `req->status`, observes `PENDING`.
+  2. Before the waiter enters the sleep queue, a hardware interrupt fires on the CPU.
+  3. The interrupt handler executes: calls `wake_up(&req->wq)`, but the wait queue is currently empty.
+  4. The interrupt handler then sets `req->status = DONE` and returns from interrupt.
+  5. The preempted waiter resumes and executes `sleep_on(&req->wq)`.
+  6. The waiter is now suspended indefinitely because the wakeup occurred in the past, causing a lost wakeup and indefinite thread hang.
+- **Correct synchronization protocol:**
+  The status transition must happen before the wakeup, and both operations must be protected by the queue lock:
+  - In handler:
+    ```c
+    acquire(&req->lock);
+    req->status = DONE;
+    wake_up_locked(&req->wq);
+    release(&req->lock);
+    ```
+  - In waiter:
+    ```c
+    acquire(&req->lock);
+    while (req->status == PENDING) {
+        sleep_locked(&req->wq, &req->lock);
+    }
+    release(&req->lock);
+    ```
+  Holding `req->lock` ensures that checking the condition and sleeping is atomic with respect to the state modification and wakeup.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

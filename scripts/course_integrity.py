@@ -17,17 +17,19 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 LESSONS_DIR = ROOT / "src" / "content" / "lessons"
+MANIFESTS_DIR = ROOT / "src" / "data" / "course-manifests"
 
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 ARTIFACT_RE = re.compile(
-    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|CaseStudy|MathStatement|MathProof|SqlRunner|ExerciseSolution|[A-Z][A-Za-z0-9]+Playground|details)\b|^```|^\*\*(?:Worked|Example|Counterexample|Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Remark|Warning|Proof|Trace|Algorithm)\b|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Example|Warning|Remark|Proof)\.",
+    r"<(?:PlantUML|PythonDiagram|TikZ|Quiz|CodeRunner|CodeExercise|FillInExercise|CaseStudy|MathStatement|MathProof|SqlRunner|ExerciseSolution|PracticeGenerator|Figure|[A-Z][A-Za-z0-9]+Playground|details)\b|^```|^\*\*(?:Worked|Example|Counterexample|Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Remark|Warning|Proof|Trace|Algorithm)\b|^>\s*\*\*(?:Definition|Lemma|Theorem|Proposition|Corollary|Invariant|Claim|Example|Warning|Remark|Proof)\.",
     re.MULTILINE,
 )
 ACTIVE_COMPONENT_RE = re.compile(
-    r"<(?:Quiz|CaseStudy|CodeRunner|CodeExercise|SqlRunner|[A-Z][A-Za-z0-9]+Playground)\b"
+    r"<(?:Quiz|CaseStudy|CodeRunner|CodeExercise|FillInExercise|SqlRunner|PracticeGenerator|[A-Z][A-Za-z0-9]+Playground)\b"
 )
 PASSIVE_COMPONENT_RE = re.compile(r"<(?:details|ExerciseSolution)\b")
 ASSESSMENT_RE = re.compile(r"<(Quiz|CaseStudy)\b(.*?)/>", re.DOTALL)
@@ -131,34 +133,111 @@ def extract_array_prop(block: str, prop: str = "options") -> str | None:
     return None
 
 
-def assessment_length_cues(body: str) -> list[dict]:
-    """Find assessments whose correct choice is conspicuously longest."""
-    cues = []
+def is_code_all_comments(code: str) -> bool:
+    if not code:
+        return True
+    lines = [line.strip() for line in code.splitlines() if line.strip()]
+    if not lines:
+        return True
+    in_block = False
+    for line in lines:
+        if in_block:
+            if "*/" in line or "-->" in line:
+                in_block = False
+            continue
+        if line.startswith("/*"):
+            if "*/" not in line:
+                in_block = True
+            continue
+        if line.startswith("<!--"):
+            if "-->" not in line:
+                in_block = True
+            continue
+        if line.startswith(("#", "//", "--", ";", "%", "*")):
+            continue
+        return False
+    return True
+
+
+def evaluate_assessments(body: str) -> list[dict]:
+    """Extract and analyze options and correct answers for all Quiz and CaseStudy components."""
+    assessments = []
     for component in ASSESSMENT_RE.finditer(body):
         kind, block = component.groups()
-        source = extract_array_prop(block)
-        index_match = re.search(r"\b(?:correctIndex|answer)\s*=\s*\{(\d+)\}", block)
-        if not source or not index_match or "`" in source:
+        options = []
+
+        # 1. Object options: { id: ..., text: ..., isCorrect: ... }
+        obj_matches = list(re.finditer(
+            r"\{\s*id:\s*['\"][^'\"]+['\"],\s*text:\s*(?:['\"]([^'\"]+)['\"]|`([^`]+)`)[^}]*?isCorrect:\s*(true|false)",
+            block,
+            re.DOTALL
+        ))
+        if obj_matches:
+            for m in obj_matches:
+                text = m.group(1) or m.group(2) or ""
+                is_correct = m.group(3) == "true"
+                options.append({"text": text, "isCorrect": is_correct})
+        else:
+            # 2. String array options: options={["...", "..."]} with correctIndex={N}
+            source = extract_array_prop(block, "options")
+            index_match = re.search(r"\b(?:correctIndex|answer)\s*=\s*\{(\d+)\}", block)
+            if source and index_match and "`" not in source:
+                try:
+                    raw_options = ast.literal_eval(source)
+                    if isinstance(raw_options, list) and all(isinstance(opt, str) for opt in raw_options):
+                        correct_idx = int(index_match.group(1))
+                        options = [
+                            {"text": opt, "isCorrect": (i == correct_idx)}
+                            for i, opt in enumerate(raw_options)
+                        ]
+                except (SyntaxError, ValueError):
+                    pass
+
+        if len(options) < 2:
             continue
-        try:
-            options = ast.literal_eval(source)
-        except (SyntaxError, ValueError):
+
+        correct_options = [opt for opt in options if opt["isCorrect"]]
+        distractor_options = [opt for opt in options if not opt["isCorrect"]]
+        if not correct_options or not distractor_options:
             continue
-        if not isinstance(options, list) or not all(isinstance(option, str) for option in options):
-            continue
-        correct_index = int(index_match.group(1))
-        if correct_index >= len(options) or len(options) < 2:
-            continue
-        lengths = [len(WORD_RE.findall(option)) for option in options]
-        distractor_max = max(length for index, length in enumerate(lengths) if index != correct_index)
-        correct_length = lengths[correct_index]
-        if correct_length >= distractor_max * 1.5 and correct_length - distractor_max >= 3:
-            cues.append({
-                "component": kind,
-                "correctWords": correct_length,
-                "distractorMaxWords": distractor_max,
-            })
-    return cues
+
+        correct_lengths = [len(WORD_RE.findall(opt["text"])) for opt in correct_options]
+        distractor_lengths = [len(WORD_RE.findall(opt["text"])) for opt in distractor_options]
+        max_distractor = max(distractor_lengths)
+        max_correct = max(correct_lengths)
+
+        is_length_cue = any(
+            c_len >= max_distractor * 1.5 and c_len - max_distractor >= 3
+            for c_len in correct_lengths
+        )
+
+        assessments.append({
+            "component": kind,
+            "options": options,
+            "correctCount": len(correct_options),
+            "isSingleCorrect": len(correct_options) == 1,
+            "isLengthCue": is_length_cue,
+            "correctWords": max_correct,
+            "distractorMaxWords": max_distractor,
+        })
+
+    return assessments
+
+
+def assessment_length_cues(body: str) -> list[dict]:
+    """Find assessments whose correct choice is conspicuously longest."""
+    return [a for a in evaluate_assessments(body) if a["isLengthCue"]]
+
+
+def load_course_modules(course_id: str) -> list[dict]:
+    manifest_path = MANIFESTS_DIR / f"{course_id}.yml"
+    if not manifest_path.exists():
+        return []
+    try:
+        data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        return data.get("modules", []) or []
+    except Exception:
+        return []
 
 
 def strip_frontmatter(content: str) -> str:
@@ -178,12 +257,36 @@ def analyze_lesson(path: Path) -> dict:
         if phrase in lowered:
             findings.append({"kind": "filler-phrase", "severity": "error", "message": f"contains '{phrase}'"})
 
-    for cue in assessment_length_cues(body):
-        findings.append({
-            "kind": "answer-length-cue",
-            "severity": "review",
-            "message": f"{cue['component']} correct choice has {cue['correctWords']} words; longest distractor has {cue['distractorMaxWords']}",
-        })
+    code_exercise_re = re.compile(r"<CodeExercise\b(.*?)/>", re.DOTALL)
+    for match in code_exercise_re.finditer(body):
+        block = match.group(1)
+        code_match = re.search(r"\bcode=\{(?:String\.raw)?`([\s\S]*?)`\}|\bcode=\{['\"]([\s\S]*?)['\"]\}", block)
+        if code_match:
+            raw_code = code_match.group(1) or code_match.group(2) or ""
+            if is_code_all_comments(raw_code):
+                findings.append({
+                    "kind": "code-exercise-all-comments",
+                    "severity": "error",
+                    "message": "<CodeExercise> code consists entirely of comments; use <FillInExercise> for non-code prompts",
+                })
+
+    assessments = evaluate_assessments(body)
+    for cue in assessments:
+        if cue["isLengthCue"]:
+            findings.append({
+                "kind": "answer-length-cue",
+                "severity": "review",
+                "message": f"{cue['component']} correct choice has {cue['correctWords']} words; longest distractor has {cue['distractorMaxWords']}",
+            })
+
+    if len(assessments) >= 2:
+        cue_count = sum(1 for a in assessments if a["isLengthCue"])
+        if cue_count >= 2 and cue_count / len(assessments) >= 0.5:
+            findings.append({
+                "kind": "excessive-answer-length-cues",
+                "severity": "review",
+                "message": f"{cue_count}/{len(assessments)} exercises have conspicuously longest correct answers; suggests answer-length cueing or wrong exercise type choice",
+            })
 
     generic_titles = [
         title for title in re.findall(r"\btitle\s*=\s*['\"]([^'\"]+)['\"]", body)
@@ -207,7 +310,8 @@ def analyze_lesson(path: Path) -> dict:
         r"Solutions?|Answer key|Rubric and self-check|"
         r"(?:Deliberate\s+)?Omissions?(?:\s*&.*)?|(?:Course\s+)?Scope Boundaries?(?:\s*&.*)?|"
         r"Deliberate (?:Omissions?\s*&.*|Boundary.*)|Connections and limits|"
-        r"Assessment standard|Lab tasks|Proof obligations)$",
+        r"Assessment standard|Lab tasks|Proof obligations|"
+        r"Definitions and Results|Method Chooser|Hypothesis Checklist|Typical Errors)$",
         re.IGNORECASE,
     )
     uncovered = [
@@ -238,12 +342,14 @@ def analyze_lesson(path: Path) -> dict:
 
     return {
         "path": relative,
+        "slug": path.stem,
         "courseId": path.parent.name,
         "wordCount": len(WORD_RE.findall(body)),
         "paragraphCount": len(paragraphs),
         "headingCount": len(HEADING_RE.findall(body)),
         "artifactCount": len(ARTIFACT_RE.findall(body)),
         "diagrams": diagrams,
+        "assessments": assessments,
         "findings": findings,
     }
 
@@ -270,6 +376,53 @@ def audit(course_id: str | None = None) -> dict:
                             "severity": "error",
                             "message": f"diagram topology repeats {count} times in course '{course}'",
                         })
+
+        modules = load_course_modules(course)
+        lesson_by_slug = {lesson["slug"]: lesson for lesson in course_lessons}
+
+        for mod in modules:
+            mod_title = mod.get("title", "Untitled Module")
+            mod_slugs = mod.get("lessons", [])
+            mod_lessons = [lesson_by_slug[s] for s in mod_slugs if s in lesson_by_slug]
+            if not mod_lessons:
+                continue
+
+            mod_assessments = [a for l in mod_lessons for a in l.get("assessments", [])]
+            mod_mc = [a for a in mod_assessments if a["component"] == "Quiz"]
+            single_correct_mc = sum(1 for a in mod_mc if a["isSingleCorrect"])
+            length_cues = sum(1 for a in mod_assessments if a["isLengthCue"])
+
+            if len(mod_assessments) >= 2 and length_cues >= 2 and (length_cues / len(mod_assessments) >= 0.4 or length_cues >= 3):
+                mod_lessons[0]["findings"].append({
+                    "kind": "excessive-answer-length-cues",
+                    "severity": "review",
+                    "message": f"module '{mod_title}' has {length_cues}/{len(mod_assessments)} exercises where the correct answer is conspicuously longest; suggests answer-length cueing or wrong exercise type choice",
+                })
+
+            if len(mod_mc) >= 3 and (single_correct_mc / len(mod_mc) >= 0.8):
+                mod_lessons[0]["findings"].append({
+                    "kind": "uniform-single-correct-choice",
+                    "severity": "review",
+                    "message": f"module '{mod_title}' has {single_correct_mc}/{len(mod_mc)} multiple-choice exercises with only one correct answer; suggests a wrong exercise type choice (Quiz should evaluate multi-claim classification or consider FillInExercise / derivation)",
+                })
+
+        course_assessments = [a for l in course_lessons for a in l.get("assessments", [])]
+        course_mc = [a for a in course_assessments if a["component"] == "Quiz"]
+        course_single = sum(1 for a in course_mc if a["isSingleCorrect"])
+        course_cues = sum(1 for a in course_assessments if a["isLengthCue"])
+
+        if len(course_mc) >= 5 and (course_single / len(course_mc) >= 0.85):
+            course_lessons[0]["findings"].append({
+                "kind": "uniform-single-correct-choice",
+                "severity": "review",
+                "message": f"course '{course}' has {course_single}/{len(course_mc)} multiple-choice exercises with only one correct answer; suggests a wrong exercise type choice",
+            })
+        if len(course_assessments) >= 5 and course_cues >= 3 and (course_cues / len(course_assessments) >= 0.25):
+            course_lessons[0]["findings"].append({
+                "kind": "excessive-answer-length-cues",
+                "severity": "review",
+                "message": f"course '{course}' has {course_cues}/{len(course_assessments)} exercises where the correct answer is conspicuously longest; suggests answer-length cueing pattern",
+            })
 
     return {"courses": dict(sorted(by_course.items()))}
 

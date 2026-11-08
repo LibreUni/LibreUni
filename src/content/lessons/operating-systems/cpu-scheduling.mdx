@@ -19,6 +19,9 @@ estimatedMinutes: 330
 assessment: Given an unseen arrival/service workload with a context-switch model and a fairness requirement, construct competing schedules, compute all metrics, expose one policy failure, and defend a policy or hybrid with falsifiable evidence.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Figure from '../../../components/Figure.astro';
 
 import SchedulerPlayground from '../../../components/playgrounds/SchedulerPlayground';
 import Quiz from '../../../components/Quiz';
@@ -80,16 +83,15 @@ Response is $4-2=2$. Turnaround is $13-2=11$. CPU service is $2+3=5$. Blocked ti
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Charge the right interval"
-  question="Job Q arrives at 3, is first dispatched at 5, blocks on I/O during [7,9), resumes at 10, and completes at 14 with 6 units of CPU service. What is its ready-waiting time?"
+  title="CPU Scheduling Metrics Classification Matrix"
+  question="Job Q arrives at 3, is first dispatched at 5, blocks on I/O during [7,9), resumes at 10, and completes at 14 with 6 units of CPU service. Evaluate each statement:"
   options={[
-    "3 units",
-    "5 units",
-    "6 units",
-    "8 units"
+    { id: "opt-sched-ready-wait", text: "Ready-waiting time is 3 units, calculated by subtracting 6 service units and 2 blocked units from 11 turnaround units.", isCorrect: true },
+    { id: "opt-sched-resp-time", text: "Response time is 2 units, measured as the initial latency from arrival at time 3 until first CPU dispatch at time 5.", isCorrect: true },
+    { id: "opt-sched-turnaround-wait", text: "Ready-waiting time is 5 units, computed directly by subtracting 6 CPU service units from 11 turnaround units.", isCorrect: false },
+    { id: "opt-sched-blocked-cpu", text: "The 2 units spent blocked on I/O must be charged directly to the CPU scheduler as processor scheduling delay.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="Turnaround is 14 - 3 = 11, and ready-wait is 11 - 6 - 2 = 3: two units before first dispatch and one after wakeup. Reporting 5 subtracts service but incorrectly includes the two blocked units."
+  explanation="Ready-waiting time measures only time spent in the runnable state waiting for a core (here 2 units before first dispatch plus 1 unit from wakeup at 10 to completion at 14, totaling 3 units). Blocked I/O time must not be charged to the CPU scheduler."
 />
 
 ## FCFS and the convoy effect
@@ -204,6 +206,8 @@ $$
 
 As $q\rightarrow\infty$, round robin approaches FCFS for finite jobs. As $q\rightarrow0$, response opportunities become frequent while switching consumes the machine. A quantum is therefore a workload-timescale decision.
 
+<Figure id="fig-scheduler-response" />
+
 {/* Source tracking: POSIX.1-2024 specifies SCHED_RR as FIFO-with-time-quantum at each priority. The queue trace, service-gap bound, and overhead model are original derivations with their assumptions exposed. */}
 
 ### Prediction before interaction
@@ -294,32 +298,94 @@ This is not SJF: a virtual deadline is not an oracle for total job length. It is
 
 {/* Source tracking: Linux EEVDF claims are limited to the official kernel EEVDF documentation. The page explicitly notes the transition from CFS and defines lag, eligibility, and virtual-deadline selection. */}
 
-### Synthesis — choose policy under an adversarial workload
-
-A single-CPU edge controller runs:
-
-- control task C: 0.5 ms CPU every 10 ms; missing 20 ms is unsafe;
-- interactive task I: bursts between 0.2 and 3 ms after unpredictable input;
-- batch task B: always runnable and benefits from cache residency;
-- switch cost: measured 0.08 ms plus cache effects not yet quantified.
-
-Construct and defend a policy. Your answer must specify admission assumptions, preemption points, queue/order rules, quantum or budget values, overload behavior, metrics, and one test that can falsify the design.
-
-<ExerciseSolution title="Reveal grading diagnostics">
-
-A defensible answer isolates C with an explicit budget/deadline or fixed-priority policy only after checking feasibility and kernel/device interference; it does not claim RR alone guarantees safety. I may receive responsive service through a short slice or eligibility rule, while B consumes residual capacity with a larger granularity to preserve locality. Overload must preserve C's admitted budget and shed/defer lower-criticality work. Measure C response and misses, I response distribution, B throughput, switch count, and cache events. Inject synchronized I bursts near C release and a CPU-saturating B. Exact values require measured execution/interrupt costs; claiming a hard bound from the supplied average demands is insufficient.
-
-</ExerciseSolution>
-
-**Rubric (20 points).** Correct schedules/metrics 5; assumptions and theorem boundaries 3; policy mechanism and complete rules 4; tail/fairness/overload analysis 3; overhead evidence 3; adversarial falsification 2.
-
-## Connections and deliberate omissions
-
-Timer traps make involuntary preemption possible; context-switch invariants keep it safe. Wait/wakeup changes the runnable set and therefore policy input. Synchronization affects priority inversion and run-queue scalability. Virtual memory and caches make migrations and short quanta costlier than the abstract model. The scheduler lab turns these claims into xv6 measurements rather than accepting simulator output as implementation evidence.
-
 > **Remark.** A scheduler extension earns a place only with a new workload model, invariant, and falsifying trace—not by adding policy names to a comparison list.
 
-Hard real-time response-time analysis, earliest-deadline-first feasibility, priority inheritance, multiprocessor affinity, work stealing, NUMA, energy, heterogeneous cores, gang scheduling, and scheduler security are omitted. Linux EEVDF is not reverse-engineered here. These subjects require event and resource models not present in the single-CPU fixed-burst simulator.
+<ExerciseSet>
+
+<Exercise id="ex-sched-convoy-effect-fcfs" type="describe" level="application" title="Convoy Effect and Head-of-Line Blocking in FCFS">
+
+Analyze the convoy effect under First-Come, First-Served (FCFS) scheduling when one CPU-bound task with an 80 ms burst arrives immediately ahead of ten interactive I/O-bound tasks with 2 ms bursts. Compute the average waiting time and describe the utilization of the CPU and I/O devices over time.
+
+<ExerciseSolution hint="Contrast the FCFS schedule with an interleaved round-robin or shortest-job-first order.">
+
+Under FCFS, the 80 ms CPU job blocks all ten 2 ms interactive jobs. The first interactive job waits 80 ms, the second waits 82 ms, and the tenth waits 98 ms, yielding a mean waiting time of $\frac{80 + 82 + \dots + 98}{11} \approx 80.9\text{ ms}$. During this initial 80 ms window, the I/O devices sit completely idle. Once the CPU job finishes, all ten interactive jobs quickly execute for 2 ms and issue I/O, leaving the CPU idle while disk or network transfers complete concurrently. FCFS creates head-of-line blocking that penalizes interactive response and degrades device concurrency.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-sched-sjf-starvation-proof" type="prove" level="application" title="Starvation in Shortest Job First Under Continuous Short Job Arrival">
+
+Prove that non-preemptive Shortest Job First (SJF) and preemptive Shortest Remaining Time First (SRTF) can cause indefinite starvation for a long job, and formulate an aging mechanism that restores bounded turnaround.
+
+<ExerciseSolution hint="Construct an adversarial workload where new short jobs arrive faster than they can be cleared.">
+
+Suppose a long job $J_{\mathrm{long}}$ with burst length $T = 100$ arrives at time 0. At every time interval $t = 5k$ (for $k = 0, 1, 2, \dots$), a new short job $J_k$ with burst length 4 arrives. Because $4 < 100$ (and $4 < \text{remaining}(J_{\mathrm{long}})$), the SJF/SRTF dispatch rule perpetually prioritizes the newly arrived short job $J_k$ over $J_{\mathrm{long}}$. Thus, $J_{\mathrm{long}}$ is never scheduled and starves indefinitely. An aging mechanism dynamically decrements the effective burst estimate or increments an effective priority by $\alpha \cdot \text{waiting\_time}$, guaranteeing that $J_{\mathrm{long}}$'s priority eventually dominates every fresh arrival.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-sched-rr-quantum-tradeoff" type="verify" level="transfer" title="Round-Robin Quantum Sizing and Switch Overhead Trade-off">
+
+In a Round-Robin scheduler with context switch cost $\delta = 0.2\text{ ms}$, evaluate the fractional CPU overhead $\frac{\delta}{q + \delta}$ and maximum interactive response latency $(m - 1)(q + \delta)$ across $m = 10$ runnable tasks for quantum lengths $q = 1\text{ ms}$, $q = 10\text{ ms}$, and $q = 100\text{ ms}$.
+
+<ExerciseSolution hint="Apply the saturation overhead formula and queue cycle bounds.">
+
+1. $q = 1\text{ ms}$:
+   - Overhead: $\frac{0.2}{1.0 + 0.2} = \frac{0.2}{1.2} \approx 16.67\%$.
+   - Max latency between quanta: $(10 - 1)(1.0 + 0.2) = 9 \times 1.2 = 10.8\text{ ms}$.
+2. $q = 10\text{ ms}$:
+   - Overhead: $\frac{0.2}{10.0 + 0.2} = \frac{0.2}{10.2} \approx 1.96\%$.
+   - Max latency between quanta: $9 \times 10.2 = 91.8\text{ ms}$.
+3. $q = 100\text{ ms}$:
+   - Overhead: $\frac{0.2}{100.0 + 0.2} = \frac{0.2}{100.2} \approx 0.20\%$.
+   - Max latency between quanta: $9 \times 100.2 = 901.8\text{ ms}$.
+Small quanta guarantee snappy interactive response ($10.8\text{ ms}$) but waste $16.7\%$ of CPU cycles in switching overhead; large quanta minimize overhead ($0.2\%$) but degrade interactive responsiveness toward FCFS.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-sched-burst-prediction-ema" type="verify" level="transfer" title="Exponential Moving Average CPU Burst Estimation">
+
+A process exhibits measured CPU bursts $t_1 = 12$, $t_2 = 4$, $t_3 = 6$, $t_4 = 8$. Using an exponential moving average $\tau_{n+1} = \alpha t_n + (1 - \alpha)\tau_n$ with weighting factor $\alpha = 0.5$ and initial guess $\tau_1 = 10$, compute the predicted bursts $\tau_2, \tau_3, \tau_4, \tau_5$.
+
+<ExerciseSolution hint="Apply the recursive formula step by step.">
+
+1. $\tau_2 = 0.5 \cdot t_1 + 0.5 \cdot \tau_1 = 0.5(12) + 0.5(10) = 6 + 5 = 11.0$.
+2. $\tau_3 = 0.5 \cdot t_2 + 0.5 \cdot \tau_2 = 0.5(4) + 0.5(11.0) = 2 + 5.5 = 7.5$.
+3. $\tau_4 = 0.5 \cdot t_3 + 0.5 \cdot \tau_3 = 0.5(6) + 0.5(7.5) = 3 + 3.75 = 6.75$.
+4. $\tau_5 = 0.5 \cdot t_4 + 0.5 \cdot \tau_4 = 0.5(8) + 0.5(6.75) = 4 + 3.375 = 7.375$.
+The estimator dampens transient spikes while gradually tracking shifts in process behavior.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-sched-eevdf-lag-fairness" type="describe" level="synthesis" title="Virtual Runtime, Lag, and Eligibility in EEVDF Scheduling">
+
+Explain the concepts of virtual runtime, lag, and virtual deadlines in Linux Earliest Eligible Virtual Deadline First (EEVDF) scheduling. Describe how EEVDF prevents a short interactive task from being starved by compute-heavy threads while preserving weighted proportional-share fairness.
+
+<ExerciseSolution hint="Contrast the eligibility check (lag >= 0) with the selection criterion (earliest virtual deadline).">
+
+In EEVDF, each entity has a weight $w_i$. Fluid fair-share time advances at rate $w_i / \sum w_j$. An entity's lag is the difference between the service it *should* have received in an ideal fluid model and the service it actually received: $\mathrm{lag}_i = V - v_i$. An entity is defined as **eligible** if and only if $\mathrm{lag}_i \ge 0$ (it has not received more than its fair share). Among eligible tasks, EEVDF selects the task with the earliest **virtual deadline** $d_i = v_i + q_i / w_i$, where $q_i$ is the task's requested slice. An interactive task requests a small slice $q_i$, yielding an early virtual deadline that grants it immediate preemption upon becoming eligible, while compute threads with large slices are bounded to their proportional share without starving the interactive task.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-sched-mixed-workload-policy" type="construct" level="synthesis" title="Scheduling Mixed Real-Time, Interactive, and Batch Workloads">
+
+Design a multi-queue scheduling policy for a single-core embedded controller running a hard real-time control loop (0.5 ms CPU every 10 ms), an interactive console daemon, and a background batch data compression worker. Specify admission checks, preemption triggers, quantum budgets, and overload shed policies.
+
+<ExerciseSolution hint="Combine fixed-priority real-time scheduling with rate-monotonic analysis and round-robin background queues.">
+
+1. Queue hierarchy:
+   - Priority 1 (Highest, Real-Time FIFO): Control loop $C$. Admitted only after rate-monotonic feasibility check: $U_C = 0.5 / 10 = 5\% \le 69.3\%$. Preempts all lower queues immediately upon timer release.
+   - Priority 2 (Interactive Round-Robin): Console daemon $I$. Allocated a small quantum $q = 2\text{ ms}$ for low response latency.
+   - Priority 3 (Lowest, Batch Background): Compression worker $B$. Runs with a large quantum $q = 20\text{ ms}$ to maximize L1/L2 cache locality and reduce switch overhead.
+2. Overload protection: If $C$ overruns its 0.5 ms budget (detected via hardware watchdog or CPU timer), it is quarantined and an alarm logged. If $I$ floods the system, Priority 2 is throttled to at most $20\%$ CPU time, preserving residual bandwidth for $B$.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

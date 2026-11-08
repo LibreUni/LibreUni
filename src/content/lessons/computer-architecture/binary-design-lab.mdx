@@ -10,12 +10,16 @@ outcomes:
   - Implement and test encode/decode state transitions, rejecting malformed or ambiguous records.
   - Defend portability with round-trip, boundary, mutation, and compatibility evidence.
 omissions:
-  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
+  - Variable-length entropy compression schemes (DEFLATE, protobuf varints) and self-describing serialization (ASN.1, Avro) are omitted to focus on deterministic fixed-width binary record parsing.
+  - Cryptographic message authentication (HMAC, signatures) is deferred to Network Security; CRC-16 is evaluated purely as an error-detecting code.
+  - Electrical device physics and full RTL syntheses are outside scope.
 estimatedMinutes: 420
 assessment: Given a binary format and hostile byte stream, derive the parser state, reject invalid lengths/fields, and prove valid round-trip preservation.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 
@@ -46,10 +50,34 @@ Directly overlaying a C struct onto a byte stream introduces three fatal hazards
 </ExerciseSolution>
 
 <Quiz client:load title="Specify before encode"
-  question="Why should a binary format be specified before writing bit-manipulation code?"
-  options={["Encoding decisions are independent of the values and errors consumers observe", "Field widths, endianness, and invalid encodings determine what the code must preserve", "Bitwise implementations cannot be tested until every hardware target is available", "Specifications prevent compilers from optimizing shifts, masks, and byte-order conversions"]}
-  correctIndex={1}
-  explanation="A bit pattern has meaning only through a format contract. Writing code first hides ambiguity about boundaries, byte order, and malformed input."
+  question="Why must a binary wire format be formally specified before implementing bit-manipulation and serialization routines?"
+  options={[
+    {
+      id: "claim-endian-boundaries",
+      text: "Field widths, endianness, and reserved values establish the semantic contract that parser routines must preserve.",
+      isCorrect: true,
+      feedback: "Correct. A bit pattern has meaning only through an explicit format specification defining boundaries and byte order."
+    },
+    {
+      id: "claim-adversarial-boundaries",
+      text: "Formal field constraints define unambiguous rejection boundaries for malformed, truncated, or hostile inputs.",
+      isCorrect: true,
+      feedback: "Correct. Specifications define which input streams must be rejected to prevent buffer overruns or domain corruption."
+    },
+    {
+      id: "claim-independent-encoding",
+      text: "Bitwise serialization decisions are mathematically independent of the error modes and values observable by consumers.",
+      isCorrect: false,
+      feedback: "Incorrect. The encoding choices directly dictate precision, sign interpretation, and observable failure modes."
+    },
+    {
+      id: "claim-compiler-optimization",
+      text: "Formal wire format specifications prevent C compilers from optimizing bitwise shifts, masks, and byte conversions.",
+      isCorrect: false,
+      feedback: "Incorrect. Compilers aggressively optimize valid bitwise masking and shifting code regardless of format documentation."
+    }
+  ]}
+  explanation="A bit pattern has meaning only through a format contract. Writing code without a specification introduces boundary ambiguities and vulnerability to malformed input."
 />
 
 ## Worked encoding
@@ -61,10 +89,34 @@ The checksum must cover a defined byte range and have a defined initial value, p
 <CaseStudy client:load
   title="Verify before minimizing"
   scenario="A lab minimizes a four-input control function directly from prose. The resulting circuit is small, but one reserved input combination unexpectedly asserts write-enable."
-  question="Which artifact should have constrained the minimization?"
-  options={["A complete truth table including reserved and don't-care input policy", "A gate-count target chosen before defining any observable output behavior", "A vendor schematic for a component with a different interface contract", "A timing screenshot that omits the input combination causing the write"]}
-  correctIndex={0}
-  explanation="Minimization preserves the function it is given. A complete truth table and explicit don't-care policy define that function and prevent unsafe reserved combinations from being optimized arbitrarily."
+  question="Evaluate which engineering design artifacts are essential before performing logic minimization on control circuits:"
+  options={[
+    {
+      id: "claim-truth-table",
+      text: "A complete truth table specifying explicit outputs for reserved and unassigned inputs prevents accidental control assertions.",
+      isCorrect: true,
+      feedback: "Correct. Defining behavior for all $2^n$ inputs ensures minimization algorithms cannot assign unsafe values to don't-care states."
+    },
+    {
+      id: "claim-dont-care-policy",
+      text: "Unused input patterns must be explicitly assigned safe default outputs rather than treated as unconstrained don't-cares.",
+      isCorrect: true,
+      feedback: "Correct. Leaving critical control lines like write-enable as arbitrary don't-cares can cause illegal bus writes."
+    },
+    {
+      id: "claim-gate-target",
+      text: "Selecting an aggressive gate-count target before defining behavioral truth tables mathematically guarantees circuit safety.",
+      isCorrect: false,
+      feedback: "Incorrect. Optimization targets dictate physical gate count, not semantic correctness or safe fault handling."
+    },
+    {
+      id: "claim-schematic-copy",
+      text: "Copying vendor reference schematics without interface contracts ensures zero unexpected assertions under invalid inputs.",
+      isCorrect: false,
+      feedback: "Incorrect. Different systems enforce distinct interface invariants; schematics cannot substitute for local truth tables."
+    }
+  ]}
+  explanation="Minimization preserves the function it is given. Complete truth tables and deliberate don't-care assignments define safe behavior across all input combinations."
 />
 
 ## Parser state and failure behavior
@@ -149,21 +201,23 @@ Consider an environmental sensor deployed in an Antarctic research station measu
    * **Root Cause**: The software treated bitfield syntax as an unsigned scalar rather than enforcing the two's complement arithmetic invariant defined in the interface contract.
 
 
-## Lab tasks
+<ExerciseSet>
 
-### Task 1: Byte-offset specification table
+<Exercise id="ex-bin-byte-layout" type="construct" level="application" title="Byte-Offset Specification and Alignment Table">
 
-Produce a byte-offset table with field name, width, signedness, scaling, valid range, and endianness.
+Produce a byte-offset specification table for a 16-byte telemetry record with explicit field names, widths, signedness, integer scaling factors, valid ranges, and endianness, without relying on compiler-dependent struct padding.
 
 <ExerciseSolution hint="Specify explicit bit/byte widths, signedness, valid numerical ranges, and endianness for every field.">
 
-A complete table names every byte and makes no reliance on host padding. The signed temperature field must explicitly say two’s complement before scaling; pressure and timestamps must state whether all bit patterns are syntactically valid.
+A complete table names every byte and makes no reliance on host padding. The signed temperature field must explicitly specify two’s complement before scaling; pressure and timestamps must state whether all bit patterns are syntactically valid.
 
 </ExerciseSolution>
 
-### Task 2: Two's-complement sample encoding
+</Exercise>
 
-Derive the encoded bytes for five samples, including minimum and maximum representable temperature.
+<Exercise id="ex-bin-twos-comp-encoding" type="construct" level="application" title="Two's-Complement Signed Fixed-Point Encoding">
+
+Derive the encoded byte sequences for five representative sensor samples, including minimum and maximum representable temperatures and negative scaling boundaries.
 
 <ExerciseSolution hint="Convert negative scaled values using modular complement arithmetic before emitting high-order bytes.">
 
@@ -171,9 +225,11 @@ Encode negative scaled temperature as $2^{16}-|x|$ and emit high byte first. Che
 
 </ExerciseSolution>
 
-### Task 3: Streaming parser state machine
+</Exercise>
 
-Write pseudocode for a streaming parser with explicit states and error returns.
+<Exercise id="ex-bin-streaming-parser" type="describe" level="application" title="Streaming Parser State Machine and Buffer Framing">
+
+Specify a streaming parser state machine with explicit framing states (header, payload, checksum) and deterministic error rejection paths for partial reads.
 
 <ExerciseSolution hint="Define explicit states (header, payload, checksum) and deterministic error rejection paths.">
 
@@ -181,9 +237,11 @@ States should collect header/body bytes, then checksum, then validate and publis
 
 </ExerciseSolution>
 
-### Task 4: Checksum design and error detection
+</Exercise>
 
-Define a checksum and demonstrate detection of a one-bit error and a two-byte transposition.
+<Exercise id="ex-bin-crc-error-detection" type="verify" level="application" title="CRC Error Detection and Bit-Flip Sensitivity">
+
+Define a 16-bit CRC polynomial and demonstrate mathematical detection of single-bit corruption and two-byte transpositions over the telemetry frame.
 
 <ExerciseSolution hint="Specify polynomial, initial value, and bit coverage to detect single-bit flips and transpositions.">
 
@@ -191,9 +249,11 @@ A CRC specification must include polynomial, initial value, reflection, final XO
 
 </ExerciseSolution>
 
-### Task 5: Version-2 backward compatibility
+</Exercise>
 
-Design a version-2 extension that preserves version-1 parser safety.
+<Exercise id="ex-bin-backward-compat" type="construct" level="transfer" title="Version-2 Extension and Backward Compatibility">
+
+Design a version-2 record extension that enables legacy version-1 parsers to safely reject newer frames while version-2 parsers decode both generations.
 
 <ExerciseSolution hint="Ensure version-1 parsers reject newer versions cleanly while version-2 parsers can decode legacy frames.">
 
@@ -201,9 +261,11 @@ Put new records under version 2 and keep byte offsets unambiguous. A version-1 p
 
 </ExerciseSolution>
 
-### Task 6: Encode/decode round-trip correctness
+</Exercise>
 
-Give a proof sketch that encoding followed by decoding returns the original canonical sample.
+<Exercise id="ex-bin-round-trip-proof" type="prove" level="synthesis" title="Encode-Decode Bijective Round-Trip Invariant Proof">
+
+Provide a formal proof sketch showing that decoding an encoded canonical sample $D(E(x))$ bijectively recovers $x$ for all valid domain values.
 
 <ExerciseSolution hint="Show field-level injectivity, exact integer scaling preservation, and invertibility of byte reversal.">
 
@@ -211,15 +273,21 @@ Show each field’s encoding is injective over its valid range, byte reversal is
 
 </ExerciseSolution>
 
-### Task 7: Boundary and fuzz test matrix
+</Exercise>
 
-Create a test matrix for truncation, reserved fields, overflow, checksum, sequence, and physical range.
+<Exercise id="ex-bin-fuzz-matrix" type="generalise" level="transfer" title="Hostile Byte Stream Mutation and Fuzzing Matrix">
+
+Construct an adversarial test matrix containing truncated frames, reserved bit corruptions, out-of-range sensor readings, and invalid checksums, stating expected parser outcomes.
 
 <ExerciseSolution hint="Include zero-length frames, partial truncations, reserved-field mutations, and out-of-range sensor values.">
 
 Include length 0, every length 1–15, exact 16, extra trailing bytes, all-zero/all-one values, signed boundaries, each reserved bit, one-bit and burst mutations, stale sequence, and physical limits. Expected outcomes must distinguish reject, accept, and accept-with-warning.
 
 </ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## Proof obligations
 
@@ -236,13 +304,6 @@ Prove the properties compositionally. First prove field encode/decode lemmas, th
 An excellent lab report contains a complete byte-level specification, integer derivations, pseudocode with failure states, generated examples, a test matrix, and proofs tied to stated assumptions. It explains why a packed C struct is insufficient, why CRC is not authentication, why a checksum can be valid for semantically invalid data, and how a future version remains unambiguous. A report that only prints a hexadecimal sample has demonstrated encoding practice but not architectural competence.
 
 The reviewer should be able to implement the encoder and parser independently from the report and obtain identical bytes for every canonical example.
-
-## Deliberate Omissions & Scope Boundaries
-
-* **Variable-Length Huffman / Prefix Encodings**: Variable-length entropy compression schemes (e.g., DEFLATE or protobuf varints) are omitted to focus on fixed-width binary record parsing.
-* **Cryptographic Signatures & HMAC Authentication**: Cryptographic message integrity (e.g., Ed25519 or HMAC-SHA256) is treated in Network Security; CRC-16 is evaluated purely as an error-detecting code.
-* **Complex Self-Describing Schemas**: Self-describing serialization engines (such as ASN.1 BER/DER or Avro) are omitted in favor of bare-metal deterministic binary layout.
-
 
 ## References & Further Reading
 

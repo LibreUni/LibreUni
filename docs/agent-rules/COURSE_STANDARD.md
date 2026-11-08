@@ -47,7 +47,7 @@ For each major concept, check that the draft answers:
 - How does it relate to adjacent concepts?
 - What problem requires transfer rather than recall?
 
-These are quality obligations, not a demand for repetitive headings. Combine them naturally when that preserves reasoning; do not omit them merely to make a lesson shorter.
+These are quality obligations, not a demand for repetitive headings. Form, numbering, statement taxonomy, and exercise architecture follow [`COURSE_STRUCTURE.md`](COURSE_STRUCTURE.md). Combine them naturally when that preserves reasoning; do not omit them merely to make a lesson shorter.
 
 ## Scope discipline and intellectual honesty
 

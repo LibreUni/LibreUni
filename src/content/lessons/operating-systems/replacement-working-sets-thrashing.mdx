@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 330
 assessment: Given an unseen multi-process reference trace with clean and dirty pages, execute competing replacement policies, prove or refute monotonicity as frames change, estimate working sets, identify the onset of thrashing, and defend a recovery policy with measurable evidence.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -100,16 +102,15 @@ With four frames, FIFO faults **10** times on the same trace. The larger residen
 Exact LRU has this property. Maintain all referenced pages in one recency order. The $k$-frame resident set is the first $k$ pages of that order; the $(k+1)$-frame set is the first $k+1$. Therefore every hit with $k$ frames is also a hit with $k+1$, so adding a frame cannot increase exact-LRU faults. FIFO's resident sets are not prefixes of one shared order, so the proof does not apply.
 
 <Quiz client:load
-  title="The stack property and policy anomalies"
-  question="A proposed replacement algorithm assigns each resident page a static priority score based on its process class (independent of cache capacity) and always evicts the resident page with the lowest score. Does this policy satisfy the stack property, and can it suffer Bélády's anomaly?"
+  title="Page replacement and stack properties"
+  question="Evaluate each statement regarding page replacement policies, stack properties, and thrashing:"
   options={[
-    "It satisfies the stack property because the k-frame resident set is always a subset of the (k+1)-frame set; it cannot exhibit Bélády's anomaly.",
-    "It exhibits Bélády's anomaly because static priority rankings fail to reflect changing page reference recency and frequency over time.",
-    "It violates the stack property because adding frames causes higher-priority pages to displace already resident lower-priority pages.",
-    "It cannot satisfy the stack property unless the priority values are dynamically recomputed after each individual memory reference."
+    { id: "opt-rep-stack-belady", text: "Replacement algorithms satisfying the stack property guarantee that increasing physical frames cannot increase faults.", isCorrect: true },
+    { id: "opt-rep-clock-second", text: "The CLOCK second-chance algorithm uses hardware accessed bits to approximate LRU with bounded pointer traversal cost.", isCorrect: true },
+    { id: "opt-rep-fifo-anomaly", text: "FIFO page replacement is guaranteed to be monotonic because older loaded pages are strictly less likely to be used.", isCorrect: false },
+    { id: "opt-rep-thrash-algorithm", text: "Thrashing can be resolved entirely by switching the local replacement algorithm without reducing active workload demand.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="Mattson et al. (1970) proved that any replacement policy where the relative priority ordering among pages is independent of memory capacity satisfies the inclusion property (stack property): the top k pages maintained in memory are always a strict subset of the top k+1 pages for any common reference string. Consequently, adding page frames cannot turn a cache hit into a fault, ruling out Bélády's anomaly."
+  explanation="Stack algorithms obey the inclusion property, which mathematically prevents Belady's anomaly. CLOCK approximates LRU using access bits. FIFO violates the stack property and can produce Belady's anomaly, while thrashing occurs when aggregate working sets exceed physical memory capacity, requiring admission control rather than mere victim policy tweaks."
 />
 
 ## Experiment: force a non-monotonic fault curve
@@ -264,86 +265,150 @@ Linux's documented Multi-Gen LRU groups pages by estimated recency generations a
 
 A global policy may evict pages from a latency-sensitive service because a batch job generates more faults. Total faults might fall while the service misses its latency objective. A local or cgroup-bounded policy can preserve allocation isolation at some cost to global utilization. The correct scope follows the resource contract and workload objective.
 
-## Synthesis assessment: two processes, dirty pages, one overload
-
-An allocation domain has five frames. Process P references
-
-```text
-A B C A B D A B C D
-```
-
-while process Q references
-
-```text
-X Y X Z Y X
-```
-
-P's pages `B` and `D` become dirty on their first reference; all others are clean. Q's pages are clean. The scheduler interleaves two P references followed by one Q reference until Q finishes, then runs P's remainder.
-
-Produce:
-
-1. the combined reference string;
-2. exact working sets at the point immediately after Q's second `X`, using a six-reference window;
-3. an argument for whether five frames can hold both current working sets;
-4. a FIFO trace and fault count for the combined string;
-5. one cost-aware deviation from pure FIFO when the oldest candidate is dirty and a clean non-working-set page exists; and
-6. an experiment that can distinguish “replacement policy defect” from “aggregate demand exceeds capacity.”
-
-<ExerciseSolution title="Reveal reference solution and rubric">
-
-The interleaving is:
-
-```text
-A B X C A Y B D X A B Z C D Y X
-```
-
-Q's second `X` is combined reference 9. The six-reference window is positions 4–9: `C A Y B D X`, whose global set is `{A,B,C,D,X,Y}`. Per-process windows over the same interval give P `{A,B,C,D}` and Q `{X,Y}`; combined demand is six distinct pages, greater than five frames. Sharing is absent, so at least one active page cannot remain resident.
-
-FIFO with five frames:
-
-| Ref | Resident queue after reference | Hit/fault | Evicted |
-| --- | --- | --- | --- |
-| A | A | F | — |
-| B | A B | F | — |
-| X | A B X | F | — |
-| C | A B X C | F | — |
-| A | A B X C | H | — |
-| Y | A B X C Y | F | — |
-| B | A B X C Y | H | — |
-| D | B X C Y D | F | A |
-| X | B X C Y D | H | — |
-| A | X C Y D A | F | B |
-| B | C Y D A B | F | X |
-| Z | Y D A B Z | F | C |
-| C | D A B Z C | F | Y |
-| D | D A B Z C | H | — |
-| Y | A B Z C Y | F | D |
-| X | B Z C Y X | F | A |
-
-FIFO produces 12 faults. The trace alone assigns equal cost to all faults. If the oldest candidate is dirty `B` or `D` while a clean page outside the estimated working sets exists, a cost-aware policy may schedule dirty writeback and evict the clean cold page first. It must not classify “outside working set” from future knowledge unavailable online; use sampled recency/refault evidence.
-
-Run the same recorded workload over a frame sweep and compare FIFO, an online recency approximation, and offline OPT while measuring application progress, fault count, bytes written, and blocked time. If every online policy approaches OPT yet performance collapses below six frames, capacity is the dominant constraint. If one policy has a large avoidable gap at a capacity that holds the active set, victim choice is implicated.
-
-Rubric, 30 points:
-
-- 4 points: exact interleaving;
-- 5 points: window and per-process sets;
-- 3 points: capacity argument without claiming a precise universal threshold;
-- 8 points: reproducible FIFO states and count;
-- 4 points: dirty cost handled without using future knowledge;
-- 6 points: experiment includes OPT bound, frame sweep, progress, and reclaim cost.
-
-An answer reporting only fault count earns at most 10 points because it cannot distinguish bad policy from insufficient capacity or expensive dirty eviction.
-
-</ExerciseSolution>
-
-## Deliberate boundary and source trail
-
 > **Remark.** Working-set theory $\sum_i |W_i(t, \tau)| \le M$ explains why local replacement policy changes cannot cure thrashing when aggregate active-page demand exceeds physical memory $M$; resolving thrashing requires admission control, working-set reduction, or per-cgroup memory isolation.
 
-The interactive and hand traces use equal-size pages, fixed reference strings, exact LRU, and one global frame pool. The broader analysis adds dirty cost and allocation scope but does not implement swap, compressed memory, NUMA reclaim, huge pages, or a production kernel's concurrency. Simulator output is therefore evidence about its model, not a direct kernel benchmark.
+<ExerciseSet>
 
-{/* Source tracking: FIFO anomaly facts were checked against Bélády, Nelson, and Shedler (1969); working-set definitions and thrashing motivation were checked against Denning's primary papers; all traces and exercises were independently constructed. */}
+<Exercise id="ex-rep-belady-trace-fifo" type="verify" level="application" title="Tracing Belady's Anomaly Under FIFO Replacement">
+
+Consider the classic reference sequence $\sigma = 1, 2, 3, 4, 1, 2, 5, 1, 2, 3, 4, 5$.
+1. Compute the total page fault count under FIFO replacement with 3 physical frames.
+2. Compute the total page fault count under FIFO replacement with 4 physical frames.
+3. State the formal definition of Belady's anomaly demonstrated by this reference trace.
+
+<ExerciseSolution hint="Step through arrival orders in a FIFO queue. With 3 frames, faults occur 9 times; with 4 frames, faults occur 10 times.">
+
+1. **FIFO with 3 frames:**
+   Tracing the queue (oldest to newest):
+   - Ref 1: [1], Fault 1.
+   - Ref 2: [1, 2], Fault 2.
+   - Ref 3: [1, 2, 3], Fault 3.
+   - Ref 4: [2, 3, 4], Fault 4 (evicts 1).
+   - Ref 1: [3, 4, 1], Fault 5 (evicts 2).
+   - Ref 2: [4, 1, 2], Fault 6 (evicts 3).
+   - Ref 5: [1, 2, 5], Fault 7 (evicts 4).
+   - Ref 1: [1, 2, 5], Hit (1 resident).
+   - Ref 2: [1, 2, 5], Hit (2 resident).
+   - Ref 3: [2, 5, 3], Fault 8 (evicts 1).
+   - Ref 4: [5, 3, 4], Fault 9 (evicts 2).
+   - Ref 5: [5, 3, 4], Hit (5 resident).
+   Total faults with 3 frames = 9.
+
+2. **FIFO with 4 frames:**
+   - Ref 1: [1], Fault 1.
+   - Ref 2: [1, 2], Fault 2.
+   - Ref 3: [1, 2, 3], Fault 3.
+   - Ref 4: [1, 2, 3, 4], Fault 4.
+   - Ref 1: [1, 2, 3, 4], Hit.
+   - Ref 2: [1, 2, 3, 4], Hit.
+   - Ref 5: [2, 3, 4, 5], Fault 5 (evicts 1).
+   - Ref 1: [3, 4, 5, 1], Fault 6 (evicts 2).
+   - Ref 2: [4, 5, 1, 2], Fault 7 (evicts 3).
+   - Ref 3: [5, 1, 2, 3], Fault 8 (evicts 4).
+   - Ref 4: [1, 2, 3, 4], Fault 9 (evicts 5).
+   - Ref 5: [2, 3, 4, 5], Fault 10 (evicts 1).
+   Total faults with 4 frames = 10.
+
+3. **Belady's anomaly definition:**
+   Belady's anomaly is the counter-intuitive phenomenon whereby increasing the physical page frame allocation for a given reference string results in a strictly greater number of page faults under a non-stack replacement algorithm.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-rep-lru-stack-inclusion" type="prove" level="synthesis" title="Proving Stack Inclusion and Anomaly Immunity for Exact LRU">
+
+Let $R_k(t)$ denote the resident set of pages in physical memory after reference $t$ using exact Least Recently Used (LRU) with $k$ frames.
+1. Prove by induction on $t$ that $R_k(t) \subseteq R_{k+1}(t)$ for all $t \ge 1$ (the inclusion / stack property).
+2. Deduce that exact LRU can never exhibit Belady's anomaly for any reference string or capacity.
+
+<ExerciseSolution hint="Express R_k(t) as the set of the k most recently referenced unique pages.">
+
+1. **Proof of the stack inclusion property:**
+   At any time $t$, let $S(t) = \langle p_1, p_2, \dots, p_u \rangle$ be the sequence of unique pages referenced up to time $t$, ordered strictly by decreasing recency of their most recent reference (so $p_1 = r_t$ is the most recently referenced page).
+   By definition of exact LRU:
+   - For a memory of capacity $k$, the resident set consists of the first $\min(k, u)$ elements of $S(t)$:
+     $$
+     R_k(t) = \{p_1, p_2, \dots, p_{\min(k, u)}\}.
+     $$
+   - For a memory of capacity $k+1$, the resident set consists of the first $\min(k+1, u)$ elements of $S(t)$:
+     $$
+     R_{k+1}(t) = \{p_1, p_2, \dots, p_{\min(k+1, u)}\}.
+     $$
+   Since $\min(k, u) \le \min(k+1, u)$, it follows immediately from the definition of subset that:
+   $$
+   R_k(t) \subseteq R_{k+1}(t) \quad \text{for all } t \ge 1.
+   $$
+
+2. **Deduction of anomaly immunity:**
+   Suppose page reference $r_t$ results in a cache hit under $k$ frames. Then $r_t \in R_k(t-1)$.
+   By the inclusion property proved above, $R_k(t-1) \subseteq R_{k+1}(t-1)$, which immediately implies $r_t \in R_{k+1}(t-1)$.
+   Thus, any reference that is a hit with $k$ frames is guaranteed to also be a hit with $k+1$ frames. The total fault count with $k+1$ frames must therefore be less than or equal to the fault count with $k$ frames ($F_{k+1} \le F_k$). Consequently, exact LRU can never suffer Belady's anomaly.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-rep-clock-victim-selection" type="construct" level="application" title="Simulating CLOCK Hand Traversals with Dirty Page Writeback">
+
+A circular buffer of 4 frames contains pages $P = [7, 2, 9, 4]$ at indices $0, 1, 2, 3$. The CLOCK pointer currently points to index 0. The hardware access ($A$) and dirty ($D$) bits are:
+- Index 0 (page 7): $A=1, D=0$.
+- Index 1 (page 2): $A=0, D=1$.
+- Index 2 (page 9): $A=1, D=1$ (pinned for active DMA).
+- Index 3 (page 4): $A=0, D=0$.
+
+Trace the CLOCK algorithm to select a victim to satisfy an incoming fault for page 5 under the policy: "advance hand, clear accessed bits, do not evict pinned pages, schedule dirty pages for writeback without blocking, and evict the first clean unreferenced eligible page."
+
+<ExerciseSolution hint="Check each frame in order from the current hand position.">
+
+1. **Index 0 (page 7):** $A=1$. The algorithm clears the accessed bit ($A \leftarrow 0$) and advances hand to index 1.
+2. **Index 1 (page 2):** $A=0, D=1$. The page has not been recently accessed, but it is dirty. Under the non-blocking policy, the kernel issues an asynchronous disk writeback request for page 2 and advances the hand to index 2 (without immediately stalling on writeback).
+3. **Index 2 (page 9):** Pinned for active DMA. The algorithm skips pinned frames and advances hand to index 3.
+4. **Index 3 (page 4):** $A=0, D=0$, unpinned. The page has $A=0$ and is clean ($D=0$). The algorithm selects page 4 as the immediate victim frame.
+The pointer is left pointing to index 0 (circular advance: $(3 + 1) \bmod 4 = 0$), and page 5 is loaded into frame 3 with $A=1, D=0$.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-rep-working-set-window" type="construct" level="transfer" title="Computing Denning Working-Set Sizes Across Reference Windows">
+
+Let an operating system process reference virtual pages according to the sequence:
+$$
+\sigma = \langle 1, 2, 1, 3, 4, 1, 2, 3, 2, 4, 5, 1 \rangle.
+$$
+1. Using Denning's working-set model with window size $\Delta = 4$, compute the working set $W(t, 4)$ and its cardinality $|W(t, 4)|$ for time steps $t = 4, 8, 12$.
+2. If the operating system allocates only 2 physical frames to this process during the interval $t \in [8, 12]$, explain why thrashing is inevitable.
+
+<ExerciseSolution hint="The working set W(t, Delta) is the set of distinct pages referenced in the interval [t - Delta + 1, t].">
+
+1. **Working-set evaluations:**
+   - At $t = 4$, the window is the last 4 references (indices 1 to 4): $\{1, 2, 1, 3\}$.
+     The distinct pages are $W(4, 4) = \{1, 2, 3\}$, so $|W(4, 4)| = 3$.
+   - At $t = 8$, the window is references at indices 5 to 8: $\{4, 1, 2, 3\}$.
+     The distinct pages are $W(8, 4) = \{1, 2, 3, 4\}$, so $|W(8, 4)| = 4$.
+   - At $t = 12$, the window is references at indices 9 to 12: $\{2, 4, 5, 1\}$.
+     The distinct pages are $W(12, 4) = \{1, 2, 4, 5\}$, so $|W(12, 4)| = 4$.
+2. **Thrashing onset:**
+   During $t \in [8, 12]$, the process actively demands 4 distinct pages ($|W(t, 4)| = 4$) to execute its phase loop. If the OS allocates only 2 frames ($M = 2 < 4$), every memory access requiring one of the unrepresented working-set pages triggers a page fault. Every fault necessarily evicts a page that will be demanded again within the next 1–3 instructions. The process spends virtually 100% of its execution time waiting on storage I/O, which is the exact definition of thrashing.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-rep-thrashing-admission-control" type="describe" level="synthesis" title="Diagnosing System-Wide Thrashing and Sizing Allocation Domains">
+
+Explain why aggregate working-set overload $\sum_{i=1}^N |W_i(t, \Delta)| > M_{\text{total}}$ causes a sudden cliff in system throughput rather than a gradual linear degradation. Describe how memory cgroups and process suspension (swapping) restore equilibrium.
+
+<ExerciseSolution hint="Consider the feedback loop between page-fault handling latency, queue buildup, and CPU utilization collapse.">
+
+- **The non-linear thrashing cliff:**
+  When $\sum |W_i| \le M_{\text{total}}$, page fault rates are low, and the swap/storage device queue is largely idle. When aggregate working-set demand crosses the physical threshold $M_{\text{total}}$, processes continuously evict each other's active working-set pages. Each evicted page triggers a synchronous disk read latency ($50\ \mu\text{s}$ to $10\text{ ms}$).
+  Because threads block waiting on I/O, the operating system scheduler attempts to compensate by dispatching other runnable threads, which immediately fault as well. Storage request queues explode, I/O latency compounds, and CPU utilization collapses to near zero. Throughput drops precipitously from near 100% to near 0% across a tiny increase in working-set demand.
+- **Remediation mechanisms:**
+  1. **Admission control / suspension:** The kernel suspends one or more processes entirely (moving their active threads to swapped state) until $\sum_{\text{active}} |W_i| \le M_{\text{total}}$. The remaining processes run to completion at full speed without thrashing, after which suspended tasks are resumed.
+  2. **Memory cgroups (resource isolation):** By placing processes into bounded cgroups with `memory.max` and `memory.high` thresholds, the kernel isolates memory pressure. A runaway batch job thrashes only within its own private quota without evicting pages belonging to critical interactive or production services.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

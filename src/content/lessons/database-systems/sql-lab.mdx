@@ -15,7 +15,9 @@ estimatedMinutes: 720
 assessment: Submit a query portfolio containing a result contract, SQL, predicted and observed edge-case rows, constraint tests, and a brief explanation of one plan observation.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import CodeExercise from '../../../components/CodeExercise';
 import SqlRunner from '../../../components/SqlRunner';
 
@@ -315,24 +317,15 @@ ORDER BY o.code, o.offering_id;
 
 Record exactly one observation that the output supports, such as “on this four-offering fixture, PostgreSQL chose a sequential scan.” Do **not** conclude that a sequential scan is always best or that the plan proves semantic correctness.
 
-<ExerciseSolution title="Optional extension: test an index hypothesis">
+> **Remark (Optional extension on testing an index hypothesis).** In a disposable lab only, add an index after recording the baseline, rerun the same `EXPLAIN`, and compare the actual rows as well as the plan. For a tiny fixture PostgreSQL may rationally keep a sequential scan. The experiment teaches that a physical change is a cost hypothesis, while the report contract is a correctness obligation.
 
-In a disposable lab only, add an index after recording the baseline, rerun the same `EXPLAIN`, and compare the actual rows as well as the plan. For a tiny fixture PostgreSQL may rationally keep a sequential scan. The experiment teaches that a physical change is a cost hypothesis, while the report contract is a correctness obligation.
+<ExerciseSet>
 
-</ExerciseSolution>
+<Exercise id="ex-lab-conditional-aggregation" type="construct" level="application" title="Conditional Aggregation with Status Filtering">
 
-## Portfolio transfer task
+Write a PostgreSQL query against `offering(offering_id, code, term)` and `enrollment(student_id, offering_id, status)` that reports `(code, enrolled_count, waitlisted_count)` for all 2026S offerings, preserving offerings with zero registrations. Use standard SQL aggregate `FILTER` clauses.
 
-Write and test a query for: “For every 2026S offering, show the code, the number of enrolled students, and the number of waitlisted students; include offerings with neither; order by code.” Submit:
-
-1. a one-sentence result contract;
-2. the SQL with a sentence for each `ON`, `WHERE`, and aggregate choice;
-3. a predicted result table for the fixed fixture;
-4. two extra seed rows that would catch a wrong answer.
-
-<ExerciseSolution hint="Keep the current-term condition on Offering. Preserve all offerings with a left join, then use conditional aggregation for the two status counts.">
-
-One correct core is:
+<ExerciseSolution hint="Use a LEFT JOIN from offering to enrollment and aggregate using FILTER (WHERE ...).">
 
 ```sql
 SELECT o.code,
@@ -343,13 +336,54 @@ LEFT JOIN enrollment AS e
   ON e.offering_id = o.offering_id
 WHERE o.term = '2026S'
 GROUP BY o.offering_id, o.code
-ORDER BY o.code, o.offering_id;
+ORDER BY o.code;
 ```
+`COUNT(*) FILTER (WHERE ...)` evaluates conditions over right-side matches while preserving empty offerings with count 0.
 
-For the fixture, DB101 is `(1, 0)`, DB201 is `(0, 1)`, and DB301 is `(0, 0)`. Seed one offering with both an enrolled and waitlisted row, plus one offering with only a dropped row. Those cases catch accidental status filtering in `WHERE` and incorrect use of `COUNT(*)` without a filter.
 </ExerciseSolution>
 
-## References
+</Exercise>
+
+<Exercise id="ex-lab-multi-row-check-invariant" type="verify" level="application" title="Capacity Check Constraint Scope Limitation">
+
+A developer attempts to enforce an offering capacity limit by writing `CHECK ((SELECT COUNT(*) FROM enrollment e WHERE e.offering_id = offering_id) <= capacity)` inside a table definition. Verify why standard SQL rejects or fails to guarantee this constraint under concurrent transactions.
+
+<ExerciseSolution hint="Check constraints are evaluated strictly on the single modified row and cannot safely query dynamic foreign tables.">
+
+Standard SQL table check constraints evaluate predicates over the immediate columns of the mutated row; subqueries in `CHECK` constraints are either explicitly disallowed by RDBMS engines or susceptible to race conditions under non-serializable isolation levels, where concurrent commits can exceed capacity without seeing each other's inserts.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-lab-explain-plan-interpretation" type="describe" level="recall" title="Query Plan Execution vs. Correctness Semantics">
+
+Explain why observing a sequential scan in `EXPLAIN ANALYZE` on a four-row fixture does not indicate an optimization defect or justify adding an index.
+
+<ExerciseSolution hint="Compare disk page fetch overhead with sequential cache hits on small tables.">
+
+For small relations occupying a single disk page, a sequential scan reads the single page directly into cache without paying the additional overhead of traversing an index B-tree. The optimizer correctly minimizes cost based on catalog statistics. Physical plans reflect cost models, not relational correctness contracts.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-lab-dual-status-report-transfer" type="generalise" level="transfer" title="Multi-Status Enrollment Reporting with Null Preservation">
+
+Design test cases for the multi-status registration query. Identify two adversarial seed rows that expose bugs in: (1) moving status checks to `WHERE`, and (2) using unfiltered `COUNT(*)`.
+
+<ExerciseSolution hint="Provide an offering with only dropped enrollments, and an offering with zero enrollments.">
+
+1. Seed an offering with only a `dropped` enrollment: moving status checks into `WHERE` removes this offering entirely instead of reporting counts `(0, 0)`.
+2. Seed an offering with zero enrollments: using unfiltered `COUNT(*)` reports count 1 due to the null-extended joined row, whereas `COUNT(*) FILTER (...)` or `COUNT(e.student_id)` correctly yields 0.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
 
 - [PostgreSQL 18: `SELECT`](https://www.postgresql.org/docs/18/sql-select.html)
 - [PostgreSQL 18: Constraints](https://www.postgresql.org/docs/18/ddl-constraints.html)

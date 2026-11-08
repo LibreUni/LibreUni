@@ -18,7 +18,7 @@ To address the systemic issues of AI-generated content, all output must adhere t
 
 - **Deep, University-Level Rigor:** Content must include complex problems, dilemmas, and formal mathematical notation. Do not shy away from the "struggle" of hard math. Present foundational generators (like Maxwell's equations) and prove how they derive broader results.
 - **Zero Fluff and Compression:** Avoid conversational transitions. Start immediately with the core propositions. Compress the knowledge into a few core generating ideas ("unconditional truths") rather than presenting a scattered list of facts.
-- **Strict Modularity (No Interlinking):** Never use relative chronological references like "In the next lesson" or "As we saw yesterday." Math is cumulative, but course structures change. Rely only on explicit prerequisites (e.g., "This requires an understanding of limit definitions") rather than referencing external modules.
+- **Strict Modularity & Resolvable Dependencies:** Never use relative chronological references like "In the next lesson" or "As we saw yesterday." Math and systems are cumulative, but course structures change. Rely on declared prerequisites and link foundational statements using `<Ref id="..." />` (D-0013, `COURSE_STRUCTURE.md`).
 - **Visual Over Textual:** If a relationship, formula, or concept can be mapped visually, do so. Do not explain over text what a graph can demonstrate instantly.
 - **Intentional, Meaningful Practice (The 80/20 Rule):** Do not push mindless coding exercises. Practice should make up the bulk of the learner's effort, but the exercises must be purposefully mixed in type to build genuine intuition and pattern recognition, avoiding repetitive rote tasks.
 
@@ -26,9 +26,9 @@ To address the systemic issues of AI-generated content, all output must adhere t
 
 Use this structure to introduce concepts, replacing the standard "I do, We do, You do" with a structure modeled after how the brain actually learns advanced math:
 
-- **Motivated Discovery (The "Why"):** Do not just hand the student an arbitrary formula. Establish a real problem or tension. Show the "happy path" of discovery: Question → Attempt → Obstacle → Insight → Formalization. Walk through how a mathematician would have naturally discovered this using trial and error.
-- **Worked Examples Before Formal Definitions:** Our working memory processes new concepts better through concrete examples. Introduce the formal, rigorous definition, but immediately ground it in step-by-step worked examples where the reasoning behind every single step is explicitly justified.
-- **Deep Independent Practice:** Provide challenging problems that require independent transfer. These problems should operate right at the "edge of the learner's understanding" to induce a flow state, rather than being impossibly hard or boringly easy.
+- **Motivated Discovery (The "Why"):** Do not just hand the student an arbitrary formula. Establish a real problem or tension. Show the "happy path" of discovery: Question → Attempt → Obstacle → Insight → Formalization. Walk through how a mathematician or engineer would have discovered this through inquiry.
+- **Formal Definition Grounded in Step-by-Step Examples:** State the rigorous, formal definition or invariant in an addressable statement card, then immediately ground it in step-by-step worked examples (canonical case, then edge/variable case) where the reasoning behind every single step is explicitly justified, followed by non-examples that reveal boundary limits.
+- **Deep Independent Practice:** Provide challenging problems in an `<ExerciseSet>` that require independent transfer across Bloom's levels (D-0013, `COURSE_STRUCTURE.md`). These problems operate at the edge of learner understanding to build genuine mastery.
 - **Feedback & Knowledge Gaps:** Feedback must do more than provide the correct answer. It must act as a "diagnosis," revealing the exact missing prerequisite or logic gap that caused the error, allowing the student to use targeted self-explanation (Feynman technique) to patch their understanding.
 
 ## 4. Substantive Quality Checks

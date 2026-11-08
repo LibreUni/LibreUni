@@ -19,6 +19,8 @@ estimatedMinutes: 330
 assessment: Audit an unfamiliar context-switch implementation by reconstructing state ownership, proving no execution context is simultaneously active on two CPUs, and producing traces that expose two named save/restore defects.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
@@ -70,16 +72,15 @@ User SP, kernel SP, and the active CPU register file necessarily change because 
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Trapframe versus context: two save sets"
-  question="In an OS kernel on RISC-V, a user thread enters the kernel via a trap, saving its state in a trapframe. Later, the kernel scheduler calls swtch(&p1->context, &p2->context). Why does swtch() save only callee-saved registers (ra, sp, s0-s11), whereas the trapframe saves all user registers?"
+  title="Context Switch Save Sets Classification Matrix"
+  question="Evaluate each statement regarding the differences between the user trapframe and the kernel scheduler context in RISC-V:"
   options={[
-    "swtch() is a standard C ABI call whose caller-saved registers are already preserved by the compiler; asynchronous traps interrupt arbitrary live registers.",
-    "swtch() executes in machine mode where hardware automatically pushes temporary registers; user traps execute in supervisor mode without hardware register stacks.",
-    "User processes can modify all general-purpose registers, whereas the kernel is prohibited by hardware from altering callee-saved registers during a switch.",
-    "Callee-saved registers are sufficient to restore user space, but kernel thread switches require saving all architectural registers to preserve interrupt state."
+    { id: "opt-ctx-trap-all", text: "The user trapframe preserves all 31 general registers because asynchronous traps can interrupt any live register.", isCorrect: true },
+    { id: "opt-ctx-swtch-callee", text: "The kernel swtch() function preserves only callee-saved registers because it conforms to the standard C calling ABI.", isCorrect: true },
+    { id: "opt-ctx-swtch-machine", text: "Context switching executes in machine mode where hardware automatically pushes temporary registers to memory.", isCorrect: false },
+    { id: "opt-ctx-trapframe-callee", text: "User-space system calls require saving only callee-saved registers into the trapframe prior to kernel entry.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="A user trap can interrupt execution at any instruction where any of the 31 user registers may be live; the kernel cannot assume a cooperative ABI boundary and must preserve all user registers in the trapframe. In contrast, swtch() is called as a standard C ABI function by the kernel scheduler. Any caller-saved temporary live across swtch() has already been preserved by the C compiler on that thread's kernel stack, so swtch() only needs to preserve callee-saved registers (ra, sp, s0-s11)."
+  explanation="User traps can interrupt arbitrary live registers requiring complete trapframe saves. In contrast, swtch() is invoked as a C function call where the compiler already preserved caller-saved registers on the kernel stack."
 />
 
 ## Process state is a global invariant
@@ -238,35 +239,87 @@ A kernel implements `fork` by byte-copying its entire process structure, includi
 The copied lock may appear held by a nonexistent owner or duplicate internal wait state. The kernel-stack pointer aliases the parent's stack, so parent and child corrupt one call chain. The scheduler context resumes at the parent's suspended kernel PC with parent-specific stack/register assumptions rather than a controlled child-first-return path. Descriptor objects also need reference-counted duplication rather than arbitrary pointer ownership. Correct creation copies selected semantics and constructs fresh synchronization/execution state.
 </ExerciseSolution>
 
-## Context-switch design audit
+> **Remark.** Any architectural extension that introduces vector registers, floating-point units, or inter-core thread migration must explicitly expand the kernel continuation ownership table before altering the assembly switch sequence.
 
-Audit a hypothetical RV64 kernel whose `switch_context` saves `{pc, sp, s0..s11, satp}` directly from one thread to another. The kernel supports two user threads per process, lazy vector state, four harts, and migration.
+<ExerciseSet>
 
-Submit:
+<Exercise id="ex-ctx-thread-vs-process-state" type="describe" level="application" title="Classifying Thread-Private Continuations vs Process-Shared Resources">
 
-1. an ownership table for every saved field plus trapframe, kernel stack, vector state, and current-CPU pointer;
-2. a state machine and selection linearization point;
-3. normal traces for preemption and blocking;
-4. adversarial traces for double selection and one omitted register class;
-5. a decision on whether `satp` belongs in every thread context;
-6. a migration rule for hart-local state; and
-7. an explicit list of architecture state deliberately not supported.
+In a multi-threaded Unix environment, classify which architectural and operating-system resources must be swapped during a thread switch within the same process versus a full process context switch across distinct address spaces.
 
-**Rubric (20 points).** Entity/ownership separation 4; state invariant 4; two complete traces 4; ABI/save-set argument 3; multicore selection proof 3; omissions and testability 2.
+<ExerciseSolution hint="Determine which registers and memory structures define an execution continuation versus an address space.">
 
-<ExerciseSolution title="Reveal grading diagnostics">
-
-Full credit does not require `satp` per thread. If threads share one process address space, storing it once per process avoids divergence; the switch path can reload only when the address-space identity changes. A per-thread field can still be correct if equality is invariant and checked. Lazy vector state needs an owner marker per hart plus save/restore on ownership transfer; migration must not leave a thread's dirty state only in another hart's registers. The double-selection test must coordinate two harts to race one runnable object and detect simultaneous entry with an atomic guard or stack canary. A list of registers without an ABI/liveness rationale earns at most half of the save-set points.
+During a thread switch within the same process, the kernel swaps only thread-private execution state: the kernel stack pointer (`sp`), user stack pointer, architectural CPU register file (callee-saved registers in cooperative switches, or full trapframe in preemptive switches), thread-local storage base pointers, and thread-specific signal masks. The virtual address space (`satp` root page table), open file descriptor table, current working directory, and shared memory segments remain unchanged. During a full process context switch, the kernel additionally reloads `satp` (flushing or tagging TLBs with ASIDs), switches process credential contexts, and points to a distinct descriptor table.
 
 </ExerciseSolution>
+</Exercise>
 
-## Connections and deliberate omissions
+<Exercise id="ex-ctx-trapframe-vs-swtch-abi" type="verify" level="application" title="C ABI Invariants in Context Switching vs Asynchronous Traps">
 
-Trap handling provides the full user save/restore envelope. Scheduling supplies selection policy but relies on the process-state and continuation invariants derived here. Synchronization gives the formal tools for lock handoff, wait predicates, and memory visibility. Virtual memory determines whether a thread switch also changes translation identity. Signals and `fork` modify process/thread state under contracts that cannot be inferred from the context structure alone.
+Explain why the kernel `swtch(&old->context, &new->context)` assembly routine on RISC-V saves only callee-saved registers (`ra`, `sp`, `s0..s11`), whereas the user-to-kernel `trapframe` must save all 31 general-purpose registers.
 
-> **Remark.** Any extension that adds architecture state or migration must expand the ownership table before changing the assembly save set.
+<ExerciseSolution hint="Contrast the caller/callee contract of a standard C function call with an arbitrary asynchronous interrupt.">
 
-The treatment omits user-level thread packages, work stealing, CPU affinity, NUMA, priority inheritance, realtime dispatch, lazy FPU/vector implementation, ASID allocation, kernel preemption, and formal weak-memory proofs. Those mechanisms are not compressed into terminology because each changes saved state or execution ownership in a way that deserves a separate trace.
+The `swtch()` routine is invoked as a standard C function call by the kernel scheduler. According to the RISC-V calling convention (ABI), the compiler automatically generates code to spill any caller-saved temporary registers (`t0..t6`, `a0..a7`) that contain live values across the call onto the thread kernel stack. Thus, `swtch()` only needs to preserve callee-saved registers to restore the C execution context. In contrast, an asynchronous user trap (such as a timer interrupt) can strike at any arbitrary instruction boundary where any or all of the 31 user registers hold live values; the kernel has no compiler guarantees and must save every user register to preserve transparency.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-process-state-double-run" type="formalise" level="transfer" title="Multicore Mutual Exclusion and Double-Execution Prevention">
+
+Consider a multicore system where two idle CPU cores run `scheduler()` loops concurrently. State the exact locking invariant and state transition linearization point that prevents both cores from selecting the same `RUNNABLE` process and executing it simultaneously on two CPUs.
+
+<ExerciseSolution hint="Analyze the atomic state check and lock acquisition in xv6 proc.c scheduler loop.">
+
+The invariant is: No process struct can have state `RUNNING` on more than one CPU, and a thread kernel stack can be active on at most one CPU core simultaneously. To linearize selection, the scheduler on each CPU acquires the candidate process lock (`acquire(&p->lock)`), checks `if (p->state == RUNNABLE)`, updates `p->state = RUNNING`, and calls `swtch()` while still holding `p->lock`. The newly scheduled process releases `p->lock` only after running on the new CPU core. Any competing CPU scheduler attempting to acquire `p->lock` spins until the state transition to `RUNNING` is complete, whereupon it observes `p->state != RUNNABLE` and skips it.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-pipe-read-wakeup-trace" type="describe" level="transfer" title="Execution Trace of Blocking Pipe Read and Waiter Wakeup">
+
+Trace the process state transitions, queue manipulations, and context switches when Process $A$ blocks reading an empty pipe, Process $B$ writes data to the pipe, and Process $A$ is subsequently scheduled and completes its read.
+
+<ExerciseSolution hint="Trace the lock handoff between pipe lock and process lock during sleep() and wakeup().">
+
+1. Process $A$ acquires the pipe lock, discovers the pipe buffer is empty, and calls `sleep(&pipe->nread, &pipe->lock)`.
+2. Inside `sleep()`, $A$ acquires `a->lock`, releases `pipe->lock`, updates `a->state = SLEEPING`, records the channel `a->chan = &pipe->nread`, and calls `sched()` to switch context to the per-CPU scheduler.
+3. The CPU scheduler releases `a->lock` and schedules another process.
+4. Process $B$ runs, acquires `pipe->lock`, copies bytes into the pipe buffer, and calls `wakeup(&pipe->nread)`.
+5. `wakeup()` scans the process table, acquires `p->lock` for each sleeping process, and upon matching `p->chan == &pipe->nread`, updates `p->state = RUNNABLE` and releases `p->lock`.
+6. Later, an idle CPU scheduler acquires `a->lock`, observes `a->state == RUNNABLE`, sets `a->state = RUNNING`, and switches context to $A$.
+7. $A$ resumes inside `sleep()`, re-acquires `pipe->lock`, releases `a->lock`, reads the newly written bytes from the buffer, releases `pipe->lock`, and returns to user space.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-fork-structure-aliasing" type="construct" level="synthesis" title="Failure Modes of Direct Struct Byte-Copying in Fork Implementation">
+
+A junior operating systems engineer attempts to optimize `fork()` by executing a raw memory copy (`memcpy(child_proc, parent_proc, sizeof(struct proc))`). Detail three catastrophic failure modes that manifest during execution.
+
+<ExerciseSolution hint="Identify synchronization objects, stack pointers, and kernel continuations that cannot be aliased.">
+
+1. Lock corruption and deadlock: The copied spinlock (`child->lock`) inherits the locked/unlocked state and holder ID of the parent. If copied while held or contended, the child lock is poisoned, leading to deadlocks or assertion panics in the scheduler.
+2. Kernel stack aliasing: The child struct inherits the parent kernel stack pointer (`sp`). When the child runs, its push and pop operations overwrite active stack frames of the parent, resulting in immediate kernel call chain corruption.
+3. Scheduler continuation aliasing: The child inherits the parent scheduler context (`context.ra` and `context.sp`). Rather than returning through the dedicated `forkret` entry point that prepares a fresh user trapframe return, the child resumes at the parent suspended kernel continuation with parent-specific local variables.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-multicore-context-switch-audit" type="construct" level="synthesis" title="Designing Context Switching for Multi-Threaded Processes with Migration">
+
+Design the context switch protocol for a multi-threaded kernel supporting multiple kernel threads per address space and core migration. Detail when `satp` must be reloaded, how thread-local register state is managed, and how migration across cores preserves cache and TLB consistency.
+
+<ExerciseSolution hint="Check whether incoming and outgoing threads share the same page table root to optimize MMU reloads.">
+
+1. Address space check: The context switch routine inspects `prev->proc == next->proc`. If both threads belong to the same process, reloading `satp` and issuing `sfence.vma` is bypassed, eliminating unnecessary TLB invalidation overhead. If switching across distinct processes, `satp` is updated to `next->proc->pagetable` and an address-space-tagged TLB sync is executed.
+2. Thread-local state: The user thread-pointer register (`tp` or thread-local base CSR) is restored from `next->trapframe->tp`.
+3. Migration safety: If a thread migrates from CPU $i$ to CPU $j$, CPU $j$ acquires `thread->lock` before switching. The release fence in the lock ensures all stores from CPU $i$ are visible to CPU $j$. Lazy floating-point/vector registers must be explicitly saved from CPU $i$ hardware registers before allowing CPU $j$ to activate the thread.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

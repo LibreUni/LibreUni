@@ -10,12 +10,16 @@ outcomes:
   - Identify bottlenecks and sensitivity to workload, serial fraction, bandwidth, and measurement boundaries.
   - Design a reproducible experiment whose counters and uncertainty could falsify the proposed performance model.
 omissions:
-  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
+  - Silicon-level process simulation (SPICE, transistor threshold voltages, wire RC delays) is abstracted into clock cycle times and setup/hold margins.
+  - Non-Uniform Memory Access (NUMA) cache-coherent interconnect topologies are treated in subsequent multicore modules.
+  - Speculative side-channel vulnerability modeling (Spectre, Meltdown) is deferred to specialized security modules.
 estimatedMinutes: 480
 assessment: Given two implementations and measured counts, compute wall time and model sensitivity, then specify the observation that would overturn the optimization choice.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import AmdahlPlayground from '../../../components/playgrounds/AmdahlPlayground';
@@ -72,17 +76,65 @@ Queueing adds waiting time. If a server’s utilization approaches one, small in
 <CaseStudy client:load
   title="Benchmark claim under review"
   scenario="One warm benchmark run places CPU A eight percent ahead of CPU B. The report attributes the difference to A's wider pipeline."
-  question="What evidence is needed before accepting that causal claim?"
-  options={["Repeat controlled workloads and test the model against confounders", "Keep the warm result and report only its arithmetic mean", "Rename each configuration so the comparison is easier to cite", "Reduce the sample to isolate the fastest observed execution"]}
-  correctIndex={0}
-  explanation="Performance is an empirical claim. A model predicts the mechanism, while controls and repeated measurements distinguish that mechanism from cache state, thermal drift, scheduling, or workload bias."
+  question="Evaluate which evidentiary standards are required before accepting this causal architectural claim:"
+  options={[
+    {
+      id: "claim-controlled-confounders",
+      text: "Controlled repeated executions must isolate pipeline width from frequency scaling, cache footprint, and OS scheduler variance.",
+      isCorrect: true,
+      feedback: "Correct. Performance differences can easily stem from thermal throttling, clock jitter, or page faults rather than microarchitecture."
+    },
+    {
+      id: "claim-hardware-counters",
+      text: "Hardware performance counter traces must verify that CPU A retired more instructions per cycle than CPU B across the test.",
+      isCorrect: true,
+      feedback: "Correct. Demonstrating higher IPC and issue slot utilization provides direct mechanistic proof of pipeline efficacy."
+    },
+    {
+      id: "claim-fastest-run-only",
+      text: "Filtering out all non-minimum runs to isolate the single fastest execution provides statistically sound proof of architectural superiority.",
+      isCorrect: false,
+      feedback: "Incorrect. Cherry-picking the minimum run conceals measurement noise and fails to reflect expected statistical performance."
+    },
+    {
+      id: "claim-single-warm-mean",
+      text: "Reporting the arithmetic mean of a single warm benchmark run is methodologically sufficient to prove causal processor claims.",
+      isCorrect: false,
+      feedback: "Incorrect. A single run provides zero variance metrics and cannot establish statistical significance against background noise."
+    }
+  ]}
+  explanation="Performance is an empirical claim. Microarchitectural models predict the causal mechanism, while repeated measurements and hardware counter telemetry distinguish pipeline effects from thermal, scheduling, and cache confounders."
 />
 
 <Quiz client:load title="Latency versus throughput"
-  question="Which statement distinguishes latency from throughput?"
-  options={["Latency measures one operation's completion time; throughput measures completions per interval", "Latency counts completed operations; throughput measures one operation's waiting time", "Latency and throughput become identical whenever the pipeline remains occupied", "Throughput excludes pipeline occupancy while latency includes only occupied stages"]}
-  correctIndex={0}
-  explanation="A pipeline can have long latency but high throughput after filling. A model must name which quantity the workload actually cares about."
+  question="Evaluate which statements accurately distinguish computational latency from throughput in processor pipelines:"
+  options={[
+    {
+      id: "claim-latency-def",
+      text: "Latency measures the total elapsed time required for a single operation to complete from initiation to retirement.",
+      isCorrect: true,
+      feedback: "Correct. Latency is the end-to-end execution delay experienced by a discrete request or instruction."
+    },
+    {
+      id: "claim-throughput-def",
+      text: "Throughput measures the total volume of independent operations successfully completed per unit of time.",
+      isCorrect: true,
+      feedback: "Correct. Throughput reflects rate of completion after pipeline fill, governed by the initiation interval."
+    },
+    {
+      id: "claim-identical-pipelined",
+      text: "Pipelining deep instruction execution paths causes latency and throughput to become mathematically identical.",
+      isCorrect: false,
+      feedback: "Incorrect. Deep pipelining frequently increases single-instruction latency due to register overhead while substantially boosting throughput."
+    },
+    {
+      id: "claim-tail-latency",
+      text: "High-throughput request batching architectures inherently reduce 99th-percentile tail latency for latency-sensitive queries.",
+      isCorrect: false,
+      feedback: "Incorrect. Batching maximizes throughput at the expense of queuing delay, commonly worsening tail latency."
+    }
+  ]}
+  explanation="Latency measures single-operation duration, while throughput measures rate of completion. Pipelining decouples the two by allowing multiple overlapping in-flight instructions."
 />
 
 ## Amdahl’s law and bottlenecks
@@ -199,86 +251,93 @@ Consider multiplying two $N \times N$ dense matrices with $N = 1024$.
    * **Rule**: Optimizing for MFLOPS, MIPS, or CPI without fixing the algorithmic work and the instruction count ($IC$) produces invalid engineering decisions.
 
 
-## Independent practice
+<ExerciseSet>
 
-### Exercise 1: CPU performance equation derivations
+<Exercise id="ex-perf-cpu-equation" type="construct" level="application" title="CPU Performance Equation Derivation and Analysis">
 
-Compute CPU time, cycles, and CPI from instruction count, frequency, and measured time. Compare two implementations with different instruction counts.
+Compute CPU time, cycle count, and CPI from instruction count, frequency, and measured execution time. Explain why a lower CPI does not guarantee lower wall-clock time when instruction count or frequency differs.
 
 <ExerciseSolution hint="Relate instruction count, cycles per instruction (CPI), and clock cycle time to total execution runtime.">
 
-Use $T=IC\cdot CPI/f$. Cycles are $T f$ and CPI is cycles divided by IC. A lower CPI does not prove lower time when instruction count or frequency differs.
+Use $T = IC \cdot CPI / f$. Cycle count is $T \cdot f$ and CPI is cycles divided by $IC$. An optimization that reduces CPI by adding simple instructions (raising $IC$) or lowering clock frequency $f$ can increase total execution runtime $T$ despite a numerically lower CPI.
 
 </ExerciseSolution>
 
-### Exercise 2: Amdahl's law with non-parallelizable serial bottlenecks
+</Exercise>
 
-Apply Amdahl’s law to a workload with 25% memory, 15% synchronization, and 60% compute when memory is 4× faster and synchronization 2× faster.
+<Exercise id="ex-perf-amdahl-multi-bottleneck" type="construct" level="application" title="Amdahl's Law with Multiple Serial and Parallel Bottlenecks">
+
+Apply Amdahl’s law to a workload spending 25% of time in memory access, 15% in synchronization, and 60% in compute, when memory access is accelerated by $4\times$ and synchronization by $2\times$. Calculate the overall speedup and identify the limiting bottleneck.
 
 <ExerciseSolution hint="Compute the maximum achievable speedup when an accelerated component represents a fraction of execution time.">
 
-Baseline fractions are 0.25, 0.15, and 0.60. New time fraction is $0.25/4+0.15/2+0.60=0.7375$, so speedup is about 1.356. The remaining compute fraction limits the result.
+The baseline fraction sum is $0.25 + 0.15 + 0.60 = 1.0$. The improved execution time fraction is $T_{\text{new}} = 0.25/4 + 0.15/2 + 0.60 = 0.0625 + 0.075 + 0.60 = 0.7375$. Overall speedup is $S = 1 / 0.7375 \approx 1.356$. The unaccelerated compute portion (60%) now accounts for $0.60 / 0.7375 \approx 81.4\%$ of total runtime, establishing the primary bottleneck.
 
 </ExerciseSolution>
 
-### Exercise 3: Roofline model kernel classification and ceiling shifts
+</Exercise>
 
-Use a roofline model to classify a kernel given bandwidth, peak compute, and arithmetic intensity. Explain what optimization can move each ceiling.
+<Exercise id="ex-perf-roofline-classification" type="describe" level="recall" title="Roofline Model Kernel Classification and Ceiling Shifts">
+
+Using the Roofline model with memory bandwidth $B$, peak compute performance $P_{\text{peak}}$, and arithmetic intensity $I$, explain how to classify a kernel as compute-bound versus memory-bound. What architectural and code transformations raise each ceiling?
 
 <ExerciseSolution hint="Compare operational intensity times memory bandwidth ($I \cdot B$) against peak arithmetic throughput to classify memory-bound vs compute-bound kernels.">
 
-Compute $B\cdot I$ and compare with peak compute. Increasing vector width raises compute ceiling; tiling, reuse, compression, and fewer bytes moved raise arithmetic intensity or effective bandwidth. Neither helps if another resource is already the bottleneck.
+Compute the operational throughput boundary $I \cdot B$. If $I \cdot B < P_{\text{peak}}$, the kernel is memory-bound; if $I \cdot B \ge P_{\text{peak}}$, it is compute-bound. Increasing SIMD vector width or FMA units raises the compute ceiling $P_{\text{peak}}$. Loop tiling, register blocking, cache reuse, and data compression raise arithmetic intensity $I$, shifting the kernel rightward along the bandwidth slope.
 
 </ExerciseSolution>
 
-### Exercise 4: Experimental methodology for cache-bound traversals
+</Exercise>
 
-Design an experiment testing whether a matrix traversal is cache-bound. Name at least five confounders.
+<Exercise id="ex-perf-cache-traversal-methodology" type="verify" level="application" title="Experimental Methodology for Cache-Bound Array Traversals">
+
+Design a rigorous experimental harness to test whether a 2D matrix traversal is cache-bound. Identify at least five confounding variables and how to control for them.
 
 <ExerciseSolution hint="Vary working set size across L1/L2/LLC boundaries and control for frequency scaling, page faults, compiler vectorization, and cache warmup.">
 
-Control matrix dimensions, element type, compiler, thread placement, frequency, allocator, warm-up, input values, and background load; measure time, cache misses, bandwidth, and repetitions. Compare dimensions crossing cache capacities.
+Vary matrix dimensions such that working set sizes span $8\text{ KB}$ (L1-resident), $256\text{ KB}$ (L2-resident), $16\text{ MB}$ (LLC-resident), and $128\text{ MB}$ (DRAM-bound). Control confounders by: (1) locking CPU clock governor to prevent dynamic frequency scaling; (2) pinning thread affinity to a single core; (3) pre-faulting and warming pages to eliminate page-fault overhead; (4) using identical compiler optimization flags (`-O3 -fno-tree-vectorize`); and (5) reading hardware performance counters (`PAPI_L1_DCM`, `PAPI_L2_DCM`) to confirm cache misses.
 
 </ExerciseSolution>
 
-### Exercise 5: Average throughput versus tail latency divergence
+</Exercise>
 
-Explain a case where average latency improves while p99 latency worsens.
+<Exercise id="ex-perf-tail-latency-divergence" type="describe" level="recall" title="Average Throughput versus Tail Latency Divergence">
+
+Explain how architectural optimizations like batching and aggressive caching can simultaneously improve average throughput while degrading 99th-percentile (p99) tail latency.
 
 <ExerciseSolution hint="Consider how caching or request batching can accelerate the fast path while queuing complex or evicted requests into high p99/p99.9 percentiles.">
 
-A cache or admission policy may improve common requests while causing rare large requests to queue behind evictions, increasing tail latency. Report the distribution rather than infer quality from the mean.
+Batching buffers incoming requests to saturate wide vector units, maximizing throughput at the cost of holding individual early requests in queues, inflating tail latency. Similarly, cache admission policies accelerate common requests but cause tail requests encountering cold evictions or lock contention to stall for milliseconds. System performance evaluation must report percentiles rather than relying exclusively on mean throughput.
 
 </ExerciseSolution>
 
-### Exercise 6: Pipeline latency, initiation interval, and throughput metrics
+</Exercise>
 
-Distinguish latency, initiation interval, throughput, and utilization in a pipelined unit.
+<Exercise id="ex-perf-pipeline-metrics" type="construct" level="application" title="Pipeline Latency, Initiation Interval, and Throughput Metrics">
+
+Distinguish between pipeline latency, initiation interval, throughput, and hardware utilization. Give the exact completion time for $N$ independent operations traversing a $k$-stage pipeline with clock period $\tau$ and initiation interval $II = 1$.
 
 <ExerciseSolution hint="Differentiate between total end-to-end service delay (latency), minimum input issue separation (initiation interval), and completions per second (throughput).">
 
-Latency is request-to-result delay; initiation interval is spacing between accepted inputs; throughput is completed results per unit time; utilization is occupied capacity relative to its maximum. A four-cycle pipeline can have four-cycle latency and one-cycle initiation interval.
+Latency is total propagation time from issue to retirement ($k \cdot \tau$). Initiation interval ($II$) is the cycle delay between successive accepted inputs ($1 \cdot \tau$). Throughput is retired operations per second ($1/\tau$). Total completion time for $N$ operations is $T(N) = (k + N - 1) \cdot \tau$. For $N=1$, $T = k\tau$; as $N \to \infty$, incremental completion time per operation approaches $\tau$.
 
 </ExerciseSolution>
 
-### Exercise 7: Benchmarking methodology critique: best-of-three reporting
+</Exercise>
 
-Critique a benchmark that reports only the fastest of three runs on a warmed cache.
+<Exercise id="ex-perf-benchmark-critique" type="generalise" level="transfer" title="Benchmarking Methodology Critique: Best-of-Three Reporting">
+
+Critique the practice of publishing only the minimum (fastest) elapsed runtime from three experimental runs. Detail why this anti-pattern invalidates scientific reproducibility and prescribe the proper reporting protocol.
 
 <ExerciseSolution hint="Identify how minimum-of-three filtering suppresses system variance, thermal throttling, OS context switches, and cache eviction noise.">
 
-The fastest run hides variability, warm-up state, scheduling, and outliers. The experiment should report all runs or a distribution, define warm-up, repeat enough times, and use counters or controlled conditions to test the proposed mechanism.
+Reporting the minimum of three runs censors natural system variance, OS scheduler preemption, thermal throttling, and cache eviction effects, presenting an unrepresentative best-case artifact. The proper protocol requires: performing at least 30 independent iterations after verified cache warmup; reporting median, interquartile range (IQR), and full percentiles (p50, p90, p99); and applying non-parametric statistical tests (e.g. Mann-Whitney U) with confidence intervals.
 
 </ExerciseSolution>
 
+</Exercise>
 
-
-## Deliberate Omissions & Scope Boundaries
-
-* **Silicon Process & Gate-Level Delay Simulation**: We deliberately omit SPICE simulations, transistor threshold voltages, and wire RC delays, abstracting circuit timing into clock cycle times $T_{cycle}$ and setup/hold margins.
-* **Non-Uniform Memory Access (NUMA) Topology Graphs**: Detailed multi-socket cache-coherent interconnect protocols (e.g., UPI, Infinity Fabric) are treated in the Multicore & SIMD module.
-* **Speculative Execution Side Channels**: Spectre and Meltdown timing leakage models are deferred to the security specialization.
-
+</ExerciseSet>
 
 ## References & Further Reading
 

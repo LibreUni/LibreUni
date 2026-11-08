@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 300
 assessment: Produce and defend traces for unfamiliar pathname and descriptor schedules, then specify a race-resistant update protocol with explicit atomicity, authority, and durability assumptions.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -79,16 +81,15 @@ A response that says “everything is copied” has collapsed three layers: desc
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Unlinking an open file and namespace independence"
-  question="Process P creates /tmp/temp.dat, opens it with fd = open(...), and immediately calls unlink('/tmp/temp.dat') while keeping fd open. Subsequently, Process Q calls open('/tmp/temp.dat', O_CREAT | O_RDWR, 0600) and writes data. What happens to Process P's file and descriptor?"
+  title="File descriptors, open descriptions, and namespace invariants"
+  question="Evaluate each statement regarding POSIX file descriptors, directory entries, and file lifecycles:"
   options={[
-    "Process P continues reading and writing through fd; Process Q allocates a fresh inode at that path, keeping both files completely isolated.",
-    "Process P's descriptor fd is immediately invalidated by the kernel when Process Q creates /tmp/temp.dat, failing future read or write calls.",
-    "Process Q re-attaches to Process P's unlinked inode and overwrites its contents, sharing file position across both open descriptions.",
-    "The filesystem rejects Process Q's create call with EEXIST because Process P still holds an active in-core descriptor for that pathname."
+    { id: "opt-fs-unlink-open", text: "Unlinking a file removes its directory entry while existing open file descriptors continue reading its data.", isCorrect: true },
+    { id: "opt-fs-dup-offset", text: "Duplicating a descriptor with dup creates a new descriptor that shares the exact file offset and status flags.", isCorrect: true },
+    { id: "opt-fs-rename-durability", text: "The POSIX rename system call provides immediate disk durability guarantees without requiring explicit fsync calls.", isCorrect: false },
+    { id: "opt-fs-second-open-shared", text: "Two separate open calls to the same file pathname in one process always share a single common file offset.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="Unlinking /tmp/temp.dat removes the directory entry and decrements the inode's on-disk link count to zero, but Process P's open file description keeps the in-core inode and data blocks active. When Process Q later creates a file with that same name, the directory links a newly allocated inode. The two processes operate on completely separate files with independent storage; Process P's blocks are freed only after P closes fd."
+  explanation="Unlinking removes the directory name, but the inode and data blocks remain allocated until the last open description is closed. Descriptors duplicated with dup share the identical underlying open file description (and therefore share offset). Atomic rename replaces names in the namespace but does not force volatile caches to disk without fsync, and independent open calls create separate open file descriptions with independent offsets."
 />
 
 ## Worked trace: shared and independent offsets
@@ -243,38 +244,117 @@ Step 3 prevents a durable new name from exposing unwritten or stale content unde
 
 This recipe is not universal folklore. Filesystem, device-cache, network, and platform semantics can narrow or alter it. It does not make several files into one atomic transaction. It also does not update long-lived reader descriptors; readers that require fresh configuration must reopen or use an explicit version-notification protocol.
 
-### Synthesis task: specify before coding
-
-Design an API `publish(dirfd, final_name, bytes)` for a service that publishes one immutable object. Your specification must state:
-
-- the namespace and attacker model;
-- the success-state invariant for concurrent readers;
-- the post-crash state set;
-- how temporary names are acquired without a precreation race;
-- which errors are propagated; and
-- how a reader detects or requests a newer generation when it holds an old descriptor.
-
-<ExerciseSolution title="Reveal the grading criteria and a reference design">
-
-A complete specification distinguishes three contracts:
-
-1. **Authority:** `dirfd` was opened from trusted configuration; `final_name` is one component; all creation and rename operations are relative to `dirfd`; temporary creation is exclusive or uses an unnamed temporary-object facility supported by the platform. No process-wide `chdir` participates.
-2. **Visibility:** before the rename point, readers opening `final_name` obtain the old object; after it, they obtain the complete new object. Existing descriptors remain on their original generation. The file format carries a generation identifier if clients need freshness detection.
-3. **Recovery:** after checked file synchronization, checked rename, and checked directory synchronization on a filesystem documenting those semantics, recovery exposes the complete old or complete new generation. An I/O error yields an indeterminate durability result and is not reported as success.
-
-A strong design also bounds input size, writes until all bytes are consumed, handles interrupted calls, sets permissions before publication, and removes an uncommitted temporary entry on a best-effort basis. It does not claim multi-file atomicity, remote-filesystem equivalence, automatic reader refresh, or immunity to a compromised kernel.
-
-Award full credit only when the response states assumptions and legal states. Deduct for a pathname-based validate-then-open sequence, `rename` presented as a durability primitive, unchecked partial writes, or silent `fsync` failure.
-
-</ExerciseSolution>
-
-## Connections and deliberate boundary
-
 > **Remark.** The three-level POSIX state model—per-process file descriptors, system-wide open file descriptions (holding offset and status flags), and underlying inodes (holding link count and data)—is a mandatory API contract that every storage backend in the subsequent implementation and journaling lessons must satisfy.
 
-The interface model constrains implementation. Directory lookup needs a representation for `(name, object-id)` entries; open references need reference counts independent of link counts; duplicated descriptors need a shared offset object; rename needs exclusion and a recoverable multi-block update; path confinement needs an authority model at every traversal edge. These are not implementation details that can be selected independently of the API contract.
+<ExerciseSet>
 
-The model deliberately omits directory-cache algorithms, inode/block layout, journaling, remote cache consistency, ACL evaluation, leases, and mandatory labels. Those mechanisms answer different questions. The interface established here is the contract their implementations must preserve.
+<Exercise id="ex-fs-dup-vs-open-offset" type="verify" level="application" title="Tracing Shared versus Independent File Offsets Across dup and open">
+
+A file `log.txt` contains 20 bytes `0123456789abcdefghij`. A process executes:
+```c
+int fd1 = open("log.txt", O_RDONLY);
+int fd2 = dup(fd1);
+int fd3 = open("log.txt", O_RDONLY);
+char buf[5];
+read(fd1, buf, 4); // Op A
+read(fd2, buf, 4); // Op B
+read(fd3, buf, 4); // Op C
+```
+1. State the file offset for `fd1`, `fd2`, and `fd3` after Op A.
+2. State the byte string read into `buf` by Op B and Op C.
+3. Draw the relationship between descriptor table entries, open file descriptions, and the in-memory inode.
+
+<ExerciseSolution hint="dup shares the open file description and offset; separate open calls create new open file descriptions.">
+
+1. **Offsets after Op A:**
+   `fd1` and `fd2` point to the identical open file description (OFD 1). When `read(fd1, buf, 4)` consumes 4 bytes, OFD 1's offset advances from 0 to 4. Therefore, both `fd1` and `fd2` now observe offset 4. `fd3` refers to independent OFD 2, whose offset remains 0.
+2. **Read results:**
+   - Op B (`read(fd2, buf, 4)`): Reads 4 bytes from OFD 1 starting at offset 4, returning `"4567"`. OFD 1's offset advances to 8.
+   - Op C (`read(fd3, buf, 4)`): Reads 4 bytes from OFD 2 starting at its initial offset 0, returning `"0123"`. OFD 2's offset advances to 4.
+3. **Architecture graph:**
+   - `fd1` (slot in proc table) $\rightarrow$ Open File Description 1 (offset = 8) $\rightarrow$ Inode (`log.txt`).
+   - `fd2` (slot in proc table) $\rightarrow$ Open File Description 1 (offset = 8).
+   - `fd3` (slot in proc table) $\rightarrow$ Open File Description 2 (offset = 4) $\rightarrow$ Inode (`log.txt`).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fs-unlink-open-file-lifecycle" type="construct" level="application" title="State Transitions for Unlinking Open Files with Active Descriptors">
+
+Process $P_1$ opens `/var/run/worker.pid` with descriptor 3. While $P_1$ runs, Process $P_2$ invokes `unlink("/var/run/worker.pid")`.
+1. State the inode link count (`i_nlink`) and in-core reference count (`i_count`) before and after the `unlink`.
+2. Can $P_1$ continue to read and write through descriptor 3 after the `unlink` succeeds?
+3. When are the file's data blocks and inode metadata physically deallocated by the filesystem?
+
+<ExerciseSolution hint="The directory link count drops to 0, but the kernel in-core reference count remains 1 while open.">
+
+1. **Reference counts:**
+   - Before `unlink`: On-disk `i_nlink = 1` (directory entry exists); in-core `i_count = 1` ($P_1$'s open file description holds an active reference).
+   - After `unlink`: The directory entry is removed from the directory block, so on-disk `i_nlink = 0`. However, in-core `i_count` remains 1 because $P_1$'s descriptor 3 is still active.
+2. **Access persistence:**
+   Yes. POSIX dictates that descriptor operations operate through the open file description, not pathname resolution. $P_1$ can continue reading, writing, and seeking through descriptor 3 without error. Any new attempt by other processes to `open("/var/run/worker.pid")` will return `ENOENT` (unless a new file of that name is created).
+3. **Deallocation trigger:**
+   When $P_1$ executes `close(3)` (or when $P_1$ terminates), the kernel decrements `i_count` from 1 to 0. Finding `i_count == 0` and `i_nlink == 0`, the VFS/filesystem driver deallocates all mapped data blocks to the free bitmap and marks the inode free on disk.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fs-atomic-rename-visibility" type="verify" level="transfer" title="Linearization Points and Concurrent Reader Observations Across rename">
+
+Process $W$ prepares an updated database file by creating temporary file `db.tmp` and executing `rename("db.tmp", "db.live")`. Concurrently, reader processes $R_1, R_2, \dots$ repeatedly call `open("db.live", O_RDONLY)`.
+1. Prove that no reader process can ever observe a "file not found" (`ENOENT`) error during the rename operation.
+2. If reader $R_1$ opened `db.live` prior to the rename linearization point, what content does $R_1$ observe after the rename commits?
+3. Explain why `rename` alone does not guarantee that the new database file survives a power failure.
+
+<ExerciseSolution hint="POSIX rename is atomic in namespace; readers either get the old inode or new inode; durability needs fsync.">
+
+1. **Namespace atomicity invariant:**
+   POSIX specifies that `rename(old, new)` is atomic with respect to namespace lookups. The filesystem directory implementation updates or replaces the directory entry in a single atomic directory transaction. At any point in time, a pathname resolution traversing `"db.live"` either resolves to the old inode $I_{\text{old}}$ (before the directory commit) or the new inode $I_{\text{new}}$ (after the commit). There is no intermediate window where the directory entry is empty or absent.
+2. **Reader observation:**
+   $R_1$'s descriptor is bound to the open file description of the old inode $I_{\text{old}}$. Modifying the directory pointer does not change existing open descriptors. $R_1$ continues reading the original database contents until it closes its descriptor.
+3. **Durability boundary:**
+   `rename` guarantees directory namespace atomicity in RAM/dcache. It does not force dirty directory blocks or file data from volatile OS page cache to disk platters/flash. If power fails immediately after `rename`, storage may restore to an older state, write back out-of-order blocks, or expose a 0-byte file unless preceded by `fsync(fd_tmp)` and followed by `fsync(fd_dir)`.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fs-crash-resistant-file-publish" type="construct" level="synthesis" title="Designing a Crash-Resilient and Race-Free Atomic Publication Protocol">
+
+Specify the exact, crash-resilient 5-step sequence required to replace a configuration file `/etc/daemon.conf` using POSIX system calls, ensuring that crash recovery either yields the complete old file or complete new file without corrupt half-writes.
+
+<ExerciseSolution hint="Create temp in same filesystem -> write -> fsync file -> rename -> fsync directory.">
+
+The atomic, crash-resilient publication protocol proceeds as follows:
+1. **Create temporary file in same directory:**
+   Call `int fd = open("/etc/daemon.conf.tmp.PID", O_WRONLY | O_CREAT | O_EXCL, 0644)`. The temporary file must reside in the same filesystem/mount as `/etc` so that subsequent `rename` is a local directory update rather than a cross-device `EXDEV` copy.
+2. **Write complete contents:**
+   Execute a write loop ensuring all buffer bytes are written, handling partial writes and interrupted system calls (`EINTR`).
+3. **Sync file data and metadata:**
+   Call `fsync(fd)` and check the return code. This guarantees all file data blocks and the inode are durable on non-volatile media before publication. Close `fd`.
+4. **Atomic rename:**
+   Call `rename("/etc/daemon.conf.tmp.PID", "/etc/daemon.conf")` and check the return code. This atomically swings the directory pointer from old to new.
+5. **Sync containing directory:**
+   Open the directory `int dfd = open("/etc", O_RDONLY | O_DIRECTORY)`, execute `fsync(dfd)`, and close `dfd`. This commits the updated directory entry to durable storage.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-fs-symlink-resolution-loop" type="describe" level="application" title="Symbolic Link Traversal Limits and Detection of Cyclic References">
+
+Explain how an operating system path resolution routine traverses symbolic links. Describe how a cyclic reference (e.g., `ln -s /a/b /a/c` and `ln -s /a/c /a/b`) is detected and handled to prevent infinite kernel loops.
+
+<ExerciseSolution hint="Track symlink traversal count against SYMLOOP_MAX (typically 32 to 40) and return ELOOP.">
+
+- **Traversal mechanism:**
+  When `namei` or path walk encounters a directory entry pointing to an inode of type `S_IFLNK`, the kernel reads the symlink's payload target string into a buffer. If the target begins with `'/'`, traversal restarts from the root directory; otherwise, it resolves relative to the current directory. The remaining components of the original pathname are appended to the link path, and resolution continues.
+- **Cycle detection and loop bounds:**
+  Filesystems do not detect cycles at creation time (since creating a dangling or cyclic link is permissible). Instead, the path resolver maintains an integer counter tracking the number of nested symbolic links traversed during a single resolution call.
+  POSIX defines `SYMLOOP_MAX` (typically 32 in modern Linux / BSD). If the counter exceeds `SYMLOOP_MAX`, the kernel halts traversal and returns `-ELOOP` (Too many levels of symbolic links), protecting the kernel stack from overflow and terminating the infinite loop.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

@@ -13,7 +13,7 @@ This is the repository entrypoint for every coding host. Codex, OpenCode, Gemini
 
 ## Routing contract
 
-- **Course, module, lesson, manifest, assessment, or course component:** read [`GENERAL.md`](docs/agent-rules/GENERAL.md), then mandatory [`COURSE_STANDARD.md`](docs/agent-rules/COURSE_STANDARD.md) and [`COURSE_WORK.md`](docs/agent-rules/COURSE_WORK.md). Add the packs selected by `TASKS.md`, including pedagogy, integrity, repair, components, research, UI, and PlantUML where applicable.
+- **Course, module, lesson, manifest, assessment, or course component:** read [`GENERAL.md`](docs/agent-rules/GENERAL.md), then mandatory [`COURSE_STANDARD.md`](docs/agent-rules/COURSE_STANDARD.md), [`COURSE_STRUCTURE.md`](docs/agent-rules/COURSE_STRUCTURE.md), and [`COURSE_WORK.md`](docs/agent-rules/COURSE_WORK.md). Add the packs selected by `TASKS.md`, including pedagogy, integrity, repair, components, research, UI, and PlantUML where applicable.
 - **Research, factual material, explanations, or citations:** read [`RESEARCH.md`](docs/agent-rules/RESEARCH.md).
 - **Layout, styling, interaction, accessibility, or visual design:** read [`UI.md`](docs/agent-rules/UI.md).
 - **PlantUML:** read [`PLANTUML.md`](docs/agent-rules/PLANTUML.md).

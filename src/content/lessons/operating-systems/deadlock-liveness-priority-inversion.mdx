@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 330
 assessment: Given an unseen multi-resource trace, derive the wait-for relation, classify the liveness failure, prove or refute a proposed prevention rule, and select a recovery or priority protocol with bounded claims.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -55,16 +57,15 @@ It is priority inversion during that interval. A finite delay does not establish
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Steps without progress"
-  question="Two threads each trylock one of two accounts, fail on the second lock, release the first, sleep 1 ms, and retry in lockstep indefinitely. Which classification is correct?"
+  title="Classifying progress failures"
+  question="Evaluate each statement regarding concurrency, deadlocks, and liveness failures:"
   options={[
-    "Deadlock, because neither thread ever completes its transfer.",
-    "Livelock, because both keep running and changing state while the operation never completes.",
-    "Starvation, because one thread is postponed indefinitely by the other.",
-    "Priority inversion, because a lower-priority thread delays a higher one."
+    { id: "opt-dead-livelock", text: "Livelock occurs when threads repeatedly change state and execute instructions without completing their operation.", isCorrect: true },
+    { id: "opt-dead-priority-inherit", text: "Priority inheritance temporarily raises the scheduling priority of a lock holder to match its highest waiter.", isCorrect: true },
+    { id: "opt-dead-sleep-retry", text: "Deadlock can be eliminated by adding identical fixed sleep intervals before retrying without reordering locks.", isCorrect: false },
+    { id: "opt-dead-multi-unit-cycle", text: "A cycle in a resource-allocation graph with multiple resource units always guarantees an active deadlock.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="Deadlock requires a closed wait-for cycle of permanently blocked participants; here each thread releases and retries, so the protocol keeps taking steps without completing the operation. That is livelock, and randomized backoff only reduces its probability rather than proving liveness."
+  explanation="Livelock involves active execution without progress. Priority inheritance bounds inversion by elevating the owner priority to the highest waiter priority. Fixed sleep intervals cause synchronized livelock rather than breaking deadlocks, and cycles in multi-unit resource graphs are necessary but not sufficient for deadlock."
 />
 
 ## Resource graphs expose ownership and demand
@@ -222,30 +223,131 @@ A **priority-ceiling** protocol associates a ceiling with each resource based on
 
 **Worked nested inversion.** H waits for R1 held by L. L waits for R2 held by X. Boosting only L does not help because X remains preemptible by M. A transitive PI implementation propagates H's effective priority through L to X; X releases R2, L resumes and releases R1, then H proceeds. The chain also shows why PI implementation needs cycle detection and careful priority restoration.
 
-## Synthesis studio: review a two-subsystem protocol
+<ExerciseSet>
 
-A storage path acquires `inode_lock`, then calls quota code that acquires `quota_lock`. A quota-reclamation worker holds `quota_lock`, selects an inode, and acquires `inode_lock`. Both workers are killable; updating disk allocation is not reversible after submission. A high-priority flush thread can wait on either lock.
+<Exercise id="ex-dead-coffman-conditions" type="verify" level="application" title="Evaluating the Four Coffman Necessary Conditions">
 
-Produce a design review containing:
+State the four Coffman conditions necessary for a system deadlock to arise. For each condition, describe how a concrete operating system mechanism directly invalidates that condition.
 
-1. the current resource and wait-for graphs;
-2. the shortest deadlocking schedule;
-3. a stable global acquisition order or a phase split that removes nested ownership;
-4. revalidation needed after any release/reacquire boundary;
-5. why timeout-and-kill is unsafe after irreversible I/O submission; and
-6. whether priority inheritance is still useful after deadlock prevention.
+<ExerciseSolution hint="Recall mutual exclusion, hold and wait, no preemption, and circular wait.">
 
-<ExerciseSolution title="Diagnostic review and rubric">
+The four necessary conditions established by Coffman, Elphick, and Shoshani (1971) are:
 
-Current edges are `inode_lock → storage`, `storage → quota_lock`, `quota_lock → reclaim`, and `reclaim → inode_lock`, forming a cycle. One schedule lets storage hold inode and request quota while reclaim holds quota and requests inode.
+1. **Mutual exclusion:** at least one resource must be held in a non-shareable mode. *Invalidation:* Use lock-free data structures (e.g., atomic compare-and-swap) or read-only shared access where multiple threads proceed concurrently without mutual exclusion.
+2. **Hold and wait:** a thread currently holding at least one resource may request additional resources. *Invalidation:* Require a thread to request all needed resources simultaneously in a single atomic operation, or release all held resources before requesting new ones.
+3. **No preemption:** resources cannot be forcibly confiscated from a thread; they can only be released voluntarily by the holding thread. *Invalidation:* Implement preemption protocols where the OS kernel or runtime revokes a resource (or aborts and restarts a transaction) if an additional request cannot be immediately satisfied.
+4. **Circular wait:** a closed chain of threads $\{T_0, T_1, \dots, T_{k-1}\}$ exists such that $T_i$ waits for a resource held by $T_{(i+1) \bmod k}$. *Invalidation:* Impose a strict global partial or total ordering on all resource classes, mandating that resources are acquired only in increasing order.
 
-A global `quota_lock < inode_lock` order requires storage to acquire quota first or split into: inspect under inode; release; reserve quota; reacquire inode; revalidate inode version/allocation; commit; release. The split needs rollback for an unused reservation and must place irreversible I/O after the state needed to recover is durable. Timeout can free a caller but cannot safely revoke a submitted device action or assume protected metadata is consistent.
-
-Priority inheritance remains relevant because a high-priority flush can still block behind a low-priority legitimate owner even after cycles are removed. PI addresses scheduling interference, not circular wait.
-
-Rubric: graph and legal schedule 25%; prevention proof 25%; revalidation/rollback 20%; recovery boundary 15%; priority analysis 10%; explicit assumptions 5%.
+Breaking any single condition renders deadlock mathematically impossible.
 
 </ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-dead-resource-allocation-graph-cycle" type="construct" level="application" title="Cycle Detection in Multi-Unit Resource Graphs">
+
+Construct a concrete resource-allocation graph with two thread nodes ($T_1, T_2$) and two resource nodes ($R_1, R_2$) where $R_1$ has 2 available units and $R_2$ has 1 available unit. Show that a directed cycle exists in the graph, yet the system is not deadlocked.
+
+<ExerciseSolution hint="Give R1 two units held by different threads or an unallocated unit that allows one thread to finish.">
+
+Let resource $R_1$ possess 2 units and resource $R_2$ possess 1 unit. Introduce a third thread $T_3$ to illustrate the distinction between single-unit and multi-unit resource graphs:
+
+- $R_1$ allocation edges: $R_1 \rightarrow T_1$ and $R_1 \rightarrow T_3$ (both units allocated).
+- $R_2$ allocation edge: $R_2 \rightarrow T_2$ (its single unit allocated).
+- Request edges: $T_1 \rightarrow R_2$ ($T_1$ requests $R_2$) and $T_2 \rightarrow R_1$ ($T_2$ requests $R_1$).
+
+Notice the directed cycle: $T_1 \rightarrow R_2 \rightarrow T_2 \rightarrow R_1 \rightarrow T_1$.
+
+However, thread $T_3$ holds a unit of $R_1$ and has no outstanding requests. Thread $T_3$ executes to completion and releases its unit of $R_1$. The newly freed unit of $R_1$ is allocated to $T_2$, satisfying $T_2$'s request. $T_2$ completes and releases both its unit of $R_1$ and $R_2$. Finally, $R_2$ is allocated to $T_1$, allowing $T_1$ to complete.
+
+Hence, while a cycle is necessary and sufficient for deadlock in single-unit resource graphs, in multi-unit graphs a cycle is merely necessary, not sufficient. A knot (or absence of reducible sinks) is required for deadlock in general graphs.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-dead-lock-ordering-prevention" type="prove" level="synthesis" title="Proving Deadlock Freedom via Global Lock Hierarchies">
+
+Let $\mathcal{L} = \{L_1, L_2, \dots, L_m\}$ be a finite set of mutex locks with a strict total order $\prec$ defined over them. Suppose every thread acquires locks strictly in ascending order: if a thread holds lock $L_i$ and requests lock $L_j$, then $L_i \prec L_j$. Prove that circular wait cannot occur.
+
+<ExerciseSolution hint="Assume a cycle of waiters exists and examine the ordering of the held locks.">
+
+Assume for contradiction that a circular wait exists among $k \ge 2$ threads $\{T_0, T_1, \dots, T_{k-1}\}$.
+
+For each thread $T_i$, let $H_i \subseteq \mathcal{L}$ be the set of locks currently held by $T_i$, and let $\max(H_i)$ denote the maximum lock held by $T_i$ with respect to $\prec$.
+Suppose thread $T_i$ is blocked requesting lock $R_i$, which is held by thread $T_{(i+1) \bmod k}$.
+
+By the strict ordering protocol, because $T_i$ requests $R_i$ while holding $\max(H_i)$, we must have:
+$$
+\max(H_i) \prec R_i.
+$$
+Furthermore, since $R_i \in H_{(i+1) \bmod k}$, by definition of the maximum element:
+$$
+R_i \preceq \max(H_{(i+1) \bmod k}).
+$$
+Combining these inequalities yields:
+$$
+\max(H_i) \prec \max(H_{(i+1) \bmod k}) \quad \text{for all } i \in \{0, 1, \dots, k-1\}.
+$$
+Chaining this strict inequality along the entire cycle from $T_0$ to $T_k = T_0$:
+$$
+\max(H_0) \prec \max(H_1) \prec \max(H_2) \prec \dots \prec \max(H_{k-1}) \prec \max(H_0).
+$$
+By transitivity of the strict total order $\prec$, this implies $\max(H_0) \prec \max(H_0)$, which violates the irreflexivity of strict orders.
+
+Thus, no circular wait can form, proving that the system is guaranteed deadlock-free.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-dead-livelock-backoff-hazard" type="describe" level="application" title="Deterministic Retry Traps versus Randomized Exponential Backoff">
+
+Explain why two threads using non-blocking `try_lock()` with identical, deterministic sleep intervals can enter livelock. Explain how randomized exponential backoff breaks the synchronization lockstep.
+
+<ExerciseSolution hint="Contrast deterministic phase alignment with probabilistic symmetry breaking.">
+
+When two threads attempt to acquire two locks $L_1$ and $L_2$ using `try_lock()`:
+1. Thread $A$ acquires $L_1$, and Thread $B$ acquires $L_2$.
+2. Both attempt to `try_lock()` the second lock and fail.
+3. Both release their held lock to avoid deadlock and immediately execute a fixed deterministic sleep (e.g., `sleep(1ms)`).
+4. Because both threads wake up at identical offsets, they repeat the acquisition in perfect lockstep: Thread $A$ gets $L_1$, Thread $B$ gets $L_2$, both fail on the second lock, both release, and both sleep again.
+
+This is livelock: CPU cycles and state transitions occur continuously, but the aggregate operation makes zero forward progress.
+
+Randomized exponential backoff breaks this deterministic symmetry by selecting a sleep duration uniformly at random from a dynamically doubling window: $t_{\text{sleep}} \sim U[0, 2^k \cdot \tau]$ on the $k$-th failure. With high probability, one thread draws a significantly shorter delay, awakens earlier, and acquires both locks uncontested before the other thread wakes up.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-dead-priority-inversion-mars-pathfinder" type="formalise" level="transfer" title="Priority Inheritance Protocol Bounds on Priority Inversion Chains">
+
+Consider three threads with priorities $\pi(H) > \pi(M) > \pi(L)$. Thread $L$ acquires mutex $R$, after which thread $H$ arrives and blocks requesting $R$. Thread $M$ becomes runnable and does not need $R$.
+1. Formalize the duration of priority inversion experienced by $H$ without priority inheritance.
+2. Formalize the maximum blocking time under the basic priority inheritance protocol.
+
+<ExerciseSolution hint="Without inheritance, M can preempt L indefinitely. With inheritance, L runs at effective priority pi(H).">
+
+1. **Without priority inheritance:**
+   Thread $H$ is blocked awaiting mutex $R$ held by $L$. However, thread $M$ has higher priority than $L$ ($\pi(M) > \pi(L)$) and is ready to run. The scheduler preempts $L$ to execute $M$. If a set of medium-priority threads $\mathcal{M}$ arrives, thread $L$ cannot execute until all threads in $\mathcal{M}$ complete or block.
+   The blocking time experienced by $H$ is:
+   $$
+   T_{\text{block}}(H) = t_{\text{crit}}(L) + \sum_{M_j \in \mathcal{M}} t_{\text{exec}}(M_j),
+   $$
+   where $\sum t_{\text{exec}}(M_j)$ can be unbounded if new medium-priority tasks continue arriving. This is unbounded priority inversion (the classic Mars Pathfinder hazard).
+
+2. **Under basic priority inheritance protocol (PIP):**
+   When $H$ blocks on mutex $R$ held by $L$, the kernel elevates $L$'s effective priority:
+   $$
+   \pi_{\text{eff}}(L) = \max(\pi(L), \pi(H)) = \pi(H).
+   $$
+   Now $\pi_{\text{eff}}(L) > \pi(M)$ for all $M \in \mathcal{M}$. The scheduler cannot preempt $L$ with medium-priority work. $L$ executes its critical section without interference from $\mathcal{M}$, releases $R$, restores its original priority $\pi(L)$, and immediately unblocks $H$.
+   The maximum blocking duration for $H$ is strictly bounded by the execution time of $L$'s critical section:
+   $$
+   T_{\text{block}}(H) \le t_{\text{crit}}(L).
+   $$
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

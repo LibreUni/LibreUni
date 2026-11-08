@@ -17,6 +17,8 @@ omissions:
 estimatedMinutes: 360
 assessment: Given a mixed anonymous/file-backed address map and an adversarial sequence of fork, read, write, truncate, and allocation-failure events, classify each fault, update mappings and refcounts, preserve retry semantics, and defend the final state against data disclosure or unintended sharing.
 ---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
@@ -67,16 +69,15 @@ $$
 </ExerciseSolution>
 
 <Quiz client:load
-  title="Copy-on-write reference counts and promotion"
-  question="A parent process forks, marking a writable page read-only with refcount = 2 in both parent and child. Both processes subsequently attempt to write to that same page. How does the kernel resolve these faults under an optimal reference-counted COW protocol?"
+  title="Page fault classification and copy-on-write invariants"
+  question="Evaluate each statement regarding page faults, copy-on-write fork semantics, and memory-mapped files:"
   options={[
-    "The first fault copies the page to a fresh frame and decrements refcount to 1; the second fault sees refcount == 1 and promotes the frame in place.",
-    "Both faults allocate new frames and discard the original frame, forcing subsequent stores to fault repeatedly until user threads synchronize.",
-    "The kernel blocks the second fault until the parent terminates, because copy-on-write prohibits concurrent page-table modifications.",
-    "The kernel marks the frame shared writable so both stores complete on the original frame without allocating or copying memory."
+    { id: "opt-cow-refcount-promote", text: "When a sole surviving process writes to a copy-on-write page with refcount one, the kernel promotes the frame in place.", isCorrect: true },
+    { id: "opt-cow-zero-exposure", text: "Fresh physical frames allocated for demand zero pages must be zeroed before publishing page table mappings to user space.", isCorrect: true },
+    { id: "opt-cow-unmapped-retry", text: "Instruction page faults to addresses outside any valid virtual memory region should allocate zeroed frames and retry.", isCorrect: false },
+    { id: "opt-cow-map-private-persist", text: "Modifications made by a process to a MAP_PRIVATE file-backed mapping are written back to synchronize with storage.", isCorrect: false }
   ]}
-  correctIndex={0}
-  explanation="When the first process writes to the COW page, refcount > 1, so the kernel must allocate a fresh physical frame, copy the original page's bytes into it, map it writable into the faulting process's page table, and decrement the original frame's refcount to 1. When the other process subsequently faults on that same virtual page, it discovers refcount == 1 (it is now the sole owner). Rather than allocating a redundant frame and performing another 4 KiB memory copy, the kernel directly promotes the existing frame to writable (W=1) in place."
+  explanation="When refcount is 1, COW pages are promoted in place without copying. Zeroing before PTE publication prevents data disclosure. Accesses outside valid regions are fatal segment violations rather than demand-allocated pages, and MAP_PRIVATE explicitly discards modifications upon unmapping without altering the underlying file."
 />
 
 ## Derive a restartable fault protocol
@@ -308,67 +309,126 @@ Copying syscall data through `copyin` or `copyout` may encounter lazy pages with
 
 {/* Source tracking: The xv6-specific observation that copyin/copyout can call vmfault was checked in xv6-riscv rev5 kernel/vm.c; production kernels may structure this path differently. */}
 
-## Synthesis assessment: mixed backing under pressure
-
-Page size is 4 KiB. Parent P has:
-
-- anonymous private region A at `[0x400000, 0x404000)`, read/write;
-- private file mapping F at `[0x600000, 0x603000)`, read/write, file offsets `[0, 12288)`;
-- shared file mapping S at `[0x700000, 0x702000)`, read/write;
-- read/execute text T at `[0x100000, 0x102000)`.
-
-Before `fork`, A page 0 maps PFN 10, F page 1 maps page-cache PFN 20, S page 0 maps page-cache PFN 30, and T page 0 maps PFN 40. All frame reference counts are 1. P forks child C. The implementation applies COW only where private writes must diverge.
-
-Trace these events:
-
-1. C reads A at `0x400080`.
-2. C writes F at `0x601120`; allocation succeeds with PFN 77.
-3. P writes A at `0x400040`; allocation fails.
-4. C writes S at `0x700010`.
-5. C writes T at `0x100008`.
-6. P unmaps A while C still maps it.
-
-For each event, state the fault/no-fault outcome, mapping/refcount changes, and whether another process or the file object observes a changed byte. End with the final references to PFNs 10, 20, 30, 40, and 77.
-
-<ExerciseSolution title="Reveal reference trace and rubric">
-
-Immediately after fork:
-
-- A/PFN 10: parent and child PTEs are read-only COW; refcount 2.
-- F/PFN 20: parent and child mappings may share the resident file page read-only COW for private-write semantics; refcount/accounting is at least 2 mapping references in this model.
-- S/PFN 30: both mappings remain shared read/write; refcount 2.
-- T/PFN 40: both remain genuine read/execute, not COW; refcount 2.
-
-Events:
-
-1. C's read of A succeeds without a fault under the COW read-only mapping. No byte changes.
-2. C's store faults and validates private writable policy plus COW state. The handler pins PFN 20, copies it to PFN 77, establishes 77's mapping reference, and maps C's F page writable/private to 77 while retaining C's old mapping reference and the temporary pin on 20. After invalidating every stale C translation, it drops the old mapping reference and pin, then retries. P and the file object do not observe C's modification.
-3. P's store to A faults. Allocation failure leaves both COW mappings and PFN 10 refcount 2 unchanged; no store completes.
-4. C's store to S proceeds through the shared writable mapping (or dirties it through an implementation-specific first-write mechanism). P's shared mapping and the underlying file object are within the visibility/persistence contract for that changed page.
-5. C's store to T is rejected. T was never writable, so COW resolution is forbidden.
-6. P removes its A PTE, performs required invalidation, and decrements PFN 10 to refcount 1. C retains a valid read-only COW mapping; because it is now sole owner, a later authorized write could promote in place.
-
-Final references in the stated model: PFN 10 → C only (1); PFN 20 → P's private file mapping (1 mapping reference); PFN 30 → P and C shared mappings (2); PFN 40 → P and C text mappings (2); PFN 77 → C private file page (1). Cache-owned references, if modeled separately, must be stated rather than silently mixed with mapping references.
-
-Rubric, 28 points:
-
-- 5 points: correct post-fork classification of writable-private, shared, and genuine read-only mappings;
-- 6 points: COW success commits PFN 77 without changing P or the file;
-- 4 points: allocation failure leaves all old state intact;
-- 4 points: MAP_SHARED visibility distinguished from durability timing;
-- 3 points: text write rejected without COW;
-- 3 points: unmap decrements only P's reference after invalidation;
-- 3 points: final refcounts use one declared counting convention.
-
-Any trace that grants write access to PFN 10 after failed allocation or converts text to COW violates the central isolation contract and cannot receive more than half credit.
-
-</ExerciseSolution>
-
-## Deliberate boundary and source trail
-
 > **Remark.** This lesson establishes the state transitions for demand paging, copy-on-write, and file-backed mappings when free frames are available; policy decisions for choosing an eviction victim when physical memory is exhausted follow in Replacement, Working Sets, and Thrashing.
 
-The fault model excludes replacement and swap, huge pages, NUMA migration, memory-mapped devices, user-space fault handling, and speculative side effects. It assumes a page-oriented file cache and a precise restartable ISA. The COW skeleton establishes state obligations but deliberately omits production lock topology and a complete teaching-kernel patch.
+<ExerciseSet>
+
+<Exercise id="ex-cow-demand-zero-page-fault" type="verify" level="application" title="Demand-Zero Anonymous Page Fault State Transitions">
+
+A user process invokes `sbrk(4096)` to expand its heap by one 4 KiB page. The kernel records the virtual allocation in its region descriptor list but leaves the hardware PTE invalid ($V = 0$).
+1. State the hardware register values (`scause`, `sepc`, `stval`) when the user code first reads from the new virtual page address `0x00405000`.
+2. Trace the kernel page-fault handler actions to resolve this fault cleanly.
+3. Why must the newly allocated physical frame be zeroed before the PTE is set to valid?
+
+<ExerciseSolution hint="scause 13 indicates a load page fault; stval holds the faulting address; sepc holds the faulting instruction PC.">
+
+1. **Hardware trap state:**
+   - `scause`: 13 (Load page fault exception).
+   - `stval`: `0x00405000` (the faulting virtual memory address).
+   - `sepc`: points to the specific load instruction that triggered the fault.
+2. **Kernel resolution steps:**
+   - Trap entry saves user registers and queries `stval` and `scause`.
+   - The handler searches the process virtual memory region tree and verifies that `0x00405000` falls within an authorized, readable anonymous heap region.
+   - The kernel allocates a free physical frame $F$ from the physical memory pool.
+   - The kernel zeroes all 4096 bytes of frame $F$.
+   - The kernel installs a leaf PTE mapping $\text{VPN}(0x00405000) \mapsto F$ with $V=1, R=1, W=1, U=1$.
+   - The kernel executes `SFENCE.VMA` (or issues appropriate TLB invalidation if required).
+   - Trap return restores registers and executes `sret`, re-executing the faulting instruction at `sepc`, which now succeeds.
+3. **Information disclosure defense:**
+   If the frame is mapped into user space before being zeroed, a concurrent thread or immediate load instruction can read residual bytes left behind by prior processes or the kernel itself, creating a critical information leak vulnerability.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cow-fork-refcount-protocol" type="construct" level="application" title="Tracing Copy-on-Write Reference Counts and Private In-Place Promotion">
+
+A parent process owns a private writable page mapped to physical frame $F_1$. The parent forks child $C_1$, which later forks child $C_2$. No process writes until after all forks complete.
+1. State the PTE permissions ($R, W$) and physical frame reference count for $F_1$ immediately after the second fork.
+2. Child $C_1$ executes a store to the page. Describe the fault handling, frame allocation ($F_2$), and updated reference counts.
+3. Parent terminates. Child $C_2$ then executes a store to the page. Describe how the kernel handles this second write without copying.
+
+<ExerciseSolution hint="On the second write, check if the remaining reference count is equal to one.">
+
+1. **State after two forks:**
+   - Each process (Parent, $C_1$, $C_2$) maps $F_1$ with permissions $R=1, W=0$ (read-only COW).
+   - The kernel reference count for frame $F_1$ is $\text{refcount}(F_1) = 3$.
+2. **First store by $C_1$:**
+   - $C_1$ triggers a store page fault (`scause` 15).
+   - Handler verifies $C_1$ has write authority in its region descriptor, but $\text{refcount}(F_1) = 3 > 1$.
+   - Handler allocates a fresh physical frame $F_2$, copies 4096 bytes from $F_1$ to $F_2$, and sets $\text{refcount}(F_2) = 1$.
+   - Handler updates $C_1$'s PTE to map to $F_2$ with $R=1, W=1$.
+   - Handler decrements $\text{refcount}(F_1)$ from 3 to 2, flushes $C_1$'s local TLB, and returns to user space.
+3. **Termination and second store by $C_2$:**
+   - When Parent terminates, its page table is unmapped, decrementing $\text{refcount}(F_1)$ from 2 to 1.
+   - When $C_2$ writes, it triggers a store page fault on $F_1$.
+   - Handler checks $\text{refcount}(F_1)$ and discovers it equals 1.
+   - Because $C_2$ is the sole remaining owner of $F_1$, no memory copy is needed. The kernel directly promotes $C_2$'s PTE in place by setting $W=1$.
+   - After invalidating $C_2$'s TLB, the store completes on $F_1$ without allocating memory.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cow-map-private-vs-shared" type="verify" level="transfer" title="Comparing MAP_PRIVATE and MAP_SHARED Write Semantics">
+
+A program opens a 1 MiB file and maps it twice: region $R_{\text{priv}}$ uses `MAP_PRIVATE`, and region $R_{\text{share}}$ uses `MAP_SHARED`. Both regions specify read-write permissions (`PROT_READ | PROT_WRITE`).
+1. A store is executed to byte offset `0x100` within $R_{\text{priv}}$. What are the effects on the underlying file and on other processes mapping the same file?
+2. A store is executed to byte offset `0x100` within $R_{\text{share}}$. What are the effects on other processes mapping the same file and on disk storage?
+
+<ExerciseSolution hint="MAP_PRIVATE creates an isolated copy-on-write page; MAP_SHARED writes to the shared page cache frame.">
+
+1. **MAP_PRIVATE store:**
+   The store triggers a copy-on-write page fault. The kernel allocates a private anonymous frame, copies the file page contents into it, and updates the process PTE to point to the private frame with write permissions.
+   - The underlying file is never modified.
+   - Other processes mapping the file (whether private or shared) do not observe the store; the modification remains strictly private to the calling process and is discarded when unmapped.
+2. **MAP_SHARED store:**
+   The store completes directly on the shared page in the operating system page cache.
+   - All processes that map the same file region (using `MAP_SHARED`) immediately observe the modified byte (subject to CPU cache coherency).
+   - The kernel marks the underlying page cache page as dirty. The modified page will eventually be written back to the backing block device during periodic flushing (`sync`, `msync`, or dirty page writeback).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cow-allocation-failure-recovery" type="construct" level="synthesis" title="Handling Memory Exhaustion during Copy-on-Write Allocation">
+
+Suppose two processes share a COW page frame $F$. Process $A$ executes a store instruction, triggering a COW fault, but the physical frame allocator returns `NULL` because physical memory and swap are completely exhausted.
+1. Why must the kernel NOT set $W=1$ directly on frame $F$ to let the store proceed?
+2. Why can the kernel NOT ignore the fault and resume user execution at `sepc + 4`?
+3. What is the correct, safe kernel failure behavior?
+
+<ExerciseSolution hint="Setting W=1 destroys process isolation; skipping the instruction silently skips user computation.">
+
+1. **Violation of memory isolation:**
+   If the kernel set $W=1$ on the shared frame $F$ without allocating a private frame, Process $A$'s store would overwrite memory visibly belonging to Process $B$. This would destroy process memory isolation, leading to arbitrary data corruption or privilege escalation.
+2. **Violation of execution correctness:**
+   If the kernel skipped the store by resuming at `sepc + 4`, the user program would proceed under the false assumption that its memory update completed, causing silent mathematical and data structure corruption.
+3. **Correct failure recovery:**
+   The kernel must treat allocation failure as an unrecoverable resource exhaustion condition for the faulting thread or process. It either:
+   - Blocks the thread until memory can be reclaimed by eviction or page out (if asynchronous reclamation is configured), or
+   - Delivers a `SIGBUS` or `SIGSEGV` signal to Process $A$, or terminates Process $A$ via the Out-Of-Memory (OOM) killer, leaving Process $B$'s state and frame $F$ completely intact.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-cow-kernel-copyin-safety" type="prove" level="synthesis" title="Proving Safe Kernel Copyin Execution over Lazy Virtual Memory">
+
+When a user program passes a pointer `buf` to the `read(fd, buf, count)` system call, the target buffer may reside on a valid but unmaterialized lazy anonymous page. Prove that the kernel must validate user region bounds and permissions rather than relying on raw supervisor loads and stores.
+
+<ExerciseSolution hint="In supervisor mode, page fault protections may differ; passing an arbitrary kernel address must be rejected.">
+
+Assume for contradiction that the kernel implements `copyout` by directly dereferencing the user pointer in supervisor mode without explicit user-address validation:
+1. In supervisor mode, the MMU may allow stores to supervisor pages unless restricted by hardware features like SMAP (Supervisor Mode Access Prevention).
+2. If an adversarial user process passes a kernel data structure address (e.g., `buf = 0xFFFFFFFF80000000`), a naive supervisor dereference will read or write directly into kernel memory, allowing an unprivileged process to overwrite page tables or kernel text.
+3. Furthermore, if `buf` points to an unmapped user address or a read-only code region (`PROT_READ`), a blind kernel write would either trigger an unexpected kernel-mode trap or overwrite read-only binaries.
+
+Therefore, the kernel must execute `copyin`/`copyout` using specialized routines that:
+- Explicitly verify that `[buf, buf + count)` lies strictly within the user virtual address range.
+- Validate that the containing virtual memory region grants the requested access ($W=1$ for `copyout`, $R=1$ for `copyin`).
+- Install a trap recovery fixup table so that any unexpected page fault inside the copy routine returns `-EFAULT` cleanly to the system call caller rather than panicking the kernel.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 {/* Source tracking: xv6 page-fault dispatch and vmfault behavior were checked against revision 5 kernel/trap.c and kernel/vm.c at commit 7d7adbb; LibreUni examples and assessment are original. */}
 

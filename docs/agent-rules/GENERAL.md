@@ -33,9 +33,9 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
   - `<SqlRunner>`: `schema`, `initialQuery`, `title`, `description`
 - Write new custom components when existing ones don't fit.
 - Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/agent-rules/PLANTUML.md` for troubleshooting.
-- Lessons must be self-contained — no lesson should require reading another first.
-- No lesson numbers in filenames, headers, or text. Lessons can be taken in any order.
-- Lesson order and module grouping must be edited in `src/data/course-manifests/<course-id>.yml`, not in lesson frontmatter.
+- Lessons rely on explicit, declared prerequisites and resolvable cross-references (D-0013, `COURSE_STRUCTURE.md`). Avoid chronological prose ("in the next lesson", "as we saw yesterday"), but precise conceptual references via `<Ref id="..." />` are encouraged.
+- No lesson numbers in filenames, headings, or source text (numbers are generated dynamically per D-0013).
+- Lesson order, module grouping, and lesson roles are defined in `src/data/course-manifests/<course-id>.yml`.
 - Everything must be university level or above.
 - For any course-related work, read [`COURSE_STANDARD.md`](COURSE_STANDARD.md) first. It is the mandatory quality bible for every agent, including agents working only on components, assessments, manifests, research, or repairs.
 
@@ -46,6 +46,8 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 Academic but not dry. Engaging, clear, precise, to the point. No filler.
 
 **Never use:** "welcome", "let's dive in", "in this lesson", "as you have learned before", "congratulations on finishing", "you have completed", "next up", "previously", "before we move on", "let's explore", "let's take a look at".
+
+**Prompt Parroting Prohibition (D-0015):** Prompt instructions, user constraints, design rationales, or implementation directives (e.g. "don't add a timer", "no teacher grading", "coming later as a feature") must NEVER be parroted or echoed into user-facing copy, headers, badges, or descriptions. Public page copy must be written strictly from the learner's perspective as professional, standalone educational material describing what the content is, never discussing prompt directives, absent features, or omitted requirements.
 
 Instead — directly present the question, problem, or concept.
 
@@ -60,7 +62,7 @@ Instead — directly present the question, problem, or concept.
 
 ## Structure & Testing
 
-**Course size:** 20–80 lessons per course. **Lesson size:** typically 1000–6000 characters. Note that there is no strict limit; focus should remain on depth, clarity, and academic rigor without artificial constraints.
+**Course size:** typically 15–40 lessons per full-semester course (focused preparatory modules such as Calculus may have 7–15 lessons). **Lesson size:** typically 10,000–30,000 characters (~6–8 hours of focused study including exercises/derivations). Note that there is no strict limit; focus should remain on depth, clarity, and academic rigor without artificial constraints.
 
 Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: define the concept, demonstrate it with examples (including edge cases), then give the reader something to try.
 
@@ -95,7 +97,7 @@ Tracks which modules meet the LibreUni Standard: academic rigor + interactive Py
 
 ### Standards Applied to All Finalized Modules
 
-1. **Theory-Example-Exercise**: every definition followed by an example and every example followed by an interactive exercise.
+1. **Theory-Example-Practice**: formal definitions are grounded in concrete worked examples, non-examples, and deep practice (D-0005, D-0013).
 2. **Clean Python**: no `\"\"\"` escapes, proper docstrings.
 3. **No Fluff**: no "Welcome" or "In this lesson" phrases.
 4. **University Level**: formal definitions maintained alongside code.

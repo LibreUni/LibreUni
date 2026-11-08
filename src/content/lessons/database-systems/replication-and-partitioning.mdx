@@ -18,7 +18,9 @@ estimatedMinutes: 420
 assessment: Given a multi-tenant workload and a failover/migration incident, select replication and partition boundaries, identify a split-brain or pruning counterexample, and specify the evidence required before cutover.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
 
@@ -79,15 +81,34 @@ Route the immediate read to the primary/source of truth, or attach a required lo
 
 <Quiz client:load
   title="Why promotion is not enough"
-  question="A replica is promoted and begins accepting writes. The old primary is still reachable and has a delayed client retry in flight. What must prevent a split-brain write?"
+  question="A standby replica is promoted to primary after network failure and accepts writes. The former primary remains online and receives delayed requests. Evaluate which mechanisms prevent split-brain data corruption:"
   options={[
-    "The new primary's larger disk capacity, which absorbs the delayed retry",
-    "A lease or term that makes the old primary reject writes from the old epoch",
-    "Read-your-writes routing that sends the client to the new primary",
-    "Increasing the replication factor after promotion to three replicas"
+    {
+      id: "claim-fencing-token",
+      text: "Fencing tokens or epoch terms reject writes from the demoted primary by checking monotonically increasing leadership numbers.",
+      isCorrect: true,
+      feedback: "Correct. Every write request carries the current leadership epoch; requests carrying stale epoch numbers are rejected."
+    },
+    {
+      id: "claim-lease-revocation",
+      text: "Lease expiration guarantees that an isolated former primary cannot commit writes once its allocated time lease elapses.",
+      isCorrect: true,
+      feedback: "Correct. Time-bounded leader leases ensure the old primary stops serving writes before a new leader can be safely established."
+    },
+    {
+      id: "claim-disk-capacity",
+      text: "The promoted replica storage volume absorbs delayed client writes naturally without requiring routing protocol changes.",
+      isCorrect: false,
+      feedback: "Incorrect. Disk capacity does not prevent two reachable nodes from independently accepting divergent, conflicting writes."
+    },
+    {
+      id: "claim-read-your-writes",
+      text: "Configuring read-your-writes client session guarantees revokes the old primary authority to commit concurrent writes.",
+      isCorrect: false,
+      feedback: "Incorrect. Read-your-writes controls read routing; it does not fence disconnected primary nodes from accepting rogue writes."
+    }
   ]}
-  correctIndex={1}
-  explanation="Starting a new leader does not revoke the old one's ability to accept requests. Fencing makes stale authority unable to commit: the old primary must reject writes carrying an old lease or term, and routing must move clients to the new epoch. Read-your-writes is a visibility contract; it does not prevent two write authorities."
+  explanation="Promoting a new leader does not inherently disable the old leader. Split-brain prevention requires fencing tokens, generation epochs, or hardware STONITH to revoke write authority from stale nodes."
 />
 
 ## A partition key is a workload and operations decision
@@ -143,6 +164,67 @@ Tenant 42 is moving to a new shard while orders continue to arrive. What single 
 <ExerciseSolution hint="A matching row count cannot prove every key/version and in-flight write moved exactly once.">
 A final row count alone is insufficient: it misses mismatched values, duplicate outbox events, and writes after the snapshot. Record a migration epoch, fence or route writes through that epoch, replay changes after a known position idempotently, then verify key sets, checksums or sampled hashes, and domain invariants before retirement. Keep a rollback decision rule rather than deleting the old copy on optimism.
 </ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-rep-split-brain-fencing" type="verify" level="application" title="Split-Brain Prevention and Epoch-Based Leader Fencing">
+
+In a high-availability primary-replica setup, a network partition isolates the active primary from the cluster monitor. The monitor promotes a standby to primary at epoch 2. Verify how a client request carrying epoch 1 sent to the old primary is safely rejected to prevent split-brain writes.
+
+<ExerciseSolution hint="Examine monotonically increasing epoch tokens and lease validation.">
+
+Each mutation request carries the coordinator's current leadership epoch. If a request with epoch 1 arrives at the old primary, it either encounters an expired time-bounded leader lease or, upon attempting to append to persistent storage / consensus log, is rejected by storage fencing mechanisms that demand epoch $\ge 2$. Because the cluster consensus quorum has already advanced to epoch 2, the stale primary cannot commit the transaction.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rep-read-your-writes-lag" type="describe" level="recall" title="Read-Your-Writes Consistency under Asynchronous Replication Lag">
+
+Describe why a user who creates an account and is immediately redirected to a read replica may receive an HTTP 404 (Not Found) error under asynchronous replication, and propose two routing architectures that guarantee read-your-writes consistency.
+
+<ExerciseSolution hint="Asynchronous replication decouples primary commit from replica log replay.">
+
+Under asynchronous replication, the primary confirms commits to the client before the WAL stream has been replayed on standby read replicas. If the client's subsequent read query routes to a replica lagging behind the commit LSN, the new account tuple is not yet visible.
+Architectural solutions:
+1. Primary read routing: Route read requests immediately following user mutations to the primary database for a bounded duration (e.g. 5 seconds).
+2. Session-level LSN wait: Record the primary's commit LSN in the client's session cookie; the read router forwards queries only to replicas that have confirmed replay past that recorded LSN.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rep-partition-key-tradeoff" type="construct" level="application" title="Workload-Driven Partition Key Selection: Time Range vs. Tenant Hash">
+
+A SaaS platform with 50,000 tenants processes 50,000,000 order records per month. Contrast the operational trade-offs of range partitioning by `created_at` (monthly) versus hash partitioning by `tenant_id` (32 partitions) across query pruning and data retention workflows.
+
+<ExerciseSolution hint="Analyze WHERE clause pruning and DROP TABLE efficiency.">
+
+1. Range by `created_at`: Ideal for data lifecycle retention; dropping an expired month is an $O(1)$ metadata operation (`DROP TABLE orders_2025_01`) with zero vacuum overhead. However, queries filtering only by `tenant_id` must scan all partitions, and all current-day writes concentrate into a single active partition.
+2. Hash by `tenant_id`: Perfect for tenant isolation and query pruning on tenant-specific lookups; writes distribute evenly across all 32 partitions. However, dropping expired historical data requires expensive row-level `DELETE` scans across all 32 partitions.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rep-live-tenant-cutover-transfer" type="generalise" level="transfer" title="Zero-Downtime Live Shard Migration and Cutover Protocol">
+
+Design a zero-downtime shard migration protocol to transfer a high-throughput tenant from an overloaded database shard $A$ to a newly provisioned shard $B$. Detail the six sequential phases and evidence required before retiring shard $A$.
+
+<ExerciseSolution hint="Follow prepare, copy, catch up, cut over, verify, and retire phases with epoch fencing.">
+
+1. Prepare: Verify destination shard $B$ schema matches $A$, and initialize tenant routing configuration with epoch 1.
+2. Initial copy: Take a consistent point-in-time snapshot of tenant rows on shard $A$ at LSN $L_0$ and copy data to shard $B$.
+3. Catch up: Enable CDC (change data capture) or logical replication to stream and apply all mutation records from $L_0$ forward onto shard $B$.
+4. Cutover: Set tenant routing to read-only or brief pause; advance routing epoch to 2 pointing to shard $B$. Drain in-flight writes on $A$.
+5. Verify: Execute reconciliation queries comparing row counts, cryptographic column checksums, and key sets between $A$ and $B$.
+6. Retire: Route all traffic to shard $B$ under epoch 2. Retain frozen tenant data on shard $A$ in read-only mode for 7 days before issuing drop.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

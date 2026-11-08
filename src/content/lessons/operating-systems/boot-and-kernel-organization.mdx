@@ -19,6 +19,8 @@ estimatedMinutes: 330
 assessment: Given an unfamiliar multiprocessor boot trace and subsystem dependency graph, identify the violated precondition, prove a safe publication order, and redesign one module boundary with an explicit protection argument.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 
 import PlantUML from '../../../components/PlantUML.astro';
 import Quiz from '../../../components/Quiz';
@@ -120,16 +122,15 @@ If hart 5 enters, its computed SP points beyond `stack0`; a call or spill corrup
 </ExerciseSolution>
 
 <Quiz client:load
-  title="What the flag does not publish"
-  question="Hart 0 builds the kernel page table and sets started = 1. Hart 1 spins on started and then loads the root. If both ordering fences are removed and started remains volatile, what publication guarantee is missing?"
+  title="Multicore Boot Publication Matrix"
+  question="Hart 0 builds the kernel page table and sets started = 1. Evaluate each statement regarding multicore memory publication without memory fences:"
   options={[
-    "A volatile store stays invisible to other harts until an explicit cache flush is issued.",
-    "The volatile access orders only the flag itself; it creates no edge that makes the earlier page-table writes visible to hart 1.",
-    "The page table must be written after the flag so that its entries are already fresh.",
-    "The flag must be atomic, because volatile memory cannot be read by two harts at once."
+    { id: "opt-boot-fence-needed", text: "Without a release fence on hart 0, preceding page-table stores may not be visible when hart 1 reads started.", isCorrect: true },
+    { id: "opt-boot-acquire-needed", text: "Hart 1 requires an acquire fence or data dependency to order its read of started before reading page tables.", isCorrect: true },
+    { id: "opt-boot-volatile-orders", text: "Declaring started as volatile in C automatically injects hardware bus memory fences across all processor cores.", isCorrect: false },
+    { id: "opt-boot-atomic-flushes", text: "Atomic read-modify-write instructions universally flush L1 CPU instruction and data caches to physical RAM.", isCorrect: false }
   ]}
-  correctIndex={1}
-  explanation="volatile constrains only how the compiler treats that access; it creates no inter-hart ordering. Publication of the preceding page-table writes requires a release/acquire (or full-fence) edge, which is the role rev5 assigns to __sync_synchronize()."
+  explanation="volatile restricts compiler optimizations on that single variable but creates no inter-hart memory ordering. Publication requires a release fence on hart 0 and an acquire fence on hart 1."
 />
 
 ## From machine mode to a supervisor kernel
@@ -252,25 +253,74 @@ A new kernel feature parses an untrusted, variable-length device manifest during
 The privileged design can run after a bounded input buffer, allocator, and diagnostics exist. Give it read-only access to the manifest and a narrow builder API rather than raw global pointers; parse into temporary state, validate references and lengths, then commit. Failure can reject the device or stop boot, but memory corruption remains in the TCB. The isolated design requires address spaces, IPC, scheduling, and a way to hand over a bounded buffer, so it must run later or use a pre-kernel compartment mechanism. It can be restarted on a fault, but the kernel must validate the returned object graph and handle service absence. Measure boot latency and memory cost, fuzz both protocol boundaries, and audit authority. Isolation is valuable only if the trusted consumer does not blindly accept malicious parsed output.
 </ExerciseSolution>
 
-## Boot forensics assessment
+> **Remark.** Omitted boot facilities (such as ACPI, device trees, or secure boot) may not be assumed in the xv6 traces unless added to the handoff contract explicitly.
 
-Analyze a supplied trace containing: entry register dump, linker symbols, per-hart PCs, CSR values, publication events, and the subsystem dependency graph. Submit:
+<ExerciseSet>
 
-> **Remark.** Diagnosis is graded at the first violated precondition, not at the final panic or missing console line.
+<Exercise id="ex-boot-per-hart-stack-sizing" type="describe" level="application" title="Per-Hart Entry Stack Allocation and Bounds Corruption">
 
-1. the last cut satisfying the activation invariant;
-2. the first violated precondition and two competing hypotheses;
-3. one observation that discriminates those hypotheses;
-4. a corrected partial order with a release/acquire or join argument;
-5. one boundary redesign and its authority consequences.
+In RISC-V xv6 `entry.S`, initial stack pointers are computed as `sp = stack0 + (hartid + 1) * 4096`. Explain the failure modes that occur if `NCPU` is configured to 8 but `stack0` in static data allocates only four 4096-byte slices.
 
-**Rubric (20 points).** Exact handoff reconstruction 4; dependency reasoning 5; publication proof 4; discriminating diagnosis 3; boundary/TCB analysis 3; explicit uncertainty 1. Award no publication points for adding fences without naming the predicate they publish.
+<ExerciseSolution hint="Trace the memory layout when hart 5 writes to its computed stack pointer.">
 
-## Deliberate omissions
+Each hart computes an offset based on its hardware ID. If only 4 slices (16 KiB) are allocated in the BSS/data segment, harts 0 through 3 occupy valid bounds. When hart 4 or 5 boots, its computed `sp` points beyond the `stack0` buffer into adjacent static kernel variables (such as kernel locks or page tables). Any subsequent function call or register spill corrupts those symbols, causing delayed, non-deterministic system panics. If the hardware platform only powers on harts 0 through 3, the bug remains latent until tested on an 8-core CPU.
 
-This boot model does not teach PC-compatible BIOS/UEFI chronology, executable relocation, device-tree parsing, ACPI, entropy initialization, KASLR, secure boot, measured boot, initramfs, kernel modules, suspend/resume, or hotplug. The Linux boot reference is used only to demonstrate that a production kernel consumes a documented platform contract different from xv6's QEMU contract. Detailed microkernel architecture, formal component isolation, and multicore memory-model proofs require dedicated mechanisms rather than labels.
+</ExerciseSolution>
+</Exercise>
 
-> **Remark.** None of these omitted facilities may be assumed in the xv6 traces unless it is added to the handoff contract explicitly.
+<Exercise id="ex-boot-multicore-flag-publication" type="verify" level="application" title="Memory Ordering Fences in Secondary Hart Bootstrapping">
+
+Hart 0 constructs the kernel page table and initializes subsystems before setting a volatile flag `started = 1`. Secondary harts spin on `while (started == 0)`. Explain why removing memory fences (`__sync_synchronize()`) causes secondary harts to crash even though `started` is declared `volatile`.
+
+<ExerciseSolution hint="Contrast compiler volatile semantics with hardware store-buffer visibility across CPU cores.">
+
+In C, `volatile` prevents compiler register caching and dead-code elimination on the variable itself, but it does NOT emit CPU memory barrier instructions. Modern out-of-order or weakly-ordered architectures (like RISC-V) buffer stores in local write buffers. Without a release fence (`__sync_synchronize()`) on hart 0, the write `started = 1` can become globally visible to hart 1 before the stores populating the page tables and kernel data structures drain to cache. Hart 1 then exits its spin loop and loads uninitialized, corrupt page tables into `satp`.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-boot-machine-mode-pmp-delegation" type="describe" level="transfer" title="Machine-Mode Handoff, PMP, and Exception Delegation">
+
+Detail why setting `mstatus.MPP` to supervisor mode and jumping to `mret` is insufficient to establish a functioning supervisor kernel without configuring Physical Memory Protection (PMP) and trap delegation CSRs (`medeleg` and `mideleg`).
+
+<ExerciseSolution hint="Recall that machine mode owns all physical memory by default and traps trap to machine mode unless delegated.">
+
+By default on RISC-V, all traps (exceptions and interrupts) trap to machine mode (M-mode), and supervisor mode (S-mode) has zero physical memory access rights. If M-mode executes `mret` into S-mode without programming `pmpcfg0` and `pmpaddr0` to grant supervisor read/write/execute permissions to physical RAM, the first instruction fetch in S-mode immediately triggers an access fault. Furthermore, without setting bits in `medeleg` (system calls, page faults) and `mideleg` (timer and external interrupts), any subsequent user trap or timer interrupt traps back into M-mode rather than reaching the kernel's supervisor trap handler.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-boot-subsystem-dependency-order" type="formalise" level="transfer" title="Subsystem Construction Graph and Premature Interrupt Hazards">
+
+Construct the strict partial order of initialization in `main()` for the following kernel subsystems: console, physical page allocator, kernel page table, process table, trap vector, and PLIC interrupt controller. Identify the failure that occurs if interrupts are enabled before the process table is initialized.
+
+<ExerciseSolution hint="Map the prerequisite resources required by each subsystem constructor.">
+
+Strict initialization order:
+1. Console and print locks (enables diagnostic output).
+2. Physical page allocator `kinit()` (provides free physical frames).
+3. Kernel page table `kvminit()` and activation `kvminithart()` (enables MMU translation).
+4. Process table `procinit()` (allocates proc locks and kernel stacks).
+5. Trap vector `trapinithart()` (installs `kernelvec` into `stvec`).
+6. PLIC / timer interrupt controller `plicinit()` and `plicinithart()`.
+If device interrupts are enabled before `procinit()`, an incoming device interrupt invokes `trap()`, which attempts to acquire proc locks, inspect the current CPU's process pointer, or wake waiting processes. Dereferencing uninitialized process table locks or pointers causes an immediate kernel panic or deadlock.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-boot-parser-compartment-tradeoffs" type="construct" level="synthesis" title="Monolithic vs Compartmentalized Boot-Time Device Manifest Parsers">
+
+Compare placing a complex device-tree or ACPI hardware manifest parser directly inside the early monolithic boot sequence versus executing it inside an isolated user-space or pre-kernel compartment.
+
+<ExerciseSolution hint="Analyze the trade-offs between trusted computing base (TCB) size, crash recovery, and early boot resource availability.">
+
+Monolithic placement: The parser runs in early supervisor mode with direct access to physical memory. Benefit: minimal resource requirements (runs before scheduler or address spaces exist) and zero IPC overhead. Cost: complex C string and tree parsing runs with full kernel privilege; a memory corruption vulnerability compromises the entire kernel.
+Isolated compartment placement: The parser runs in a restricted address space with only read access to the raw manifest buffer and communicates parsed records via IPC. Benefit: parser crashes or exploits cannot corrupt kernel memory; faults can be logged and contained. Cost: requires deferring device parsing until memory management, scheduling, and IPC are functional, complicating bootstrap of boot-critical storage or interrupt controllers.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

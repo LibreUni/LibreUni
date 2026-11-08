@@ -10,12 +10,16 @@ outcomes:
   - Trace physical-register, reorder-buffer, and exception state through out-of-order completion and in-order commit.
   - Evaluate an OoO optimization by IPC, energy, recovery, and precise-state invariants.
 omissions:
-  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
+  - Simultaneous Multithreading (SMT) resource partitioning (ROB, store queues) is treated in the Multicore module.
+  - CISC micro-op fusion and loop stream detectors are omitted to focus on canonical RISC out-of-order pipelines.
+  - Transistor-level CAM match line circuit physics are abstracted into logical tag broadcast matching.
 estimatedMinutes: 540
 assessment: Given an instruction window and dependencies, produce issue/retirement state and identify the first event that could violate precise exceptions or register liveness.
 ---
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
-
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import PlantUML from '../../../components/PlantUML.astro';
@@ -81,10 +85,34 @@ The critical path remains exactly 4 serial addition latencies. Only algorithmic 
 <CaseStudy client:load
   title="Execute early, retire in order"
   scenario="A younger independent instruction finishes before an older cache-missing load. A branch older than both is later found mispredicted."
-  question="Which structures preserve precise architectural state?"
-  options={["Rename dependencies, buffer results, squash younger work, and retire in order", "Write every completed result immediately and repair registers after each exception", "Delay all issue until every older memory operation has reached writeback", "Reuse architectural register names as physical destinations for speculative results"]}
-  correctIndex={0}
-  explanation="Register renaming removes false dependencies, while the reorder buffer keeps speculative results from becoming architectural state until in-order retirement. A misprediction can then discard all younger work precisely."
+  question="Evaluate which hardware structures and mechanisms preserve precise architectural state in this scenario:"
+  options={[
+    {
+      id: "claim-rename-rob",
+      text: "Register renaming eliminates false hazards, while reorder buffer entries prevent speculative results from committing until in-order retirement.",
+      isCorrect: true,
+      feedback: "Correct. The ROB guarantees that speculative or younger results remain non-architectural until verified as correct."
+    },
+    {
+      id: "claim-squash-recovery",
+      text: "Branch mispredictions restore the speculative rename map from checkpoints and flush all younger ROB entries cleanly.",
+      isCorrect: true,
+      feedback: "Correct. Rolling back the rename map and flushing younger pipeline stages discards wrong-path work completely."
+    },
+    {
+      id: "claim-immediate-writeback",
+      text: "Writing completed speculative results directly to the architectural register file immediately upon functional unit completion preserves state.",
+      isCorrect: false,
+      feedback: "Incorrect. Immediate architectural writeback corrupts register state if older instructions later fault or branch away."
+    },
+    {
+      id: "claim-stall-on-memory",
+      text: "Out-of-order processors must stall all instruction dispatch whenever any older memory access experiences a cache miss.",
+      isCorrect: false,
+      feedback: "Incorrect. Stalling on every memory miss destroys the core benefit of out-of-order latency hiding."
+    }
+  ]}
+  explanation="Register renaming removes anti- and output-dependencies, while in-order ROB retirement buffers speculative results until older branches and memory faults are definitively resolved."
 />
 
 ## Reservation stations and wakeup
@@ -132,19 +160,17 @@ all younger retirement.
 end note
 @enduml`} />
 
-**Transfer check.** The ROB contains older load A followed by independent add B. B completes while A waits; A then reports a page fault. Which entries were already allocated, and which result can become architectural?
+> **Remark (ROB precise exception boundary).** If the reorder buffer contains older load $A$ followed by independent add $B$, and $B$ completes while $A$ waits on a page fault, both entries were allocated in order at dispatch. Although $B$ holds a valid speculative result, $B$ cannot retire past $A$. At the fault boundary when $A$ reaches the ROB head, $A$ traps and younger instruction $B$ is squashed; neither instruction writes an architectural register result. Older instructions committed prior to $A$ remain architectural.
 
-<ExerciseSolution title="Check the precise-exception boundary">
-
-Both entries were allocated before their execution. B may hold a computed value, but cannot retire past A. At the fault boundary, A traps and B is discarded; neither instruction writes an architectural result. Older instructions before A may already have retired. Recording B only when it finishes would lose this ordering information.
-
-</ExerciseSolution>
-
-<Quiz client:load title="Preserve the illusion"
-  question="What must an out-of-order processor preserve for software?"
-  options={["The order of every internal micro-operation", "The architectural behavior of the specified instruction stream", "The order of cache misses", "The exact pipeline depth"]}
-  correctIndex={1}
-  explanation="Internal execution may reorder independent work, but retirement and dependency control preserve the ISA-visible result and exception behavior."
+<Quiz client:load title="Architectural State Preservation Matrix"
+  question="Evaluate each statement regarding what an out-of-order superscalar processor must guarantee to software to preserve the sequential execution model:"
+  options={[
+    { id: "opt-ooo-arch-state", text: "Register values and memory stores must be made architectural strictly in program order at retirement.", isCorrect: true },
+    { id: "opt-ooo-exceptions", text: "Exceptions must be reported precisely so no younger instructions have modified architectural state when the handler runs.", isCorrect: true },
+    { id: "opt-ooo-uop-order", text: "Internal issue queue dispatch and execution unit wakeups must strictly preserve original program order.", isCorrect: false },
+    { id: "opt-ooo-pipeline-depth", text: "The cycle latency and pipeline depth of all arithmetic functional units must be constant across instructions.", isCorrect: false }
+  ]}
+  explanation="Internal execution may reorder independent operations arbitrarily, but retirement, store buffering, and reorder buffer tracking guarantee precise exceptions and sequential program semantics."
 />
 
 ## Load/store ordering and memory disambiguation
@@ -276,19 +302,20 @@ I3: add x7, x6, x8    # Dependent consumer
    If the Load-Store Queue (LSQ) fails to detect this address collision when `I1` resolves, a silent data corruption bug occurs. A correct out-of-order core must snoop the store address against all younger speculative loads in the LSQ. Upon collision detection, it marks `I2` and its dependents for replay; if they have already executed, it squashes and re-executes them after `I1`’s data is available. The store `I1` itself is older and remains; recovery does not roll architectural state back to before `I1`.
 
 
-## Independent practice
+<ExerciseSet>
 
-### Exercise 1: Register renaming for dependency resolution
+<Exercise id="ex-ooo-renaming-hazards" type="construct" level="application" title="Register Renaming for Dependency Resolution">
 
-Rename a sequence containing RAW, WAR, and WAW dependencies and draw the physical-register mappings.
+Rename an instruction sequence containing RAW, WAR, and WAW dependencies and draw the resulting physical-register mappings.
 
 <ExerciseSolution hint="Assign fresh physical registers to eliminate false WAR and WAW naming hazards while preserving RAW chains.">
 
 Allocate fresh physical destinations for every write, while each read uses the mapping visible at dispatch. WAR and WAW disappear; a consumer still waits for the physical register produced by its true source instruction.
 
 </ExerciseSolution>
+</Exercise>
 
-### Exercise 2: Superscalar dual-issue instruction scheduling
+<Exercise id="ex-ooo-superscalar-dual-issue" type="verify" level="application" title="Superscalar Dual-Issue Instruction Scheduling">
 
 Schedule four instructions on two ALUs with one three-cycle multiply and one dependent consumer. State issue, completion, and retirement cycles.
 
@@ -297,18 +324,20 @@ Schedule four instructions on two ALUs with one three-cycle multiply and one dep
 The multiply can issue alongside an independent add if units and operands are ready. Its consumer cannot issue until three-cycle completion. Retirement remains in program order even if the independent add finishes first.
 
 </ExerciseSolution>
+</Exercise>
 
-### Exercise 3: Memory disambiguation and store-to-load forwarding
+<Exercise id="ex-ooo-memory-disambiguation" type="describe" level="transfer" title="Memory Disambiguation and Store-to-Load Forwarding">
 
-Explain why an older unresolved store can prevent a younger load from executing even when the load’s register operands are ready.
+Explain why an older unresolved store can prevent a younger load from executing even when the load's register operands are ready.
 
 <ExerciseSolution hint="Explain why unknown older store addresses force younger loads to wait or verify against store queues.">
 
 The store address may equal the load address. Executing the load first could read an older value and violate program order. The queue can prove nonaliasing, forward from the store, or wait and replay if speculation fails.
 
 </ExerciseSolution>
+</Exercise>
 
-### Exercise 4: Reorder buffer (ROB) precise exception handling
+<Exercise id="ex-ooo-rob-precise-exceptions" type="describe" level="transfer" title="Reorder Buffer Precise Exception Handling">
 
 Trace ROB state for an exception at the head with two younger completed instructions.
 
@@ -317,8 +346,9 @@ Trace ROB state for an exception at the head with two younger completed instruct
 Older instructions before the head retire; the faulting head records cause; younger completed entries do not retire and are discarded. Architectural register and memory state contains no younger effects.
 
 </ExerciseSolution>
+</Exercise>
 
-### Exercise 5: Branch misprediction impact on out-of-order IPC
+<Exercise id="ex-ooo-branch-flush-recovery" type="generalise" level="transfer" title="Branch Misprediction Impact on Out-of-Order IPC">
 
 Derive the expected IPC effect of a branch frequency, prediction accuracy, and recovery cost.
 
@@ -327,8 +357,9 @@ Derive the expected IPC effect of a branch frequency, prediction accuracy, and r
 Branch cost is frequency times misprediction probability times penalty. IPC or CPI must then be combined with base issue width and clock period; a lower CPI does not automatically mean lower wall-clock time.
 
 </ExerciseSolution>
+</Exercise>
 
-### Exercise 6: Speculative checkpointing and architectural restore
+<Exercise id="ex-ooo-speculative-checkpointing" type="describe" level="synthesis" title="Speculative Checkpointing and Architectural Restore">
 
 Identify the state that must be checkpointed for branch recovery.
 
@@ -337,8 +368,9 @@ Identify the state that must be checkpointed for branch recovery.
 Save the rename map or a recoverable checkpoint, the ROB boundary/branch mask, speculative store state, and fetch PC/target state. Predictor updates may use a separate policy but cannot allow wrong-path architectural effects.
 
 </ExerciseSolution>
+</Exercise>
 
-### Exercise 7: Physical register free-list management invariants
+<Exercise id="ex-ooo-free-list-invariants" type="formalise" level="synthesis" title="Physical Register Free-List Management Invariants">
 
 Give three assertions that would catch premature physical-register reuse.
 
@@ -347,15 +379,9 @@ Give three assertions that would catch premature physical-register reuse.
 Assert that a physical register is allocated only when free, not allocated while referenced by any in-flight source, and not returned to the free list until retirement has removed every architectural and speculative reference.
 
 </ExerciseSolution>
+</Exercise>
 
-
-
-## Deliberate Omissions & Scope Boundaries
-
-* **Simultaneous Multithreading (SMT) Thread Partitions**: Dynamic partitioning vs sharing of reservation stations, ROB entries, and store buffers between hardware threads (hyper-threads) is addressed in the Multicore module.
-* **Micro-Op Fusion & Loop Stream Detectors**: CISC x86 frontend decoding engines and $\mu$op cache decoders are omitted to focus on canonical RISC out-of-order pipelines.
-* **Transistor-Level CAM Match Circuits**: Detailed electrical circuit structures of Content-Addressable Memory (CAM) arrays used in associative queue wakeups are treated in VLSI design courses.
-
+</ExerciseSet>
 
 ## References & Further Reading
 
