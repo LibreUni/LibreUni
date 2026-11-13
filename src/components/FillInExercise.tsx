@@ -38,6 +38,11 @@ function getPrimaryAnswer(expected: string | string[] | undefined): string {
   return Array.isArray(expected) ? expected[0] || '' : expected;
 }
 
+function formatPrintAnswer(answer: string): string {
+  if (!answer || answer.includes('$')) return answer;
+  return /(?:\\[A-Za-z,;]+|[\^_{}])/.test(answer) ? `$${answer}$` : answer;
+}
+
 export function FillInExercise({
   title = 'Complete the Statement',
   prompt,
@@ -51,7 +56,7 @@ export function FillInExercise({
 
   const parts = actualPrompt.split(/(?:\[!blank!]|_{3,})/);
   const completedPrompt = parts.reduce((result, part, index) => {
-    const answer = index < actualAnswers.length ? getPrimaryAnswer(actualAnswers[index]) : '';
+    const answer = index < actualAnswers.length ? formatPrintAnswer(getPrimaryAnswer(actualAnswers[index])) : '';
     return result + part + answer;
   }, '');
 

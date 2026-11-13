@@ -75,7 +75,7 @@ export default function RelationalAlgebraPlayground() {
       title="Execute an algebra operator over visible relations"
       description="Choose a logical operator and inspect its input/output tables. The model separates set projection from SQL’s default bag behavior."
       status={description}
-      staticContent={<div className="grid gap-4"><p className="m-0 text-sm">The static comparison keeps the input relations beside the result. The join has one output tuple for each enrollment because `Course.cid` is unique in this fixture.</p><div className="grid gap-4 lg:grid-cols-2"><RelationTable title="Enrollment" columns={['sid', 'cid', 'term']} rows={enrollments} /><RelationTable title="Course" columns={['cid', 'title']} rows={courses} /></div><Result mode="join" term="2026F" distinct /></div>}
+      staticContent={<div className="grid gap-4"><p className="m-0 text-sm">The static comparison keeps the input relations beside the result. The join has one output tuple for each enrollment because <code>Course.cid</code> is unique in this fixture.</p><div className="grid gap-4 lg:grid-cols-2"><RelationTable title="Enrollment" columns={['sid', 'cid', 'term']} rows={enrollments} /><RelationTable title="Course" columns={['cid', 'title']} rows={courses} /></div><Result mode="join" term="2026F" distinct /></div>}
       staticCaption="Static state: the equijoin carries each Enrollment.cid to the matching Course row and appends the title; compare the input grain with the joined-pair grain."
       onReset={() => { setMode('selection'); setTerm('2026F'); setDistinct(false); }}
     >

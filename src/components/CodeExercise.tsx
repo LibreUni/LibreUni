@@ -5,8 +5,9 @@ import MathText from './MathText';
 
 interface CodeExerciseProps {
   title?: string;
+  description?: string;
   code?: string; // Use [!blank!] for blanks
-  answers?: string[];
+  answers?: (string | string[])[];
   explanation?: string;
 }
 
@@ -15,6 +16,17 @@ function normalizeAnswer(value: string) {
     .replace(/[−–—]/g, '-')
     .replace(/\s+/g, '')
     .trim();
+}
+
+function getPrimaryAnswer(expected: string | string[] | undefined): string {
+  if (!expected) return '';
+  return Array.isArray(expected) ? expected[0] || '' : expected;
+}
+
+function checkCodeMatch(userInput: string, expected: string | string[] | undefined): boolean {
+  const normInput = normalizeAnswer(userInput);
+  const candidates = Array.isArray(expected) ? expected : [expected || ''];
+  return candidates.some((cand) => normInput === normalizeAnswer(cand || ''));
 }
 
 export function isCodeAllComments(code: string): boolean {
@@ -63,6 +75,7 @@ export function validateCodeExercise(code: string): void {
 
 export default function CodeExercise({
   title = 'Complete the Code',
+  description,
   code,
   answers,
   explanation,
@@ -73,7 +86,7 @@ export default function CodeExercise({
 
   const parts = actualCode.split(/\[!blank!]|_{3,}/);
   const completedCode = parts.reduce((result, part, index) => {
-    const answer = index < actualAnswers.length ? actualAnswers[index] || '' : '';
+    const answer = index < actualAnswers.length ? getPrimaryAnswer(actualAnswers[index]) : '';
     return result + part + answer;
   }, '');
 
@@ -84,9 +97,8 @@ export default function CodeExercise({
   const [attempts, setAttempts] = useState(0);
   const [revealedSolution, setRevealedSolution] = useState(false);
 
-  const blankMatches = actualAnswers.map(
-    (expected, idx) =>
-      normalizeAnswer(userInputs[idx] || '') === normalizeAnswer(expected || ''),
+  const blankMatches = actualAnswers.map((expected, idx) =>
+    checkCodeMatch(userInputs[idx] || '', expected),
   );
   const isCorrect = submitted && blankMatches.every(Boolean);
   const allFilled = userInputs.every((inp) => inp.trim().length > 0);
@@ -109,7 +121,7 @@ export default function CodeExercise({
   };
 
   const showExpectedTokens = () => {
-    setUserInputs([...actualAnswers]);
+    setUserInputs(actualAnswers.map((a) => getPrimaryAnswer(a)));
     setSubmitted(true);
     setRevealedSolution(true);
   };
@@ -152,6 +164,12 @@ export default function CodeExercise({
         {title}
       </h3>
 
+      {description && (
+        <p className="mb-3 text-sm leading-relaxed text-light-muted dark:text-dark-muted">
+          <MathText>{description}</MathText>
+        </p>
+      )}
+
       <div className="code-exercise-shell overflow-hidden rounded-lg border border-light-border bg-light-bg dark:border-dark-border dark:bg-dark-bg">
         <pre className="code-exercise-codeframe hl-default m-0 overflow-x-auto whitespace-pre p-4 font-mono text-sm leading-7 border-0 rounded-none shadow-none bg-transparent">
           {parts.map((part, index) => {
@@ -181,7 +199,7 @@ export default function CodeExercise({
                     aria-label={`Code blank ${index + 1}`}
                     placeholder="?"
                     style={{
-                      width: `${Math.max((actualAnswers[index] || '').length + 3, 5)}ch`,
+                      width: `${Math.max(getPrimaryAnswer(actualAnswers[index]).length + 3, 5)}ch`,
                     }}
                     className={`code-exercise-blank mx-1 inline-block h-7 rounded-md border px-2 py-0 text-center font-mono text-xs font-bold transition-colors focus:outline-none focus:ring-2 focus:ring-primary/25 ${blankClass}`}
                   />
