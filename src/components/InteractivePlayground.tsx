@@ -24,7 +24,7 @@ export default function InteractivePlayground({
   onReset,
 }: InteractivePlaygroundFrameProps) {
   return (
-    <figure className="interactive-playground lu-card-tier3 not-prose my-8 overflow-hidden p-5 md:p-6">
+    <figure className="interactive-playground lu-card-tier3 not-prose my-8 scroll-mt-20 overflow-hidden p-5 md:p-6">
       <figcaption className="interactive-playground-screen mb-4 grid gap-4 sm:grid-cols-[1fr_18rem] sm:items-start">
         <div className="min-w-0">
           <div className="label-caps">Interactive exploration</div>
@@ -33,7 +33,7 @@ export default function InteractivePlayground({
         </div>
         {(status || onReset) && <div className="flex shrink-0 flex-wrap items-center sm:flex-col sm:items-end gap-2 text-right">
           {status && <output className="text-sm font-semibold text-light-muted dark:text-dark-muted min-h-[3rem] flex items-center sm:justify-end">{status}</output>}
-          {onReset && <button type="button" onClick={onReset} className="min-h-9 rounded-lg border border-light-border px-3 text-xs font-bold text-light-muted transition-colors hover:border-primary/50 hover:text-primary dark:border-dark-border dark:text-dark-muted">Reset model</button>}
+          {onReset && <button type="button" onClick={onReset} className="min-h-11 rounded-lg border border-light-border px-3 text-xs font-bold text-light-muted transition-colors hover:border-primary/50 hover:text-primary dark:border-dark-border dark:text-dark-muted">Reset model</button>}
         </div>}
       </figcaption>
       <div className="interactive-playground-screen">

@@ -396,7 +396,6 @@ export default function StudyToolsRail({ lessonSlug, lessonTitle }: StudyToolsRa
             setActiveTab('highlighter');
             setIsOpen((prev) => (activeTab === 'highlighter' ? !prev : true));
           }}
-          aria-label="Open lesson highlighter"
           aria-expanded={isOpen && activeTab === 'highlighter'}
           className={`inline-flex min-h-11 items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-colors ${
             isOpen && activeTab === 'highlighter'
@@ -404,7 +403,7 @@ export default function StudyToolsRail({ lessonSlug, lessonTitle }: StudyToolsRa
               : 'border-light-border bg-light-surface text-light-text hover:border-primary/40 dark:border-dark-border dark:bg-dark-surface dark:text-dark-text'
           }`}
         >
-          <Highlighter size={15} />
+          <Highlighter size={15} aria-hidden="true" />
           <span>Highlighter</span>
           {highlights.length > 0 && (
             <span
@@ -417,6 +416,7 @@ export default function StudyToolsRail({ lessonSlug, lessonTitle }: StudyToolsRa
               {highlights.length}
             </span>
           )}
+          <span className="sr-only"> — Open lesson highlighter</span>
         </button>
 
         <button
@@ -426,7 +426,6 @@ export default function StudyToolsRail({ lessonSlug, lessonTitle }: StudyToolsRa
             setActiveTab('clock');
             setIsOpen((prev) => (activeTab === 'clock' ? !prev : true));
           }}
-          aria-label="Open study clock and Pomodoro timer"
           aria-expanded={isOpen && activeTab === 'clock'}
           className={`inline-flex min-h-11 items-center gap-1.5 rounded-xl border px-3.5 py-2 font-mono text-xs font-bold tabular-nums transition-colors ${
             isOpen && activeTab === 'clock'
@@ -436,12 +435,13 @@ export default function StudyToolsRail({ lessonSlug, lessonTitle }: StudyToolsRa
                 : 'border-light-border bg-light-surface text-light-text hover:border-primary/40 dark:border-dark-border dark:bg-dark-surface dark:text-dark-text'
           }`}
         >
-          <Clock size={15} />
+          <Clock size={15} aria-hidden="true" />
           <span>
             {pomodoro.isRunning
               ? formatTime(pomodoro.remainingSeconds)
               : clockString || 'Pomodoro'}
           </span>
+          <span className="sr-only"> — Open study clock and Pomodoro timer</span>
         </button>
       </div>
 

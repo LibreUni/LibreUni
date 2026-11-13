@@ -9,10 +9,12 @@ function Trace({ taken }: { taken: boolean }) {
   return <div>
     <ul className="mb-3 grid gap-1 text-xs">{program.map((instruction, index) => <li key={instruction}><strong>I{index}</strong>: <code>{instruction}</code></li>)}</ul>
     <p className="mb-2 text-xs">T = first target instruction; · = invalid bubble; — = empty. Each row shows occupancy during the cycle; branch redirection takes effect at its end.</p>
-    <table className="w-full table-fixed text-center text-xs" aria-label="Pipeline hazard trace">
+    <div className="overflow-x-auto" tabIndex={0} aria-label="Pipeline hazard trace table">
+      <table className="w-full min-w-[22rem] text-center text-xs" aria-label="Pipeline hazard trace">
       <thead><tr className="border-b border-light-border dark:border-dark-border">{['Cycle', 'IF', 'ID', 'EX', 'MEM', 'WB'].map(heading => <th scope="col" className="py-2" key={heading}>{heading}</th>)}</tr></thead>
       <tbody>{rows.map(row => <tr className="border-b border-light-border/60 dark:border-dark-border/60" key={row[0]}>{row.map((cell, index) => <td className="py-2 font-mono" key={`${row[0]}-${index}`} title={cell}>{index === 0 ? cell : label(cell)}</td>)}</tr>)}</tbody>
     </table>
+    </div>
   </div>;
 }
 

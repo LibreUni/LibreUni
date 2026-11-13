@@ -7,16 +7,37 @@ export type ModuleKind = 'chapter' | 'practice' | 'reference';
 
 type LessonEntry = CollectionEntry<'lessons'>;
 
-export type OrderedLesson = LessonEntry & {
-  data: LessonEntry['data'] & {
-    module?: string;
-    kind: PageKind;
-    label: string;
-    number?: string | null;
-    moduleKind: ModuleKind;
-    moduleIndex: number | null;
-  };
+export type OrderedLessonMetadata = {
+  module?: string;
+  label: string;
+  number?: string | null;
+  moduleKind: ModuleKind;
+  moduleIndex: number | null;
 };
+
+export type OrderedLesson = LessonEntry & {
+  data: LessonEntry['data'] & OrderedLessonMetadata;
+};
+
+type CourseStructurePage = {
+  slug: string;
+  kind: PageKind;
+  label: string;
+  number: string | null;
+  moduleTitle?: string;
+  moduleKind: ModuleKind;
+  moduleIndex: number | null;
+};
+
+function attachOrderMetadata(lesson: LessonEntry, meta: OrderedLessonMetadata): OrderedLesson {
+  return {
+    ...lesson,
+    data: {
+      ...lesson.data,
+      ...meta,
+    },
+  };
+}
 
 function lessonStem(lesson: LessonEntry) {
   return lesson.id.split('/').pop() ?? lesson.id;
@@ -27,9 +48,9 @@ export async function getCourseLessons(courseId: string, lessonEntries?: LessonE
   const courseLessons = allLessons.filter((l) => l.data.course === courseId);
   const remainingLessons = new Map(courseLessons.map((lesson) => [lessonStem(lesson), lesson]));
 
-  let structure: { modules: any[]; pages: any[] };
+  let structure: { modules: unknown[]; pages: CourseStructurePage[] };
   try {
-    structure = loadCourseStructure(courseId);
+    structure = loadCourseStructure(courseId) as { modules: unknown[]; pages: CourseStructurePage[] };
   } catch {
     structure = { modules: [], pages: [] };
   }
@@ -40,35 +61,29 @@ export async function getCourseLessons(courseId: string, lessonEntries?: LessonE
     const lesson = remainingLessons.get(page.slug);
     if (!lesson) continue;
 
-    orderedLessons.push({
-      ...lesson,
-      data: {
-        ...lesson.data,
+    orderedLessons.push(
+      attachOrderMetadata(lesson, {
         module: page.moduleTitle || 'Overview',
-        kind: page.kind as PageKind,
         label: page.label,
         number: page.number,
-        moduleKind: page.moduleKind as ModuleKind,
+        moduleKind: page.moduleKind,
         moduleIndex: page.moduleIndex,
-      },
-    });
+      }),
+    );
     remainingLessons.delete(page.slug);
   }
 
   const fallbackLessons = [...remainingLessons.values()]
     .sort((a, b) => lessonStem(a).localeCompare(lessonStem(b)))
-    .map((lesson) => ({
-      ...lesson,
-      data: {
-        ...lesson.data,
+    .map((lesson) =>
+      attachOrderMetadata(lesson, {
         module: 'Overview',
-        kind: ((lesson.data as any).kind || 'lesson') as PageKind,
         label: '',
         number: null,
-        moduleKind: 'chapter' as ModuleKind,
+        moduleKind: 'chapter',
         moduleIndex: null,
-      },
-    }));
+      }),
+    );
 
   return [...orderedLessons, ...fallbackLessons];
 }
