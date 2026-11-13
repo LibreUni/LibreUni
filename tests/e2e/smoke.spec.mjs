@@ -333,21 +333,60 @@ test.describe('production smoke checks', () => {
   });
 
   test('active-course visuals and math are rendered, not leaked source', async ({ page }) => {
-    test.setTimeout(120_000);
-    const activeLessons = LESSON_ROUTES.filter((lesson) => /\/lessons\/(computer-architecture|operating-systems|database-systems)\//.test(lesson.url));
+    test.setTimeout(180_000);
+    const activeLessons = LESSON_ROUTES.filter((lesson) =>
+      /\/lessons\/(calculus-intro|computer-architecture|operating-systems|database-systems)\//.test(lesson.url)
+    );
     const failures = [];
     for (const lesson of activeLessons) {
       await page.goto(lesson.url, { waitUntil: 'domcontentloaded' });
-      const article = page.locator('article');
-      const visibleText = await article.evaluate((root) => {
-        const clone = root.cloneNode(true);
-        clone.querySelectorAll('pre, code, svg, details.diagram-source, script, style, annotation').forEach((node) => node.remove());
-        return clone.textContent || '';
+      const audit = await page.evaluate(() => {
+        const katexErrors = document.querySelectorAll('.katex-error').length;
+        const tableMismatches = [];
+        document.querySelectorAll('table').forEach((table, idx) => {
+          const rows = Array.from(table.querySelectorAll('tr'));
+          if (rows.length === 0) return;
+          const rowCols = rows.map((tr) =>
+            Array.from(tr.children)
+              .filter((el) => el.tagName === 'TH' || el.tagName === 'TD')
+              .reduce((sum, cell) => sum + (cell.colSpan || 1), 0)
+          ).filter((n) => n > 0);
+          if (rowCols.length > 0 && rowCols.some((n) => n !== rowCols[0])) {
+            tableMismatches.push(`table #${idx + 1} row cols=${JSON.stringify(rowCols)}`);
+          }
+        });
+
+        const article = document.querySelector('article');
+        let visibleText = '';
+        if (article) {
+          const clone = article.cloneNode(true);
+          clone
+            .querySelectorAll('pre, code, svg, details.diagram-source, script, style, annotation')
+            .forEach((node) => node.remove());
+          visibleText = clone.textContent || '';
+        }
+        return { katexErrors, tableMismatches, visibleText };
       });
-      if (/\\(?:sum|frac|sqrt|Theta|Omega|alpha|beta|ge|le|log|lfloor|rfloor)\b|(?<!\\)\$[^$\n]+(?<!\\)\$/.test(visibleText)) {
+
+      if (audit.katexErrors > 0) {
+        failures.push(`${lesson.url}: ${audit.katexErrors} .katex-error element(s) rendered`);
+      }
+      if (audit.tableMismatches.length > 0) {
+        failures.push(`${lesson.url}: ragged HTML table columns (${audit.tableMismatches.join(', ')})`);
+      }
+      if (
+        /\\[A-Za-z]{2,}\b|(?<!\\)\$(?=[A-Za-z_\\[({])|(?<!\\)\$\d[\d,]*(?:\.\d+)?[+\-*/^_=|]|(?<!\\)\$[^$\n]+(?<!\\)\$/.test(
+          audit.visibleText
+        )
+      ) {
         failures.push(`${lesson.url}: raw TeX visible in lesson text`);
       }
-      if (visibleText.includes('\\n')) failures.push(`${lesson.url}: escaped newline leaked into lesson text`);
+      if (/`[^`\n]+`/.test(audit.visibleText)) {
+        failures.push(`${lesson.url}: unformatted Markdown backtick span visible in lesson text`);
+      }
+      if (audit.visibleText.includes('\\n')) {
+        failures.push(`${lesson.url}: escaped newline leaked into lesson text`);
+      }
     }
     expect(failures, failures.join('\n')).toEqual([]);
   });
@@ -542,4 +581,70 @@ test('calculus practice generator automatically heals and renders legacy questio
   const storedJson = await page.evaluate(() => localStorage.getItem('libreuni-practice-calculus-intro'));
   expect(storedJson).toContain('$y = x^2$.');
   expect(storedJson).not.toContain('Since 2 > 1$,');
+});
+
+test('query-plans join table renders cardinality expressions intact across all five columns', async ({ page }) => {
+  await page.goto('/lessons/database-systems/query-plans.html', { waitUntil: 'domcontentloaded' });
+
+  const joinTable = page.locator('table', { hasText: 'Second join cost' });
+  await expect(joinTable).toBeVisible();
+
+  const thirdRow = joinTable.locator('tbody tr').nth(2);
+  const cells = thirdRow.locator('td');
+  await expect(cells).toHaveCount(5);
+
+  const secondJoinCell = cells.nth(3);
+  const totalCell = cells.nth(4);
+  await expect(secondJoinCell.locator('.katex')).toHaveCount(1);
+  await expect(totalCell.locator('.katex')).toHaveCount(1);
+
+  const cellTextWithoutAnnotations = async (cell) =>
+    cell.evaluate((el) => {
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll('annotation').forEach((n) => n.remove());
+      return clone.textContent || '';
+    });
+
+  const secondJoinText = await cellTextWithoutAnnotations(secondJoinCell);
+  const totalText = await cellTextWithoutAnnotations(totalCell);
+  expect(secondJoinText).not.toContain('\\bowtie');
+  expect(totalText).not.toContain('\\bowtie');
+  expect(secondJoinText).toContain('1,000+');
+  expect(totalText).toContain('1,110+');
+});
+
+test('interactive FillInExercise and CodeExercise blanks enable verification and accept alternate forms', async ({ page }) => {
+  // 1. Integration by Parts FillInExercise in fundamental-theorem
+  await page.goto('/lessons/calculus-intro/fundamental-theorem.html', { waitUntil: 'networkidle' });
+  const ibpCard = page.locator('[data-component="FillInExercise"]', { hasText: 'Integration by Parts' });
+  await ibpCard.getByLabel('Blank 1').fill("∫(u' * v) dx");
+  const ibpCheck = ibpCard.getByRole('button', { name: /Check answer/i });
+  await expect(ibpCheck).toBeEnabled();
+  await ibpCheck.click();
+  await expect(ibpCard).toContainText(/All blanks verified correctly/i);
+  await expect(page.locator('.katex-error')).toHaveCount(0);
+
+  // 2. Washer cross-sectional area FillInExercise in applications-integration
+  await page.goto('/lessons/calculus-intro/applications-integration.html', { waitUntil: 'networkidle' });
+  const washerCard = page.locator('[data-component="FillInExercise"]', { hasText: 'washer cross-sectional area' });
+  await washerCard.getByLabel('Blank 1').fill('x**2');
+  await washerCard.getByRole('button', { name: /Check answer/i }).click();
+  await expect(washerCard).toContainText(/All blanks verified correctly/i);
+  await expect(page.locator('.katex-error')).toHaveCount(0);
+
+  // 3. Second-step L'Hopital FillInExercise in mean-value-theorem
+  await page.goto('/lessons/calculus-intro/mean-value-theorem.html', { waitUntil: 'networkidle' });
+  const mvtCard = page.locator('[data-component="FillInExercise"]', { hasText: "L'Hôpital" });
+  await mvtCard.getByLabel('Blank 1').fill('0.5');
+  await mvtCard.getByRole('button', { name: /Check answer/i }).click();
+  await expect(mvtCard).toContainText(/All blanks verified correctly/i);
+
+  // 4. Darboux sums CodeExercise in integration-problems
+  await page.goto('/lessons/calculus-intro/integration-problems.html', { waitUntil: 'networkidle' });
+  const darbouxCard = page.locator('[data-component="CodeExercise"]', { hasText: 'Darboux Sums' });
+  await darbouxCard.getByLabel('Code blank 1').fill('(i/n)**3');
+  const codeCheck = darbouxCard.getByRole('button', { name: /Check code/i });
+  await expect(codeCheck).toBeEnabled();
+  await codeCheck.click();
+  await expect(darbouxCard).toContainText(/All tokens verified/i);
 });

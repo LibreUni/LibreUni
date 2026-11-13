@@ -71,6 +71,15 @@ Mathematical figures and page contracts are verified on every test run:
   - `LINT-09`: Forbids fragile function plots in `<TikZ>` using `plot`, `controls`, or coordinate curves.
   - `LINT-10`: Enforces that `<MathStatement>` is declared solely on `lesson` and `lab` pages.
   - `LINT-11`: Enforces bidirectional figure resolution (no missing specs, no orphaned specs).
+  - `LINT-16`: Enforces GFM Markdown table column parity, balanced cell `$` / backtick delimiters, and bans unescaped `|` inside table math (requiring `\lvert ... \rvert` or `\mid`).
+  - `LINT-17`: Validates inline math delimiter parity, rejects `\(...\)` / `\[...\]` and raw TeX commands outside math, validates KaTeX strictly across JSX component props and frontmatter, and catches unescaped backslashes in JS string math props.
+  - `LINT-18`: Enforces `[!blank!]`-to-`answers` arity parity across `<FillInExercise>` and `<CodeExercise>` and forbids splitting math expressions across `[!blank!]`.
+
+- **Rendered lesson validator (`scripts/validate-rendered-lessons.mjs`, part of `check:build`):**
+  - Verifies `.katex-error` absence, HTML table cell parity and clean cell rendering, `<template data-math-preview>` and visible prose freedom from leaked TeX commands/backticks, and serialized `<astro-island>` blank-to-answer arity.
+
+- **Local Playwright CPU cap (`playwright.config.mjs`):**
+  - Caps local Chromium worker concurrency to at most `min(2, floor(cpus / 4))` (`>= 1`; configurable downward via `PLAYWRIGHT_WORKERS`, and `2` on CI) so local E2E/UX runs do not saturate host CPU cores.
 
 The course integrity audit is intentionally separate from `course_stats.py`. Smoke tests answer “is the content mechanically valid?”; integrity checks answer “does the source show signs of padding, duplication, generic artifacts, or uncovered structured sections?” Neither command certifies pedagogical quality. A strict integrity failure must be investigated rather than bypassed by changing thresholds or adding placeholder text.
 

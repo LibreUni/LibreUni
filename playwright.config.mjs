@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { defineConfig, devices } from '@playwright/test';
 
 // Keep local and CI browser runs quiet when the host injects conflicting color
@@ -8,6 +9,14 @@ process.env.no_proxy = 'localhost,127.0.0.1,::1' + (process.env.no_proxy ? `,${p
 process.env.NO_PROXY = process.env.no_proxy;
 
 const isCI = Boolean(process.env.CI);
+// Reserve most host cores during local runs so Chromium workers do not freeze the desktop.
+const defaultLocalWorkers = Math.max(1, Math.min(2, Math.floor(os.cpus().length / 4)));
+const envWorkers = Number(process.env.PLAYWRIGHT_WORKERS);
+const workers = isCI
+  ? 2
+  : Number.isInteger(envWorkers) && envWorkers > 0
+    ? Math.min(envWorkers, defaultLocalWorkers)
+    : defaultLocalWorkers;
 
 export default defineConfig({
   testDir: './tests',
@@ -18,7 +27,7 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: isCI,
   retries: isCI ? 2 : 0,
-  workers: isCI ? 2 : undefined,
+  workers,
   reporter: [
     ['list'],
     ['html', { outputFolder: 'reports/playwright', open: 'never' }],
