@@ -7,7 +7,7 @@ const TEST_ROUTES = [
   { name: 'Database SQL Lab', url: '/lessons/database-systems/sql-lab.html' },
   { name: 'OS CPU Scheduling', url: '/lessons/operating-systems/cpu-scheduling.html' },
   { name: 'OS Scheduler Lab', url: '/lessons/operating-systems/scheduler-lab.html' },
-  { name: 'Systems Foundations Career', url: '/careers/systems-foundations.html' },
+  { name: 'Software Engineer Career', url: '/careers/software-engineer.html' },
 ];
 
 test.describe('Buttons, Cursors, and Theme Color Contrast', () => {

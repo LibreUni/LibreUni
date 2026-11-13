@@ -128,23 +128,30 @@ test('declared credit stays calibrated near 25 hours per ECTS', () => {
   }
 });
 
-test('the systems foundations path has only real active course steps and unique gates', () => {
+test('the software engineer career roadmap has real active course steps, languages, skills, and reading list', () => {
   const pathFiles = fs.readdirSync(path.join(root, 'src/content/careers')).filter((name) => name.endsWith('.json')).sort();
-  assert.deepEqual(pathFiles, ['systems-foundations.json']);
-  const career = JSON.parse(read('src/content/careers/systems-foundations.json'));
-  assert.deepEqual(career.steps.map((step) => step.id), ['machine', 'kernel', 'data']);
-  assert.equal(career.steps.length, 3);
-  const gateLessons = new Set();
+  assert.deepEqual(pathFiles, ['software-engineer.json']);
+  const career = JSON.parse(read('src/content/careers/software-engineer.json'));
+  assert.deepEqual(career.steps.map((step) => step.id), ['foundations', 'machine', 'kernel', 'data']);
+  assert.equal(career.steps.length, 4);
+  const capstoneLessons = new Set();
   for (const step of career.steps) {
     assert.ok(step.id && step.title && step.outcome);
+    assert.ok(Array.isArray(step.languagesUsed) && step.languagesUsed.length > 0);
+    assert.ok(Array.isArray(step.externalStudy) && step.externalStudy.length > 0);
     assert.ok(Array.isArray(step.courses) && step.courses.length > 0);
     assert.ok(step.courses.every((course) => course.type === 'internal' && activeCourses.includes(course.id)));
-    assert.ok(step.gate?.lesson && step.gate.prompt && Array.isArray(step.gate.criteria) && step.gate.criteria.length > 0);
-    assert.ok(!gateLessons.has(step.gate.lesson), `gate lesson duplicated: ${step.gate.lesson}`);
-    gateLessons.add(step.gate.lesson);
-    assert.ok(fs.existsSync(path.join(root, 'src/content/lessons', `${step.gate.lesson}.mdx`)), `missing gate lesson: ${step.gate.lesson}`);
+    assert.ok(step.capstoneFocus?.lesson && step.capstoneFocus.summary);
+    assert.ok(!capstoneLessons.has(step.capstoneFocus.lesson), `capstone lesson duplicated: ${step.capstoneFocus.lesson}`);
+    capstoneLessons.add(step.capstoneFocus.lesson);
+    assert.ok(fs.existsSync(path.join(root, 'src/content/lessons', `${step.capstoneFocus.lesson}.mdx`)), `missing capstone lesson: ${step.capstoneFocus.lesson}`);
   }
-  assert.ok(career.scope && Array.isArray(career.preparation) && career.preparation.length > 0 && Array.isArray(career.entryChecks) && career.entryChecks.length > 0 && career.synthesis);
+  assert.ok(
+    career.scope &&
+    Array.isArray(career.languages) && career.languages.length >= 4 &&
+    Array.isArray(career.skillPillars) && career.skillPillars.length >= 4 &&
+    Array.isArray(career.readingList) && career.readingList.length >= 6,
+  );
 });
 
 test('Operating Systems labs and source traces share one pinned xv6 revision', () => {

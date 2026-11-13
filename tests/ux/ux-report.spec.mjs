@@ -10,8 +10,8 @@ const TARGETS = [
   { app: 'main', name: 'Home (Modern Light)', url: 'http://127.0.0.1:4321/', theme: 'modern', mode: 'light' },
   { app: 'main', name: 'Database Lesson (Monochrome Light)', url: 'http://127.0.0.1:4321/lessons/database-systems/relational-model.html', theme: 'monochrome', mode: 'light' },
   { app: 'main', name: 'Database Lesson (Monochrome Dark)', url: 'http://127.0.0.1:4321/lessons/database-systems/relational-model.html', theme: 'monochrome', mode: 'dark' },
-  { app: 'main', name: 'Systems Foundations Path (Monochrome Light)', url: 'http://127.0.0.1:4321/careers/systems-foundations.html', theme: 'monochrome', mode: 'light' },
-  { app: 'main', name: 'Systems Foundations Path (Monochrome Dark)', url: 'http://127.0.0.1:4321/careers/systems-foundations.html', theme: 'monochrome', mode: 'dark' },
+  { app: 'main', name: 'Software Engineer Career (Monochrome Light)', url: 'http://127.0.0.1:4321/careers/software-engineer.html', theme: 'monochrome', mode: 'light' },
+  { app: 'main', name: 'Software Engineer Career (Monochrome Dark)', url: 'http://127.0.0.1:4321/careers/software-engineer.html', theme: 'monochrome', mode: 'dark' },
 ];
 
 const VIEWPORTS = [

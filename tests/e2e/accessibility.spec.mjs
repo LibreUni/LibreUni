@@ -9,7 +9,7 @@ const A11Y_ROUTES = [
   { name: 'OS scheduler model', url: 'http://127.0.0.1:4321/lessons/operating-systems/cpu-scheduling.html' },
   { name: 'calculus limits and assessments', url: 'http://127.0.0.1:4321/lessons/calculus-intro/limits.html' },
   { name: 'OS scheduler lab and code exercise', url: 'http://127.0.0.1:4321/lessons/operating-systems/scheduler-lab.html' },
-  { name: 'learning path', url: 'http://127.0.0.1:4321/careers/systems-foundations.html' },
+  { name: 'learning path', url: 'http://127.0.0.1:4321/careers/software-engineer.html' },
   { name: 'main About page', url: 'http://127.0.0.1:4321/about.html' },
 ];
 
