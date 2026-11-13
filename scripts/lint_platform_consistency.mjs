@@ -4,6 +4,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { getBlockById } from '../src/utils/statementRegistry.mjs';
 import { loadCourseStructure } from '../src/lib/courseStructure.mjs';
+import { lintMdxSourceContent } from './lib/mdx_lint_rules.mjs';
 
 const ROOT = process.cwd();
 const LESSONS_DIR = path.join(ROOT, 'src/content/lessons');
@@ -175,6 +176,15 @@ for (const file of lessonFiles) {
   }
 
   const body = raw.slice(fmMatch[0].length);
+  const bodyStartLine = fmMatch[0].split(/\r?\n/).length;
+  errors.push(
+    ...lintMdxSourceContent({
+      relPath: rel,
+      body,
+      frontmatter: fm,
+      bodyStartLine,
+    })
+  );
   const codeFreeBody = stripFencedCode(body);
   const lines = codeFreeBody.split(/\r?\n/);
 

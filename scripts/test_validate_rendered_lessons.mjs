@@ -37,3 +37,50 @@ test('rendered validator rejects missing, raw-TeX, and renderer-error pages', ()
   assert.match(validateRenderedLessons(error, ['demo']).failures[0], /renderer emitted/);
   fs.rmSync(error, { recursive: true, force: true });
 });
+
+test('rendered validator catches leaked \\bowtie and broken table cardinality math like $1,000+', () => {
+  const bowtieRoot = fixture('<table><tbody><tr><td>unknown</td><td>$1,000+</td><td>A\\bowtie C</td></tr></tbody></table>');
+  const { failures } = validateRenderedLessons(bowtieRoot, ['demo']);
+  assert.ok(failures.some((f) => /raw TeX/i.test(f)), `Expected raw TeX failure, got: ${failures}`);
+});
+
+test('rendered validator catches KaTeX error spans anywhere in HTML', () => {
+  const katexErrRoot = fixture('<main><span class="katex-error" title="ParseError">\\badcmd</span></main>');
+  const { failures } = validateRenderedLessons(katexErrRoot, ['demo']);
+  assert.ok(failures.some((f) => /KaTeX error/i.test(f)), `Expected KaTeX error failure, got: ${failures}`);
+});
+
+test('rendered validator catches HTML table column count mismatches', () => {
+  const badTable = fixture('<table><thead><tr><th>A</th><th>B</th><th>C</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>');
+  const { failures } = validateRenderedLessons(badTable, ['demo']);
+  assert.ok(failures.some((f) => /2 column\(s\), expected 3/i.test(f)), `Expected table column mismatch, got: ${failures}`);
+});
+
+test('rendered validator catches leaked Markdown backticks in visible prose and ignores diagram-source', () => {
+  const backtickRoot = fixture('<article><p>Hint: use `WHERE` carefully.</p></article>');
+  assert.ok(
+    validateRenderedLessons(backtickRoot, ['demo']).failures.some((f) => /backtick/i.test(f)),
+    'Expected leaked backtick failure'
+  );
+
+  const diagramSourceRoot = fixture(
+    '<article><details class="diagram-source"><summary>Code</summary><pre><code>A -> B : wait\\nrelease</code></pre></details><p>Price is $100.</p></article>'
+  );
+  assert.deepEqual(validateRenderedLessons(diagramSourceRoot, ['demo']).failures, []);
+});
+
+test('rendered validator checks template math previews and serialized FillInExercise blank arity', () => {
+  const badPreview = fixture('<main><template data-math-preview>Let $x = \\frac{1}{2}$.</template></main>');
+  assert.ok(
+    validateRenderedLessons(badPreview, ['demo']).failures.some((f) => /raw TeX/i.test(f)),
+    'Expected raw TeX leak inside <template data-math-preview>'
+  );
+
+  const badIsland = fixture(
+    `<main><astro-island component-url="/assets/FillInExercise.js" props="{&quot;prompt&quot;:[0,&quot;Value = [!blank!]&quot;],&quot;answers&quot;:[1,[[0,&quot;1&quot;],[0,&quot;2&quot;]]]}"></astro-island></main>`
+  );
+  assert.ok(
+    validateRenderedLessons(badIsland, ['demo']).failures.some((f) => /1 blank\(s\) but serialized 2 answer slot\(s\)/i.test(f)),
+    'Expected serialized FillInExercise blank arity failure'
+  );
+});

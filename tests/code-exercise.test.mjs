@@ -180,3 +180,66 @@ test('FillInExercise component exports correctly and renders without errors', ()
   assert.ok(html.includes('Complete the Integration by Parts formula'), 'Rendered HTML should contain title');
   assert.ok(html.includes('fill-in-exercise'), 'Rendered HTML should have fill-in-exercise class');
 });
+
+test('CodeExercise supports nested accepted answers and renders MathText description cleanly', () => {
+  const html = renderToString(
+    React.createElement(CodeExercise, {
+      title: 'Darboux term',
+      description: 'Supply the supremum factor using `i` and `n`.',
+      code: 'u_sum = sum(([!blank!]) * (1 / n) for i in range(1, n + 1))',
+      answers: [['(i / n) ** 3', '(i/n)**3']],
+      explanation: 'Right endpoint gives $(i/n)^3$.',
+    })
+  );
+  const plain = html.replace(/<!--[\s\S]*?-->/g, '');
+  assert.ok(plain.includes('1 token to supply'));
+  assert.ok(plain.includes('<code'));
+  assert.ok(!plain.includes('`i`'), 'Backticks should be formatted into <code> elements');
+});
+
+test('FillInExercise wraps TeX primary answers cleanly in print-static-prompt', () => {
+  const html = renderToString(
+    React.createElement(FillInExercise, {
+      title: 'Integration by Parts',
+      prompt: String.raw`Rearranging gives $\int (u \cdot v')\,dx = u \cdot v -$ [!blank!]`,
+      answers: [[String.raw`\int (u' \cdot v)\,dx`, "∫(u' * v) dx"]],
+    })
+  );
+  const plain = html.replace(/<!--[\s\S]*?-->/g, '');
+  const visible = plain.replace(/<annotation\b[\s\S]*?<\/annotation>/gi, '');
+  assert.ok(plain.includes('1 blank to complete'));
+  assert.ok(!visible.includes('\\int'), 'TeX primary answer in print-static-prompt should render via KaTeX, not raw TeX');
+  assert.ok(visible.includes('class="katex"'));
+});
+
+test('Every FillInExercise and CodeExercise in repository lessons matches blank count to answers length', async () => {
+  const { extractJsxComponentTags, maskCodeAndComments } = await import('../scripts/lib/mdx_lint_rules.mjs');
+  function walk(dir) {
+    const out = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...walk(full));
+      else if (entry.name.endsWith('.mdx')) out.push(full);
+    }
+    return out;
+  }
+
+  const mismatches = [];
+  for (const file of walk(path.join(root, 'src/content/lessons'))) {
+    const raw = fs.readFileSync(file, 'utf8');
+    const { tags } = extractJsxComponentTags(maskCodeAndComments(raw));
+    for (const tag of tags) {
+      if (tag.name !== 'FillInExercise' && tag.name !== 'CodeExercise') continue;
+      const src = tag.name === 'FillInExercise'
+        ? tag.props.prompt ?? tag.props.text ?? tag.props.statement
+        : tag.props.code;
+      const answers = tag.props.answers;
+      if (typeof src !== 'string' || !Array.isArray(answers)) continue;
+      const blanks = src.split(/(?:\[!blank!]|_{3,})/).length - 1;
+      if (blanks < 1 || answers.length !== blanks) {
+        mismatches.push(`${path.relative(root, file)}:${tag.line} <${tag.name}> blanks=${blanks} answers=${answers.length}`);
+      }
+    }
+  }
+  assert.deepEqual(mismatches, []);
+});
