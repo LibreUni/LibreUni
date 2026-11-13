@@ -12,4 +12,9 @@ Skills are host-provided execution aids: they may help with a bounded activity s
 
 ## Repository-native capabilities
 
-The durable, host-neutral capabilities are the routed rule packs and repository commands: course and integrity scripts, the production build, Playwright checks, UX/visual reports, and PlantUML diagnostics. Document a new repository capability as a command and task-pack requirement first; add host-specific skill guidance only when it supplies a repeatable capability that ordinary tools do not.
+The durable, host-neutral capabilities are the routed rule packs and repository commands: course and integrity scripts, the production build, Playwright checks, UX/visual reports, PlantUML diagnostics, and the AI review/issue workflow (`npm run ai:issues`, `npm run ai:preview` via [`scripts/ai_dev_workflow.mjs`](../../scripts/ai_dev_workflow.mjs)). Document a new repository capability as a command and task-pack requirement first; add host-specific skill guidance only when it supplies a repeatable capability that ordinary tools do not.
+
+## Workspace skills (`.agents/skills/`)
+
+- [`rapid-ai-preview`](../../.agents/skills/rapid-ai-preview/SKILL.md): Generates change preview bundles (`reports/ai-dev/preview-summary.md` and `.html`), maps changed files to previewable routes, records reviewer comments, and gates expansion beyond pilot scopes.
+- [`automated-issue-workflow`](../../.agents/skills/automated-issue-workflow/SKILL.md): Manages the structured issue lifecycle (`reported` → `needs-clarification` → `approved` → `in-progress` → `ready-for-review` → `verified`) backed by [`docs/agent-context/ISSUE_QUEUE.json`](../agent-context/ISSUE_QUEUE.json).

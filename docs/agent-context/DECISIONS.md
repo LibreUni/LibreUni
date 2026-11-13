@@ -37,7 +37,7 @@
 
 ## D-0006 — Three reference courses before catalog expansion
 
-- **Status:** accepted · 2026-09-14
+- **Status:** superseded by D-0008 (4-course catalog) and D-0018 (career roadmap) · 2026-09-14
 - **Decision:** Computer Architecture, Operating Systems, and Database Systems are the active reference curriculum, connected by one learning path with preparation, actual course assessment gates, and cross-course synthesis. Retired courses and paths are preserved outside Astro's content roots, including their uncommitted source. Reference selection is not a claim of completed academic certification.
 - **Rationale:** Correct explanations, visual models, meaningful interaction, and transfer assessment must coexist in a small reviewable curriculum before its patterns are expanded. Path evidence remains local and explicitly self-attested, separate from reading progress.
 - **Sources:** user-approved survivor scope; [`COURSE_CROSSWALK.md`](../curriculum/COURSE_CROSSWALK.md), [`systems-foundations.json`](../../src/content/careers/systems-foundations.json), [`archive README`](../../archive/curriculum/2026-09-14/README.md), [`test_quality_contract.mjs`](../../scripts/test_quality_contract.mjs)
@@ -155,3 +155,14 @@
      - The discriminated taxonomy contains exclusively: module kinds `chapter`, `practice`, `reference`; page kinds `lesson`, `lab`, `problems`, `recap`, `practice`.
 - **Rationale:** Institutional university jargon creates a false impression of a brick-and-mortar classroom with human graders, alienating autonomous learners, professionals, and hobbyists who study on their own schedules. Replacing timed exam pressure with infinite algorithmic practice workshops empowers genuine mastery verification.
 - **Sources:** [`docs/agent-rules/BASELINE.md`](../agent-rules/BASELINE.md), [`docs/agent-rules/COURSE_STANDARD.md`](../agent-rules/COURSE_STANDARD.md), [`docs/agent-rules/COURSE_STRUCTURE.md`](../agent-rules/COURSE_STRUCTURE.md), [`src/components/PracticeGenerator.tsx`](../../src/components/PracticeGenerator.tsx), [`src/lib/practiceGenerators.ts`](../../src/lib/practiceGenerators.ts).
+
+## D-0018 — Theme simplification, Software Engineer roadmap, lesson study tools, and AI review queue
+
+- **Status:** accepted · 2026-11-13
+- **Decision:** Finalize the platform UX and roadmap surface for the `refactor_230826` release:
+  1. **Themes:** Retire the `scholar` theme; keep `modern` (default) and `monochrome` across light and dark modes.
+  2. **Career roadmap:** Replace the 3-course `systems-foundations` self-attested checklist (`LearningPathEvidence`) with the 4-stage `Software Engineer` study roadmap (`src/content/careers/software-engineer.json`) covering core languages, skill pillars, canonical books, and LibreUni's 4 active courses.
+  3. **Lesson study tools:** Provide `StudyToolsRail` on lesson pages with browser-local multi-color highlights/notes and a study clock + configurable Pomodoro timer.
+  4. **Math, diagrams, and metrics polish:** Render KaTeX with `htmlAndMathml`, promote single-line `$$...$$` to display math, glue adjacent punctuation to inline math and `<Ref />`, allow 50%–600% diagram zoom without GPU blur caching, enforce minimum table column widths against narrow text wrapping, and replace synthetic K-means clustering on `/development` with category grouping and rank-bounded PCA.
+  5. **AI preview & issue queue:** Track page review issues in [`ISSUE_QUEUE.json`](./ISSUE_QUEUE.json) via [`scripts/ai_dev_workflow.mjs`](../../scripts/ai_dev_workflow.mjs) and `.agents/skills/` (`rapid-ai-preview`, `automated-issue-workflow`).
+- **Sources:** [`src/utils/themes.ts`](../../src/utils/themes.ts), [`src/content/careers/software-engineer.json`](../../src/content/careers/software-engineer.json), [`src/components/StudyToolsRail.tsx`](../../src/components/StudyToolsRail.tsx), [`astro.config.mjs`](../../astro.config.mjs), [`src/pages/development.astro`](../../src/pages/development.astro), [`scripts/ai_dev_workflow.mjs`](../../scripts/ai_dev_workflow.mjs).

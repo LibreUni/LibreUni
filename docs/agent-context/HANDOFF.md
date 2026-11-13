@@ -1,15 +1,16 @@
 # Active handoff
 
-## Foundation-course refactor (owner: repository owner; scope: branch `refactor_230826`)
+## Foundation-course refactor & UX polish (owner: repository owner; scope: branch `refactor_230826`)
 
-- **Start at:** [`docs/refactor/README.md`](../refactor/README.md).
+- **Start at:** [`docs/refactor/README.md`](../refactor/README.md) and [`docs/agent-context/DECISIONS.md`](DECISIONS.md) (`D-0012`–`D-0018`).
 - **Completed:**
-  - Active 4-course survivor catalog (`calculus-intro`, `computer-architecture`, `operating-systems`, `database-systems` — 75 lessons total) with exact manifests and synced `src/data/course-quality.json`.
-  - Platform UX & Component Architecture overhaul (D-0012): removed exam-reveal anti-features; implemented 3-tier card design system, modern theme default, AST linter (`scripts/lint_platform_consistency.mjs`), remark lesson structure plugin, and standardized interactive components (`ExerciseSolution`, `Quiz`, `CaseStudy`, `CodeExercise`, `CodeRunner`, `SqlRunner`, `MathStatement`, `MathProof`).
-  - All 75 MDX lessons migrated to 100% compliance with zero raw `<details>`, zero duplicate H1s, and clean import structures.
-  - Track E executable OS lab models (`src/lib/osLabModels.mjs`), pinned `fixtures/xv6-riscv/` reference anchors (`7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`), and automated model tests across all shipped playgrounds (`npm run test:models`).
-  - All 75 lessons pass `python3 scripts/course_integrity.py --strict` with **0 findings** (0 blocking, 0 non-blocking) and `python3 scripts/audit_lesson_pedagogy.py` with **75/75 passing** and **0 defects**.
-  - All named quality gates pass: `npm run check:content`, `npm run check:build` (with 4 generated course PDFs), `npm run check:e2e` (62 Playwright tests green with 0 axe violations), and `npm run check:ux` (29 Playwright UX tests green).
-  - Worktree and branch hygiene restored (stale `swarm/*` worktrees/branches, `backup.txt`, `apps/`, `.venv311`, and world-writable permissions cleaned up).
-- **Remaining:** None blocking. Optional Lighthouse release audit (`npm run check:lighthouse`) or merge of `refactor_230826`.
+  - Active 4-course catalog (`calculus-intro`: 12, `computer-architecture`: 20, `database-systems`: 20, `operating-systems`: 29 — 81 lessons total) with exact manifests and synced `src/data/course-quality.json`.
+  - Platform UX & Component Architecture overhaul (`D-0012`–`D-0018`, `REV-01`–`REV-11` verified in `ISSUE_QUEUE.json`): 3-theme switcher (`modern`, `light`, `monochrome`), `software-engineer` career roadmap replacing `systems-foundations`, lesson `StudyToolsRail` (highlighter + Pomodoro), math/code/SQL/diagram zoom polish, and AI preview/issue workflow (`npm run ai:issues`, `npm run ai:preview`).
+  - Full local release validation exited `0` (`npm run check:full` + `--project=visual`):
+    - `npm run check:content`: theme token contract (3 themes), platform consistency linter (`81` lessons, `76` components), `check:contract` (`35` pass), figure tests (`2` pass), `verify_lessons.py` (`81` files, `0` errors/warnings), `test:course-integrity` (`0` findings under `--strict`), and `test:models` (`19` pass).
+    - `npm run check:build`: `95` pages built, `81` active lessons validated, `4` course PDFs generated.
+    - `npm run check:e2e`: `90` passed, `2` skipped (desktop skips of mobile-only tests).
+    - `npm run check:ux`: `80` passed.
+    - `npm run check:lighthouse`: exited `0`; `visual` capture project: `2` passed.
+- **Remaining:** None blocking. Merge `refactor_230826` into `main` when ready.
 - **Remove when:** `refactor_230826` is merged or superseded.
