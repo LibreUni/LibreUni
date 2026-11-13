@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import Color from 'colorjs.io';
 
-const THEMES = ['modern', 'scholar', 'monochrome'];
+const THEMES = ['modern', 'monochrome'];
 const MODES = ['light', 'dark'];
 
 const INIT_SCRIPT = `
@@ -263,22 +263,22 @@ test.describe('Theme & Interactive States Contrast Matrix', () => {
         }
       });
 
-      test(`LearningPathEvidence action button: ${themeLabel}`, async ({ browser }) => {
+      test(`Software Engineer career roadmap action links: ${themeLabel}`, async ({ browser }) => {
         const context = await browser.newContext({ colorScheme: mode });
         const page = await context.newPage();
         try {
           await page.addInitScript({ content: INIT_SCRIPT });
-          await page.goto('/careers/systems-foundations.html', { waitUntil: 'domcontentloaded' });
+          await page.goto('/careers/software-engineer.html', { waitUntil: 'domcontentloaded' });
           await applyThemeAndMode(page, theme, mode);
 
-          const dlBtn = page.locator('button:has-text("Download evidence record")');
-          if (await dlBtn.isVisible()) {
-            const details = await dlBtn.evaluate((el) => window.__inspectElementColors(el));
+          const primaryLink = page.locator('a:has-text("Languages to Focus On")');
+          if (await primaryLink.isVisible()) {
+            const details = await primaryLink.evaluate((el) => window.__inspectElementColors(el));
             const contrast = calculateContrast(details.color, details.bgLayers);
 
             expect(
               contrast.contrast,
-              `'Download evidence record' in ${themeLabel} has contrast ${contrast.contrast.toFixed(2)}:1 (< 4.5:1). Text: ${contrast.textHex}, Bg: ${contrast.bgHex}`,
+              `'Languages to Focus On' in ${themeLabel} has contrast ${contrast.contrast.toFixed(2)}:1 (< 4.5:1). Text: ${contrast.textHex}, Bg: ${contrast.bgHex}`,
             ).toBeGreaterThanOrEqual(4.5);
           }
         } finally {

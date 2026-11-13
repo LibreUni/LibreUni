@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BookOpenText, Check, ChevronDown, Moon, Palette, Square, Sun } from 'lucide-react';
+import { Check, ChevronDown, Moon, Palette, Square, Sun } from 'lucide-react';
 import {
   COLOR_MODES,
   DEFAULT_COLOR_MODE,
@@ -15,7 +15,6 @@ import {
 
 const themeIcons = {
   modern: Palette,
-  scholar: BookOpenText,
   monochrome: Square,
 } satisfies Record<ThemeId, typeof Sun>;
 

@@ -9,9 +9,7 @@ const GLOBAL_CSS_PATH = path.join(ROOT, 'src/styles/global.css');
 function parseCssThemes(css) {
   const blocks = [
     { name: 'default:light', selector: ':root', regex: /:root\s*\{([^}]+)\}/ },
-    { name: 'scholar:light', selector: "html[data-theme='scholar']", regex: /html\[data-theme='scholar'\]\s*\{([^}]+)\}/ },
     { name: 'monochrome:light', selector: "html[data-theme='monochrome']", regex: /html\[data-theme='monochrome'\]\s*\{([^}]+)\}/ },
-    { name: 'scholar:dark', selector: "html.dark[data-theme='scholar']", regex: /html\.dark\[data-theme='scholar'\]\s*\{([^}]+)\}/ },
     { name: 'monochrome:dark', selector: "html.dark[data-theme='monochrome']", regex: /html\.dark\[data-theme='monochrome'\]\s*\{([^}]+)\}/ },
   ];
 

@@ -5,11 +5,6 @@ export const THEMES = [
     description: 'Clear blue academic interface',
   },
   {
-    id: 'scholar',
-    label: 'Scholar',
-    description: 'Warm serif reading mode',
-  },
-  {
     id: 'monochrome',
     label: 'Monochrome',
     description: 'Black-and-white square minimalism',

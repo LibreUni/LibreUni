@@ -4,7 +4,7 @@ const CATS = [
   { label: 'Light', vars: [{ k: '--light-bg-rgb', l: 'BG' }, { k: '--light-surface-rgb', l: 'Surface' }, { k: '--light-border-rgb', l: 'Border' }, { k: '--light-text-rgb', l: 'Text' }, { k: '--light-muted-rgb', l: 'Muted' }, { k: '--light-accent-rgb', l: 'Accent' }] },
   { label: 'Dark', vars: [{ k: '--dark-bg-rgb', l: 'BG' }, { k: '--dark-surface-rgb', l: 'Surface' }, { k: '--dark-border-rgb', l: 'Border' }, { k: '--dark-text-rgb', l: 'Text' }, { k: '--dark-muted-rgb', l: 'Muted' }, { k: '--dark-accent-rgb', l: 'Accent' }] },
 ];
-const FONTS = ['Plus Jakarta Sans', 'Literata', 'Space Grotesk'];
+const FONTS = ['Plus Jakarta Sans', 'Space Grotesk'];
 
 function load(): Record<string, string> {
   try {
