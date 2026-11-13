@@ -24,7 +24,7 @@ export default function InteractivePlayground({
   onReset,
 }: InteractivePlaygroundFrameProps) {
   return (
-    <figure className="interactive-playground lu-card-tier3 my-8 overflow-hidden p-5 md:p-6">
+    <figure className="interactive-playground lu-card-tier3 not-prose my-8 overflow-hidden p-5 md:p-6">
       <figcaption className="interactive-playground-screen mb-4 grid gap-4 sm:grid-cols-[1fr_18rem] sm:items-start">
         <div className="min-w-0">
           <div className="label-caps">Interactive exploration</div>

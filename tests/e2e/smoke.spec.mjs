@@ -130,41 +130,32 @@ test.describe('production smoke checks', () => {
     }
   });
 
-  test('Systems Foundations path requires entry evidence and preserves revision state', async ({ page }) => {
-    await page.goto('/careers/systems-foundations.html', { waitUntil: 'networkidle' });
-    await expect(page.locator('#entry-checks')).toBeVisible();
+  test('Software Engineer career roadmap presents languages, skills, reading list, and 4-stage study sequence', async ({ page }) => {
+    await page.goto('/careers/software-engineer.html', { waitUntil: 'networkidle' });
+    await expect(page.locator('#languages')).toBeVisible();
+    await expect(page.locator('#skills')).toBeVisible();
+    await expect(page.locator('#reading-list')).toBeVisible();
+    await expect(page.locator('#roadmap')).toBeVisible();
+    await expect(page.locator('#foundations')).toBeVisible();
     await expect(page.locator('#machine')).toBeVisible();
     await expect(page.locator('#kernel')).toBeVisible();
     await expect(page.locator('#data')).toBeVisible();
-    await expect(page.locator('#synthesis')).toBeVisible();
+    await expect(page.getByRole('link', { name: /Introduction to Calculus/i })).toHaveAttribute('href', /calculus-intro/);
     await expect(page.getByRole('link', { name: /Computer Architecture/i })).toHaveAttribute('href', /computer-architecture/);
     await expect(page.getByRole('link', { name: /Operating Systems Engineering/i })).toHaveAttribute('href', /operating-systems/);
     await expect(page.getByRole('link', { name: /Database Systems/i })).toHaveAttribute('href', /database-systems/);
-    const gate = page.getByRole('group', { name: 'Explain the machine', exact: true });
-    const notes = gate.getByRole('textbox', { name: 'Evidence and revision notes' });
-    const reviewed = gate.getByRole('checkbox');
-    await expect(reviewed).toBeDisabled();
-    await notes.fill('Reviewed translation and recovery evidence.');
-    await reviewed.check();
-    await page.reload({ waitUntil: 'networkidle' });
-    await expect(notes).toHaveValue('Reviewed translation and recovery evidence.');
-    await expect(reviewed).toBeChecked();
-    await notes.fill('Edited after review.');
-    await expect(reviewed).not.toBeChecked();
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'Download evidence record' }).click();
-    const download = await downloadPromise;
-    expect(download.suggestedFilename()).toMatch(/evidence/i);
-    const record = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
-    expect(record.evidence.machine).toEqual({ notes: 'Edited after review.', reviewed: false });
+    await expect(page.locator('textarea')).toHaveCount(0);
   });
 
-  test('Systems Foundations reports unavailable storage honestly', async ({ page }) => {
-    await page.addInitScript(() => { Object.defineProperty(window, 'localStorage', { get() { throw new Error('storage unavailable'); } }); });
-    await page.goto('/careers/systems-foundations.html', { waitUntil: 'networkidle' });
-    await expect(page.getByRole('status').filter({ hasText: /storage is unavailable/i })).toBeVisible();
-    await page.locator('#evidence-machine').fill('Unsaved evidence can still be downloaded.');
-    await expect(page.getByRole('button', { name: 'Download evidence record' })).toBeEnabled();
+  test('Lesson pages expose built-in Study Tools side drawer with Pomodoro timer and highlighter', async ({ page }) => {
+    await page.goto('/lessons/calculus-intro/limits.html', { waitUntil: 'networkidle' });
+    const launcher = page.locator('[data-testid="study-tools-launcher"]');
+    await expect(launcher).toBeVisible();
+    await launcher.click();
+    const drawer = page.getByRole('dialog', { name: /Study tools/i });
+    await expect(drawer).toBeVisible();
+    await expect(page.locator('[data-testid="pomodoro-time-display"]')).toContainText('25:00');
+    await expect(drawer.getByRole('button', { name: /Start timer/i })).toBeVisible();
   });
 
   test('mobile menu exposes primary navigation', async ({ page }, testInfo) => {

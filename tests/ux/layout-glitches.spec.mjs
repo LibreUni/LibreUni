@@ -178,3 +178,57 @@ test.describe('Global Layout Integrity: CodeExercise Container and Codeframe Sty
     });
   }
 });
+
+const narrowCheckRoutes = [
+  '/index.html',
+  '/courses/index.html',
+  '/development.html',
+  '/careers/software-engineer.html',
+  '/lessons/calculus-intro/limits.html',
+  '/lessons/calculus-intro/limits-derivatives-recap.html',
+  '/lessons/database-systems/relational-model.html',
+  '/lessons/operating-systems/cpu-scheduling.html',
+];
+
+test.describe('Global Layout Integrity: Narrow Multi-line Text Prevention', () => {
+  for (const route of narrowCheckRoutes) {
+    test(`${route}: multi-line prose blocks and table cells must not be squished into narrow columns`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(route, { waitUntil: 'domcontentloaded' });
+      await page.waitForLoadState('networkidle').catch(() => {});
+
+      const narrowViolations = await page.evaluate(() => {
+        const issues = [];
+        const candidates = document.querySelectorAll('p, li, td, th, blockquote, dd, figcaption');
+        for (const el of candidates) {
+          const style = window.getComputedStyle(el);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+          if (el.closest('svg, .katex, pre, code, .diagram-source-code')) continue;
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) continue;
+          const text = (el.innerText || '').trim();
+          const lineHeight = parseFloat(style.lineHeight) || 22;
+          const estimatedLines = rect.height / lineHeight;
+          // Forbid multi-line text blocks (>= 3 lines, > 30 chars) from being crushed narrower than 150px
+          if (text.length > 30 && estimatedLines >= 3 && rect.width < 150) {
+            issues.push({
+              tag: el.tagName,
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              estimatedLines: Number(estimatedLines.toFixed(1)),
+              text: text.slice(0, 60),
+            });
+          }
+        }
+        return issues;
+      });
+
+      expect(
+        narrowViolations,
+        `Found narrow squished multi-line text blocks on ${route}: ${JSON.stringify(narrowViolations, null, 2)}`,
+      ).toEqual([]);
+    });
+  }
+});

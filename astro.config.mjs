@@ -49,9 +49,10 @@ const markdownProcessor = unified({
   remarkPlugins: [remarkMath, validateMathPlugin, remarkLessonStructurePlugin],
   rehypePlugins: [
     [rehypeKatex, { 
-      output: 'mathml', // MUCH faster bundling due to smaller JS modules
+      output: 'htmlAndMathml',
       strict: false     // Skips some checks for speed
-    }]
+    }],
+    glueInlinePunctuationRehypePlugin,
   ],
 });
 
@@ -69,16 +70,35 @@ const shikiConfig = {
 // course math is content and must fail the build when it is invalid.
 function validateMathPlugin() {
   return (tree, file) => {
+    const rawSource = typeof file?.value === 'string' ? file.value : '';
     const visit = (node, ancestors = []) => {
       if (node?.type === 'math' || node?.type === 'inlineMath') {
         const value = String(node.value ?? '');
         if (value.includes('$')) {
           throw new Error(`Invalid nested dollar delimiter in math at ${file.path}:${node.position?.start?.line ?? '?'}`);
         }
+        const startOffset = node.position?.start?.offset;
+        const endOffset = node.position?.end?.offset;
+        const isDoubleDollarInline =
+          node.type === 'inlineMath' &&
+          typeof startOffset === 'number' &&
+          typeof endOffset === 'number' &&
+          (rawSource.slice(startOffset, startOffset + 2) === '$$' ||
+            endOffset - startOffset >= value.length + 4);
+        if (isDoubleDollarInline) {
+          node.data = {
+            ...(node.data ?? {}),
+            hName: 'span',
+            hProperties: {
+              ...(node.data?.hProperties ?? {}),
+              className: ['language-math', 'math-display'],
+            },
+          };
+        }
         try {
           katex.renderToString(value, {
-            displayMode: node.type === 'math',
-            output: 'mathml',
+            displayMode: node.type === 'math' || isDoubleDollarInline,
+            output: 'htmlAndMathml',
             throwOnError: true,
             strict: 'error',
           });
@@ -87,6 +107,129 @@ function validateMathPlugin() {
         }
       }
       for (const child of node?.children ?? []) visit(child, [...ancestors, node]);
+    };
+    visit(tree);
+  };
+}
+
+function getElementClasses(node) {
+  if (!node || node.type !== 'element') return [];
+  if (Array.isArray(node.properties?.className)) return node.properties.className;
+  if (typeof node.properties?.className === 'string') return node.properties.className.split(/\s+/);
+  return [];
+}
+
+function attachPunctuationToKatex(katexNode, openPunct, closePunct) {
+  const katexHtml = (katexNode.children ?? []).find(
+    (child) => getElementClasses(child).includes('katex-html')
+  );
+  if (!katexHtml || !Array.isArray(katexHtml.children)) return false;
+  const bases = katexHtml.children.filter((child) => getElementClasses(child).includes('base'));
+  if (!bases.length) return false;
+
+  if (openPunct) {
+    const firstBase = bases[0];
+    firstBase.children = [
+      {
+        type: 'element',
+        tagName: 'span',
+        properties: {
+          className: ['lu-math-punct'],
+          style: 'font-family: var(--font-sans), sans-serif; font-size: 0.91em;',
+        },
+        children: [{ type: 'text', value: openPunct }],
+      },
+      ...(firstBase.children ?? []),
+    ];
+  }
+
+  if (closePunct) {
+    const lastBase = bases[bases.length - 1];
+    lastBase.children = [
+      ...(lastBase.children ?? []),
+      {
+        type: 'element',
+        tagName: 'span',
+        properties: {
+          className: ['lu-math-punct'],
+          style: 'font-family: var(--font-sans), sans-serif; font-size: 0.91em;',
+        },
+        children: [{ type: 'text', value: closePunct }],
+      },
+    ];
+  }
+  return true;
+}
+
+function glueInlinePunctuationRehypePlugin() {
+  return (tree) => {
+    const visit = (node) => {
+      if (!node || !Array.isArray(node.children)) return;
+      if (node.type === 'element' && (node.tagName === 'pre' || node.tagName === 'script' || node.tagName === 'style')) {
+        return;
+      }
+
+      if (node.type === 'element' && getElementClasses(node).includes('katex-display')) {
+        node.properties = {
+          ...(node.properties ?? {}),
+          tabIndex: 0,
+        };
+      }
+
+      for (const child of node.children) {
+        visit(child);
+      }
+
+      for (let i = 0; i < node.children.length; i++) {
+        const current = node.children[i];
+        const classes = getElementClasses(current);
+        const isInlineKatex =
+          current?.type === 'element' &&
+          current.tagName === 'span' &&
+          classes.includes('katex') &&
+          !classes.includes('katex-display');
+        const isRefOrMathComponent =
+          current?.type === 'mdxJsxTextElement' && (current.name === 'Ref' || current.name === 'Math');
+
+        if (!isInlineKatex && !isRefOrMathComponent) continue;
+
+        let openPunct = '';
+        const prev = i > 0 ? node.children[i - 1] : null;
+        if (prev?.type === 'text' && typeof prev.value === 'string') {
+          const openMatch = prev.value.match(/^([\s\S]*?(?:^|\s))([(\[“‘]+)$/);
+          if (openMatch) {
+            prev.value = openMatch[1];
+            openPunct = openMatch[2];
+          }
+        }
+
+        let closePunct = '';
+        const next = i + 1 < node.children.length ? node.children[i + 1] : null;
+        if (next?.type === 'text' && typeof next.value === 'string') {
+          const closeMatch = next.value.match(/^([,.;:!?\)\]'”’]+)([\s\S]*)$/);
+          if (closeMatch) {
+            closePunct = closeMatch[1];
+            next.value = closeMatch[2];
+          }
+        }
+
+        if (!openPunct && !closePunct) continue;
+
+        if (isInlineKatex && attachPunctuationToKatex(current, openPunct, closePunct)) {
+          continue;
+        }
+
+        node.children[i] = {
+          type: 'element',
+          tagName: 'span',
+          properties: { className: ['whitespace-nowrap'] },
+          children: [
+            ...(openPunct ? [{ type: 'text', value: openPunct }] : []),
+            current,
+            ...(closePunct ? [{ type: 'text', value: closePunct }] : []),
+          ],
+        };
+      }
     };
     visit(tree);
   };

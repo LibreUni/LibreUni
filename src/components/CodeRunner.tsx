@@ -262,7 +262,7 @@ if not _visual and "libreuni_visual" in globals():
         _visual = _candidate if _candidate.startswith("data:") else "data:image/svg+xml;base64," + base64.b64encode(_candidate.encode("utf-8")).decode("utf-8")
 if not _visual and plt.get_fignums():
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", dpi=144)
+    plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
     buf.seek(0)
     _visual = "data:image/png;base64," + base64.b64encode(buf.read()).decode("utf-8")
 _visual
@@ -383,17 +383,17 @@ _visual
       )}
 
       {/* Auto-Sized Code Editor */}
-      <div className="relative max-h-[26rem] min-h-[7.5rem] overflow-auto bg-light-bg dark:bg-dark-bg">
+      <div className="relative max-h-[38rem] min-h-[7.5rem] overflow-auto bg-light-bg dark:bg-dark-bg">
         <div className="relative min-h-full" style={{ minWidth: 'max-content', width: '100%' }}>
           <textarea
             value={currentCode}
             onChange={(e) => setCurrentCode(e.target.value)}
             aria-label={`${title} code editor`}
-            className="absolute inset-0 z-10 h-full w-full resize-none overflow-hidden whitespace-pre bg-transparent py-4 pl-[3.25rem] pr-4 font-mono text-[13.5px] leading-6 text-transparent caret-primary selection:bg-primary/25 focus:outline-none"
+            className="absolute inset-0 z-10 h-full w-full resize-none overflow-hidden whitespace-pre bg-transparent py-4 pl-[3.25rem] pr-4 font-mono text-[13.5px] font-medium leading-6 text-transparent caret-primary selection:bg-primary/25 focus:outline-none"
             spellCheck="false"
             style={{ fontVariantLigatures: 'none', caretColor: 'var(--primary)' }}
           />
-          <div className="hl-default pointer-events-none py-4 px-4 font-mono text-[13.5px] leading-6">
+          <div className="hl-default pointer-events-none py-4 px-4 font-mono text-[13.5px] font-medium leading-6">
             {currentCode.split('\n').map((line, i) => (
               <div key={i} className="flex min-h-[24px] gap-4">
                 <span className="inline-block w-5 select-none text-right font-mono text-xs text-light-muted opacity-45 dark:text-dark-muted">
@@ -411,45 +411,50 @@ _visual
 
       {/* Persistent Stacked Output Console */}
       {(showTerminal || isBusy) && (
-        <div className="border-t border-light-border bg-slate-950 text-slate-100 dark:border-dark-border">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/90 px-4 py-2 font-mono text-[11px] text-slate-400">
+        <div className="border-t border-light-border bg-light-surface/75 text-light-text dark:border-dark-border dark:bg-slate-950 dark:text-slate-100">
+          <div className="flex items-center justify-between gap-3 border-b border-light-border bg-light-surface px-4 py-2 font-mono text-[11px] text-light-muted dark:border-slate-800 dark:bg-slate-900/90 dark:text-slate-400">
             <div className="flex items-center gap-2">
               <Terminal size={13} className="text-primary" />
-              <span className="font-bold uppercase tracking-wider text-slate-300">
+              <span className="font-bold uppercase tracking-wider text-light-text dark:text-slate-300">
                 {displayLanguage} output
               </span>
               {outputIsStale && (
-                <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
                   modified since last run
                 </span>
               )}
             </div>
+            {!isBusy && consoleOutput.some((l) => l.startsWith('Process exited')) && (
+              <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
+                {consoleOutput.find((l) => l.startsWith('Process exited'))}
+              </span>
+            )}
           </div>
 
-          <div className="max-h-[22rem] overflow-auto px-4 py-3 font-mono text-xs leading-6 [font-variant-numeric:tabular-nums]">
+          <div className="max-h-[26rem] overflow-auto px-4 py-3 font-mono text-xs leading-6 [font-variant-numeric:tabular-nums]">
             {consoleOutput.length === 0 && !plotImage && isBusy && (
-              <div className="text-slate-400">Running program…</div>
+              <div className="text-light-muted dark:text-slate-400">Running program…</div>
             )}
-            {consoleOutput.map((line, i) => {
-              const isError = line.startsWith('Error');
-              const isExit = line.startsWith('Process exited');
-              return (
-                <div
-                  key={i}
-                  className={`grid min-h-[22px] grid-cols-[2rem_minmax(0,1fr)] gap-3 ${
-                    isError ? 'text-rose-300' : isExit ? 'text-slate-400' : 'text-emerald-200'
-                  }`}
-                >
-                  <span className="select-none text-right text-[10px] text-slate-600">
-                    {line ? i + 1 : ''}
-                  </span>
-                  <span className="whitespace-pre-wrap break-words">{line || ' '}</span>
-                </div>
-              );
-            })}
+            {consoleOutput
+              .filter((line, idx, arr) => !line.startsWith('Process exited') && !(line === '' && arr[idx + 1]?.startsWith('Process exited')))
+              .map((line, i) => {
+                const isError = line.startsWith('Error');
+                return (
+                  <div
+                    key={i}
+                    className={`min-h-[22px] whitespace-pre-wrap break-words ${
+                      isError
+                        ? 'font-semibold text-rose-600 dark:text-rose-300'
+                        : 'text-light-text dark:text-emerald-200'
+                    }`}
+                  >
+                    {line || ' '}
+                  </div>
+                );
+              })}
 
             {plotImage && (
-              <div className="mt-4 overflow-hidden rounded-lg border border-slate-800 bg-slate-900 p-3">
+              <div className="mt-3 overflow-hidden rounded-lg border border-light-border bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
                 <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-primary">
                   <ImageIcon size={12} />
                   Generated Figure
@@ -457,7 +462,7 @@ _visual
                 <img
                   src={plotImage}
                   alt="Generated visual output"
-                  className="h-auto w-full rounded"
+                  className="mx-auto block h-auto max-h-[22rem] w-auto max-w-full rounded bg-white p-1"
                 />
               </div>
             )}

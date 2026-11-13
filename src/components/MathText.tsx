@@ -96,32 +96,66 @@ function renderFormattedText(text: string, partIndex: number): React.ReactNode {
 }
 
 export default function MathText({ children = '', className }: MathTextProps) {
-  return (
-    <span className={className}>
-      {splitMath(children).map((part, index) => {
-        if (part.type === 'text') {
-          return renderFormattedText(part.value, index);
-        }
+  const parts = splitMath(children);
+  const rendered: React.ReactNode[] = [];
 
-        // JSX string attributes preserve backslashes literally. Accept a
-        // doubled slash before command names/delimiters as a forgiving authoring
-        // form, while preserving `\\` followed by whitespace/newline for LaTeX
-        // row breaks inside environments like \begin{cases}...\end{cases}.
-        const mathValue = part.value.replace(/\\\\(?=[a-zA-Z{,;!|])/g, '\\');
-        const html = katex.renderToString(mathValue, {
-          displayMode: part.display,
-          output: 'mathml',
-          throwOnError: false,
-        });
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    if (part.type === 'text') {
+      if (!part.value) continue;
+      rendered.push(renderFormattedText(part.value, index));
+      continue;
+    }
 
-        return (
+    // JSX string attributes preserve backslashes literally. Accept a
+    // doubled slash before command names/delimiters as a forgiving authoring
+    // form, while preserving `\\` followed by whitespace/newline for LaTeX
+    // row breaks inside environments like \begin{cases}...\end{cases}.
+    const mathValue = part.value.replace(/\\\\(?=[a-zA-Z{,;!|])/g, '\\');
+    const html = katex.renderToString(mathValue, {
+      displayMode: part.display,
+      output: 'htmlAndMathml',
+      throwOnError: false,
+    });
+
+    let trailingPunct = '';
+    const nextPart = parts[index + 1];
+    if (!part.display && nextPart?.type === 'text') {
+      const match = nextPart.value.match(/^([,.;:!?\)\]'”’]+)([\s\S]*)$/);
+      if (match) {
+        trailingPunct = match[1];
+        nextPart.value = match[2];
+      }
+    }
+
+    if (part.display) {
+      rendered.push(
+        <span
+          key={index}
+          className="math-text-display block my-3 overflow-x-auto"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      );
+    } else if (trailingPunct) {
+      rendered.push(
+        <span key={index} className="whitespace-nowrap">
           <span
-            key={index}
-            className={part.display ? 'math-text-display' : 'math-text-inline'}
+            className="math-text-inline"
             dangerouslySetInnerHTML={{ __html: html }}
           />
-        );
-      })}
-    </span>
-  );
+          {trailingPunct}
+        </span>
+      );
+    } else {
+      rendered.push(
+        <span
+          key={index}
+          className="math-text-inline"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      );
+    }
+  }
+
+  return <span className={className}>{rendered}</span>;
 }
