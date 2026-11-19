@@ -22,12 +22,6 @@ export async function ensurePlantUmlJar(targetPath = process.env.LIBREUNI_PLANTU
     return targetPath;
   }
 
-  // If LIBREUNI_PLANTUML_JAR was not explicitly provided and a local /home/edf/puml.jar exists with matching checksum, reuse it
-  if (!process.env.LIBREUNI_PLANTUML_JAR && fs.existsSync('/home/edf/puml.jar') && verifyChecksum('/home/edf/puml.jar')) {
-    console.log('[PlantUML] Verified local fallback jar at /home/edf/puml.jar');
-    return '/home/edf/puml.jar';
-  }
-
   console.log(`[PlantUML] Downloading PlantUML ${PINNED_VERSION} to ${targetPath}...`);
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 

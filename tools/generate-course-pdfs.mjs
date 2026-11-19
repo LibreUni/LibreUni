@@ -82,6 +82,7 @@ try {
     });
     await page.close();
     await fs.rm(sourcePath);
+    await fs.rmdir(path.dirname(sourcePath)).catch(() => {});
     console.log(`Generated ${path.relative(process.cwd(), outputPath)}`);
   }
 } finally {

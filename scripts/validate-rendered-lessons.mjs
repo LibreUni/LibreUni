@@ -20,8 +20,64 @@ const rawTex =
   /\\[A-Za-z]{2,}\b|(?<!\\)\$(?=[A-Za-z_\\[({])|(?<!\\)\$\d[\d,]*(?:\.\d+)?[+\-*/^_=|]|(?<!\\)\$[^$\n]+(?<!\\)\$/;
 
 const katexErrorRe = /class=["'][^"']*\bkatex-error\b[^"']*["']/i;
-const diagramErrorRe = /(?:Diagram Rendering Error|TikZ Rendering Error|Python Diagram Error|PlantUML Rendering Error)/i;
+const diagramErrorRe = /(?:Diagram Rendering Error|TikZ Rendering Error|Python Diagram Error|PlantUML Rendering Error|PlantUML Error)/i;
 const leakedBacktickRe = /`[^`\n]+`/;
+
+function extractElementIds(html) {
+  const cleaned = html
+    .replace(/<template\b[^>]*>[\s\S]*?<\/template>/gi, '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+  const ids = new Set();
+  for (const m of cleaned.matchAll(/(?<![a-zA-Z0-9_-])id=["']([^"']+)["']/g)) {
+    ids.add(m[1]);
+  }
+  return ids;
+}
+
+function validateRenderedLinks(html, file, idCache) {
+  const errors = [];
+  const getIdsForFile = (targetFile) => {
+    const resolved = path.resolve(targetFile);
+    if (!idCache.has(resolved)) {
+      idCache.set(resolved, extractElementIds(fs.readFileSync(resolved, 'utf8')));
+    }
+    return idCache.get(resolved);
+  };
+
+  for (const m of html.matchAll(/<a\b([^>]*)\bhref=["']([^"']+)["']([^>]*)>/gi)) {
+    const attrs = `${m[1]} ${m[3]}`;
+    const href = m[2];
+    if (/^(?:https?:|mailto:|javascript:|data:)/i.test(href)) continue;
+
+    if (/#[^"']*\.html(?:$|[?#])/i.test(href)) {
+      errors.push(`${file}: link href has mangled .html after hash fragment (${href})`);
+      continue;
+    }
+
+    const isRefLink = /\blu-ref\b|\bdata-ref-id=/.test(attrs);
+    if (!isRefLink) continue;
+
+    const [rawPath, rawHash] = href.split('#');
+    let targetFile = file;
+    if (rawPath) {
+      const cleanPath = rawPath.split('?')[0];
+      targetFile = path.resolve(path.dirname(file), cleanPath);
+      if (!fs.existsSync(targetFile) || !fs.statSync(targetFile).isFile()) {
+        errors.push(`${file}: <Ref> target file does not exist (${href})`);
+        continue;
+      }
+    }
+    if (rawHash) {
+      const targetIds = getIdsForFile(targetFile);
+      const decodedHash = decodeURIComponent(rawHash);
+      if (!targetIds.has(decodedHash)) {
+        errors.push(`${file}: <Ref> anchor #${decodedHash} missing in ${path.basename(targetFile)} (${href})`);
+      }
+    }
+  }
+
+  return errors;
+}
 
 function decodeHtmlEntities(str) {
   return str
@@ -141,6 +197,7 @@ function validateExerciseIslands(html, file) {
 export function validateRenderedLessons(root = defaultRoot, activeCourses = defaultActiveCourses) {
   const failures = [];
   const pages = [];
+  const idCache = new Map();
 
   for (const courseId of activeCourses) {
     let structure;
@@ -165,6 +222,7 @@ export function validateRenderedLessons(root = defaultRoot, activeCourses = defa
       pages.push(file);
 
       const html = fs.readFileSync(file, 'utf8');
+      idCache.set(path.resolve(file), extractElementIds(html));
       const visibleText = stripNonLessonText(html);
 
       if (rawTex.test(visibleText)) {
@@ -182,6 +240,7 @@ export function validateRenderedLessons(root = defaultRoot, activeCourses = defa
 
       failures.push(...validateHtmlTables(html, file));
       failures.push(...validateExerciseIslands(html, file));
+      failures.push(...validateRenderedLinks(html, file, idCache));
     }
   }
 

@@ -153,9 +153,22 @@ export default function PracticeGenerator({ courseId }: PracticeGeneratorProps) 
   };
 
   const masteredCount = questions.filter((q) => q.isMastered).length;
+  const topics = getCourseTopics(courseId);
 
   return (
     <div className="not-prose my-8 space-y-8" id="practice-workshop-container">
+      <div className="print-static-assessment hidden">
+        <div className="print-static-label">Interactive Practice Workshop</div>
+        <p className="print-static-explanation">
+          Randomized parameter generation, progressive hints, and worked derivations are available in the interactive web edition. Covered topics:
+        </p>
+        <ul className="my-2 list-disc pl-5 text-sm">
+          {topics.map((t) => (
+            <li key={t.id}>{t.name}</li>
+          ))}
+        </ul>
+      </div>
+
       {/* Control Panel Card */}
       <div className="rounded-2xl border border-light-border bg-light-surface p-6 shadow-sm dark:border-dark-border dark:bg-dark-surface">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-light-border/60 pb-5 dark:border-dark-border/60">
@@ -325,7 +338,7 @@ export default function PracticeGenerator({ courseId }: PracticeGeneratorProps) 
                     className={`cursor-pointer rounded-xl px-3 py-1 text-xs font-bold transition-colors ${
                       q.isMastered
                         ? 'bg-emerald-500/20 text-emerald-800 dark:bg-emerald-500/30 dark:text-emerald-300'
-                        : 'border border-light-border text-light-muted hover:border-emerald-400 hover:text-emerald-600 dark:border-dark-border dark:text-dark-muted'
+                        : 'border border-light-border text-light-muted hover:border-emerald-400 hover:text-emerald-700 dark:border-dark-border dark:text-dark-muted'
                     }`}
                   >
                     {q.isMastered ? '✓ Mastered' : 'Mark mastered'}

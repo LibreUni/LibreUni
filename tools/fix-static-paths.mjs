@@ -22,6 +22,26 @@ function walk(dir, callback) {
 
 console.log(`Applying robust path fixes in ${distDir}...`);
 
+function appendHtmlBeforeSuffix(raw) {
+  const hashIdx = raw.indexOf('#');
+  const hash = hashIdx >= 0 ? raw.slice(hashIdx) : '';
+  const beforeHash = hashIdx >= 0 ? raw.slice(0, hashIdx) : raw;
+
+  const queryIdx = beforeHash.indexOf('?');
+  const query = queryIdx >= 0 ? beforeHash.slice(queryIdx) : '';
+  let cleanPath = queryIdx >= 0 ? beforeHash.slice(0, queryIdx) : beforeHash;
+
+  if (cleanPath === '' || cleanPath === '/') {
+    return `index.html${query}${hash}`;
+  }
+  if (!cleanPath.includes('.')) {
+    cleanPath = cleanPath.endsWith('/') ? cleanPath.slice(0, -1) : cleanPath;
+    if (cleanPath === '') return `index.html${query}${hash}`;
+    cleanPath += '.html';
+  }
+  return `${cleanPath}${query}${hash}`;
+}
+
 walk(distDir, (filePath) => {
   const ext = path.extname(filePath);
   if (!['.html', '.css', '.js'].includes(ext)) return;
@@ -38,30 +58,16 @@ walk(distDir, (filePath) => {
         return match;
       }
 
-      let newVal = val;
-      if (attr === 'href') {
-        if (newVal === '' || newVal === '/') {
-          newVal = 'index.html';
-        } else if (!newVal.includes('.') && !newVal.startsWith('#')) {
-          newVal = newVal.endsWith('/') ? newVal.slice(0, -1) : newVal;
-          newVal += '.html';
-        }
-      }
-
+      const newVal = attr === 'href' ? appendHtmlBeforeSuffix(val) : val;
       return `${attr}="${prefix}${newVal}"`;
     });
 
     content = content.replace(/href="\.\/([^"]*)"/g, (match, target) => {
-      if (target.startsWith('http') || target.startsWith('//') || target.startsWith('#') || target.includes('.')) {
+      if (target.startsWith('http') || target.startsWith('//') || target.startsWith('#')) {
         return match;
       }
 
-      const normalizedTarget = target.endsWith('/') ? target.slice(0, -1) : target;
-      if (normalizedTarget === '') {
-        return 'href="./index.html"';
-      }
-
-      return `href="./${normalizedTarget}.html"`;
+      return `href="./${appendHtmlBeforeSuffix(target)}"`;
     });
 
     content = content.replace(/&quot;baseUrl&quot;:\[\d+,&quot;\/&quot;\]/g, `&quot;baseUrl&quot;:[0,&quot;${prefix}&quot;]`);

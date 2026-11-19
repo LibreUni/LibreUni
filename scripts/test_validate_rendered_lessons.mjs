@@ -83,4 +83,25 @@ test('rendered validator checks template math previews and serialized FillInExer
     validateRenderedLessons(badIsland, ['demo']).failures.some((f) => /1 blank\(s\) but serialized 2 answer slot\(s\)/i.test(f)),
     'Expected serialized FillInExercise blank arity failure'
   );
+  fs.rmSync(badIsland, { recursive: true, force: true });
+});
+
+test('rendered validator catches mangled hash links and broken Ref anchors', () => {
+  const mangled = fixture('<main><a class="lu-ref" href="other#stmt.html">Ref</a></main>');
+  assert.ok(
+    validateRenderedLessons(mangled, ['demo']).failures.some((f) => /mangled \.html after hash/i.test(f)),
+    'Expected mangled hash failure'
+  );
+  fs.rmSync(mangled, { recursive: true, force: true });
+
+  const brokenSamePage = fixture('<main><a class="lu-ref" data-ref-id="missing" href="#missing">Ref</a></main>');
+  assert.ok(
+    validateRenderedLessons(brokenSamePage, ['demo']).failures.some((f) => /anchor #missing missing/i.test(f)),
+    'Expected missing same-page anchor failure'
+  );
+  fs.rmSync(brokenSamePage, { recursive: true, force: true });
+
+  const valid = fixture('<main><section id="stmt">Stmt</section><a class="lu-ref" data-ref-id="stmt" href="#stmt">Ref</a></main>');
+  assert.deepEqual(validateRenderedLessons(valid, ['demo']).failures, []);
+  fs.rmSync(valid, { recursive: true, force: true });
 });
