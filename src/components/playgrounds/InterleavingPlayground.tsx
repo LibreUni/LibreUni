@@ -77,7 +77,7 @@ function StateView({ scheduleKey, step }: { scheduleKey: string; step: number })
               <div className={active?.thread === thread && active.op === 'load' ? 'bg-primary/50' : ''}>r{thread} = counter;</div>
               <div className={active?.thread === thread && active.op === 'add' ? 'bg-primary/50' : ''}>r{thread} = r{thread} + 1;</div>
               <div className={active?.thread === thread && active.op === 'store' ? 'bg-primary/50' : ''}>counter = r{thread};</div>
-              <div className={active?.thread === thread && active.op === 'atomic' ? 'bg-primary/50' : 'text-slate-500'}>atomic_fetch_add(&counter, 1);</div>
+              <div className={active?.thread === thread && active.op === 'atomic' ? 'bg-primary/50' : 'text-slate-300 dark:text-slate-300'}>atomic_fetch_add(&counter, 1);</div>
             </div>
             <p className="mb-0 mt-3 text-sm">Register r{thread}: <strong>{state.registers[thread] ?? 'not loaded'}</strong></p>
           </section>

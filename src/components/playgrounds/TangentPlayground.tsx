@@ -49,6 +49,7 @@ export default function TangentPlayground() {
       staticCaption="A tangent line records the limiting slope at a selected point."
       staticContent={<Tangent a={1.1} />}
       status={`a = ${a.toFixed(2)}`}
+      onReset={() => setA(1.1)}
     >
       <label className="interactive-playground-controls flex items-center gap-3">
         a = {a.toFixed(2)}

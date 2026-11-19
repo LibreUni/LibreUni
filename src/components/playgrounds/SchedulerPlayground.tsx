@@ -101,7 +101,7 @@ export function scheduleJobs(jobs: Job[], algorithm: Algorithm, quantum: number,
   };
 }
 
-const colors: Record<string, string> = { A: '#2563eb', B: '#7c3aed', C: '#db2777', D: '#059669' };
+const colors: Record<string, string> = { A: '#2563eb', B: '#6d28d9', C: '#be185d', D: '#047857' };
 
 function Timeline({ result }: { result: ReturnType<typeof scheduleJobs> }) {
   const width = 820;
@@ -110,15 +110,15 @@ function Timeline({ result }: { result: ReturnType<typeof scheduleJobs> }) {
   const scale = usable / Math.max(result.end, 1);
   return (
     <div className="overflow-x-auto" tabIndex={0} aria-label="Scrollable CPU schedule timeline">
-    <svg viewBox={`0 0 ${width} 170`} className="h-auto min-w-[40rem] w-full" role="img" aria-label="CPU schedule timeline">
+    <svg viewBox={`0 0 ${width} 170`} className="h-auto min-w-[40rem] w-full text-light-text dark:text-dark-text" role="img" aria-label="CPU schedule timeline">
       <line x1={left} y1="116" x2={left + usable} y2="116" stroke="currentColor" opacity="0.25" />
       {result.segments.map((segment, index) => {
         const x = left + segment.start * scale;
         const segmentWidth = Math.max((segment.end - segment.start) * scale, 1);
-        const fill = segment.kind === 'run' ? colors[segment.id] : segment.kind === 'switch' ? '#f59e0b' : '#94a3b8';
+        const fill = segment.kind === 'run' ? colors[segment.id] : segment.kind === 'switch' ? '#b45309' : '#475569';
         return (
           <g key={`${segment.id}-${segment.start}-${index}`}>
-            <rect x={x} y="48" width={segmentWidth} height="58" rx="4" fill={fill} opacity={segment.kind === 'run' ? 0.88 : 0.42} />
+            <rect x={x} y="48" width={segmentWidth} height="58" rx="4" fill={fill} />
             {segmentWidth > 22 && <text x={x + segmentWidth / 2} y="82" textAnchor="middle" fill="white" fontSize="12" fontWeight="700">{segment.id}</text>}
             <text x={x} y="135" textAnchor="middle" fill="currentColor" fontSize="11">{segment.start}</text>
           </g>

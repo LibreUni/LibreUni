@@ -11,6 +11,7 @@ const CONTENT_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm',
   '.pdf': 'application/pdf',
 };
 
@@ -21,7 +22,8 @@ function createStaticServer({ name, root, port }) {
   if (!fs.existsSync(rootDir)) throw new Error(`Build output missing: ${rootDir}`);
 
   const server = http.createServer((req, res) => {
-    let filePath = path.join(rootDir, req.url === '/' ? '/index.html' : req.url);
+    const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://127.0.0.1').pathname);
+    let filePath = path.join(rootDir, pathname === '/' ? '/index.html' : pathname);
     if (!fs.existsSync(filePath) || !filePath.startsWith(rootDir)) filePath = null;
     if (filePath && fs.statSync(filePath).isDirectory()) filePath = path.join(filePath, 'index.html');
     if (!filePath || !fs.existsSync(filePath)) { res.writeHead(404); res.end('Not found'); return; }

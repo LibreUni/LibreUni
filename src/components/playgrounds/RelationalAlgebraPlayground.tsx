@@ -3,16 +3,16 @@ import InteractivePlayground from '../InteractivePlayground';
 
 type Mode = 'selection' | 'projection' | 'join';
 
-const enrollments = [
-  { sid: 'Ada', cid: 'DB101', term: '2026F' },
-  { sid: 'Bo', cid: 'DB101', term: '2026F' },
-  { sid: 'Cy', cid: 'DB202', term: '2027S' },
-  { sid: 'Ada', cid: 'DB202', term: '2027S' },
+const deployments = [
+  { node_id: 'worker-01', service_id: 'S101', region: 'us-east' },
+  { node_id: 'worker-02', service_id: 'S101', region: 'us-east' },
+  { node_id: 'worker-03', service_id: 'S202', region: 'eu-west' },
+  { node_id: 'worker-01', service_id: 'S202', region: 'eu-west' },
 ];
 
-const courses = [
-  { cid: 'DB101', title: 'Data models' },
-  { cid: 'DB202', title: 'Query systems' },
+const services = [
+  { service_id: 'S101', name: 'Auth API' },
+  { service_id: 'S202', name: 'Billing Worker' },
 ];
 
 function RelationTable({
@@ -41,43 +41,43 @@ function RelationTable({
   );
 }
 
-function Result({ mode, term, distinct }: { mode: Mode; term: string; distinct: boolean }) {
+function Result({ mode, region, distinct }: { mode: Mode; region: string; distinct: boolean }) {
   if (mode === 'selection') {
-    const rows = enrollments.filter((row) => row.term === term);
-    return <RelationTable title={`σ term = '${term}' (Enrollment)`} columns={['sid', 'cid', 'term']} rows={rows} />;
+    const rows = deployments.filter((row) => row.region === region);
+    return <RelationTable title={`σ region = '${region}' (Deployment)`} columns={['node_id', 'service_id', 'region']} rows={rows} />;
   }
 
   if (mode === 'projection') {
-    const projected = enrollments.map((row) => ({ sid: row.sid }));
-    const rows = distinct ? projected.filter((row, index, all) => all.findIndex((other) => other.sid === row.sid) === index) : projected;
-    return <RelationTable title={distinct ? 'π sid (Enrollment), set result' : 'SELECT sid, bag result'} columns={['sid']} rows={rows} />;
+    const projected = deployments.map((row) => ({ node_id: row.node_id }));
+    const rows = distinct ? projected.filter((row, index, all) => all.findIndex((other) => other.node_id === row.node_id) === index) : projected;
+    return <RelationTable title={distinct ? 'π node_id (Deployment), set result' : 'SELECT node_id, bag result'} columns={['node_id']} rows={rows} />;
   }
 
-  const rows = enrollments.map((enrollment) => {
-    const course = courses.find((candidate) => candidate.cid === enrollment.cid);
-    return { sid: enrollment.sid, cid: enrollment.cid, term: enrollment.term, title: course?.title ?? '—' };
+  const rows = deployments.map((deployment) => {
+    const service = services.find((candidate) => candidate.service_id === deployment.service_id);
+    return { node_id: deployment.node_id, service_id: deployment.service_id, region: deployment.region, name: service?.name ?? '—' };
   });
-  return <RelationTable title="Enrollment ⋈ Enrollment.cid = Course.cid Course" columns={['sid', 'cid', 'term', 'title']} rows={rows} />;
+  return <RelationTable title="Deployment ⋈ Deployment.service_id = Service.service_id Service" columns={['node_id', 'service_id', 'region', 'name']} rows={rows} />;
 }
 
 export default function RelationalAlgebraPlayground() {
   const [mode, setMode] = useState<Mode>('selection');
-  const [term, setTerm] = useState('2026F');
+  const [region, setRegion] = useState('us-east');
   const [distinct, setDistinct] = useState(false);
   const description = mode === 'selection'
-    ? `Selection keeps only ${term} tuples; it does not change their attributes.`
+    ? `Selection keeps only ${region} tuples; it does not change their attributes.`
     : mode === 'projection'
-      ? `${distinct ? 'Set projection removes duplicate Ada.' : 'The bag result preserves Ada twice.'} Toggle duplicate elimination to compare semantics.`
-      : 'The join matches every enrollment with its course title through the explicit cid predicate.';
+      ? `${distinct ? 'Set projection removes duplicate worker-01.' : 'The bag result preserves worker-01 twice.'} Toggle duplicate elimination to compare semantics.`
+      : 'The join matches every deployment with its service name through the explicit service_id predicate.';
 
   return (
     <InteractivePlayground
       title="Execute an algebra operator over visible relations"
       description="Choose a logical operator and inspect its input/output tables. The model separates set projection from SQL’s default bag behavior."
       status={description}
-      staticContent={<div className="grid gap-4"><p className="m-0 text-sm">The static comparison keeps the input relations beside the result. The join has one output tuple for each enrollment because <code>Course.cid</code> is unique in this fixture.</p><div className="grid gap-4 lg:grid-cols-2"><RelationTable title="Enrollment" columns={['sid', 'cid', 'term']} rows={enrollments} /><RelationTable title="Course" columns={['cid', 'title']} rows={courses} /></div><Result mode="join" term="2026F" distinct /></div>}
-      staticCaption="Static state: the equijoin carries each Enrollment.cid to the matching Course row and appends the title; compare the input grain with the joined-pair grain."
-      onReset={() => { setMode('selection'); setTerm('2026F'); setDistinct(false); }}
+      staticContent={<div className="grid gap-4"><p className="m-0 text-sm">The static comparison keeps the input relations beside the result. The join has one output tuple for each deployment because <code>Service.service_id</code> is unique in this fixture.</p><div className="grid gap-4 lg:grid-cols-2"><RelationTable title="Deployment" columns={['node_id', 'service_id', 'region']} rows={deployments} /><RelationTable title="Service" columns={['service_id', 'name']} rows={services} /></div><Result mode="join" region="us-east" distinct /></div>}
+      staticCaption="Static state: the equijoin carries each Deployment.service_id to the matching Service row and appends the service name; compare the input grain with the joined-pair grain."
+      onReset={() => { setMode('selection'); setRegion('us-east'); setDistinct(false); }}
     >
       <div className="interactive-playground-controls mb-5 grid gap-3 rounded-xl border border-light-border bg-light-bg/60 p-4 dark:border-dark-border dark:bg-dark-bg/40">
         <fieldset className="grid gap-2">
@@ -90,19 +90,19 @@ export default function RelationalAlgebraPlayground() {
           ] as Array<[Mode, string]>).map(([value, label]) => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className={mode === value ? 'assessment-action-primary' : 'assessment-action-secondary'}>{label}</button>)}
           </div>
         </fieldset>
-        {mode === 'selection' && <label className="grid max-w-xs gap-1 text-sm font-semibold">Term
-          <select aria-label="Selected term" className="input-field" value={term} onChange={(event) => setTerm(event.target.value)}>
-            <option value="2026F">2026F</option>
-            <option value="2027S">2027S</option>
+        {mode === 'selection' && <label className="grid max-w-xs gap-1 text-sm font-semibold">Region
+          <select aria-label="Selected region" className="input-field" value={region} onChange={(event) => setRegion(event.target.value)}>
+            <option value="us-east">us-east</option>
+            <option value="eu-west">eu-west</option>
           </select>
         </label>}
         {mode === 'projection' && <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={distinct} onChange={(event) => setDistinct(event.target.checked)} /> Eliminate duplicate rows (set semantics)</label>}
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="grid gap-4"><RelationTable title="Enrollment" columns={['sid', 'cid', 'term']} rows={enrollments} />{mode === 'join' && <RelationTable title="Course" columns={['cid', 'title']} rows={courses} />}</div>
-        <Result mode={mode} term={term} distinct={distinct} />
+        <div className="grid gap-4"><RelationTable title="Deployment" columns={['node_id', 'service_id', 'region']} rows={deployments} />{mode === 'join' && <RelationTable title="Service" columns={['service_id', 'name']} rows={services} />}</div>
+        <Result mode={mode} region={region} distinct={distinct} />
       </div>
-      <p className="mb-0 mt-4 text-xs leading-relaxed text-light-muted dark:text-dark-muted">Model scope: all values are non-NULL, the join key is unique in Course, and result order is deliberately unspecified. A real SQL optimizer must additionally preserve NULL, bag, collation, volatility, and outer-join semantics.</p>
+      <p className="mb-0 mt-4 text-xs leading-relaxed text-light-muted dark:text-dark-muted">Model scope: all values are non-NULL, the join key is unique in Service, and result order is deliberately unspecified. A real SQL optimizer must additionally preserve NULL, bag, collation, volatility, and outer-join semantics.</p>
     </InteractivePlayground>
   );
 }

@@ -26,6 +26,10 @@ export default function ReliabilityBudgetPlayground() {
     status={`${(composed * 100).toFixed(3)}% modeled service availability`}
     staticCaption="A quality target becomes testable when expressed as a time budget and composed with dependency assumptions."
     staticContent={<BudgetBars target={0.999} dependencies={3} />}
+    onReset={() => {
+      setTargetBasisPoints(9990);
+      setDependencies(3);
+    }}
   >
     <div className="grid gap-4 md:grid-cols-2">
       <label className="interactive-playground-controls grid gap-2 text-sm font-semibold">Target = {(target * 100).toFixed(2)}%<input aria-label="Availability target" type="range" min="9900" max="9999" value={targetBasisPoints} onChange={(event) => setTargetBasisPoints(Number(event.target.value))} /></label>

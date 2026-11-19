@@ -10,9 +10,49 @@ function Surface({ yaw, pitch }: { yaw: number; pitch: number }) {
   return <PlotFrame label="Rotatable wireframe of z equals sine x cosine y">{lines}<text x="98" y="62" fill="currentColor" fontSize="16">z = sin(x) cos(y)</text><text x="98" y="316" fill="currentColor" fontSize="14">drag inside the plot to rotate</text></PlotFrame>;
 }
 
+const INITIAL_ROTATION = { yaw: 0.55, pitch: 0.48 };
+
 export default function SurfacePlayground() {
-  const [rotation, setRotation] = useState({ yaw: 0.55, pitch: 0.48 });
+  const [rotation, setRotation] = useState(INITIAL_ROTATION);
   const drag = useRef<{ x: number; y: number } | null>(null);
-  const update = (event: PointerEvent<HTMLDivElement>) => { if (!drag.current) return; const dx = event.clientX - drag.current.x; const dy = event.clientY - drag.current.y; drag.current = { x: event.clientX, y: event.clientY }; setRotation((current) => ({ yaw: current.yaw + dx * 0.012, pitch: Math.max(-1.1, Math.min(1.1, current.pitch + dy * 0.012)) })); };
-  return <InteractivePlayground title="Rotate a surface" description="Drag the plot to inspect z=sin(x)cos(y) from different directions." staticCaption="A wireframe snapshot of z=sin(x)cos(y)." staticContent={<Surface yaw={0.55} pitch={0.48} />} status="Drag to rotate"><div className="cursor-grab touch-none" onPointerDown={(event) => { drag.current = { x: event.clientX, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={update} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}><Surface yaw={rotation.yaw} pitch={rotation.pitch} /></div></InteractivePlayground>;
+  const update = (event: PointerEvent<HTMLDivElement>) => {
+    if (!drag.current) return;
+    const dx = event.clientX - drag.current.x;
+    const dy = event.clientY - drag.current.y;
+    drag.current = { x: event.clientX, y: event.clientY };
+    setRotation((current) => ({
+      yaw: current.yaw + dx * 0.012,
+      pitch: Math.max(-1.1, Math.min(1.1, current.pitch + dy * 0.012)),
+    }));
+  };
+  return (
+    <InteractivePlayground
+      title="Rotate a surface"
+      description="Drag the plot to inspect z=sin(x)cos(y) from different directions."
+      staticCaption="A wireframe snapshot of z=sin(x)cos(y)."
+      staticContent={<Surface yaw={0.55} pitch={0.48} />}
+      status="Drag to rotate"
+      onReset={() => {
+        drag.current = null;
+        setRotation(INITIAL_ROTATION);
+      }}
+    >
+      <div
+        className="cursor-grab touch-none"
+        onPointerDown={(event) => {
+          drag.current = { x: event.clientX, y: event.clientY };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={update}
+        onPointerUp={() => {
+          drag.current = null;
+        }}
+        onPointerCancel={() => {
+          drag.current = null;
+        }}
+      >
+        <Surface yaw={rotation.yaw} pitch={rotation.pitch} />
+      </div>
+    </InteractivePlayground>
+  );
 }

@@ -13,7 +13,13 @@ function GrowthPlot({ n }: { n: number }) {
     { label: 'n²', color: '#e11d48', values: samples.map((value) => [x(value), y(value * value)] as [number, number]) },
   ];
   return <PlotFrame label="Log-scale comparison of linear, n log n, and quadratic growth">
-    {curves.map((curve, index) => <g key={curve.label}><polyline points={polyline(curve.values)} fill="none" stroke={curve.color} strokeWidth="4" /><text x="92" y={62 + index * 22} fill={curve.color} fontSize="14" fontWeight="700">{curve.label}</text></g>)}
+    {curves.map((curve, index) => (
+      <g key={curve.label}>
+        <polyline points={polyline(curve.values)} fill="none" stroke={curve.color} strokeWidth="4" />
+        <line x1="90" y1={57 + index * 22} x2="106" y2={57 + index * 22} stroke={curve.color} strokeWidth="4" />
+        <text x="114" y={62 + index * 22} fill="currentColor" fontSize="14" fontWeight="700">{curve.label}</text>
+      </g>
+    ))}
     <line x1={x(n)} x2={x(n)} y1="42" y2="276" stroke="currentColor" strokeDasharray="6 6" opacity="0.6" />
     <text x={x(n)} y="306" textAnchor="middle" fill="currentColor" fontSize="14">n={n}</text>
     <text x="32" y="170" transform="rotate(-90 32 170)" fill="currentColor" fontSize="12">operations (log₂ scale)</text>
@@ -28,6 +34,7 @@ export default function ComplexityGrowthPlayground() {
     status={`n = ${n}`}
     staticCaption="A logarithmic vertical scale makes different growth families comparable without hiding the quadratic curve."
     staticContent={<GrowthPlot n={32} />}
+    onReset={() => setN(32)}
   >
     <label className="interactive-playground-controls grid gap-2 text-sm font-semibold">
       Input size n = {n}

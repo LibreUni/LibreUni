@@ -13,8 +13,10 @@ function QueuePlot({ rho }: { rho: number }) {
     <polyline points={polyline(loads.map((value) => [x(value), y(response(value))]))} fill="none" stroke="#3b82f6" strokeWidth="4" />
     <polyline points={polyline(loads.map((value) => [x(value), y(queue(value))]))} fill="none" stroke="#e11d48" strokeWidth="4" />
     <line x1={x(rho)} x2={x(rho)} y1="42" y2="276" stroke="currentColor" strokeDasharray="6 6" opacity="0.6" />
-    <text x="98" y="62" fill="#3b82f6" fontSize="14" fontWeight="700">normalized response time</text>
-    <text x="98" y="84" fill="#e11d48" fontSize="14" fontWeight="700">mean queued work</text>
+    <line x1="88" y1="57" x2="104" y2="57" stroke="#3b82f6" strokeWidth="4" />
+    <text x="112" y="62" fill="currentColor" fontSize="14" fontWeight="700">normalized response time</text>
+    <line x1="88" y1="79" x2="104" y2="79" stroke="#e11d48" strokeWidth="4" />
+    <text x="112" y="84" fill="currentColor" fontSize="14" fontWeight="700">mean queued work</text>
     <text x="570" y="306" fill="currentColor" fontSize="12">utilization ρ → 1</text>
   </PlotFrame>;
 }
@@ -28,6 +30,7 @@ export default function QueueingPlayground() {
     status={`ρ = ${rho.toFixed(2)}`}
     staticCaption="Queueing delay is nonlinear near saturation; operating at 100% nominal capacity leaves no room for variability."
     staticContent={<QueuePlot rho={0.65} />}
+    onReset={() => setPercent(65)}
   >
     <label className="interactive-playground-controls grid gap-2 text-sm font-semibold">Offered load = {percent}% of service capacity<input aria-label="Offered load" type="range" min="5" max="95" value={percent} onChange={(event) => setPercent(Number(event.target.value))} /></label>
     <QueuePlot rho={rho} />

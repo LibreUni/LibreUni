@@ -53,6 +53,7 @@ export default function RiemannPlayground() {
       staticCaption="A finite rectangular sum approximates the area under a curve."
       staticContent={<Riemann n={8} />}
       status={`n = ${n}`}
+      onReset={() => setN(8)}
     >
       <label className="interactive-playground-controls flex items-center gap-3">
         n = {n}

@@ -11,5 +11,28 @@ function Wave({ harmonics }: { harmonics: number }) {
 
 export default function FourierPlayground() {
   const [harmonics, setHarmonics] = useState(5);
-  return <InteractivePlayground title="Build a square wave from harmonics" description="Add odd frequencies and watch smooth sine waves sharpen the edges." staticCaption="The first odd harmonics reveal the square-wave shape." staticContent={<Wave harmonics={5} />} status={`${harmonics} odd harmonics`}><label className="interactive-playground-controls flex items-center gap-3">odd harmonics = {harmonics}<input aria-label="Number of harmonics" type="range" min="1" max="15" step="2" value={harmonics} onChange={(event) => setHarmonics(Number(event.target.value))} /></label><Wave harmonics={harmonics} /></InteractivePlayground>;
+  return (
+    <InteractivePlayground
+      title="Build a square wave from harmonics"
+      description="Add odd frequencies and watch smooth sine waves sharpen the edges."
+      staticCaption="The first odd harmonics reveal the square-wave shape."
+      staticContent={<Wave harmonics={5} />}
+      status={`${harmonics} odd harmonics`}
+      onReset={() => setHarmonics(5)}
+    >
+      <label className="interactive-playground-controls flex items-center gap-3">
+        odd harmonics = {harmonics}
+        <input
+          aria-label="Number of harmonics"
+          type="range"
+          min="1"
+          max="15"
+          step="2"
+          value={harmonics}
+          onChange={(event) => setHarmonics(Number(event.target.value))}
+        />
+      </label>
+      <Wave harmonics={harmonics} />
+    </InteractivePlayground>
+  );
 }

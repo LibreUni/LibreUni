@@ -77,6 +77,7 @@ export default function EpsilonDeltaPlayground() {
       staticCaption="For f(x)=3x−1 at c=2, the δ-window pulls back the ε-band around L=5."
       staticContent={<Visual epsilon={0.45} />}
       status={`ε = ${epsilon.toFixed(2)}, δ = ${(epsilon / 3).toFixed(2)}`}
+      onReset={() => setEpsilon(0.45)}
     >
       <label className="interactive-playground-controls flex items-center gap-3">
         ε = {epsilon.toFixed(2)}

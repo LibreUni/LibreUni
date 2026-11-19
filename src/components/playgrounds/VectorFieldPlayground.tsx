@@ -10,5 +10,28 @@ function Field({ scale }: { scale: number }) {
 
 export default function VectorFieldPlayground() {
   const [scale, setScale] = useState(1);
-  return <InteractivePlayground title="Explore a rotational vector field" description="Scale the arrows and inspect circulation around the origin." staticCaption="The arrows of F(x,y)=(−y,x) are tangent to circles centered at the origin." staticContent={<Field scale={1} />} status={`strength = ${scale.toFixed(1)}×`}><label className="interactive-playground-controls flex items-center gap-3">strength = {scale.toFixed(1)}×<input aria-label="Field strength" type="range" min="0.3" max="2" step="0.1" value={scale} onChange={(event) => setScale(Number(event.target.value))} /></label><Field scale={scale} /></InteractivePlayground>;
+  return (
+    <InteractivePlayground
+      title="Explore a rotational vector field"
+      description="Scale the arrows and inspect circulation around the origin."
+      staticCaption="The arrows of F(x,y)=(−y,x) are tangent to circles centered at the origin."
+      staticContent={<Field scale={1} />}
+      status={`strength = ${scale.toFixed(1)}×`}
+      onReset={() => setScale(1)}
+    >
+      <label className="interactive-playground-controls flex items-center gap-3">
+        strength = {scale.toFixed(1)}×
+        <input
+          aria-label="Field strength"
+          type="range"
+          min="0.3"
+          max="2"
+          step="0.1"
+          value={scale}
+          onChange={(event) => setScale(Number(event.target.value))}
+        />
+      </label>
+      <Field scale={scale} />
+    </InteractivePlayground>
+  );
 }

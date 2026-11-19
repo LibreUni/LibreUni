@@ -17,7 +17,7 @@ function Schedule({ step }: { step: number }) {
   const state = scheduleState(step);
   return <div className="grid gap-4">
     <ol className="grid gap-2 md:grid-cols-3">{events.map((event, index) => <li key={event} className={`list-none rounded-lg border p-3 text-sm ${index < step ? 'border-primary/40 bg-primary/10' : index === step ? 'border-amber-500/40 bg-amber-500/10' : 'border-light-border opacity-55 dark:border-dark-border'}`}><span className="mr-2 font-black tabular-nums">{index + 1}</span>{event}</li>)}</ol>
-    <div className="grid grid-cols-3 gap-2 text-center text-sm"><div className="rounded border border-light-border p-3 dark:border-dark-border"><span className="block text-xs text-light-muted">T₁ local</span><strong>{state.t1}</strong></div><div className="rounded border border-light-border p-3 dark:border-dark-border"><span className="block text-xs text-light-muted">T₂ local</span><strong>{state.t2}</strong></div><div className={`rounded border p-3 ${state.lost ? 'border-rose-500 bg-rose-500/10' : 'border-light-border dark:border-dark-border'}`}><span className="block text-xs text-light-muted">database x</span><strong>{state.database}</strong></div></div>
+    <div className="grid grid-cols-3 gap-2 text-center text-sm"><div className="rounded border border-light-border p-3 dark:border-dark-border"><span className="block text-xs text-light-muted dark:text-dark-muted">T₁ local</span><strong>{state.t1}</strong></div><div className="rounded border border-light-border p-3 dark:border-dark-border"><span className="block text-xs text-light-muted dark:text-dark-muted">T₂ local</span><strong>{state.t2}</strong></div><div className={`rounded border p-3 ${state.lost ? 'border-rose-500 bg-rose-500/10' : 'border-light-border dark:border-dark-border'}`}><span className="block text-xs text-light-muted dark:text-dark-muted">database x</span><strong>{state.database}</strong></div></div>
   </div>;
 }
 
@@ -30,6 +30,7 @@ export default function IsolationSchedulePlayground() {
     status={state.lost ? 'lost update: expected x=2, observed x=1' : `${step} of ${events.length} events applied`}
     staticCaption="A schedule is the evidence: two successful transactions can still violate the intended increment invariant."
     staticContent={<Schedule step={6} />}
+    onReset={() => setStep(0)}
   >
     <div className="interactive-playground-controls mb-5">
       <div className="mb-2 flex items-center justify-between text-sm font-semibold">

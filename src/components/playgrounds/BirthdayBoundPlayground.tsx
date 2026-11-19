@@ -29,6 +29,10 @@ export default function BirthdayBoundPlayground() {
     status={`${(probability * 100).toPrecision(3)}% collision probability`}
     staticCaption="Collision risk depends on both random-space width and the total number of generated values under one key or policy boundary."
     staticContent={<CollisionPlot bits={48} exponent={6} />}
+    onReset={() => {
+      setBits(48);
+      setExponent(6);
+    }}
   >
     <div className="grid gap-4 md:grid-cols-2">
       <label className="interactive-playground-controls grid gap-2 text-sm font-semibold">Random value width = {bits} bits<input aria-label="Random value width" type="range" min="24" max="96" step="8" value={bits} onChange={(event) => setBits(Number(event.target.value))} /></label>

@@ -30,6 +30,10 @@ export default function AllocationFailurePlayground() {
     status={failed ? 'allocator returns NULL' : 'allocation succeeds'}
     staticCaption="A temporary pointer preserves ownership of the original allocation when realloc fails."
     staticContent={<OwnershipPanel safe failed size={96} />}
+    onReset={() => {
+      setSize(96);
+      setFailed(true);
+    }}
   >
     <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
       <label className="interactive-playground-controls grid gap-2 text-sm font-semibold">Requested size = {size} bytes<input aria-label="Requested allocation size" type="range" min="40" max="256" step="8" value={size} onChange={(event) => setSize(Number(event.target.value))} /></label>
