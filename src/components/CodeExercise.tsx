@@ -246,9 +246,9 @@ export default function CodeExercise({
           <div className={isCorrect ? 'feedback-success text-sm' : 'feedback-diagnostic text-sm'}>
             <div className="flex items-start gap-2">
               {isCorrect ? (
-                <Check className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" size={16} />
+                <Check className="mt-0.5 shrink-0 text-emerald-700 dark:text-emerald-400" size={16} />
               ) : (
-                <X className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" size={16} />
+                <X className="mt-0.5 shrink-0 text-rose-700 dark:text-rose-400" size={16} />
               )}
               <div>
                 <strong>

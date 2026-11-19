@@ -444,7 +444,7 @@ _visual
                     key={i}
                     className={`min-h-[22px] whitespace-pre-wrap break-words ${
                       isError
-                        ? 'font-semibold text-rose-600 dark:text-rose-300'
+                        ? 'font-semibold text-rose-700 dark:text-rose-300'
                         : 'text-light-text dark:text-emerald-200'
                     }`}
                   >

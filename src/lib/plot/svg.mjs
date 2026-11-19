@@ -428,7 +428,7 @@ function renderSinglePanel(spec, { width, height, margin }, panelId) {
         const cy = yScale(y).toFixed(1);
         if (mark.open) {
           marksSvg.push(
-            `<circle cx="${cx}" cy="${cy}" r="4.5" fill="var(--bg-surface, #ffffff)" stroke="currentColor" stroke-width="2.5" class="lu-fig-point-open" />`
+            `<circle cx="${cx}" cy="${cy}" r="4.5" fill="var(--lu-fig-bg, #ffffff)" stroke="currentColor" stroke-width="2.5" class="lu-fig-point-open" />`
           );
         } else {
           marksSvg.push(

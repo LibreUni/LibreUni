@@ -163,9 +163,9 @@ export default function CaseStudy(props: CaseStudyProps) {
                   {revealed && (option.isCorrect || isSelected || option.feedback) && (
                     <div className="mt-1 flex items-start gap-2 border-t border-light-border/60 pl-8 pt-2 text-xs leading-relaxed dark:border-dark-border/60">
                       {option.isCorrect ? (
-                        <Check className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" size={14} />
+                        <Check className="mt-0.5 shrink-0 text-emerald-700 dark:text-emerald-400" size={14} />
                       ) : (
-                        <X className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" size={14} />
+                        <X className="mt-0.5 shrink-0 text-rose-700 dark:text-rose-400" size={14} />
                       )}
                       <div className="text-light-muted dark:text-dark-muted">
                         <span className="font-semibold text-light-text dark:text-dark-text">

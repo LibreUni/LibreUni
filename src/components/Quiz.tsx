@@ -235,7 +235,7 @@ export default function Quiz({
                     onClick={() => setOptionEvaluation(option.id, true)}
                     className={`min-h-9 cursor-pointer rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors ${
                       choice === true
-                        ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm dark:border-emerald-500 dark:bg-emerald-600 dark:text-white'
+                        ? 'border-emerald-700 bg-emerald-700 text-white shadow-sm dark:border-emerald-600 dark:bg-emerald-700 dark:text-white'
                         : 'border-light-border bg-light-surface text-light-text hover:border-emerald-500/50 hover:bg-emerald-500/5 dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:border-emerald-500/40 dark:hover:bg-emerald-500/10'
                     }`}
                   >
@@ -259,9 +259,9 @@ export default function Quiz({
               {submitted && (
                 <div className="mt-2.5 flex items-start gap-2 border-t border-light-border/60 pt-2 text-xs leading-relaxed dark:border-dark-border/60">
                   {isCorrectChoice ? (
-                    <Check className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" size={14} />
+                    <Check className="mt-0.5 shrink-0 text-emerald-700 dark:text-emerald-400" size={14} />
                   ) : (
-                    <X className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" size={14} />
+                    <X className="mt-0.5 shrink-0 text-rose-700 dark:text-rose-400" size={14} />
                   )}
                   <div className="text-light-muted dark:text-dark-muted">
                     <span className="font-semibold text-light-text dark:text-dark-text">

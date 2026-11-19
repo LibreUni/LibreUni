@@ -105,7 +105,7 @@ export function initDevThemer() {
   c.innerHTML = `
 <style>
 #lu-dev-themer{all:initial;font-family:system-ui,sans-serif;position:fixed;bottom:16px;right:16px;z-index:2147483647;font-size:13px;line-height:1.4;color:#111;--l-bg:#fff;--l-b2:#f5f5f5;--l-b3:#e5e5e5;--l-t:#111;--l-m:#666;--l-ac:#3b82f6;--br:8px}
-#lut-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:999px;border:1px solid #e5e5e5;background:var(--l-bg);cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.12);font-size:18px;transition:transform .15s;margin-left:auto}
+#lut-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;font:inherit;color:var(--l-t);border-radius:999px;border:1px solid #e5e5e5;background:var(--l-bg);cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.12);font-size:18px;transition:transform .15s;margin-left:auto}
 #lut-btn:hover{transform:scale(1.08)}
 #lut-btn.open{transform:rotate(45deg)}
 #lut-panel{display:none;position:absolute;bottom:52px;right:0;width:340px;max-height:min(600px,80vh);overflow-y:auto;border:1px solid var(--l-b3);border-radius:var(--br);background:var(--l-bg);box-shadow:0 8px 32px rgba(0,0,0,.15);padding:0}
@@ -123,9 +123,9 @@ export function initDevThemer() {
 .lut-disclosure{border-bottom:1px solid var(--l-b3)}
 .lut-disclosure summary{cursor:pointer;list-style:none;padding:10px 14px;font-size:11px;font-weight:800;color:var(--l-t)}
 </style>
-<div id="lut-btn" aria-label="Open developer tools">+</div>
+<button id="lut-btn" type="button" aria-label="Open developer tools">+</button>
 <div id="lut-panel">
-  <div class="lut-topbar"><span class="lut-topbar-title">Developer tools</span><button id="lut-reset">Reset</button></div>
+  <div class="lut-topbar"><span class="lut-topbar-title">Developer tools</span><button id="lut-reset" type="button">Reset</button></div>
   <details class="lut-disclosure" open><summary>Theme colors</summary><div id="lut-colors"></div></details>
   <details class="lut-disclosure"><summary>Typography</summary><div class="lut-row"><label>Font</label><select class="lut-input-select" id="lut-font"></select></div></details>
 </div>`;

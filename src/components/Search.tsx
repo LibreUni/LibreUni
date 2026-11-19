@@ -103,7 +103,7 @@ export default function Search({ baseUrl, variant = 'compact' }: { baseUrl: stri
                                     {res.kind && res.kind !== 'lesson' ? (res.kind === 'problems' ? 'Problems' : res.kind) : res.type}
                                 </span>
                             </span>
-                            <span className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/70">{res.type === 'course' ? 'Course' : res.course}</span>
+                            <span className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-light-muted dark:text-dark-muted">{res.type === 'course' ? 'Course' : res.course}</span>
                             {variant === 'hero' && res.description && (
                                 <span className="mt-2 line-clamp-2 text-sm font-medium text-light-muted dark:text-dark-muted">{res.description}</span>
                             )}
