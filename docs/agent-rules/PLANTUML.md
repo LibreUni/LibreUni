@@ -16,7 +16,7 @@ PlantUML is rendered headlessly and locally during the Astro build. Remote rende
 
 ## Fix Workflow
 
-1. Run `npm run build` — populates `puml-errors.log` with failing snippets.
+1. Run `npm run check:build` (or `npm run build:all`) — renders PlantUML diagrams locally and populates `puml-errors.log` on errors.
 2. For each failure: `grep` for a unique substring from the code block to locate the source MDX.
 3. Apply minimal edits: replace named colors with hex, remove unsupported pseudo-commands, convert bracketed IDs to `component` or `note`, ensure valid block boundaries (`@startuml` / `@enduml`).
 4. Re-run build and iterate until `puml-errors.log` is empty.

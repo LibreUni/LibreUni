@@ -122,7 +122,7 @@ LibreUni replaces legacy isolated pages with **explicit, resolvable semantic dep
 ```
 
 - When rendered, `<Ref id="limit-definition" />` resolves dynamically to its label and kind:
-  *Definition 1.1.1 (Limit of a Function)*
+  *Definition 1.1.1* (and passing `showTitle` appends the title: *Definition 1.1.1 (Limit of a Function)*).
 - Clicking navigates directly to the anchor.
 - Hovering or keyboard-focusing displays an instant preview card showing the block's mathematical content.
 - Unresolved references fail the build with a descriptive error (`LINT-07`).

@@ -9,7 +9,7 @@ npm install
 npm run test:install
 ```
 
-`test:install` installs the Chromium browser Playwright uses locally. CI installs the same browser with system dependencies.
+`test:install` installs the Chromium browser Playwright uses locally and downloads/verifies `tools/plantuml.jar`. CI installs the same browser with system dependencies.
 
 ## Main Commands
 
@@ -54,29 +54,32 @@ npm run test:report
 Mathematical figures and page contracts are verified on every test run:
 
 - **Mathematical figure checks (`node --test tests/figures.test.mjs`, part of `check:content`):**
-  - **A1:** Every figure spec has positive numeric `window`, valid series `fn`, and valid styling.
-  - **A2:** Discontinuities (such as asymptotes or jumps) do not emit artificial vertical connector segments.
-  - **A3:** Series monotonic on an interval strictly maintain monotonicity under adaptive sampling.
-  - **A4:** Every mark, point, label anchor, and tangent segment stays within viewport bounds.
-  - **A5:** Labels and text elements do not overlap each other or anchor curves.
-  - **A6:** Cartesian axes intersect at $(0, 0)$ when zero lies within the viewing window.
-  - **A7:** Fill order: Darboux lower/upper sums and shaded areas render underneath plotted curves.
+  - **A1:** Every figure spec defines accessible `alt` text (≥ 40 chars), non-empty `caption` whose KaTeX expressions compile cleanly, and valid curve definitions.
+  - **A2:** Every plotted curve achieves ≥ 95% finite sample points across its interval while respecting exclusions at discontinuities/asymptotes.
+  - **A3:** Analytic derivatives `curve.d` agree with central-difference numerical derivatives across the domain.
+  - **A6:** Cartesian axes render the vertical axis line (`lu-fig-axis-y`) when zero lies within the x-domain.
+  - **A7:** Fill order: Darboux sums and shaded area regions (`lu-fig-fills`) render underneath plotted curves (`lu-fig-curves`) in SVG z-order.
   - **A8:** Custom domain assertions in `spec.checks` all evaluate to `true`.
   - **A9:** Every `<Figure id>` reference in MDX resolves to an existing spec in the same course, and every spec is used.
+  - **A10:** Rendered SVG text elements have no overlapping/colliding bounding boxes.
 - **Figure preview contact sheets (`npm run figures:preview`):**
-  - Generates standalone SVGs and contact sheet in `reports/figures/<course>/index.html`.
-- **Platform consistency lint rules (`scripts/lint_platform_consistency.mjs`):**
-  - `LINT-00`: Validates frontmatter by page `kind` (`lesson`, `lab`, `problems`, `recap`, `exam`).
-  - `LINT-08`: Forbids hardcoded `number=` attributes on `<Exercise>`, `<Problem>`, `<ExamQuestion>`, and `<Figure>`.
-  - `LINT-09`: Forbids fragile function plots in `<TikZ>` using `plot`, `controls`, or coordinate curves.
+  - Generates standalone SVGs and contact sheet in `reports/figures/index.html`.
+- **Platform consistency lint rules (`scripts/lint_platform_consistency.mjs` & `scripts/lint_extended.mjs`):**
+  - `LINT-00`: Validates frontmatter by page `kind` (`lesson`, `lab`, `problems`, `recap`, `practice`).
+  - `LINT-08`: Forbids hardcoded `number=` attributes on `<Exercise>`, `<Problem>`, and `<Figure>`.
+  - `LINT-09`: Forbids fragile function plots in `<TikZ>` using `plot`, `controls`, or coordinate curves (both `code={...}` and children syntaxes).
   - `LINT-10`: Enforces that `<MathStatement>` is declared solely on `lesson` and `lab` pages.
   - `LINT-11`: Enforces bidirectional figure resolution (no missing specs, no orphaned specs).
-  - `LINT-16`: Enforces GFM Markdown table column parity, balanced cell `$` / backtick delimiters, and bans unescaped `|` inside table math (requiring `\lvert ... \rvert` or `\mid`).
+  - `LINT-16`: Enforces GFM Markdown table column parity (excluding empty top-left corner cell in matrix tables), balanced cell `$` / backtick delimiters, and bans unescaped `|` inside table math (requiring `\lvert ... \rvert` or `\mid`).
   - `LINT-17`: Validates inline math delimiter parity, rejects `\(...\)` / `\[...\]` and raw TeX commands outside math, validates KaTeX strictly across JSX component props and frontmatter, and catches unescaped backslashes in JS string math props.
   - `LINT-18`: Enforces `[!blank!]`-to-`answers` arity parity across `<FillInExercise>` and `<CodeExercise>` and forbids splitting math expressions across `[!blank!]`.
+  - `LINT-19`: Enforces D-0017 open digital learning terminology across MDX content (forbids classroom/university trope terms outside fenced code and MDX comments).
+  - `LINT-20`: Requires `<ExerciseSet>` on `lesson`/`lab` pages and forbids list-splitting patterns inside JSX props.
+  - `SITE-01` / `SITE-02`: Validates course metadata categories and site navigation consistency across content and pages.
+  - `UI-LINT-01`–`UI-LINT-05`: Enforces explicit `<button type="...">`, safe `.innerHTML` escaping, WCAG/dark-mode Tailwind & SVG contrast classes, base-path-safe pathname parsing without JSX backticks or conflicting muted toggle classes, and `<InteractivePlayground onReset=...>` wrapping across TSX playgrounds.
 
 - **Rendered lesson validator (`scripts/validate-rendered-lessons.mjs`, part of `check:build`):**
-  - Verifies `.katex-error` absence, HTML table cell parity and clean cell rendering, `<template data-math-preview>` and visible prose freedom from leaked TeX commands/backticks, and serialized `<astro-island>` blank-to-answer arity.
+  - Verifies `.katex-error` absence, HTML table cell parity and clean cell rendering, `<template data-math-preview>` and visible prose freedom from leaked TeX commands/backticks, zero `#...html` mangled hrefs, and resolvable local file targets + `#id` anchors on `<Ref>` links and serialized `<astro-island>` blank-to-answer arity.
 
 - **Local Playwright CPU cap (`playwright.config.mjs`):**
   - Caps local Chromium worker concurrency to at most `min(2, floor(cpus / 4))` (`>= 1`; configurable downward via `PLAYWRIGHT_WORKERS`, and `2` on CI) so local E2E/UX runs do not saturate host CPU cores.
@@ -124,15 +127,15 @@ Keep the route list small and representative. The goal is fast local signal, not
 
 ## Theme and Appearance Testing Guidelines
 
-When modifying theme-specific properties, color modes (Light, Dark, Auto), or interactive styling customizers, follow this validation protocol:
+When modifying theme-specific properties, themes (`modern`, `monochrome`), or color modes (`light`, `dark`, `auto`), follow this validation protocol:
 
 ### 1. Verification Checklist for Hydration and Reloads
-* **Initial Page Mount**: Validate that the initial client-side mount matches the server-rendered color mode. Verify there is no "flash of incorrect mode" or desync where the UI controls show "Light" while the actual elements render "Dark" (or vice versa).
+* **Initial Page Mount**: Validate that the initial client-side mount matches the server-rendered theme and color mode. Verify there is no "flash of incorrect mode" or desync where the UI controls show "Light" while the actual elements render "Dark" (or vice versa).
 * **Refresh Persistence**:
   1. Toggle to **Light** mode -> Refresh -> Verify mode remains Light.
   2. Toggle to **Dark** mode -> Refresh -> Verify mode remains Dark.
-  3. Toggle to **Auto** mode -> Refresh -> Verify mode resolves to dark/light matching system preference (or time-of-day logic).
-* **Cross-Theme CSS paste check**: Verify that the selector block copied from the customizer (`html[data-theme='...']`, `html.dark[data-theme='...']`) matches the target selector in `global.css` exactly, preventing variable bleeding between light and dark modes.
+  3. Toggle to **Auto** mode -> Refresh -> Verify mode resolves to dark/light matching system preference (`prefers-color-scheme`).
+* **Cross-Theme Token Parity**: Verify that `html[data-theme='...']` and `html.dark[data-theme='...']` selectors in `global.css` override variables consistently across light and dark modes without variable bleeding, and confirm `DevThemer` overrides match those CSS tokens when debugging on `/development`.
 
 ### 2. Automated Visual Audit
 Run the visual regression suite to capture representative states under various width/mode parameters:

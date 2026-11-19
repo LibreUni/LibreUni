@@ -26,11 +26,13 @@ LibreUni is a completely free education platform — no sign-in, no ads, no payw
 - Use interactive components where they add real value; never add them to satisfy a quota. See `docs/agent-rules/COURSE_COMPONENTS.md`. In Astro/MDX, all interactive React components **must** use `client:load` (e.g. `<Quiz client:load ... />`).
 - Use `<Quiz client:load>` for knowledge validation; `<CaseStudy client:load>` for scenario-based problems with setup context.
 - **Canonical component props** — use exactly these names, no aliases:
-  - `<Quiz>`: `question`, `options`, `correctIndex`, `explanation`, `questions`, `title`
-  - `<CodeRunner>`: `code`, `output`, `language`, `title`
-  - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`
-  - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title`
+  - `<Quiz>`: `question`, `options` (string array or `{ id, text, isCorrect, feedback }` objects), `correctIndex`, `explanation`, `questions`, `title`
+  - `<CodeRunner>`: `code`, `output`, `language`, `title`, `description`
+  - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`, `description`
+  - `<FillInExercise>`: `prompt` (or `text`), `answers`, `explanation`, `title`
+  - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `questions`, `title`
   - `<SqlRunner>`: `schema`, `initialQuery`, `title`, `description`
+  - `<PracticeGenerator>`: `courseId`
 - Write new custom components when existing ones don't fit.
 - Use PlantUML diagrams where visual representation genuinely aids understanding. See `docs/agent-rules/PLANTUML.md` for troubleshooting.
 - Lessons rely on explicit, declared prerequisites and resolvable cross-references (D-0013, `COURSE_STRUCTURE.md`). Avoid chronological prose ("in the next lesson", "as we saw yesterday"), but precise conceptual references via `<Ref id="..." />` are encouraged.
@@ -66,7 +68,7 @@ Instead — directly present the question, problem, or concept.
 
 **Course size:** typically 15–40 lessons per full-length course (focused preparatory modules such as Calculus may have 7–15 lessons). **Lesson size:** typically 10,000–30,000 characters (~6–8 hours of focused study including exercises/derivations). Note that there is no strict limit; focus should remain on depth, clarity, and scholarly rigor without artificial constraints.
 
-Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: define the concept, demonstrate it with examples (including edge cases), then give the reader something to try.
+Use `h2` and `h3` headers in lesson bodies (page titles render `H1` from frontmatter; raw `# H1` is forbidden by `LINT-03`). Follow the **theory → example → exercise** pattern: define the concept, demonstrate it with examples (including edge cases), then give the reader something to try.
 
 **Strict Anti-Bypass Rule:** Adding fake "source tracking" comments, placeholder text, or using meaningless words just to bypass the `course_stats.py` source coverage checks is **strictly forbidden**. Any sources or tracking comments added must be genuine, researched references that actively support the lesson content. Bypassing tests undermines the educational integrity of LibreUni.
 
@@ -78,7 +80,7 @@ Use h1, h2, h3 headers. Follow the **theory → example → exercise** pattern: 
    - Run `python3 scripts/course_stats.py <course-id>` to smoke-test one course.
    - Run `python3 scripts/course_stats.py --write-quality` to regenerate the smoke-test data used by development tooling.
 2. Run `python3 scripts/course_integrity.py --strict` for course padding, duplication, generic-artifact, and heading-coverage findings. Treat findings as review blockers; do not reduce them to a numeric score.
-3. Run `npm run build` — catches MDX/syntax errors and populates `puml-errors.log` with any failing PlantUML diagrams. Note: use `$$` for display math, not `\[` — remark-math does not support LaTeX-style `\[ ... \]` delimiters.
+3. Run `npm run check:build` — builds the production bundle (and populates `puml-errors.log` on PlantUML failures) plus validates rendered lessons, course visuals, and PDFs (use `npm run build` when also running the UX report). Note: use `$$` for display math, not `\[` — remark-math does not support LaTeX-style `\[ ... \]` delimiters.
 
 Automated metrics do not certify course quality. Pedagogy, correctness, sourcing, and exercise value require human or agent review under `docs/agent-rules/COURSE_PEDAGOGY.md`.
 
@@ -88,7 +90,7 @@ Automated metrics do not certify course quality. Pedagogy, correctness, sourcing
 
 See `docs/agent-rules/UI.md` for the full UX vision. Key points:
 
-- Primary color: blue (`#3b82f6` / Tailwind `blue-500`).
+- Primary color: blue (`#2563eb` / Tailwind `blue-600`, dark mode accent `#93c5fd`).
 - Minimalism: clean lines, ample whitespace, clear typography.
 - Dark mode: deep zinc/slate tones, not pure black.
 - No distractions — the platform follows a strict "No Bullshit" philosophy.

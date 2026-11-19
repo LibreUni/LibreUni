@@ -36,7 +36,7 @@ LibreUni is built on the belief that high-quality, university-level education sh
 
 ## ✨ Features
 
-- 📚 **Comprehensive Curriculum:** University-level courses ranging from C/C++ and Git to Machine Learning and Philosophy.
+- 📚 **Comprehensive Curriculum:** Foundational courses spanning Introduction to Calculus, Computer Architecture, Operating Systems, and Database Systems.
 - ⚡ **Interactive Learning:** Built-in interactive components like `<Quiz />` and `<CodeRunner />`.
 - 📊 **Rich Content:** Support for KaTeX (mathematical typesetting) and PlantUML (architecture diagrams) within lessons.
 - 🚀 **Blazing Fast:** Powered by Astro for static site generation and optimal performance.
@@ -167,7 +167,7 @@ If you prefer Coolify's source/static flow instead of Docker:
 
 1. Keep the repository root as the base directory.
 2. Use `npm install` as the install command.
-3. Use `npm run build` as the build command.
+3. Use `npm run build:all` as the build command (requires Java, Graphviz, `npm run setup:plantuml`, and Playwright Chromium for diagram and PDF generation; otherwise use Coolify's **Dockerfile** build pack).
 4. Publish `dist` as the static output directory.
 
 ## 🤝 Contributing
@@ -183,7 +183,7 @@ All coding harnesses use the same repository router. Course work, research, UI c
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+3. Commit your changes (`git commit -m '[Add] Short description of change'`)
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 

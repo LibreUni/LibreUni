@@ -14,12 +14,13 @@ Import from `src/components/` with a relative MDX import and add `client:load` t
 
 | Component | Use it for | Required teaching inputs |
 | --- | --- | --- |
-| `Quiz` | A focused knowledge check or misconception check | `question`, `options`, `correctIndex`, `explanation` |
-| `CodeRunner` | A small, runnable demonstration the learner should modify or execute | `code`, optionally `output`, `language`, `title` |
-| `CodeExercise` | Fill-in-the-blank code practice | `code`, `answers`, `explanation`, `title` |
+| `Quiz` | A focused knowledge check or misconception check | `question`, `options` (strings or `{ id, text, isCorrect, feedback }`), `correctIndex`, `explanation` |
+| `CodeRunner` | A small, runnable demonstration the learner should modify or execute | `code`, optionally `output`, `language`, `title`, `description` |
+| `CodeExercise` | Fill-in-the-blank code practice | `code`, `answers`, `explanation`, `title`, optional `description` |
 | `FillInExercise` | Fill-in-the-blank practice for prose, formulas, or conceptual steps | `prompt` (or `text`), `answers`, `explanation`, `title` |
 | `CaseStudy` | A contextual decision or scenario with an analyzable trade-off | `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title` |
 | `SqlRunner` | Execute read-only SQL against a fixed, in-browser SQLite fixture | `schema`, `initialQuery`, optional `title`, `description` |
+| `PracticeGenerator` | Interactive question generator with parameter randomization, progressive hints, and worked solutions | `courseId` (used with `client:load`) |
 
 `Quiz` uses a multi-claim classification matrix: the learner classifies every claim independently as supported or unsupported before verifying. This prevents relative answer length or position from acting as a shortcut. The review treats identification of every supported claim as mandatory; rejecting all claims never appears as a near-passing aggregate score. `CaseStudy` requires structured decision commitment: the learner inspects the scenario and candidate alternatives and commits to a recommended decision before the trade-off analysis and reference decision are revealed. Authors must still keep choices concise, balance their specificity, and write plausible misconception-based alternatives; interaction design does not excuse cueing or weak distractors.
 
@@ -122,11 +123,11 @@ itself; the book prints the starting query but cannot run it.
 import SqlRunner from '../../../components/SqlRunner';
 
 <SqlRunner client:load
-  title="Run the zero-safe report"
-  description="Predict the three rows before running the query."
-  schema={`CREATE TABLE offering (id integer primary key, code text, term text);
-INSERT INTO offering VALUES (10, 'DB101', '2026S'), (11, 'DB201', '2026S');`}
-  initialQuery={`SELECT code, term FROM offering ORDER BY code;`}
+  title="Run the regional availability report"
+  description="Predict the two rows before running the query."
+  schema={`CREATE TABLE service_deployment (id integer primary key, service_id text, region text);
+INSERT INTO service_deployment VALUES (10, 'S101', 'us-east'), (11, 'S202', 'eu-west');`}
+  initialQuery={`SELECT service_id, region FROM service_deployment ORDER BY service_id;`}
 />
 ```
 
@@ -134,7 +135,7 @@ INSERT INTO offering VALUES (10, 'DB101', '2026S'), (11, 'DB201', '2026S');`}
 
 Use a named playground when the outcome requires manipulating a quantitative variable, stepping through state, injecting failure, or comparing a model with an observation. Compose it with `InteractivePlayground`; do not import that frame directly from MDX. The named component owns its domain model, controls, accessible status, responsive SVG or state view, and static book representation.
 
-The current CS/SWE investigations include growth-rate comparison, allocation-failure ownership, DFA prefix tracing, Amdahl speedup, queue saturation, nonce-collision budgets, hash probe costs, transaction schedules, round-robin scheduling, and reliability budgets under `src/components/playgrounds/`. Each is intentionally attached to a lesson that derives the displayed model. Reuse one only when the exact variables and learning outcome match; a renamed title is not reuse.
+The active 4-course catalog investigations under `src/components/playgrounds/` include calculus (`EpsilonDeltaPlayground`, `TangentPlayground`, `RiemannPlayground`), computer architecture (`RepresentationPlayground`, `CacheHierarchyPlayground`, `PipelineHazardPlayground`, `AmdahlPlayground`, `PageTablePlayground`, `DeviceIOPlayground`), operating systems (`SystemCallPathPlayground`, `SchedulerPlayground`, `InterleavingPlayground`, `ConditionVariablePlayground`, `PageReplacementPlayground`, `DiskSchedulingPlayground`, `CrashConsistencyPlayground`, `IsolationBoundaryPlayground`, `LockScalabilityPlayground`), and database systems (`RelationalAlgebraPlayground`, `JoinPredicatePlayground`, `FunctionalDependencyPlayground`, `BTreePlayground`, `QueryPlanCostPlayground`, `IsolationSchedulePlayground`, `RecoveryLogPlayground`, `ReplicationQuorumPlayground`). Each is intentionally attached to a lesson that derives the displayed model. Reuse one only when the exact variables and learning outcome match; a renamed title is not reuse.
 
 ```mdx
 import AmdahlPlayground from '../../../components/playgrounds/AmdahlPlayground';
@@ -157,19 +158,18 @@ These are Astro components and do not need `client:load`.
 | Component | Use it for | Props |
 | --- | --- | --- |
 | `Figure` | Build-time verified mathematical SVG plot for real functions (mandatory for function graphs per D-0014) | `id`, optional `size` (`'normal'` \| `'thumb'`), `collapsed`, `summary`, `caption` |
-| `PlantUML` | UML, architecture, sequence, state, and other structural diagrams | `code`, optional `theme` |
-| `PythonDiagram` | A Python-generated SVG/PNG visualization where the figure is part of the explanation | `code`, optional `format`, `title` |
-| `TikZ` | Precise mathematical or geometric diagrams (not function plots) | `code`, optional `packages` |
+| `PlantUML` | UML, architecture, sequence, state, and other structural diagrams | `code`, optional `theme`, `bookOnly` |
+| `PythonDiagram` | A Python-generated SVG/PNG visualization where the figure is part of the explanation | `code`, optional `format`, `title`, `bookOnly` |
+| `TikZ` | Precise mathematical or geometric diagrams (not function plots) | `code`, optional `packages`, `bookOnly` |
 | `Math` | A KaTeX-rendered inline or display formula | `math`, optional `block` |
 | `MathStatement` | A semantic definition, lemma, theorem, proposition, corollary, invariant, example, or remark with stable linking | `id`, `title`, optional `kind`, `proofId`, `dependsOn` |
 | `MathProof` | A proof linked back to its statement, optionally collapsible | `id`, `for`, optional `title`, `collapsible`, `open` |
-| `Ref` | Dynamic semantic link with hover popover preview to any statement, exercise, problem, or figure | `id` |
+| `Ref` | Dynamic semantic link with hover popover preview to any statement, exercise, problem, or figure | `id`, optional `label`, `showTitle` |
 | `ExerciseSet` | Concluding exercise set on lesson/lab pages (4–8 items) | slot |
-| `Exercise` | Practice exercise item on lesson/lab pages | `id`, `title`, optional `type`, `level`, `challenge` |
+| `Exercise` | Practice exercise item on lesson/lab pages | `id`, `title`, `type`, optional `level`, `challenge` |
 | `ProblemSet` | Problem set container on chapter `problems` pages (10–20 items) | slot |
 | `Problem` | Practice problem item on `problems` pages | `id`, `title`, optional `type`, `level`, `challenge`, `covers` |
-| `PracticeGenerator` | Interactive question generator with parameter randomization, progressive hints, and worked solutions | `client:load`, `courseId` |
-| `ExerciseSolution` | Collapsible solution card with optional hint disclosure for self-checks | optional `hint`, `title`, `hintTitle` |
+| `ExerciseSolution` | Collapsible solution card with optional hint disclosure for self-checks (supports `hint` string prop or `<div slot="hint">` / `<p slot="hint">` when using `<Ref>` or rich blocks) | optional `hint`, `title`, `hintTitle` |
 
 Prefer a diagram or figure when it communicates relationships more clearly than prose. Keep source code deterministic and bounded. A diagram is not a substitute for explaining the model it represents.
 
@@ -200,7 +200,7 @@ import ProblemSet from '../../../components/ProblemSet.astro';
 import Problem from '../../../components/Problem.astro';
 
 <ProblemSet>
-  <Problem id="prob-darboux-step" title="Step Function Integrability" type="proof" level="transfer" covers={["integration"]}>
+  <Problem id="prob-darboux-step" title="Step Function Integrability" type="prove" level="transfer" covers={["integration"]}>
     Problem statement...
     <ExerciseSolution>
       <div slot="hint">Hint text...</div>
@@ -232,7 +232,7 @@ import MathProof from '../../../components/MathProof.astro';
 If $H \le G$ and $G$ is finite, then $|H|$ divides $|G|$.
 </MathStatement>
 
-<MathProof id="lagrange-proof" for="lagrange" collapsible open>
+<MathProof id="lagrange-proof" for="lagrange" collapsible>
 The cosets partition $G$ into equally sized sets, so $|G|$ is an integer multiple of $|H|$.
 </MathProof>
 ```
@@ -242,9 +242,12 @@ The cosets partition $G$ into equally sized sets, so $|G|$ is an integer multipl
 Use for non-interactive self-checks, calculation exercises, or proof tasks where a learner benefits from a hint before opening the worked solution. Provides distinct accessible disclosures for the hint and the worked solution without nesting, and supports inline and display LaTeX math in both hints and solutions.
 
 ```mdx
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
 
-### Exercise 1: Cache capacity calculation
+<ExerciseSet>
+  <Exercise id="ex-cache-capacity" type="verify" level="application" title="Cache capacity calculation">
 
 Calculate the minimum capacity required for ...
 
@@ -260,6 +263,9 @@ Applying the capacity equation:
 ...
 
 </ExerciseSolution>
+
+  </Exercise>
+</ExerciseSet>
 ```
 
 ### Diagram types and usage
@@ -274,7 +280,8 @@ Choose a diagram by the question it should answer, not by the tool that is most 
 | Class or domain model | Types, attributes, operations, and relationships | Static concepts, responsibilities, inheritance, or composition | `PlantUML` class syntax |
 | Component or deployment | Software units, interfaces, nodes, and dependencies | System structure, runtime placement, or architectural boundaries | `PlantUML` component/deployment syntax |
 | Use-case or context | Actors, goals, and system boundaries | Functional scope and who interacts with a system | `PlantUML` use-case syntax |
-| Mathematical or geometric | Axes, curves, shapes, constructions, and annotations | A precise proof aid, geometric relation, or function | `TikZ` |
+| Mathematical or geometric (non-function) | Axes, shapes, and static geometric constructions | A precise proof aid or geometric construction that does not plot a real function | `TikZ` |
+| Real-function graph | Build-time verified function curves, tangent/secant lines, and areas | Plotting real functions, discontinuities, or Riemann sums (mandatory per D-0014 / `LINT-09`) | `Figure` |
 | Quantitative visualization | Data values, trends, distributions, or comparisons | A numerical pattern that is easier to see than to read in a table | `PythonDiagram` |
 | Custom conceptual or network | Nodes, links, labels, and visual groupings | A domain-specific relationship that does not fit UML or a mathematical plot | `PythonDiagram` SVG or simple `PlantUML` shapes |
 
@@ -359,7 +366,7 @@ This short editorial note is useful in the reference edition but would interrupt
 
 `BookOnly` content is hidden from normal lesson pages and included in the PDF. `ScreenOnly` content is shown on normal lesson pages and omitted from the PDF. Keep either wrapper focused and meaningful; do not duplicate whole lessons or hide required explanations behind them. Use ordinary Markdown inside the wrappers. These wrappers are the preferred, explicit mechanism—do not rely on ad-hoc `no-print` classes.
 
-Native HTML `<details>` sections remain collapsible on screen, but their content is expanded in the PDF and their summary controls are omitted. Write solution, hint, and answer content so it reads naturally when expanded in sequence. Diagram source disclosure panels are intentionally excluded from books because the rendered diagram is the citable artifact; explain the diagram in surrounding prose instead.
+Raw `<details>` elements in MDX lesson bodies are forbidden (`LINT-01`). Built-in disclosure components (`<ExerciseSolution>`, `<MathProof>`, and `<Figure collapsed>`) render collapsible disclosures on screen while expanding cleanly in the PDF with their summary controls omitted. Write solution, hint, and answer content so it reads naturally when expanded in sequence. Diagram source disclosure panels are intentionally excluded from books because the rendered diagram is the citable artifact; explain the diagram in surrounding prose instead.
 
 Book-oriented authoring guidelines:
 

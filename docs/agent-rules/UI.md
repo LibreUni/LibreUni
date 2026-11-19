@@ -4,7 +4,7 @@
 Serious learning for serious learners. The platform follows a "No Bullshit" approach: no distractions, no fluff, just high-quality university-level content presented in a modern, interactive, and professional manner.
 
 ## Visual Identity
-- **Primary Color**: Blue (`#3b82f6` / Tailwind `blue-500`). Blue represents trust, intelligence, and clarity.
+- **Primary Color**: Blue (`#2563eb` / Tailwind `blue-600`, with high-contrast `#93c5fd` accents in dark mode). Blue represents trust, intelligence, and clarity.
 - **Consistency**: All interactive elements, highlights, and exports must adhere to the primary blue theme.
 - **Highlighting**: Avoid solid black as a highlight color for interactive elements. Use subtle shades of the primary color or semantic colors (slate/zinc) for a clean, academic look.
 - **Exports**: Exported materials (PDFs, slides) must match the platform's color scheme. Avoid green in exports unless semantically required (e.g., success states).
