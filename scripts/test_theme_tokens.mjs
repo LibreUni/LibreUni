@@ -9,6 +9,7 @@ const GLOBAL_CSS_PATH = path.join(ROOT, 'src/styles/global.css');
 function parseCssThemes(css) {
   const blocks = [
     { name: 'default:light', selector: ':root', regex: /:root\s*\{([^}]+)\}/ },
+    { name: 'default:dark', selector: ':root', regex: /:root\s*\{([^}]+)\}/ },
     { name: 'monochrome:light', selector: "html[data-theme='monochrome']", regex: /html\[data-theme='monochrome'\]\s*\{([^}]+)\}/ },
     { name: 'monochrome:dark', selector: "html.dark[data-theme='monochrome']", regex: /html\.dark\[data-theme='monochrome'\]\s*\{([^}]+)\}/ },
   ];
@@ -100,7 +101,7 @@ function runAudit() {
     process.exit(1);
   }
 
-  console.log(`Theme Token Linter: All theme token contracts passed across ${themes.length} themes.`);
+  console.log(`Theme Token Linter: All theme token contracts passed across 2 themes (${themes.length} theme-mode blocks).`);
 }
 
 runAudit();

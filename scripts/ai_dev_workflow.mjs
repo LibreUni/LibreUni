@@ -108,7 +108,7 @@ export function mapFileToRoutes(relFile) {
     return [`/courses/${courseId}.html`];
   }
   if (normalized.includes('CodeRunner') || normalized.includes('SyntaxHighlighter')) {
-    return ['/lessons/calculus-intro/limits-laboratory.html'];
+    return ['/lessons/calculus-intro/limits.html'];
   }
   if (normalized.includes('StudyToolsRail') || normalized === 'src/pages/lessons/[...slug].astro') {
     return ['/lessons/calculus-intro/limits.html', '/lessons/database-systems/relational-model.html'];

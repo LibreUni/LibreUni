@@ -123,7 +123,7 @@ for (const file of lessonFiles) {
   }
 
   const kind = fm.kind || 'lesson';
-  if (!['lesson', 'lab', 'problems', 'recap', 'practice', 'exam'].includes(kind)) {
+  if (!['lesson', 'lab', 'problems', 'recap', 'practice'].includes(kind)) {
     errors.push(`[LINT-00] ${rel}: Invalid kind '${kind}'.`);
   }
 
@@ -160,19 +160,6 @@ for (const file of lessonFiles) {
     if (!Array.isArray(fm.covers) || fm.covers.length === 0) {
       errors.push(`[LINT-00] ${rel}: Frontmatter list 'covers' must be a non-empty array for kind 'practice'.`);
     }
-  } else if (kind === 'exam') {
-    if (!Array.isArray(fm.covers) || fm.covers.length === 0) {
-      errors.push(`[LINT-00] ${rel}: Frontmatter list 'covers' must be a non-empty array for kind 'exam'.`);
-    }
-    if (fm.durationMinutes !== undefined && (typeof fm.durationMinutes !== 'number' || fm.durationMinutes <= 0)) {
-      errors.push(`[LINT-00] ${rel}: Frontmatter 'durationMinutes' must be a positive integer for kind 'exam'.`);
-    }
-    if (fm.totalPoints !== undefined && (typeof fm.totalPoints !== 'number' || fm.totalPoints <= 0)) {
-      errors.push(`[LINT-00] ${rel}: Frontmatter 'totalPoints' must be a positive integer for kind 'exam'.`);
-    }
-    if (fm.allowedMaterials !== undefined && !Array.isArray(fm.allowedMaterials)) {
-      errors.push(`[LINT-00] ${rel}: Frontmatter list 'allowedMaterials' must be an array for kind 'exam'.`);
-    }
   }
 
   const body = raw.slice(fmMatch[0].length);
@@ -188,10 +175,13 @@ for (const file of lessonFiles) {
   const codeFreeBody = stripFencedCode(body);
   const lines = codeFreeBody.split(/\r?\n/);
 
-  // LINT-09: Ban function graphs in TikZ
-  const tikzMatches = body.matchAll(/<TikZ\b[^>]*>([\s\S]*?)<\/TikZ>/g);
-  for (const tm of tikzMatches) {
-    const tikzCode = tm[1];
+  // LINT-09: Ban function graphs in TikZ (both prop and children syntaxes)
+  const tikzSources = [
+    ...[...body.matchAll(/<TikZ\b[^>]*\bcode=\{\s*(?:String\.raw)?`([\s\S]*?)`\s*\}/g)].map((m) => m[1]),
+    ...[...body.matchAll(/<TikZ\b[^>]*\bcode=["']([\s\S]*?)["']/g)].map((m) => m[1]),
+    ...[...body.matchAll(/<TikZ\b[^>]*>([\s\S]*?)<\/TikZ>/g)].map((m) => m[1]),
+  ];
+  for (const tikzCode of tikzSources) {
     if (
       /\bplot\b/.test(tikzCode) ||
       /\bcontrols\b/.test(tikzCode) ||
@@ -241,11 +231,11 @@ for (const file of lessonFiles) {
     if (/<details\b/i.test(line) || /<summary\b/i.test(line)) {
       errors.push(`[LINT-01] ${rel} (body line ${lineNum}): Raw <details>/<summary> is forbidden; use <ExerciseSolution> or <MathProof>.`);
     }
-    if (/<MathStatement\b[^>]*\bnumber=["'][^"']+["']/.test(line)) {
+    if (/<MathStatement\b[^>]*\bnumber=(?:["'][^"']+["']|\{\s*[^}]+\s*\})/.test(line)) {
       errors.push(`[LINT-06] ${rel} (body line ${lineNum}): Hardcoded number prop on <MathStatement> is forbidden (D-0013); numbers are generated dynamically.`);
     }
-    if (/<(Exercise|Problem|ExamQuestion|Figure)\b[^>]*\bnumber=["'][^"']+["']/.test(line)) {
-      errors.push(`[LINT-08] ${rel} (body line ${lineNum}): Hardcoded number prop on <Exercise>, <Problem>, <ExamQuestion>, or <Figure> is forbidden (D-0013); numbers are generated dynamically.`);
+    if (/<(Exercise|Problem|Figure)\b[^>]*\bnumber=(?:["'][^"']+["']|\{\s*[^}]+\s*\})/.test(line)) {
+      errors.push(`[LINT-08] ${rel} (body line ${lineNum}): Hardcoded number prop on <Exercise>, <Problem>, or <Figure> is forbidden (D-0013); numbers are generated dynamically.`);
     }
 
     const refMatches = line.matchAll(/<Ref\s+[^>]*\bid=["']([^"']+)["']/g);

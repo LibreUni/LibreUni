@@ -2,8 +2,10 @@ FROM node:26.7.0-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Install Python and scientific libraries for build-time diagram rendering
+# Install Java, Graphviz, and Python scientific libraries for build-time diagram rendering
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    default-jre-headless \
+    graphviz \
     python3 \
     python3-matplotlib \
     python3-numpy \
@@ -14,7 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package*.json ./
 RUN npm ci
 
-# Install Playwright Chromium for CI
+# Download and verify pinned PlantUML jar before copying source
+COPY tools/download-plantuml.mjs ./tools/download-plantuml.mjs
+ENV LIBREUNI_PLANTUML_JAR=/app/tools/plantuml.jar
+RUN node tools/download-plantuml.mjs
+
+# Install Playwright Chromium for CI and course PDF generation
 RUN npx playwright install --with-deps chromium
 
 # Build the static site

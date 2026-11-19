@@ -26,10 +26,8 @@ const componentNames = new Set([
   'Figure',
   'Problem',
   'ProblemSet',
-  'ExamQuestion',
-  'ExamAttempt',
   'PracticeGenerator',
-  'MarkingScheme',
+  'SqlRunner',
   ...fs.readdirSync(path.join(root, 'src/components/playgrounds')).filter((name) => name.endsWith('.tsx')).map((name) => path.basename(name, '.tsx')),
 ]);
 
@@ -59,7 +57,7 @@ for (const courseId of activeCourses) {
     }
     for (const match of source.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)) {
       const name = match[1];
-      if (componentNames.has(name) && /Playground$|^(Quiz|CodeRunner|CodeExercise|FillInExercise|CaseStudy)$/.test(name)) {
+      if (componentNames.has(name) && /Playground$|^(Quiz|CodeRunner|CodeExercise|FillInExercise|CaseStudy|SqlRunner|PracticeGenerator)$/.test(name)) {
         const tail = source.slice(match.index, match.index + 500);
         if (!/client:load\b/.test(tail)) failures.push(`${courseId}/${fileName}: interactive ${name} must use client:load`);
       }

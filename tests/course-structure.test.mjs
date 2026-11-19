@@ -44,7 +44,6 @@ test('course structure validates module and page kinds and numbering rules', () 
       for (const page of mod.pages) {
         assert.ok(PAGE_KINDS.includes(page.kind), `Valid page kind "${page.kind}" in ${courseId}/${page.slug}`);
         if (mod.kind === 'chapter') {
-          assert.notEqual(page.kind, 'exam', `Chapter module ${mod.title} cannot contain exam page ${page.slug}`);
           assert.notEqual(page.kind, 'practice', `Chapter module ${mod.title} cannot contain practice page ${page.slug}`);
           if (page.kind === 'lesson' || page.kind === 'lab') {
             assert.equal(page.number, `${mod.index}.${expectedSection}`, `Section number matches expected sequence`);
@@ -81,7 +80,7 @@ test('every manifest slug exists on disk and every disk lesson is in manifest', 
   }
 });
 
-test('problem set, recap sheet, and exam contracts hold for specialized page kinds', () => {
+test('problem set, recap sheet, and practice contracts hold for specialized page kinds', () => {
   for (const courseId of activeCourses) {
     const structure = loadCourseStructure(courseId, { root });
 
