@@ -18,6 +18,8 @@ assessment: Design and verify an end-to-end image-pipeline architecture with for
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 
 This capstone integrates representation, instruction-set semantics, datapath/control, pipelining, memory hierarchy, I/O, performance modeling, and parallel execution. The problem is to design a processor-backed image-filter service that accepts frames from a device, applies a configurable convolution and color transform, and emits results under a latency and energy budget. The goal is not to choose a fashionable CPU feature. It is to make a defensible architecture argument in which every abstraction, optimization, and failure mode is explicit.
 
@@ -88,17 +90,6 @@ Row-major layout favors a row-wise inner loop. A line of 64 bytes contains 16 fo
 
 **Design comparison.** A row streaming design minimizes temporary storage but may reload rows for each output channel. A channel-plane tiled design improves vector reuse and coefficient broadcast but may require a format conversion. A separable design cuts arithmetic but writes and rereads an intermediate image. Measure bytes moved at each hierarchy level; “fewer operations” is not enough if traffic doubles.
 
-### Self-check — verify L1 tile footprint and reuse factor
-
-Verify that a $64 \times 32$ RGBA output tile with a 1-pixel halo fits inside the 32 KiB 4-way L1 data cache and calculate the compulsory DRAM traffic per output pixel compared to an untiled naive kernel.
-
-<ExerciseSolution hint="Include the 1-pixel border on all four sides: (64 + 2) * (32 + 2) input pixels plus 64 * 32 output pixels, at 4 bytes per RGBA pixel.">
-1. **Input tile with halo:** $(64 + 2) \times (32 + 2) = 66 \times 34 = 2{,}244$ pixels $\times 4\text{ B} = 8{,}976\text{ B}$.
-2. **Output tile:** $64 \times 32 = 2{,}048$ pixels $\times 4\text{ B} = 8{,}192\text{ B}$.
-3. **Total working set:** $8{,}976 + 8{,}192 = 17{,}168\text{ B} \approx 16.77\text{ KiB} < 32\text{ KiB}$, leaving nearly half of L1 capacity for stack frames, filter coefficients, and set-associativity conflict headroom.
-4. **Traffic reduction:** Without reuse, each output pixel reads $9 \times 4 = 36\text{ B}$ and writes $4\text{ B}$ ($40\text{ B/pixel}$). With L1 tiling, each output pixel amortizes to $\frac{8{,}976 + 8{,}192}{2{,}048} \approx 8.38\text{ B/pixel}$, reducing external memory traffic by $4.77\times$.
-</ExerciseSolution>
-
 ## DMA and buffering
 
 > **Warning.** Never allow the filter kernel to read an input frame buffer before checking the device completion status and executing the required memory/cache synchronization barrier, and never recycle an output buffer to the DMA ring while the display or output engine still holds in-flight read ownership.
@@ -159,6 +150,77 @@ Include a correctness argument for one output pixel, an invariant for buffer own
 > **Remark.** Architectural designs are evaluated on falsifiable engineering rigor: a slower design with a sound overflow proof, verified DMA ownership, and a discriminating Roofline/AMAT experiment is superior to an unverified speedup claim.
 
 A rigorous design specification is precise about boundaries and uncertainty. It derives rather than asserts arithmetic cost, connects data layout to cache lines, distinguishes architectural guarantees from microarchitectural assumptions, handles tail and overflow cases, and proposes measurements that could disprove its own model. A diagram without invariants is incomplete; a benchmark without workload and measurement boundaries is weak evidence; a speedup claim without a baseline is not a result.
+
+<ExerciseSet>
+
+<Exercise id="ex-arch-cap-l1-tile-reuse" type="verify" level="application" title="L1 Tile Working-Set Footprint and Compulsory DRAM Traffic">
+
+Verify that a $64 \times 32$ RGBA output tile with a 1-pixel halo fits inside the 32 KiB 4-way L1 data cache and calculate the compulsory DRAM traffic per output pixel compared to an untiled naive kernel.
+
+<ExerciseSolution hint="Include the 1-pixel border on all four sides: $(64 + 2) \times (32 + 2)$ input pixels plus $64 \times 32$ output pixels, at 4 bytes per RGBA pixel.">
+
+1. **Input tile with halo:** $(64 + 2) \times (32 + 2) = 66 \times 34 = 2{,}244$ pixels $\times 4\text{ B} = 8{,}976\text{ B}$.
+2. **Output tile:** $64 \times 32 = 2{,}048$ pixels $\times 4\text{ B} = 8{,}192\text{ B}$.
+3. **Total working set:** $8{,}976 + 8{,}192 = 17{,}168\text{ B} \approx 16.77\text{ KiB} < 32\text{ KiB}$, leaving nearly half of L1 capacity for stack frames, filter coefficients, and set-associativity conflict headroom.
+4. **Traffic reduction:** Without reuse, each output pixel reads $9 \times 4 = 36\text{ B}$ and writes $4\text{ B}$ ($40\text{ B/pixel}$). With L1 tiling, each output pixel amortizes to $\frac{8{,}976 + 8{,}192}{2{,}048} \approx 8.38\text{ B/pixel}$, reducing external memory traffic by $4.77\times$.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-cap-accumulator-overflow" type="verify" level="application" title="Stencil Accumulator Width and Saturation Ordering">
+
+Suppose the $3 \times 3$ convolution kernel uses signed 8-bit weights $w_{i,j} \in [-128, 127]$ and unsigned 8-bit pixels $p_{i,j} \in [0, 255]$. Determine the exact minimum signed two's-complement accumulator width required to prevent intermediate overflow before final clamping to $[0, 255]$, and construct a 9-tap counterexample showing why per-tap clamping violates exact convolution semantics.
+
+<ExerciseSolution hint="Compute the worst-case negative sum $9 \times (-128) \times 255$ and compare against signed $k$-bit bounds $[-2^{k-1}, 2^{k-1}-1]$.">
+
+1. **Minimum accumulator width:** The extreme negative sum is $9 \times (-128) \times 255 = -293{,}760$, and the extreme positive sum is $9 \times 127 \times 255 = +291{,}465$. A signed 19-bit integer covers $[-262{,}144, +262{,}143]$, which overflows both bounds. A signed 20-bit integer covers $[-524{,}288, +524{,}287]$, so **20 signed bits** is the exact mathematical minimum (implemented in hardware with a standard 32-bit lane).
+2. **Per-tap saturation counterexample:** Suppose 8 taps yield $+255 \times 1 = +255$ each and the 9th tap yields $-1800$ (e.g., $w = -8, p = 225$). Exact accumulation gives $8(255) - 1800 = 240 \in [0, 255]$. Clamping to $[0, 255]$ after every tap instead saturates at $255$ across taps $2\dots 8$ and then drops to $\max(0, 255 - 1800) = 0$, introducing a $240$-unit error.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-cap-mac-unrolling-schedule" type="construct" level="application" title="Pipeline RAW Hazard Hiding via Accumulator Unrolling">
+
+Consider a 2 GHz core whose pipelined 4-channel MAC instruction completes all four RGBA lanes of one stencil tap with initiation interval $1\text{ cycle}$ and latency $4\text{ cycles}$. A naive loop updates one pixel accumulator across all 9 taps ($9 \times 4 = 36\text{ cycles/pixel}$). Show how unrolling across $k = 4$ independent output pixels removes RAW stalls to achieve $9\text{ cycles/pixel}$, and calculate the resulting compute-only frame time for a $1920 \times 1080$ image.
+
+<ExerciseSolution hint="Interleave tap $t$ across four independent pixel accumulators $A_0, A_1, A_2, A_3$ before issuing tap $t+1$ to $A_0$.">
+
+1. **Hazard elimination:** With $k = 4$ independent pixel accumulators, the loop schedules `MAC A0, tap_t`, `MAC A1, tap_t`, `MAC A2, tap_t`, `MAC A3, tap_t` in consecutive cycles $0, 1, 2, 3$. By cycle $4$, the 4-cycle latency of `A0` has completed, so `MAC A0, tap_{t+1}` executes with zero RAW stalls.
+2. **Amortized cycle rate:** Four pixels complete all 9 taps in $4 \times 9 = 36$ cycles (plus negligible 3-cycle drain), giving $9\text{ cycles/pixel}$.
+3. **Compute-only frame time:** A $1920 \times 1080$ frame has $2{,}073{,}600$ pixels. At $9\text{ cycles/pixel}$, compute requires $2{,}073{,}600 \times 9 = 18{,}662{,}400$ cycles. At $2\text{ GHz}$ ($2 \times 10^9\text{ cycles/s}$), compute takes $\frac{18{,}662{,}400}{2 \times 10^9} = 9.33\text{ ms}$, leaving $15.67\text{ ms}$ of headroom within the $25\text{ ms}$ p99 budget (compared to $37.32\text{ ms}$ without unrolling).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-cap-dma-descriptor-overflow" type="verify" level="transfer" title="DMA Descriptor Integer Overflow and Generation-Counter Race">
+
+A camera driver allocates an $8{,}294{,}400\text{-byte}$ frame buffer (`1920 * 1080 * 4`) and validates an incoming descriptor in 32-bit unsigned arithmetic with `uint32_t bytes = width * height * 4; if (bytes <= buf_capacity) accept();`. Construct a concrete `(width, height)` input pair that bypasses this check via wraparound, and write both the overflow-safe validation invariant and the generation-tag check required before recycling a DMA slot.
+
+<ExerciseSolution hint="Choose factors of $2^{32} = 4{,}294{,}967{,}296$ (for instance powers of two whose product times 4 wraps modulo $2^{32}$ into $[0, 8{,}294{,}400]$).">
+
+1. **Overflow exploit vector:** Let `width = 65536` ($2^{16}$) and `height = 16384` ($2^{14}$). In 32-bit unsigned arithmetic, $65{,}536 \times 16{,}384 \times 4 = 2^{32} \equiv 0 \pmod{2^{32}}$. Since $0 \le 8{,}294{,}400$, the naive check accepts the descriptor while the DMA loop attempts to transfer $4\text{ GiB}$ past the buffer. (Similarly, `width = 32768, height = 32769` wraps to `131,072` bytes $\le 8{,}294{,}400$.)
+2. **Safe validation invariant:** Reject zero dimensions and enforce explicit architectural bounds plus division-checked 64-bit bounds before multiplying:
+   `width > 0 && height > 0 && width <= 4096 && height <= 2160 && (uint64_t)width * height <= buf_capacity / 4`.
+3. **Buffer recycling invariant:** Never return a slot to `FREE` until an MMIO status read confirms the DMA engine is idle on that descriptor and its returned generation token matches the slot's expected generation counter (incremented monotonically on each reuse).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-cap-roofline-falsification" type="generalise" level="synthesis" title="Falsifying Memory-Bandwidth vs. Compute Bottlenecks">
+
+Compare the untiled naive stencil ($68\text{ ops/pixel}$, $40\text{ B/pixel}$, intensity $1.7\text{ ops/B}$) and the $64 \times 32$ L1-tiled stencil ($68\text{ ops/pixel}$, $8.38\text{ B/pixel}$ DRAM traffic) on a $2\text{ GHz}$ core with a $20\text{ GB/s}$ DRAM ceiling and a $16\text{ Gops/s}$ SIMD compute ceiling. Determine which roofline bound constrains each variant, and design a single controlled experiment that falsifies the hypothesis that the tiled pipeline is DRAM-bandwidth-bound.
+
+<ExerciseSolution hint="Compute the roofline ridge point ($16\text{ Gops/s} \div 20\text{ GB/s}$) and test sensitivity to core clock scaling versus DRAM bandwidth scaling.">
+
+1. **Roofline classification:** The machine ridge point is $\frac{16\text{ Gops/s}}{20\text{ GB/s}} = 0.8\text{ ops/B}$.
+   - **Untiled kernel ($1.7\text{ ops/B}$):** Memory roofline ceiling is $1.7 \times 20 = 34\text{ Gops/s} > 16\text{ Gops/s}$ theoretically if L1/L2 had infinite conflict-free streaming, though in practice poor row-strided reuse drops effective intensity below $0.8\text{ ops/B}$ and stalls on DRAM bandwidth.
+   - **L1-tiled kernel ($\frac{68}{8.38} \approx 8.11\text{ ops/B}$):** Exceeds the $0.8\text{ ops/B}$ ridge point by over $10\times$ (DRAM ceiling $8.11 \times 20 \approx 162.3\text{ Gops/s}$), placing the tiled kernel squarely under the **$16\text{ Gops/s}$ compute ceiling**.
+2. **Falsification experiment:** Hold input resolution, tile size ($64 \times 32$), and DRAM clock fixed while stepping CPU core frequency from $2.0\text{ GHz}$ down to $1.0\text{ GHz}$ (and measuring DRAM CAS byte counters and L2 miss stalls). If frame time doubles while total DRAM bytes stay constant at $\approx 17.4\text{ MB/frame}$, compute is the bottleneck; conversely, if frame time stays nearly invariant under core clock halving while L2/DRAM stall cycles remain high, the hypothesis of compute-boundedness is falsified and the bottleneck lies in memory stalls or cache conflicts.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 

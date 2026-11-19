@@ -17,6 +17,8 @@ assessment: Given an incomplete architecture proposal, produce a risk-ranked rev
 import Quiz from '../../../components/Quiz';
 import CaseStudy from '../../../components/CaseStudy';
 import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
 
 Architecture review is a structured argument that a proposed machine satisfies its software contract under its intended workload and failure model. A block diagram can show components without proving that instruction state, memory visibility, exceptions, device ownership, and performance budgets compose. This review uses a hypothetical 4-core image-processing SoC to demonstrate the evidence a reviewer should request.
 
@@ -41,7 +43,7 @@ Review the architectural state: registers, PC, privilege modes, memory model, ex
 
 Check type boundaries: signed and unsigned arithmetic, extension rules, unaligned accesses, byte order, vector tails, and floating-point rounding. An ISA that says “integer add” without overflow semantics forces compilers and debuggers to guess. A device interface that permits arbitrary access widths can create incompatible implementations.
 
-**Review exercise.** The proposed ISA says loads return a word but does not say whether a byte load sign-extends, zero-extends, or leaves upper bits unchanged. This is a blocking defect because software cannot write a portable decoder and a compiler cannot preserve source-level signedness. Request a precise table of width and extension behavior.
+**Worked audit finding.** The proposed ISA says loads return a word but does not say whether a byte load sign-extends, zero-extends, or leaves upper bits unchanged. This is a blocking defect because software cannot write a portable decoder and a compiler cannot preserve source-level signedness. The reviewer must request a precise table of width and extension behavior.
 
 <CaseStudy client:load
   title="Review the refinement boundary"
@@ -118,15 +120,6 @@ Classify findings as blocking correctness defects, unverified assumptions, perfo
 
 **Worked decision.** The proposal uses write-back private L1 caches but gives no coherence protocol. Reject as incomplete because a two-core program can write a shared location and observe stale values, violating the memory model. A revision must specify a protocol, fence interaction, invalidation/ownership transitions, and tests for write-write, read-after-write, false sharing, and eviction. The reviewer should not approve the design merely because single-core benchmarks pass.
 
-### Self-check — construct the message-passing failure trace
-
-Given Core 0 executing `M[data] = 42; M[flag] = 1;` and Core 1 executing `while (M[flag] == 0); r1 = M[data];` on a weakly ordered multicore processor with coherent caches, explain how `r1 == 0` can occur and write the fence/ordering fix.
-
-<ExerciseSolution hint="Coherence guarantees single-address serialization, not cross-address store-to-store or load-to-load ordering across `data` and `flag`.">
-1. **Failure trace without barriers:** Even with hardware cache coherence (MESI), Core 0's store buffer or interconnect can make the write `M[flag] = 1` visible to Core 1 before `M[data] = 42` drains, or Core 1's out-of-order load unit can speculatively read `M[data]` (observing `0`) before the loop exits on `M[flag] == 1`.
-2. **Architectural repair:** Core 0 must issue a release store (`stlr` or `fence w, w` between the stores to `data` and `flag`), and Core 1 must issue an acquire load (`ldar` or `fence r, r` after observing `M[flag] == 1` and before reading `M[data]`).
-</ExerciseSolution>
-
 ## Required review report
 
 > **Remark.** Use the boundary checklist below to structure the final sign-off report so that every hardware-software interface (ISA, MMU, cache, DMA, interrupt) has an explicit pass/fail oracle.
@@ -136,6 +129,74 @@ Construct a one-page architecture claim table, a block and sequence diagram, thr
 Before signing off, perform a boundary review. Ask what happens at zero and maximum lengths, the first and last cache line, a branch taken at a page boundary, an exception after a younger DMA request, a context switch while a TLB entry is cached, a device reset while a descriptor is in flight, and a power failure after a storage acknowledgement. These cases expose whether the design has a real state model or only a collection of nominal diagrams. Record the expected architectural observation and the internal mechanism that enforces it for each case.
 
 The final review meeting should separate disagreement about a requirement from disagreement about an implementation. If two reviewers disagree about whether a frame may be dropped, first resolve the service contract; if they agree on the contract but disagree about a cache or DMA mechanism, compare evidence against the invariant. This prevents architecture review from becoming a preference contest and makes the decision reversible when a measured assumption changes.
+
+<ExerciseSet>
+
+<Exercise id="ex-arch-rev-isa-contract-audit" type="verify" level="application" title="ISA Width, Extension, and Exception Contract Audit">
+
+A proposed 64-bit ISA manual defines `LB rd, offset(rs1)` as "loads one byte from effective address `rs1 + offset` into `rd`", omits unaligned-access fault rules for `LW`/`LD`, and leaves `EPC` unspecified when a data TLB miss traps during a speculative load. Identify the three blocking contract defects and write the exact architectural state rules needed to close them.
+
+<ExerciseSolution hint="Check upper-bit semantics in the 64-bit destination register, alignment fault behavior, and precise exception state.">
+
+1. **Upper-bit extension ambiguity:** The manual must distinguish signed sign-extension (`LB`: bits `63..8` filled with bit `7`) from unsigned zero-extension (`LBU`: bits `63..8` zeroed); leaving upper bits undefined or preserved prevents portable compilation of `int8_t` vs. `uint8_t`.
+2. **Alignment contract omission:** For multi-byte loads (`LW`, `LD`), specify whether unaligned addresses trap with an alignment fault or split atomically/non-atomically across cache lines, and define the trap vector and memory side-effect guarantee.
+3. **Imprecise trap specification:** On a data TLB miss, the ISA must enforce precise exceptions: `EPC` records the faulting load's PC, `rd` remains unmodified, and younger speculative instructions are squashed before architectural commitment.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-rev-ooo-speculative-commit" type="verify" level="application" title="Out-of-Order Speculative Store and Forwarding Audit">
+
+A four-wide out-of-order core verifies single-cycle branch prediction recovery in simulation, yet allows executed stores to write L1 cache lines before reaching the head of the reorder buffer (ROB) and forwards from the store buffer by matching only word-aligned addresses without byte-mask checking. Construct an adversarial instruction sequence demonstrating architectural failure for each flaw and state the hardware invariants that fix them.
+
+<ExerciseSolution hint="Trace a store younger than a faulting load for early L1 writes, and a partial byte store followed by a wider load for forwarding.">
+
+1. **Premature store write trace:** Suppose instruction $I_1$ (`LD x1, 0(x2)`) raises a page fault while younger $I_2$ (`SW x3, 0(x4)`) writes L1 early. When $I_1$ traps at ROB retirement, architectural memory already contains $I_2$'s speculative store, violating precise exceptions and potentially corrupting shared data visible to other cores or DMA. **Invariant:** Stores remain buffered in a speculative store queue and commit to L1 only upon reaching the non-faulting head of the ROB.
+2. **Width-blind forwarding trace:** Suppose $I_1$ (`SB x5, 0(x10)`) writes byte 0 while $I_2$ (`LW x6, 0(x10)`) reads all four bytes `[0..3]`. Word-address-only matching either returns `x5` with stale/zero upper bytes or fails to merge bytes `[1..3]` from L1. **Invariant:** Store-to-load forwarding requires full containment of the load's byte mask within the matching store's byte mask (or stalling/merging byte-by-byte from L1).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-rev-message-passing-trace" type="construct" level="transfer" title="Weakly Ordered Message-Passing Failure Trace and Fence Repair">
+
+Given Core 0 executing `M[data] = 42; M[flag] = 1;` and Core 1 executing `while (M[flag] == 0); r1 = M[data];` on a weakly ordered multicore processor with coherent caches (initially `M[data] = 0`, `M[flag] = 0`), construct a trace showing how `r1 == 0` can occur and specify the architectural ordering repair.
+
+<ExerciseSolution hint="Coherence guarantees single-address serialization, not cross-address store-to-store or load-to-load ordering across `data` and `flag`.">
+
+1. **Failure trace without barriers:** Even with hardware cache coherence (MESI), Core 0's store buffer or interconnect can make the write `M[flag] = 1` visible to Core 1 before `M[data] = 42` drains, or Core 1's out-of-order load unit can speculatively read `M[data]` (observing `0`) before the loop exits on `M[flag] == 1`.
+2. **Architectural repair:** Core 0 must issue a release store (`stlr` or `fence w, w` between the stores to `data` and `flag`), and Core 1 must issue an acquire load (`ldar` or `fence r, r` after observing `M[flag] == 1` and before reading `M[data]`).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-rev-dma-iommu-ownership" type="formalise" level="transfer" title="Camera DMA Ownership Invariant and MMIO Attribute Audit">
+
+In the camera SoC proposal, the driver maps MMIO device status and read-to-clear FIFO registers as normal write-back cacheable memory and updates the DMA ring tail doorbell immediately after writing descriptor fields in cached DRAM. Identify two correctness/hardware corruption failures this causes and formulate the memory-attribute, ordering, and IOMMU isolation invariants required for a sound I/O interface.
+
+<ExerciseSolution hint="Examine stale/speculative MMIO reads, descriptor publication order across memory/I/O domains, and device physical address bounds.">
+
+1. **MMIO cacheable failure:** Caching status registers returns stale values from L1 instead of live device state, while speculative loads into a read-to-clear FIFO register silently drain queued hardware words on mispredicted paths. **Invariant:** Map all MMIO register ranges with strongly ordered, non-cacheable, non-speculative attributes (`Device-nGnRE` / I/O PMA) and guard side-effect reads with load barriers (`fence r, r` / `lfence`).
+2. **Doorbell race & DMA isolation:** Without a write-to-output barrier and cache flush (on non-coherent DMA), the device can fetch uninitialized descriptor bytes after seeing the doorbell write; without an IOMMU, a corrupted descriptor can target kernel page tables. **Invariant:** Flush/clean descriptor lines if non-coherent, issue `fence w, o` before ringing the MMIO doorbell, verify buffer generation/ownership tags on completion, and confine device bus mastering through an IOMMU page-table domain covering only active frame buffers.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-rev-p99-roofline-evidence" type="generalise" level="synthesis" title="Separating Throughput Averages from p99 Latency and Roofline Evidence">
+
+The review packet claims the 30 fps / 25 ms p99 latency SLO is met because mean frame latency is $21.5\text{ ms}$ ($46.5\text{ fps}$) and cites a $2.1\times$ speedup over a scalar baseline compiled at `-O0`. Explain why neither metric establishes the SLO or microarchitectural claim, and design a falsifiable measurement protocol using latency distributions, hardware counters, and roofline arithmetic intensity.
+
+<ExerciseSolution hint="Compare mean vs. tail percentiles under jitter, critique unoptimized baselines, and bind DRAM traffic to frame latency ceilings.">
+
+1. **Why mean and `-O0` evidence fail:** A $21.5\text{ ms}$ mean easily violates a $25\text{ ms}$ p99 bound whenever DMA interrupts, TLB shootdowns, or DRAM refresh/queueing create a heavy tail (e.g., 5% of frames taking $35\text{ ms}$). Comparing against `-O0` attributes basic register allocation and dead-code removal to the proposed hardware.
+2. **Falsifiable measurement protocol:**
+   - Benchmark against an `-O3`/vectorized reference implementation with pinned frequencies, warm-up policy, and fixed input resolution ($1920 \times 1080$ RGBA).
+   - Record full per-frame latency percentiles ($p_{50}, p_{95}, p_{99}, p_{99.9}$) across $\ge 1{,}000$ contiguous frames with concurrent camera DMA load.
+   - Collect hardware counters (retired ops, DRAM CAS read/write bytes, L1/L2 miss stalls, TLB misses) to compute measured operational intensity ($\text{ops}/\text{byte}$) on the roofline model and verify which stage bounds $p_{99}$.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
 
 ## References & Further Reading
 
