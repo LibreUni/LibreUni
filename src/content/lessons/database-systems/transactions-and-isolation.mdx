@@ -1,0 +1,207 @@
+---
+title: Transactions and Isolation
+course: database-systems
+description: Specify what a transaction promises, trace anomalies, and choose an isolation contract that protects a stated invariant.
+prerequisites:
+  - SQL reads, writes, constraints, and predicate semantics
+  - Directed graphs and topological order
+  - Durable pages, logs, and the distinction between logical and physical state
+outcomes:
+  - Separate atomicity, durability, and application consistency from the visibility guarantee called isolation.
+  - Construct a precedence graph for a history and use acyclicity to establish conflict serializability.
+  - Trace lost update and write skew, then select a constraint, atomic statement, serialization rule, or retry boundary that repairs the named invariant.
+  - State a transaction's safe retry boundary, including why external side effects need idempotency.
+omissions:
+  - Formal proofs of view serializability, every vendor's isolation implementation, and distributed commit protocols are deferred.
+  - Lock-manager algorithms and MVCC garbage collection mechanics receive focused treatment in concurrency control rather than here.
+estimatedMinutes: 480
+assessment: Given an unseen concurrent history and application invariant, classify the anomaly, derive the serializability evidence, and propose a correct repair with its retry and external-effect boundary.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import IsolationSchedulePlayground from '../../../components/playgrounds/IsolationSchedulePlayground';
+
+
+Two buyers press “reserve” for the last seat. The application cannot treat two individually successful reads as proof that both reservations fit. It needs one unit of work whose committed outcome preserves `available_seats >= 0`, and it must say what a crash, competing transaction, or retry may observe.
+
+{/* Source tracking: Isolation-level caveats, snapshot behavior, and serialization failures are synthesized from PostgreSQL's transaction-isolation documentation. Conflict serializability and schedule analysis are synthesized from CMU 15-445/645 materials. Examples and phrasing are original. */}
+
+## ACID separates obligations that are often conflated
+
+> **Definition.** A transaction is a unit with an all-or-nothing commit outcome. **Isolation** constrains concurrent observations; it does not infer every business rule from a schema.
+
+| Claim | Concrete question | What it does not promise |
+| --- | --- | --- |
+| Atomicity | Can a crash expose only the debit, not the credit? | that the completed transfer was authorized |
+| Consistency | Do commits preserve declared and encoded business invariants? | that an unexpressed rule is magically checked |
+| Isolation | Which concurrent writes/read effects can this transaction see? | an absence of aborts or retries |
+| Durability | After acknowledgement, which failures retain the commit? | survival of every regional or adversarial event |
+
+For a reservation, a row-local invariant can often be enforced by one conditional statement:
+
+```sql
+UPDATE seat_inventory
+SET available = available - :requested
+WHERE event_id = :event_id
+  AND available >= :requested;
+```
+
+An affected-row count of zero means the predicate was false *at the protected update boundary*; it is not a successful reservation. This is stronger than `SELECT available`, computing in the application, then issuing an unconditional update.
+
+### Prediction — retry scope
+
+A transaction inserts an order, reserves inventory, commits, then calls a payment provider. The network times out after the call. Should the client blindly repeat the whole sequence?
+
+<ExerciseSolution hint="Separate a database rollback-safe action from an externally visible action that may already have occurred.">
+No. Retrying the database transaction before knowing the previous commit can duplicate inventory or orders; retrying the provider call can double-charge. Commit an outbox or an idempotency key with the database work, then make the provider operation retryable against that stable key. Isolation protects database histories; it does not make an external API atomic with them.
+</ExerciseSolution>
+
+## Histories can be tested with a precedence graph
+
+<MathStatement id="conflict-serializable" kind="theorem" title="Conflict-serializability test">
+Build a graph with one node per transaction. Add $T_i \rightarrow T_j$ when an operation of $T_i$ precedes and conflicts with an operation of $T_j$ on the same item; a conflict has the same item and at least one write. The history is conflict-serializable exactly when this graph is acyclic.
+</MathStatement>
+
+<PlantUML code={`@startuml
+rectangle "T1\nread A\nwrite A" as T1
+rectangle "T2\nread A\nwrite B" as T2
+rectangle "T3\nread B" as T3
+T1 --> T2 : A write → read
+T2 --> T3 : B write → read
+note right of T3
+No edge returns to T1,
+so T1, T2, T3 is
+one serial order.
+end note
+@enduml`} />
+
+Reads of the same item do not conflict. A write followed by a read, a read followed by a write, or two ordered writes does. An acyclic graph yields a topological order that preserves every conflict order. A cycle is stronger evidence than a suspicious final balance: it proves no serial ordering can retain all observed conflicts.
+
+### Worked trace — a lost update
+
+Start with `available = 20`. T1 reads 20 and plans to subtract 7. T2 reads 20 and plans to subtract 7. T1 writes 13; T2 then writes 13. The intended serial result is 6, but the final result is 13: one subtraction disappeared. The writes create a cycle when each transaction's read/write dependencies are represented, so a serializable protocol must block, abort, or otherwise reject one path.
+
+<IsolationSchedulePlayground client:load />
+
+Use the schedule explorer to commit to the observed value before revealing its explanation. It models a read-modify-write lost update; it is not evidence that every database's named isolation levels behave identically.
+
+## Snapshot visibility has a known boundary
+
+> **Counterexample.** “At least one doctor remains on call” can fail even when each transaction reads a consistent snapshot. T1 reads doctors A and B and turns A off; T2 reads the same snapshot and turns B off. The writes are disjoint, both commit, and no doctor remains.
+
+<PlantUML code={`@startuml
+participant "T1" as T1
+participant "T2" as T2
+database "on_call" as D
+T1 -> D : read A=true, B=true
+T2 -> D : read A=true, B=true
+T1 -> D : write A=false
+T2 -> D : write B=false
+note right of D
+Each row update succeeds;
+the predicate invariant fails.
+end note
+@enduml`} />
+
+Snapshot isolation often prevents dirty reads and many read anomalies while allowing readers and writers to proceed concurrently. It does **not** automatically serialize predicates over several rows. A serializable level may detect a dangerous dependency and abort one transaction; another repair is to lock/update a summary row that represents the invariant, or to encode a viable declarative constraint where possible.
+
+| Requirement | Reliable repair shape | Why a weaker shortcut fails |
+| --- | --- | --- |
+| no duplicate email | unique constraint | `SELECT` then `INSERT` races |
+| nonnegative stock in one row | conditional `UPDATE ... WHERE stock >= n` | a prior read becomes stale |
+| at least one on-call doctor | serializable validation or protected summary/predicate | row-local updates are disjoint |
+| price + order snapshot agree | same transaction and foreign-key/version rules | application-side sequencing can expose a prefix |
+
+### Application — pick the conflict boundary
+
+A tenant has a monthly credit limit across many invoices. Two requests each read remaining credit and add a different invoice. Name a repair and state the price it pays.
+
+<ExerciseSolution>
+Maintain a tenant-month summary row and update it conditionally in the same transaction, or use serializable isolation with a retry on serialization failure. The summary row makes the aggregate invariant a shared write boundary but can become hot; serializable validation preserves flexibility but can abort more often under contention. A normal row lock on each new invoice does not protect the aggregate predicate.
+</ExerciseSolution>
+
+## Isolation labels require an implementation contract
+
+> **Warning.** “Read committed,” “repeatable read,” and “serializable” are names, not a portable proof. Check the target DBMS's documented semantics, error behavior, and replica/DDL caveats.
+
+PostgreSQL, for example, documents Read Committed, Repeatable Read, and Serializable behavior, treats Read Uncommitted as Read Committed, and may report a serialization failure that the application must retry. That is an implementation example, not a license to generalize its exact snapshot boundary to another engine.
+
+### Transfer — design a test rather than trust the label
+
+You are told a service uses “repeatable read.” Give the smallest experiment that reveals whether it protects the on-call invariant.
+
+<ExerciseSolution hint="Run the two disjoint writes concurrently and retain outcome evidence, not just the final rows.">
+Create two on-call rows, begin two transactions at the claimed level, have both read the predicate, have each disable a different doctor, then commit. Record blocking, errors, commits, and the final predicate. If both commit with no doctor on call, the level does not protect this invariant; add a serializable/summary/predicate-based repair and rerun the same schedule.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-tx-conflict-serializability" type="verify" level="application" title="Conflict-Serializability Precedence Graph Construction">
+
+Consider history $H = r_1(A)\; r_2(B)\; w_1(B)\; w_2(A)\; c_1\; c_2$. Using <Ref id="conflict-serializable" />, construct the serialization graph and verify whether $H$ is conflict-serializable.
+
+<ExerciseSolution hint="Identify conflicting operation pairs on the same data item and draw directed edges.">
+
+The conflicting pairs are:
+1. $r_2(B)$ precedes $w_1(B)$ on item $B$, inducing directed edge $T_2 \to T_1$.
+2. $r_1(A)$ precedes $w_2(A)$ on item $A$, inducing directed edge $T_1 \to T_2$.
+The serialization graph contains the cycle $T_1 \to T_2 \to T_1$. By <Ref id="conflict-serializable" />, because the graph contains a directed cycle, the history $H$ is not conflict-serializable.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-tx-write-skew-anomaly" type="describe" level="recall" title="Write Skew Anomaly under Snapshot Isolation">
+
+Explain why snapshot isolation permits write skew in the classic hospital on-call problem (where at least one doctor must remain active) while preventing dirty reads, non-repeatable reads, and lost updates.
+
+<ExerciseSolution hint="Each transaction reads the shared active count but modifies disjoint doctor rows.">
+
+Under snapshot isolation, transactions read from a consistent snapshot taken at start and check for write conflicts only on the specific rows they update (first-committer-wins). In write skew, transaction $T_1$ updates doctor $A$ while $T_2$ updates doctor $B$. Because their write sets $\{A\}$ and $\{B\}$ are disjoint, no write-write conflict is detected, and both commit. However, their commit decisions depended on each other's state, violating the multi-row invariant.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-tx-aggregate-limit-repair" type="construct" level="application" title="Multi-Invoice Aggregate Credit Limit Protection">
+
+A business requires that the total of all unpaid invoices for a tenant cannot exceed credit limit $L$. Two concurrent transactions attempt to insert new invoices for tenant 12. Specify two alternative architectural mechanisms to prevent exceeding $L$ under concurrent execution.
+
+<ExerciseSolution hint="Consider explicit lock serialization on a parent row versus serializable snapshot isolation.">
+
+1. Explicit parent row lock: Each transaction begins by executing `SELECT * FROM Tenant WHERE tenant_id = 12 FOR UPDATE;`. This serializes all invoice additions for tenant 12, forcing each transaction to read the committed sum of prior transactions before inserting.
+2. Serializable isolation: Run both transactions at `SERIALIZABLE` isolation. The database tracks predicate read dependencies and aborts one transaction with a serialization error (`40001`), requiring the application to retry.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-tx-isolation-test-transfer" type="generalise" level="transfer" title="Empirical Isolation Level Validation Harness">
+
+Design an automated test harness to empirically verify whether a database's declared `REPEATABLE READ` isolation level is vulnerable to write skew. Define the initial database fixture, the interleaved operations of two concurrent sessions, and the assertion that detects invariant violation.
+
+<ExerciseSolution hint="Seed two doctors on call, have two concurrent threads each take one doctor off call, then assert final count.">
+
+1. Fixture: Insert `Doctor(id, on_call)` with rows `(1, true)` and `(2, true)`. Invariant: `COUNT(*) FILTER (WHERE on_call) >= 1`.
+2. Schedule:
+   - Session 1: `BEGIN ISOLATION LEVEL REPEATABLE READ;` reads active count (2).
+   - Session 2: `BEGIN ISOLATION LEVEL REPEATABLE READ;` reads active count (2).
+   - Session 1: `UPDATE Doctor SET on_call = false WHERE id = 1; COMMIT;`
+   - Session 2: `UPDATE Doctor SET on_call = false WHERE id = 2; COMMIT;`
+3. Assertion: Query `SELECT COUNT(*) FROM Doctor WHERE on_call = true;`. If count is 0, both committed and write skew occurred, proving the level is snapshot isolation rather than true serializability.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* [PostgreSQL: Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+* [PostgreSQL: Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

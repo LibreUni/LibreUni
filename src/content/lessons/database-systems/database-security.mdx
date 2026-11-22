@@ -1,0 +1,229 @@
+---
+title: Database Security
+course: database-systems
+description: Place authorization, input handling, secrets, auditing, and recovery controls at the boundaries where data can actually escape or be corrupted.
+prerequisites:
+  - Relational keys, constraints, SQL predicates, and transaction boundaries
+  - Basic web-service request flow, authentication, and threat-model vocabulary
+  - Replication, backups, and failure-recovery objectives
+outcomes:
+  - Draw a database-facing data flow and identify the enforcement point for each protected datum and authority transition.
+  - Distinguish parameter binding, identifier allowlists, least-privilege roles, and row-level policies by the attack they address.
+  - Design tenant isolation that remains safe under malformed input, alternate query paths, and a compromised runtime credential.
+  - Specify audit, secret-rotation, backup, and incident evidence requirements without mistaking encryption or replicas for complete security.
+omissions:
+  - Cryptographic protocol design, operating-system isolation, privacy law, PCI compliance programs, and incident forensics are separate subjects.
+  - Vendor-specific role syntax is illustrative; policy behavior must be verified against the chosen DBMS.
+estimatedMinutes: 420
+assessment: Given an unfamiliar multi-tenant data flow and attack path, identify the first bypassable control, redesign the authority and query boundary, and produce a testable containment and evidence plan.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
+
+
+A tenant filter in a web handler is not tenant isolation if an analyst endpoint, job worker, or direct SQL path can omit it. Database security begins by naming the data, the authority allowed to use it, and every transition where an attacker or defect can change that authority. The database is both a policy enforcement point and a high-value archive of credentials, history, backups, and replicas.
+
+{/* Source tracking: SQL injection prevention is synthesized from the OWASP SQL Injection Prevention Cheat Sheet; row-level security semantics are synthesized from PostgreSQL documentation; key-management principles are synthesized from NIST SP 800-57 Part 1 Rev. 5. Threat-flow examples are original. */}
+
+## Put authority on the data flow
+
+> **Definition.** A threat model names assets, trust boundaries, principals, entry points, and failure actions. A control is meaningful only if an untrusted path cannot bypass it.
+
+<PlantUML code={`@startuml
+actor "tenant user" as U
+rectangle "API\nauthenticates subject + tenant" as API
+rectangle "application role\nparameterized queries" as APP
+database "primary database\nconstraints + row policy" as DB
+database "replica / backup" as BK
+rectangle "audit sink" as AUD
+U --> API : request and credential
+API --> APP : trusted tenant context
+APP --> DB : bound parameters
+DB --> BK : protected replication / backup
+DB --> AUD : security-relevant events
+note right of DB
+Tenant identity must be
+server-derived, not accepted
+as a free query parameter.
+end note
+@enduml`} />
+
+The diagram has two authority claims: who is the caller, and which rows may this execution read or modify. The API should authenticate and derive tenant scope from a trusted session/token mapping. The database role should have only the permissions its code path requires. A database policy can add defense in depth, but it must be tested with the actual runtime role and with privileged bypass behavior explicitly understood.
+
+### Prediction — find the bypass and counterexample
+
+An API filters every query by a client-supplied tenant ID. A scheduled export job connects with an owner-like database role and has no tenant predicate. Which path is the security boundary failure mode?
+
+<ExerciseSolution>
+Both paths fail as a worked example of incomplete boundary design: the export job is an alternate path that can read every tenant, and the client-supplied tenant ID is not a trustworthy authority source. Derive tenant identity server-side, give the job a narrow role and explicit export scope, and enforce tenant ownership again in the database where practical. A correct public endpoint does not compensate for an overprivileged internal role.
+</ExerciseSolution>
+
+## Query construction and authorization solve different problems
+
+> **Warning.** Parameter binding prevents attacker-controlled *values* from changing SQL structure. It does not decide whether an authenticated caller is authorized to request a row, and it cannot safely bind arbitrary table or column identifiers.
+
+| Need | Correct boundary | Common unsafe shortcut |
+| --- | --- | --- |
+| value in a predicate | prepared statement / bound parameter | concatenate quoted input |
+| user-selectable sort column | fixed allowlist mapped to known SQL fragments | bind an identifier as a value or concatenate it |
+| tenant row access | server-derived tenant predicate and/or verified row policy | trust a browser-supplied tenant ID |
+| migration changes | separate owner/migration role | let runtime API role alter schema |
+| operational investigation | bounded support role plus audited procedure | share an administrator credential |
+
+A parameterized statement still needs an authorization condition. A perfect tenant predicate still needs binding so an injected value cannot alter the predicate. Security controls compose; their names are not interchangeable.
+
+### Application — repair a query API
+
+A report endpoint accepts a status value and a sort field. It runs under the same role that can delete users. State the two independent repairs.
+
+<ExerciseSolution hint="Separate SQL syntax handling from database authority.">
+Bind the status value as a parameter and map the sort field through a fixed allowlist of known columns/directions. Separately replace the broad runtime role with a least-privilege reporting role that can read only the approved view/table scope. Escaping input alone leaves destructive authority available; reducing the role alone leaves injection risk.
+</ExerciseSolution>
+
+<Quiz client:load
+  title="Two controls, two jobs"
+  question="A reporting endpoint binds its filter values as parameterized inputs, but executes using a database role with full superuser privileges. Evaluate which security concerns remain unresolved:"
+  options={[
+    {
+      id: "claim-overprivileged-role",
+      text: "The application role possesses destructive authority, allowing arbitrary table truncation if any secondary defect exists.",
+      isCorrect: true,
+      feedback: "Correct. Parameter binding prevents syntax injection but does not restrict the database permissions granted to the executing role."
+    },
+    {
+      id: "claim-dynamic-identifiers",
+      text: "Parameterized queries cannot bind dynamic table or column identifiers (e.g. ORDER BY), leaving identifier injection possible.",
+      isCorrect: true,
+      feedback: "Correct. SQL parameters apply only to scalar literals; column and table names require strict programmatic allowlists."
+    },
+    {
+      id: "claim-binding-privilege",
+      text: "Parameter binding automatically constrains database roles to least privilege through dynamic query privilege evaluation.",
+      isCorrect: false,
+      feedback: "Incorrect. Parameterization only separates data from syntax trees; it has no effect on database grant permissions."
+    },
+    {
+      id: "claim-index-suppression",
+      text: "Binding literal parameters prevents query optimizers from utilizing index structures on the filtered table.",
+      isCorrect: false,
+      feedback: "Incorrect. The query planner readily matches bound parameters against indexed search keys."
+    }
+  ]}
+  explanation="Parameter binding separates data literals from query syntax trees, preventing SQL injection. It does not replace least-privilege role boundaries or protect against identifier injection."
+/>
+
+## Tenant isolation needs layered tests
+
+> **Invariant.** A request authenticated as tenant 12 must not read, write, infer, or mutate tenant 13's protected rows through ordinary APIs, background jobs, replicas, exports, or error paths.
+
+| Layer | Enforces | Test that can falsify it |
+| --- | --- | --- |
+| application authorization | subject may act for tenant 12 | change a URL/body tenant ID to 13 |
+| SQL query construction | input cannot rewrite a predicate | use hostile value syntax; verify query shape remains fixed |
+| relational design | references do not cross tenant ownership | attempt a tenant-12 child pointing at tenant-13 parent |
+| row-level policy | database filters rows for runtime role | issue a direct query as that role with no application predicate |
+| audit/monitoring | sensitive access is discoverable | perform approved and denied access; inspect immutable event fields |
+
+Composite tenant-aware keys can make invalid cross-tenant references unrepresentable. Row-level security in PostgreSQL is an implementation feature whose policy enablement, session identity, table owner/superuser bypass, and role privileges need explicit tests. A policy that is never enabled for the runtime role is theater.
+
+> **Remark (Essential fields for security audit trails).** Record actor/service identity, tenant or scope, action, target identifier, outcome, correlation ID, time, and relevant policy/version context. Avoid logging raw secrets or unnecessary personal data. Audit events support investigation only if retention, access control, and tamper resistance are part of the design.
+
+## Protect the lifecycle, not only the primary table
+
+> **Example.** TLS protects a database connection in transit; encryption at rest protects media under its key-management model; neither prevents an authorized but compromised application role from reading rows. Backups, replicas, logs, exports, and observability systems each need their own access boundary and retention rule.
+
+| Asset | Primary control | Recovery / detection evidence |
+| --- | --- | --- |
+| runtime database credential | secret manager, rotation, narrow role | issuance/use record; revoke and validate replacement |
+| customer rows | authorization, policies, constraints | denied-path tests; tenant-bound audit event |
+| backup archive | independent access, encryption/key custody, retention | isolated restore with access logging |
+| change history | append-oriented audit with protected writers | correlation across application and DB events |
+| query traffic | TLS and certificate/endpoint validation | monitored failures and configuration review |
+
+### Transfer — leaked runtime credential
+
+A production read/write application credential appears in a build log. Put the first actions in order.
+
+<ExerciseSolution hint="Prioritize credential containment, revocation, and scope analysis before considering data restore.">
+Contain first: revoke or rotate the exposed credential and stop the log's further distribution while preserving evidence. Identify its permissions and recent use, then inspect audit/query/access records for misuse and validate that the replacement uses a narrower role if possible. Rotate dependent connection pools and verify service behavior. A backup restore is not the first response unless data integrity evidence indicates destructive activity; encryption at rest does not invalidate a live credential.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-sec-parameter-binding-scope" type="verify" level="application" title="Parameter Binding vs. Dynamic Identifier Injection">
+
+An endpoint constructs a query using: `f"SELECT * FROM items WHERE status = $1 ORDER BY {user_sort};"`. The developer asserts that because `$1` is parameterized, SQL injection is completely prevented. Verify why this claim is false, and demonstrate an exploit payload for `user_sort`.
+
+<ExerciseSolution hint="Parameter binding cannot be used for SQL identifiers such as column names or sort directions.">
+
+Parameter binding separates data literals from query syntax trees; it cannot bind SQL keywords, table names, or column identifiers. If `user_sort` is interpolated directly into the query string, an attacker can pass `(CASE WHEN (SELECT 1 FROM users WHERE name='admin' AND substring(password,1,1)='a') THEN id ELSE name END)` or append stacked commands if multi-statement execution is enabled. Dynamic identifiers must be validated against a strict hardcoded allowlist.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-sec-least-privilege-roles" type="describe" level="recall" title="Separation of Runtime Role Privileges and Least Privilege">
+
+Explain why connecting an application web server using a single all-powerful `postgres` superuser role violates least privilege, and outline a four-tier role separation model for production database systems.
+
+<ExerciseSolution hint="Differentiate application web traffic, background workers, analytics, and schema migrations.">
+
+Using a superuser role grants unrestricted authority (`DROP TABLE`, bypass RLS, read write-ahead logs, execute system shell commands via extensions). If an injection or unauthorized access defect occurs, the entire database is compromised.
+Four-tier role model:
+1. `app_user`: Limited `SELECT, INSERT, UPDATE, DELETE` strictly on necessary application tables; no DDL permissions.
+2. `app_readonly`: `SELECT` permissions on reporting tables or views; used by analytics dashboards.
+3. `migration_user`: DDL privileges (`CREATE, ALTER, DROP`) used exclusively during CI/CD deployment pipelines.
+4. `admin`: Restricted administrative role reserved for DBA maintenance and emergency recovery.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-sec-rls-policy-design" type="construct" level="application" title="Row-Level Security Tenant Isolation Policy Definition">
+
+Write PostgreSQL DDL to enable row-level security on `orders` and create a policy ensuring that the current session (via `current_setting('app.current_tenant_id')`) can select and insert only rows belonging to its authenticated tenant.
+
+<ExerciseSolution hint="Enable RLS on the table and define a policy using USING and WITH CHECK clauses.">
+
+```sql
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_orders ON orders
+  FOR ALL
+  TO app_user
+  USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
+  WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+```
+The `USING` clause restricts visible rows for reads, updates, and deletes; the `WITH CHECK` clause prevents inserting or updating rows with a foreign tenant ID.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-sec-credential-exposure-transfer" type="generalise" level="transfer" title="Incident Response Protocol for Compromised Database Credentials">
+
+A continuous integration build log publicly exposes production read/write credentials for an orders database. Prescribe a 5-step incident response checklist to contain the breach, investigate potential data exfiltration, and re-establish secure operations.
+
+<ExerciseSolution hint="Order actions: immediate revocation, credential rotation, log inspection, blast-radius audit, and post-mortem.">
+
+1. Immediate revocation: Terminate existing connection pool sessions and revoke or rotate the exposed database password immediately in secrets management.
+2. Log suppression: Purge the public build log from version control and CI caches, invalidating web share links while preserving forensic copies internally.
+3. Audit query logs: Query database audit logs and VPC connection logs for unauthorized client IP addresses connecting with the exposed username during the exposure window.
+4. Data integrity verification: Run cryptographic checksums and domain invariant checks to detect unauthorized table modifications or exfiltration traces.
+5. Least-privilege redeployment: Issue new credentials with least-privilege role scoping, and implement CI secrets scanning to prevent future pipeline credential leaks.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* [OWASP: SQL Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html)
+* [PostgreSQL: Row Security Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
+* [NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final)

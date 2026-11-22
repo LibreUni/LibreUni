@@ -1,0 +1,340 @@
+---
+title: "SQL querying: specify rows, then test edge cases"
+course: database-systems
+description: Write PostgreSQL queries whose joins, filters, groups, NULL behavior, and ordering match an explicit result contract.
+prerequisites:
+  - Relational-model grain, keys, foreign keys, duplicate, and NULL concepts
+  - Relational-algebra selection, projection, join, and difference
+outcomes:
+  - Trace the logical effect of `FROM`, `ON`, `WHERE`, `GROUP BY`, `HAVING`, `SELECT`, and `ORDER BY` on a small query.
+  - Place a left-join predicate in `ON` or `WHERE` according to whether unmatched left rows must survive.
+  - Write a NULL-safe anti-join and a grouped report with a stated output grain.
+omissions:
+  - Window functions, recursive queries, optimizer tuning, and transaction isolation are introduced elsewhere.
+estimatedMinutes: 420
+assessment: Given a report requirement and seed rows, write a PostgreSQL query, predict its result for NULL and no-match cases, and explain each clause's role.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import CodeExercise from '../../../components/CodeExercise';
+import JoinPredicatePlayground from '../../../components/playgrounds/JoinPredicatePlayground';
+import SqlRunner from '../../../components/SqlRunner';
+import Quiz from '../../../components/Quiz';
+
+
+SQL is concise enough to hide a wrong question. Before typing, say the output grain: “one row per service pool in us-east-1, including pools with zero active allocations.” That single sentence determines whether a filter belongs in `ON`, `WHERE`, or `HAVING`.
+
+> **Definition.** This lesson uses PostgreSQL `SELECT` semantics. A query's clauses define a logical result; the optimizer may use a different physical execution order to compute it.
+
+{/* Source tracking: The logical `SELECT` processing model and join/aggregate clauses are synthesized from PostgreSQL’s current `SELECT` documentation. */}
+
+## Follow the logical pipeline
+
+For a common grouped query, reason in this order.
+
+| Stage | Question answered | Typical clause |
+| --- | --- | --- |
+| Build candidate rows | Which source rows and matches are available? | `FROM ... JOIN ... ON ...` |
+| Remove individual rows | Which candidate rows satisfy a condition? | `WHERE` |
+| Form groups | Which remaining rows belong together? | `GROUP BY` |
+| Remove groups | Which computed groups qualify? | `HAVING` |
+| Shape output | Which expressions become columns? | `SELECT` |
+| Present a sequence | What order is promised to the client? | `ORDER BY` |
+
+> **Warning.** This is a semantic trace, not an execution-plan trace. A database may push a filter into a scan or rearrange inner joins when it can preserve the same result. Never infer a result order without `ORDER BY`.
+
+## Build a zero-safe allocation report
+
+Use this service allocation fixture.
+
+**`ServicePool`:**
+
+| `pool_id` | `service_code` | `region` |
+| --- | --- | --- |
+| 10 | S101 | us-east-1 |
+| 11 | S201 | us-east-1 |
+| 12 | S301 | us-east-1 |
+| 13 | S101 | us-west-2 |
+
+**`Allocation`:**
+
+| `client_id` | `pool_id` | `status` |
+| --- | --- | --- |
+| Ada | 10 | active |
+| Bo | 11 | suspended |
+
+The report must include service pools 11 and 12 with count zero. Its grain is **one service pool in us-east-1**, not one joined allocation row.
+
+### Execute and predict
+
+The runner seeds exactly this fixture in SQLite. State the three result rows before running the starting query, then move `AND a.status = 'active'` into `WHERE` and run it again. The difference is the lesson.
+
+<SqlRunner
+  client:load
+  title="Zero-safe allocation report"
+  description="Predict which service pools survive, including zero counts, before executing the query."
+  schema={`CREATE TABLE Client (
+  client_id text PRIMARY KEY,
+  display_name text NOT NULL
+);
+CREATE TABLE ServicePool (
+  pool_id integer PRIMARY KEY,
+  service_code text NOT NULL,
+  region text NOT NULL
+);
+CREATE TABLE Allocation (
+  client_id text NOT NULL REFERENCES Client(client_id),
+  pool_id integer NOT NULL REFERENCES ServicePool(pool_id),
+  status text NOT NULL,
+  memory_gb integer,
+  PRIMARY KEY (client_id, pool_id)
+);
+INSERT INTO Client VALUES ('Ada', 'Ada'), ('Bo', 'Bo'), ('Cy', 'Cy');
+INSERT INTO ServicePool VALUES (10, 'S101', 'us-east-1'), (11, 'S201', 'us-east-1'), (12, 'S301', 'us-east-1'), (13, 'S101', 'us-west-2');
+INSERT INTO Allocation VALUES
+  ('Ada', 10, 'active', 87),
+  ('Bo', 11, 'suspended', 40);`}
+  initialQuery={`SELECT p.service_code,
+       COUNT(a.client_id) AS active_count
+FROM ServicePool AS p
+LEFT JOIN Allocation AS a
+  ON a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+GROUP BY p.pool_id, p.service_code
+ORDER BY p.service_code;`}
+/>
+
+The analogous PostgreSQL statement is:
+
+```sql
+SELECT p.service_code,
+       COUNT(a.client_id) AS active_count
+FROM ServicePool AS p
+LEFT JOIN Allocation AS a
+  ON a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+GROUP BY p.pool_id, p.service_code
+ORDER BY p.service_code;
+```
+
+> **Worked example.** `ON` decides which allocation rows match each service pool. The status condition keeps only active matches, while the left join still emits null-extended rows for pools with no such match. `WHERE` then removes the other-region pool 13. `COUNT(a.client_id)` counts only non-null matching IDs, yielding `S101 → 1`, `S201 → 0`, and `S301 → 0`.
+
+### Predict the bug
+
+Move `AND a.status = 'active'` from `ON` to `WHERE`. Which service pool rows disappear, and why?
+
+<ExerciseSolution hint="A left join creates NULLs for rows with no qualifying right-side match; `WHERE` runs afterward.">
+
+Service pools 11 and 12 disappear. Pool 11's only matching allocation is `suspended`; pool 12 is null-extended because it has no allocation. Neither makes `a.status = 'active'` true in `WHERE`. The condition turns this part of the left join into inner-join-like behavior for that predicate.
+</ExerciseSolution>
+
+<Quiz client:load
+  title="Outer join predicate placement and null survival"
+  question="A report must retain every target-region service pool from ServicePool while counting only matching Allocation rows where memory_gb >= 70. Evaluate each assertion regarding predicate placement in a LEFT JOIN query:"
+  options={[
+    {
+      id: "claim-on-memory",
+      text: "Placing 'a.memory_gb >= 70' in the ON clause preserves service pools with no matching allocations while suppressing allocations below 70 GB.",
+      isCorrect: true,
+      feedback: "Correct. In a LEFT JOIN, conditions in ON restrict which right-side rows match without eliminating left-side service pools."
+    },
+    {
+      id: "claim-where-region",
+      text: "Placing 'p.region = us-east-1' in the WHERE clause discards service pools from other regions after joining.",
+      isCorrect: true,
+      feedback: "Correct. Post-join WHERE filtering eliminates non-qualifying left rows, including any null-extended results from other regions."
+    },
+    {
+      id: "claim-where-memory",
+      text: "Placing 'a.memory_gb >= 70' in the WHERE clause preserves current service pools that have zero qualifying allocations.",
+      isCorrect: false,
+      feedback: "Incorrect. In null-extended rows, a.memory_gb is NULL, so 'a.memory_gb >= 70' evaluates to UNKNOWN and WHERE discards the entire service pool."
+    },
+    {
+      id: "claim-count-star",
+      text: "Replacing 'COUNT(a.client_id)' with 'COUNT(*)' correctly reports zero allocations for service pools lacking qualifying memory sizes.",
+      isCorrect: false,
+      feedback: "Incorrect. COUNT(*) counts every emitted row including null-extended rows, incorrectly yielding a count of 1."
+    }
+  ]}
+  explanation="Conditions in ON determine which right rows qualify as matches, leaving unmatched left rows null-extended. Conditions in WHERE filter the final combined rows. Aggregating with COUNT(column) ignores nulls, while COUNT(*) counts the row itself."
+/>
+
+<CodeExercise
+  client:load
+  title="Reconstruct the zero-safe report"
+  code={String.raw`SELECT p.service_code,
+       [!blank!] AS active_count
+FROM ServicePool AS p
+LEFT JOIN Allocation AS a
+  [!blank!] a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+[!blank!] p.pool_id, p.service_code
+ORDER BY p.service_code`}
+  answers={["COUNT(a.client_id)", "ON", "GROUP BY"]}
+  explanation="`COUNT(a.client_id)` ignores the NULL-extended right side and therefore yields zero for an empty service pool; `COUNT(*)` would count the left row. The status predicate belongs in `ON` so unmatched pools survive. `GROUP BY` fixes the output grain at one row per service pool rather than one row per allocation."
+/>
+
+## See predicate placement change the result
+
+The visual model fixes `worker-01` at 87 GB, `worker-02` at 40 GB, and `worker-03` with no allocations. Set the threshold to 50 GB. Predict whether `worker-03` survives before trying both placements.
+
+<JoinPredicatePlayground client:load />
+
+> **Invariant.** In a `LEFT JOIN`, a predicate in `ON` limits right-side matches while retaining every left-side row. A predicate in `WHERE` filters the post-join rows, including null-extended rows. Put it where the report's inclusion rule says it belongs.
+
+> **Counterexample.** “Put every filter in `WHERE`” fails for the zero-safe report. “Put every filter in `ON`” also fails when the condition should remove left rows, such as `p.region = 'us-east-1'`. Clause placement follows row survival, not a style rule.
+
+### Apply the row-survival test
+
+The infrastructure team wants **all** us-east-1 service pools, but only allocations of 70 GB or more should be shown when an allocation exists. Where do `p.region = 'us-east-1'` and `a.memory_gb >= 70` belong?
+
+<ExerciseSolution hint="Ask whether each condition describes a left row that may survive and a right row that may match.">
+
+`p.region = 'us-east-1'` belongs in `WHERE` because an other-region service pool should disappear. `a.memory_gb >= 70` belongs in `ON` if a us-east-1 pool must still appear when it has no qualifying allocation. This preserves the left relation's required rows while changing which right rows qualify as matches.
+</ExerciseSolution>
+
+## Groups answer a different question from rows
+
+`WHERE` filters rows before aggregation; `HAVING` filters a group after an aggregate has been computed.
+
+```sql
+SELECT p.service_code,
+       COUNT(a.client_id) AS active_count
+FROM ServicePool AS p
+LEFT JOIN Allocation AS a
+  ON a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+GROUP BY p.pool_id, p.service_code
+HAVING COUNT(a.client_id) >= 1;
+```
+
+> **Worked example.** This version has the same group grain as the zero-safe report but removes groups with zero active allocations at `HAVING`. Moving `COUNT(a.client_id) >= 1` to `WHERE` is invalid because `WHERE` is evaluated before the count exists.
+
+### Trace a result
+
+For the fixture above, what rows survive the `HAVING` version? Then state what one output row means.
+
+<ExerciseSolution hint="Reuse the three group counts from the earlier report.">
+
+Only `S101, 1` survives. Each output row means “one service pool in us-east-1 whose active allocation count is at least one.” It does not mean one client, because the grouping collapsed allocation rows.
+</ExerciseSolution>
+
+## Anti-joins: prefer a NULL-safe question
+
+To ask for clients with no active allocation in region us-east-1, write the absence condition directly.
+
+```sql
+SELECT c.client_id
+FROM Client AS c
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM Allocation AS a
+  JOIN ServicePool AS p ON p.pool_id = a.pool_id
+  WHERE a.client_id = c.client_id
+    AND a.status = 'active'
+    AND p.region = 'us-east-1'
+);
+```
+
+> **Worked example.** The correlated condition asks whether an active allocation row exists for this client. If none exists, `NOT EXISTS` is true. The query does not depend on a subquery list having no `NULL` values.
+
+> **Warning.** `NOT IN (subquery)` can behave unexpectedly if the subquery returns `NULL`: comparisons can become `UNKNOWN`, so no outer row is retained. Use `NOT EXISTS` for an anti-join unless you have proved the list is non-null and understand the intended semantics.
+
+### Prediction with a NULL
+
+Suppose a data-quality bug produces an allocation row with `client_id = NULL`. Why can `WHERE c.client_id NOT IN (SELECT client_id FROM Allocation)` return no clients, while the `NOT EXISTS` query above can still answer the intended question?
+
+<ExerciseSolution hint="Evaluate `c.client_id <> NULL` using SQL three-valued logic.">
+
+The `NOT IN` condition is equivalent to a chain of inequalities. One comparison to `NULL` becomes `UNKNOWN`, so the whole predicate may fail to become true for every client. `NOT EXISTS` tests only whether a correlated row with equal non-null ID and active status exists; an unrelated null ID does not make that condition true.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-sql-predicate-placement" type="describe" level="recall" title="ON versus WHERE Predicate Placement Semantics">
+
+Explain how moving an outer join filter predicate from the `ON` clause to the `WHERE` clause changes query semantics for null-extended rows. Give a concrete example where a service pool with zero allocations is erroneously discarded.
+
+<ExerciseSolution hint="A LEFT JOIN produces NULL values for right attributes when no match occurs. WHERE filters after that generation.">
+
+In a `LEFT JOIN`, conditions in the `ON` clause decide whether right-side rows match, preserving all left rows. If the filter condition is moved to `WHERE`, it is evaluated on the joined result where right attributes are `NULL`. Comparisons against `NULL` evaluate to `UNKNOWN` in SQL's three-valued logic, which `WHERE` treats as false, eliminating unmatched left-side rows and inadvertently converting the outer join into an inner join.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-sql-anti-join-null-hazard" type="verify" level="application" title="Anti-Join NULL Semantics: NOT EXISTS vs. NOT IN">
+
+Suppose an `Allocation` table contains a single row with `client_id = NULL`. Verify why `WHERE c.client_id NOT IN (SELECT client_id FROM Allocation)` returns zero clients, while a correlated `NOT EXISTS` query correctly identifies clients without allocations.
+
+<ExerciseSolution hint="Evaluate the logical expansion of NOT IN with a NULL in the candidate set.">
+
+`c.client_id NOT IN (a1, a2, ..., NULL)` expands to `(c.id <> a1) AND (c.id <> a2) AND ... AND (c.id <> NULL)`. In SQL, `c.id <> NULL` yields `UNKNOWN`. Because `TRUE AND UNKNOWN` is `UNKNOWN`, the entire predicate evaluates to `UNKNOWN` for every client, discarding all rows. In contrast, `NOT EXISTS` checks whether the subquery returns any row; a row with `NULL` matching condition `a.client_id = c.client_id` evaluates to `UNKNOWN` and is not returned, leaving `NOT EXISTS` true.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-sql-aggregation-grain" type="construct" level="application" title="Grouped Aggregation with Post-Filter Specification">
+
+Write a PostgreSQL query against `ServicePool(pool_id, service_code, region)` and `Allocation(client_id, pool_id, status)` that returns the service code and active allocation count for all us-east-1 service pools having strictly more than 10 active allocations.
+
+<ExerciseSolution hint="Use WHERE to filter service pools by region, ON for allocation status, and HAVING for aggregate thresholds.">
+
+```sql
+SELECT p.service_code,
+       COUNT(a.client_id) AS active_count
+FROM ServicePool AS p
+JOIN Allocation AS a
+  ON a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+GROUP BY p.pool_id, p.service_code
+HAVING COUNT(a.client_id) > 10
+ORDER BY p.service_code;
+```
+Because the threshold requires `> 10` allocations, an inner join is sufficient. `GROUP BY` includes `pool_id` to guarantee uniqueness per service pool.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-sql-zero-safe-report-transfer" type="generalise" level="transfer" title="Zero-Safe Service Pool Report with Computed Boolean Status">
+
+Construct a query returning `(service_code, active_count, is_full)` for all service pools in region `us-east-1` with `capacity >= 1`. Pools with zero allocations must appear with count 0 and `is_full = false`. Explain how the grain is preserved.
+
+<ExerciseSolution hint="Preserve unmatched service pools with LEFT JOIN and count non-null client IDs.">
+
+```sql
+SELECT p.service_code,
+       COUNT(a.client_id) AS active_count,
+       COUNT(a.client_id) >= p.capacity AS is_full
+FROM ServicePool AS p
+LEFT JOIN Allocation AS a
+  ON a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+  AND p.capacity >= 1
+GROUP BY p.pool_id, p.service_code, p.capacity
+ORDER BY p.service_code;
+```
+The grain is one positive-capacity service pool in us-east-1. Placing `a.status = 'active'` in `ON` allows pools without active allocations to survive as null-extended rows, which `COUNT(a.client_id)` aggregates to 0.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+- [PostgreSQL: `SELECT`](https://www.postgresql.org/docs/current/sql-select.html)
+- [PostgreSQL: Table Expressions and Joins](https://www.postgresql.org/docs/current/queries-table-expressions.html)
+- [PostgreSQL: Queries](https://www.postgresql.org/docs/current/queries.html)

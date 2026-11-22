@@ -1,0 +1,237 @@
+---
+title: "Schema review: turn requirements into constraints"
+course: database-systems
+description: Review a concrete multi-tenant order schema for grain, identity, dependencies, integrity boundaries, and migration-safe choices.
+prerequisites:
+  - Relational-model grain, keys, foreign keys, and NULL semantics
+  - Functional dependencies and normalization trade-offs
+outcomes:
+  - Review a relation by naming its grain, candidate key, foreign keys, and facts that must not be duplicated.
+  - Detect a cross-tenant reference, mixed historical/current fact, or unsupported constraint in a proposed schema.
+  - Write a focused schema-review note with test cases and migration questions.
+omissions:
+  - Online migration tooling, query-plan tuning, and distributed consistency are treated in later courses.
+estimatedMinutes: 480
+assessment: Given a proposed commerce schema and a business change, identify integrity risks, propose focused constraints or decompositions, and supply adversarial rows that test the design.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import CodeExercise from '../../../components/CodeExercise';
+import PlantUML from '../../../components/PlantUML.astro';
+
+
+A schema review is a testable argument, not a naming review. For every relation, ask: what is one row? What identifies it? Which other row must exist? Which value is a historical fact rather than a lookup? Then write the smallest constraint or test that would catch a violation.
+
+> **Definition.** A schema review maps domain rules to database-enforceable constraints, documents rules that cannot be enforced locally, and supplies adversarial examples for both. It reviews facts and failure modes before it reviews syntax.
+
+## Review one multi-tenant order design
+
+An online marketplace gives every seller a tenant. Product and order identifiers are tenant-scoped, so a foreign key must carry the tenant identity too.
+
+<PlantUML
+  code={String.raw`
+class Tenant {
+  tenant_id : UUID <<PK>>
+}
+class Product {
+  tenant_id : UUID <<PK>>
+  product_id : UUID <<PK>>
+  sku : text
+  list_price : money
+}
+class PurchaseOrder {
+  tenant_id : UUID <<PK>>
+  order_id : UUID <<PK>>
+  customer_id : UUID
+  placed_at : timestamp
+}
+class OrderLine {
+  tenant_id : UUID <<PK>>
+  order_id : UUID <<PK>>
+  line_no : integer <<PK>>
+  product_id : UUID <<FK>>
+  quantity : integer
+  unit_price : money
+}
+Tenant "1" -- "0..*" Product
+Tenant "1" -- "0..*" PurchaseOrder
+PurchaseOrder "1" -- "1..*" OrderLine
+Product "1" -- "0..*" OrderLine : selected product
+`}
+/>
+
+| Relation | Grain | Key | Core reference or rule |
+| --- | --- | --- | --- |
+| `Product(tenant_id, product_id, sku, list_price)` | One catalog product for one tenant | `(tenant_id, product_id)` | `sku` may need `UNIQUE(tenant_id, sku)` if the business calls it a tenant-local identifier |
+| `PurchaseOrder(tenant_id, order_id, customer_id, placed_at)` | One placed order for one tenant | `(tenant_id, order_id)` | Tenant-scoped customer reference, if customers are tenant-scoped |
+| `OrderLine(tenant_id, order_id, line_no, product_id, quantity, unit_price)` | One product line in one order | `(tenant_id, order_id, line_no)` | Composite reference to its order and selected product; `quantity > 0` |
+
+> **Worked example.** `unit_price` belongs on `OrderLine` when it records the price actually agreed at purchase time. `Product.list_price` is a current catalog fact and may change tomorrow. Replacing `unit_price` with a lookup from `Product` changes historical orders retroactively; it is not a harmless normalization.
+
+{/* Source tracking: The use of keys, composite foreign keys, check constraints, and their enforcement boundaries is synthesized from PostgreSQL’s current constraints documentation. */}
+
+### Predict the tenant leak
+
+Tenant A has `product_id = p9`; tenant B also has `product_id = p9`. An order line for tenant A references only `product_id = p9`. What incorrect fact can the database accept if the foreign key is only `OrderLine.product_id → Product.product_id`?
+
+<ExerciseSolution hint="The identifier is scoped by tenant, so the product ID alone is ambiguous.">
+
+The order line can be associated with tenant B's product even though the order belongs to tenant A. The database sees a matching product ID but cannot prove tenant consistency. Make `(tenant_id, product_id)` a referenced key of `Product` and reference both columns from `OrderLine`.
+</ExerciseSolution>
+
+<CodeExercise
+  client:load
+  title="Keep the tenant in the product reference"
+  code={String.raw`FOREIGN KEY (tenant_id, product_id)
+  REFERENCES Product ([!blank!], [!blank!])`}
+  answers={["tenant_id", "product_id"]}
+  explanation="A composite foreign key must name a candidate key with the same tenant-scoped meaning in Product."
+/>
+
+> **Invariant.** If identifiers are tenant-scoped, every relationship that uses one must establish tenant equality as part of its key or foreign key. Filtering by tenant in application code is not an equivalent integrity constraint.
+
+## Walk the review questions in order
+
+| Review question | Evidence to request | A failure it catches |
+| --- | --- | --- |
+| What is one row? | A grain sentence for each relation | A line item table that also stores order-wide shipping state |
+| What identifies it? | Candidate keys and whether they are stable | A display label silently used as a primary key |
+| What must exist first? | Foreign keys and deletion/update policy | An order line with no order or wrong-tenant product |
+| Which values are derived or historical? | Source of truth and update rule | Repricing past orders by joining current catalog price |
+| Which rules span rows? | Transaction/procedure/test design | Two writes that independently pass an aggregate capacity rule |
+| How will it change? | Backfill, compatibility, rollback, and verification plan | A non-null column added before legacy rows are populated |
+
+> **Warning.** A `CHECK` constraint validates the row being written; it is not a general substitute for a rule involving arbitrary other rows. “An order total equals the sum of its lines” or “stock never drops below zero” needs a design that coordinates reads and writes, not a wish written as a local check.
+
+### Review a mixed-grain proposal
+
+A teammate proposes this shortcut:
+
+```text
+OrderLine(tenant_id, order_id, line_no, product_id, quantity,
+          order_status, placed_at, customer_email)
+```
+
+Name two facts with the wrong grain. Where should each live instead?
+
+<ExerciseSolution hint="A line is one product occurrence; ask whether each value is the same for every line of an order.">
+
+`order_status` and `placed_at` are facts about the whole order, so they belong in `PurchaseOrder`. `customer_email` is normally a customer fact, so it belongs in a tenant-scoped customer relation or an explicitly justified immutable order-contact snapshot. Repeating order-level values on every line causes update anomalies and makes a changed line capable of contradicting its own order.
+</ExerciseSolution>
+
+## Turn dependencies into constraints and tests
+
+> **Definition.** A dependency hypothesis is useful in a review only when it names a business rule that can be enforced by a key, tested by adversarial rows, or explicitly owned by an application procedure.
+
+For this design, the following dependencies express useful review hypotheses:
+
+$$
+(tenant\_id, product\_id) \to (sku, list\_price)
+$$
+
+$$
+(tenant\_id, order\_id, line\_no) \to (product\_id, quantity, unit\_price).
+$$
+
+They justify the relation keys only if the product and line identifiers really are stable in the business domain. A natural key such as SKU may also be unique per tenant, but only after spelling out capitalization, reuse, and retirement policy.
+
+> **Counterexample.** Adding `UNIQUE(sku)` globally because the current export has no duplicates can reject two independent sellers' legitimate use of the same SKU. The requirement is usually tenant-local uniqueness, which has a different key and different error behavior.
+
+### Make an adversarial test set
+
+Write four insert attempts that should not all succeed:
+
+1. a duplicate line number in one order;
+2. a zero or negative quantity;
+3. a line that names a missing order;
+4. a line for tenant A that names tenant B's product ID.
+
+<ExerciseSolution hint="Map each attempt to a distinct constraint; the last one needs the composite key.">
+
+The duplicate is rejected by `PRIMARY KEY (tenant_id, order_id, line_no)`. The invalid quantity is rejected by `CHECK (quantity > 0)`. The missing order is rejected by `FOREIGN KEY (tenant_id, order_id) REFERENCES PurchaseOrder`. The cross-tenant product is rejected only when the product foreign key is `(tenant_id, product_id) REFERENCES Product(tenant_id, product_id)`. These tests establish different invariants; one successful happy-path order proves none of them.
+</ExerciseSolution>
+
+## Review a change before the migration is written
+
+The product team wants to allow a line to have no catalog product after a product is retired, while preserving the original line description and price.
+
+> **Worked example.** This is not just “make `product_id` nullable.” Decide first whether a line must retain a historical product snapshot, whether product deletion is forbidden, or whether retirement is represented by a status rather than deletion. If the relationship becomes optional, update the foreign-key nullability, the reporting contract, and tests for null product references together.
+
+> **Remark (Operational rollout deferred to migration planning).** A schema review should identify, but not guess, the rollout method: how existing lines are backfilled, whether reads tolerate a temporary dual representation, what rollback preserves, and how a large index or constraint build affects live traffic. Those operational choices require deployment tooling and production workload metrics.
+
+<ExerciseSet>
+
+<Exercise id="ex-schema-tenant-isolation" type="verify" level="application" title="Composite Key Multi-Tenant Isolation">
+
+In a multi-tenant order schema, an engineer declares `OrderLine(tenant_id, order_id, line_no, product_id, quantity)` with foreign key `FOREIGN KEY (product_id) REFERENCES Product(product_id)`. Verify why this foreign key fails to prevent cross-tenant data corruption, and specify the correct multi-column constraint.
+
+<ExerciseSolution hint="The foreign key must reference both the tenant identifier and the product identifier.">
+
+Because `product_id` is only unique within a tenant, referencing `Product(product_id)` alone permits an order in tenant $A$ to reference a catalog product belonging to tenant $B$. The constraint must enforce multi-tenant scoping: `FOREIGN KEY (tenant_id, product_id) REFERENCES Product(tenant_id, product_id)`, backed by a matching composite candidate key on `Product`.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-schema-line-item-normalization" type="construct" level="application" title="Order Line-Item Grain and Constraint Definition">
+
+Specify SQL table definitions for `PurchaseOrder` and `OrderLine` with composite tenant keys. Include primary keys, referential integrity foreign keys, and a check constraint ensuring line quantities are strictly positive.
+
+<ExerciseSolution hint="Include tenant_id in primary and foreign keys of both relations.">
+
+```sql
+CREATE TABLE PurchaseOrder (
+  tenant_id UUID NOT NULL,
+  order_id BIGINT NOT NULL,
+  ordered_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (tenant_id, order_id)
+);
+
+CREATE TABLE OrderLine (
+  tenant_id UUID NOT NULL,
+  order_id BIGINT NOT NULL,
+  line_no INT NOT NULL,
+  product_id BIGINT NOT NULL,
+  quantity INT NOT NULL CHECK (quantity > 0),
+  PRIMARY KEY (tenant_id, order_id, line_no),
+  FOREIGN KEY (tenant_id, order_id) REFERENCES PurchaseOrder(tenant_id, order_id)
+);
+```
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-schema-historical-snapshot" type="describe" level="recall" title="Product Retirement Historical Snapshot Modeling">
+
+When a catalog product is retired, existing order lines must preserve the purchase price and product description at the time of sale. Explain why making `product_id` nullable without capturing historical price attributes violates relational schema design principles.
+
+<ExerciseSolution hint="Distinguish between the current catalog state and an immutable transaction line snapshot.">
+
+An order line records an immutable historical financial event. If `product_id` is set to NULL or points to an updated/deleted product row, historical reports either lose identity or recompute totals using altered prices. The schema must store historical unit price and description directly on `OrderLine`, or retain soft-deleted product records with active status indicators.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-schema-order-discount-transfer" type="generalise" level="transfer" title="Discount Code vs. Applied Discount Schema Review">
+
+Review a proposed `OrderDiscount(tenant_id, order_id, code, amount)` relation. Determine whether its grain represents a discount definition, an applied order discount, or both. State candidate keys, foreign keys, and identify two business rules that must be clarified before finalizing the schema.
+
+<ExerciseSolution hint="Separate coupon definition rules from the event of applying a coupon to a purchase order.">
+
+The grain represents one applied discount on a purchase order. The candidate key is `(tenant_id, order_id, code)` if each code can apply at most once per order, with foreign key `(tenant_id, order_id) REFERENCES PurchaseOrder(tenant_id, order_id)`. The general definition of codes belongs in a separate `Discount(tenant_id, code, percentage, valid_until)` relation. Before finalizing, clarify: (1) whether multiple instances of the same discount code can be applied to an order, and (2) whether `amount` is an immutable financial snapshot or recomputed dynamically upon return or line adjustment.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)
+- [PostgreSQL: `CREATE TABLE`](https://www.postgresql.org/docs/current/sql-createtable.html)
+- [Ramakrishnan and Gehrke, *Database Management Systems*: schema-refinement chapters](https://pages.cs.wisc.edu/~dbbook/openAccess/secondEdition/dbbook.toc.html)

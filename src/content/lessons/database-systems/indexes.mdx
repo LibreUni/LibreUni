@@ -1,0 +1,196 @@
+---
+title: Indexes
+course: database-systems
+description: Choose and trace access paths without mistaking an index for a free or logically authoritative structure.
+prerequisites:
+  - Sorted arrays, trees, hashing, and logarithmic search
+  - SQL predicates, joins, ordering, and relational keys
+  - Pages, record identifiers, and the distinction between physical and logical data
+outcomes:
+  - Trace a B+ tree lookup, leaf split, and range scan using separator-key invariants.
+  - Predict which predicates and orderings a composite index can support from its lexicographic key order.
+  - Select, reject, or revise an index proposal using selectivity, heap access, maintenance, and correctness evidence.
+  - Explain why visibility, partial predicates, and expression semantics limit apparently covering access paths.
+omissions:
+  - Vendor-specific index DDL options, bitmap internals, learned indexes, and concurrent index-build algorithms are not implemented.
+  - Hash and probabilistic filters are compared only far enough to state their access guarantees.
+estimatedMinutes: 480
+assessment: Given an unfamiliar workload and candidate indexes, derive the supported key ranges, trace one update cost, and defend an access path or its rejection with a counterexample.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import BTreePlayground from '../../../components/playgrounds/BTreePlayground';
+
+
+A support query asks for the newest 50 failed deliveries for tenant 12. A table scan is correct, yet reading millions of unrelated rows is not a design. An index can make the request selective, but every new delivery and status update must also maintain its entries. The central question is not “should this column be indexed?” but “which ordered search space does this workload need, and what update work buys it?”
+
+{/* Source tracking: B-tree, multicolumn, partial, expression, and index-only behavior is synthesized from PostgreSQL index documentation and CMU 15-445/645 materials. The page-level B+ tree trace and workload examples are original. */}
+
+## B+ tree navigation is an ordering proof
+
+> **Definition.** A B+ tree keeps keys sorted in page-sized nodes. An internal separator partitions key ranges; leaves contain search keys and tuple references and are linked for ordered scans. Balance means every leaf has the same depth.
+
+<PlantUML code={`@startuml
+rectangle "root\n< (12, 2025-01-01) | ≥ (12, 2025-01-01)" as R
+rectangle "leaf A\n(11, …)\n(12, 2024-12-31)" as A
+rectangle "leaf B\n(12, 2025-01-01)\n(12, 2025-01-02)\n(13, …)" as B
+R --> A : lower range
+R --> B : target range
+A --> B : leaf-next
+note right of B
+Range scan follows leaves
+without returning to root.
+end note
+@enduml`} />
+
+To find `(12, 2025-01-02)`, compare it with the root separator, choose leaf B, then search that leaf. If B is full on insertion, split it into two sorted leaves and propagate a separator upward. The split changes navigation, not query meaning. A correct implementation ensures every key remains in exactly one leaf and every separator directs search to a child whose range contains the key.
+
+<BTreePlayground client:load />
+
+Use the playground to insert its shown keys until the leaf divides. Before advancing, state which half contains the new key and which separator the parent needs. The visual models a leaf split only; it does not model disk latches, deletion merge policy, or vendor page format.
+
+### Prediction — separator choice
+
+Leaves after an insert must be `[4, 7]` and `[9, 13]`. Which value can be a separator if the parent routes keys less than the separator left and all other keys right?
+
+<ExerciseSolution hint="Use the smallest key on the right leaf under this comparison convention.">
+`9` works: 4 and 7 route left; 9 and 13 route right. `7` would route 7 right even though it remains left, unless the comparator convention were changed consistently. Separator values are routing contracts, not decorative summaries.
+</ExerciseSolution>
+
+## Composite keys have a left-to-right geometry
+
+> **Invariant.** An index on `(tenant_id, created_at, id)` is ordered first by tenant, then by time *within an equal tenant*, then by `id` within an equal tenant and time.
+
+| Query shape | Can `(tenant_id, created_at, id)` navigate directly? | Why |
+| --- | --- | --- |
+| `tenant_id = 12 ORDER BY created_at, id` | Yes | equality fixes the leading group; suffix order is already present |
+| `tenant_id = 12 AND created_at >= t` | Yes | starts at one tenant/time boundary and scans forward |
+| `created_at >= t` for all tenants | Usually no | matching times are scattered across tenant groups |
+| `tenant_id = 12 ORDER BY id` | Not generally | `created_at` intervenes before `id` order |
+
+This is lexicographic order, not a slogan about “leading columns.” It also explains why a query returning most of a table can prefer a sequential scan: an index may locate every tuple but require many scattered heap reads. Clustering, cache state, visibility, and selectivity decide the trade.
+
+### Worked example — an access path proposal
+
+For:
+
+```sql
+SELECT id, created_at, error_code
+FROM delivery
+WHERE tenant_id = $1 AND status = 'failed'
+ORDER BY created_at DESC, id DESC
+LIMIT 50;
+```
+
+an index such as `(tenant_id, status, created_at DESC, id DESC) INCLUDE (error_code)` can align equality predicates with output order and may avoid a sort. It is useful only if failed rows per tenant are selective enough and the added write/space cost is justified. If `status` changes often, the same index can amplify a hot write path.
+
+> **Remark (Conditions for index-only scans).** All selected values may be present in the index, but an MVCC engine can still need a heap or visibility-map check before returning a tuple. An index-only scan is a plan opportunity, not a guarantee that heap I/O is zero.
+
+## Derived structures must preserve query semantics
+
+> **Warning.** An index is not the logical source of truth. It is correct only if visible rows required by its predicate have entries and each entry resolves to a row that still satisfies its indexed condition.
+
+A partial index stores only rows satisfying a fixed predicate, for example `WHERE status = 'failed'`. The optimizer may use it only when it can establish that the query condition implies the partial predicate. An expression index on `lower(email)` similarly requires matching normalization, collation, and expression semantics. A raw `email` index does not automatically answer a transformed predicate.
+
+Hash indexes target equality lookups; they do not yield the ordered leaf traversal required by a range. A Bloom filter answers a narrower question: it may safely say “definitely absent,” but “possibly present” still requires another access path. Treating a filter's positive result as a row location is a logical bug.
+
+### Transfer — a subtle uniqueness requirement
+
+Each tenant may register an email once, case-insensitively. Tenants may share the same spelling. Propose the key and state two details that could invalidate a naive implementation.
+
+<ExerciseSolution hint="The uniqueness domain contains both tenant identity and the agreed normalization rule.">
+Use a unique index or constraint over `(tenant_id, lower(email))` only after specifying the normalization/collation contract. The naive `UNIQUE(email)` wrongly forbids different tenants; `UNIQUE(tenant_id, email)` can allow case variants when the product treats them as equal. Unicode normalization and whether NULL emails are allowed must be specified as well, because DBMS NULL uniqueness behavior varies.
+</ExerciseSolution>
+
+## Maintenance cost belongs in the design
+
+> **Example.** Inserting one delivery row may insert one heap record plus entries in the primary key, foreign-key support, status/time, and audit indexes. Updating an indexed status can remove and add an entry even when the business update looks small.
+
+| Proposal | Read benefit | Write and recovery cost | Decision evidence |
+| --- | --- | --- | --- |
+| key index on `delivery(id)` | direct point lookup | one entry per insert; split/vacuum work | point lookup frequency and uniqueness need |
+| wide covering support index | fewer heap visits for support query | larger entries, cache pressure, status-update work | `EXPLAIN (ANALYZE)` plus write benchmark |
+| partial failed-delivery index | small hot subset | predicate transitions maintain membership | failed-row fraction and query implication |
+
+Measure representative reads and writes, including warm and cold-cache assumptions. A plan estimate is evidence about a model, not proof: compare estimated and actual cardinalities, then inspect skew or stale statistics before adding an index merely to silence a slow example.
+
+### Prediction — reject an index
+
+A monthly archive table is append-only, queried once nightly by `WHERE created_at >= current_date - interval '30 days'`, and 95% of rows match. Should a B-tree on `created_at` be the default answer?
+
+<ExerciseSolution hint="Evaluate the I/O cost of random heap lookups when almost the entire table matches.">
+Not automatically. The predicate returns almost the entire relation, so a sequential scan can be cheaper than index navigation plus widespread tuple access. Time partitioning, zone maps/segment metadata, or a sequential aggregate may fit the actual workload better. The decisive evidence is selectivity and physical locality, not the existence of a date predicate.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-idx-covering-index-scan" type="describe" level="recall" title="Covering Indexes and Visibility Map Prerequisites">
+
+Explain why an index-only scan on a covering index `(tenant_id, status) INCLUDE (error_code)` may still perform random heap page reads in PostgreSQL MVCC execution.
+
+<ExerciseSolution hint="Consider transaction isolation and tuple visibility flags.">
+
+Under multi-version concurrency control (MVCC), index tuples do not store transaction commit status or row creation/expiry timestamps (`xmin`, `xmax`). To return an attribute directly from the index without visiting the heap, the engine checks the table's visibility map. If the target heap page is not marked all-visible to all active transactions, the engine must fetch the underlying heap page to verify tuple visibility.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-idx-selectivity-rejection" type="verify" level="application" title="Index Access Path Rejection on Low Selectivity">
+
+A query scans an archive table where predicate `created_at >= NOW() - INTERVAL '30 days'` matches 95% of total rows. Verify why the query planner rejects an existing unclustered B-tree index on `created_at` in favor of a sequential scan.
+
+<ExerciseSolution hint="Compare the cost of sequential page reads against random single-tuple heap page fetches.">
+
+With an unclustered B-tree index matching 95% of rows, fetching matching tuples through the index incurs random I/O for almost every page in the heap, reading nearly every heap page multiple times. A sequential table scan reads each heap page sequentially exactly once with hardware prefetching, resulting in substantially lower total cost despite evaluating non-matching rows.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-idx-partial-index-predicate" type="construct" level="application" title="Partial and Expression Index Specification">
+
+Specify PostgreSQL DDL for: (1) a partial index that optimizes queries looking up only deliveries in `status = 'failed'`, and (2) an expression index that enforces case-insensitive email uniqueness scoped by tenant.
+
+<ExerciseSolution hint="Use a WHERE clause in CREATE INDEX for partial indexes, and apply lower() for expression indexes.">
+
+```sql
+-- Partial index for failed deliveries
+CREATE INDEX idx_delivery_failed
+  ON delivery (tenant_id, created_at DESC, id DESC)
+  WHERE status = 'failed';
+
+-- Scoped case-insensitive unique constraint
+CREATE UNIQUE INDEX idx_user_tenant_email_ci
+  ON app_user (tenant_id, lower(email));
+```
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-idx-multi-tenant-unique-transfer" type="generalise" level="transfer" title="Case-Insensitive Multi-Tenant Unique Constraint Design">
+
+An engineering team must guarantee that no tenant can register duplicate user emails case-insensitively, while distinct tenants may legitimately register identical email addresses. Contrast `UNIQUE (email)`, `UNIQUE (tenant_id, email)`, and `UNIQUE (tenant_id, lower(email))` against this requirement.
+
+<ExerciseSolution hint="Check cross-tenant isolation and case normalization.">
+
+1. `UNIQUE (email)`: Incorrect. Prevents different tenants from registering the same email address, violating multi-tenant data isolation.
+2. `UNIQUE (tenant_id, email)`: Incomplete. Permits a single tenant to register both `User@example.com` and `user@example.com`, violating case-insensitivity.
+3. `UNIQUE (tenant_id, lower(email))`: Correct. Scopes uniqueness to the tenant and normalizes case uniformly, satisfying both isolation and case-insensitive identity invariants.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* [PostgreSQL: Indexes](https://www.postgresql.org/docs/current/indexes.html)
+* [PostgreSQL: Multicolumn Indexes](https://www.postgresql.org/docs/current/indexes-multicolumn.html)
+* [PostgreSQL: Index-Only Scans and Covering Indexes](https://www.postgresql.org/docs/current/indexes-index-only-scans.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

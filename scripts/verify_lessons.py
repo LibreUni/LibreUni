@@ -9,25 +9,146 @@ from pathlib import Path
 
 # Paths
 ROOT = Path(__file__).resolve().parents[1]
-LESSONS_DIR = ROOT / "apps" / "main" / "src" / "content" / "lessons"
+LESSONS_DIR = ROOT / "src" / "content" / "lessons"
 
 # Regexes
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
-BANNED_PHRASES = [
-    "welcome", "let's dive in", "in this lesson", "as you have learned before",
-    "congratulations on finishing", "you have completed", "next up", "previously",
-    "before we move on", "let's explore", "let's take a look at"
-]
+# These patterns describe conversational scaffolding, not technical vocabulary.
+# Keep them narrow enough that a rigorous sentence is never rejected merely for
+# containing an ordinary domain word such as "state", "simple", or "current".
+FILLER_PATTERNS = {
+    "stock welcome or celebration": r"\b(?:welcome|congratulations on finishing|you have completed)\b",
+    "conversational invitation": r"\b(?:let['’]s|let us)\s+(?:dive(?:\s+in)?|explore|take a look(?:\s+at)?)\b",
+    "lesson-navigation transition": r"\b(?:in|during)\s+(?:this|the (?:next|following|previous))\s+(?:lesson|module|section|course)\b",
+    "chronological callback": r"\b(?:as (?:we|you) (?:have )?(?:seen|saw|learned|discussed)|before (?:we|you) (?:move on|continue))\b",
+    "exploration prompt": r"\bto practice or explore further\b",
+    "journey framing": r"\b(?:summary of (?:the|your) journey|(?:the|your|our) journey from)\b",
+    "empty intensifier": r"\b(?:dive deeper|seamless experience)\b",
+    "placeholder transition": r"\b(?:next up|previously|the following sections explore)\b",
+    "unnecessary reminder": r"\b(?:remember that|keep in mind|it is (?:important|worth) to note|it should be noted|needless to say)\b",
+    "trivializing adverb": r"\bsimply\b",
+    "marketing or conversational framing": r"\b(?:deep[- ]dive|really work|gateway drug|you might wonder|it just works|the abstraction we know and love|full-fat|incredibly (?:small|fast|restricted)|billion dollars)\b",
+}
 
 # Canonical Component Props
 COMPONENT_PROPS = {
     "Quiz": ["question", "options", "correctIndex", "explanation", "questions", "title", "client:load"],
     "CodeRunner": ["code", "output", "language", "title", "client:load"],
-    "CodeExercise": ["code", "answers", "explanation", "title", "client:load"],
-    "CaseStudy": ["scenario", "question", "options", "correctIndex", "explanation", "title", "client:load"]
+    "CodeExercise": ["code", "answers", "explanation", "title", "description", "client:load"],
+    "FillInExercise": ["prompt", "text", "statement", "code", "answers", "explanation", "title", "description", "client:load"],
+    "CaseStudy": ["scenario", "question", "options", "correctIndex", "explanation", "tradeoffs", "title", "client:load"],
+    "SqlRunner": ["schema", "initialQuery", "title", "description", "client:load"]
 }
 
 URL_RE = re.compile(r"https?://[^\s)\]]+", re.IGNORECASE)
+
+# Structural sections frame the lesson; they are not teaching units and must not
+# be asked to supply an example or a closing interaction. Treating them as
+# ordinary sections produced hundreds of false warnings across the curriculum.
+STRUCTURAL_SECTION_RE = re.compile(
+    r"^(?:"
+    r"references?(?:\s*(?:&|and)\s*(?:further reading|sources?))?|"
+    r"sources?|bibliography|further reading|"
+    r"(?:course\s+)?(?:scope\s+)?boundar(?:y|ies).*|"
+    r"deliberate (?:omissions?|boundar(?:y|ies)).*|"
+    r"omissions?(?:\s*&.*)?|"
+    r"connections?(?:\s+and\s+.*)?|limits? and connections?|"
+    r"summary|key takeaways?|assessment(?: standard)?|grading criteria|verification (?:criteria|checklist).*|"
+    r"(?:lab\s+)?tasks?|proof obligations?|"
+    r"required (?:submission|invariant checker)|(?:architecture\s+)?specification(?:\s+package)?|"
+    r"deliverables?(?:\s+.*)?|"
+    r"definitions and results|method chooser|hypothesis checklist|typical errors"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# A section can teach through a diagram, formal statement, worked trace, table,
+# or disclosure rather than a fenced code block. Count those artifacts as
+# evidence before reporting a missing example.
+EXAMPLE_SIGNAL_RE = re.compile(
+    r"```[a-zA-Z0-9+-]+"
+    r"|<(?:MathStatement|MathProof|PlantUML|PythonDiagram|TikZ|Figure|Quiz|CodeRunner|CodeExercise|FillInExercise|CaseStudy|ExerciseSolution|details)\b"
+    r"|\b(?:example|case|demonstrat|scenario|worked|trace|deriv|proof|counterexample)\b"
+    r"|^\|.+\|\s*$"
+    r"|^\$\$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+EXERCISE_SIGNAL_RE = re.compile(
+    r"<(?:Quiz|CodeExercise|FillInExercise|CodeRunner|CaseStudy|ExerciseSolution|details)\b"
+    r"|\b(?:exercise|practice|try|quiz|lab|checkpoint|prediction|synthesis)\b",
+    re.IGNORECASE,
+)
+
+
+def section_is_structural(title):
+    """Return True when a heading is framing rather than a teaching unit."""
+    return bool(STRUCTURAL_SECTION_RE.match(title.strip()))
+
+
+def component_prop_names(props_block):
+    """Return top-level JSX attribute names, ignoring expression contents.
+
+    Naive regex stripping misreads identifiers inside `options={[...]}` as
+    props. Track brace/bracket/parenthesis depth and string literals instead.
+    """
+    names = []
+    depth = 0
+    quote = None
+    index = 0
+    while index < len(props_block):
+        char = props_block[index]
+        if quote:
+            if char == "\\" and index + 1 < len(props_block):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "\"'`":
+            quote = char
+            index += 1
+            continue
+        if char in "{[(":
+            depth += 1
+            index += 1
+            continue
+        if char in "}])":
+            depth = max(0, depth - 1)
+            index += 1
+            continue
+        if depth == 0 and (char.isalpha() or char == ":"):
+            match = re.match(r"[A-Za-z][A-Za-z0-9:_]*", props_block[index:])
+            if match:
+                name = match.group(0)
+                after = props_block[index + len(name):].lstrip()
+                if after.startswith("=") or name == "client:load":
+                    names.append(name)
+                index += len(name)
+                continue
+        index += 1
+    return names
+
+
+def structure_warnings(body):
+    """Report teaching sections that lack a visible artifact or closing practice."""
+    warnings = []
+    h2_sections = re.split(r"^##\s+", body, flags=re.MULTILINE)
+    if len(h2_sections) <= 1:
+        return ["No ## subheadings found; lesson should be structured with subheadings."]
+
+    for idx, sec in enumerate(h2_sections[1:], start=1):
+        sec_title = sec.split("\n", 1)[0].strip()
+        structural = section_is_structural(sec_title)
+        has_example = bool(EXAMPLE_SIGNAL_RE.search(sec))
+        has_exercise = bool(EXERCISE_SIGNAL_RE.search(sec))
+
+        if not has_example and not structural:
+            warnings.append(f"Section '{sec_title}' has no clear code block or example signal.")
+        if not has_exercise and not structural and idx == len(h2_sections) - 1:
+            warnings.append("Lesson does not conclude with an interactive/exercise component.")
+    return warnings
 
 def split_frontmatter(content):
     match = FRONTMATTER_RE.match(content)
@@ -41,23 +162,41 @@ def split_frontmatter(content):
         frontmatter[key.strip()] = val.strip().strip('"').strip("'")
     return frontmatter, content[match.end():]
 
+def find_filler_violations(body):
+    """Return visible conversational filler found outside fenced code/comments."""
+    visible = re.sub(r"^```[^\n]*\n.*?^```\s*$", " ", body, flags=re.MULTILINE | re.DOTALL)
+    visible = re.sub(r"\{\s*/\*.*?\*/\s*\}", " ", visible, flags=re.DOTALL)
+    violations = []
+    for label, pattern in FILLER_PATTERNS.items():
+        match = re.search(pattern, visible, re.IGNORECASE)
+        if match:
+            violations.append((label, match.group(0)))
+    return violations
+
 def check_url(url):
     """Checks if a URL is valid and reachable."""
     # Clean trailing punctuation
-    url = url.rstrip(".,;:")
+    url = url.rstrip(".,;:>\"'")
     try:
         req = urllib.request.Request(
             url, 
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         )
         with urllib.request.urlopen(req, timeout=5) as response:
-            return url, response.status == 200, f"HTTP {response.status}"
+            if 200 <= response.status < 400:
+                return url, True, f"HTTP {response.status}"
+            return url, False, f"HTTP {response.status}"
     except urllib.error.HTTPError as e:
+        # A live reference can reject automated requests. Preserve that signal
+        # as an audit warning; only an explicit dead-resource response should
+        # fail the lesson audit.
+        if e.code in {403, 429}:
+            return url, None, f"HTTP Error {e.code} (access restricted)"
         return url, False, f"HTTP Error {e.code}"
     except urllib.error.URLError as e:
-        return url, False, f"URL Error {e.reason}"
+        return url, None, f"URL Error {e.reason} (not verifiable automatically)"
     except Exception as e:
-        return url, False, f"Error: {str(e)}"
+        return url, None, f"Error: {str(e)} (not verifiable automatically)"
 
 def verify_lesson(path, check_links=False):
     content = path.read_text(encoding="utf-8")
@@ -73,41 +212,24 @@ def verify_lesson(path, check_links=False):
     if not frontmatter.get("description"):
         warnings.append("Missing or empty 'description' in frontmatter")
 
-    # 2. Banned Phrases Check
-    for phrase in BANNED_PHRASES:
-        # Match as whole phrase (case insensitive)
-        if re.search(r'\b' + re.escape(phrase) + r'\b', body, re.IGNORECASE):
-            errors.append(f"Contains banned filler phrase: '{phrase}'")
+    # 2. Filler and chronological-navigation check
+    for label, phrase in find_filler_violations(body):
+        errors.append(f"Contains banned filler ({label}): '{phrase}'")
 
     # 3. Pedagogical Structure: Theory -> Example -> Exercise
-    h2_sections = re.split(r"^##\s+", body, flags=re.MULTILINE)
-    # The first element is pre-first-H2 content (introduction/theory)
-    if len(h2_sections) > 1:
-        for idx, sec in enumerate(h2_sections[1:], start=1):
-            sec_title = sec.split("\n", 1)[0].strip()
-            # Check if each H2 section has an example (either a code block or example keywords)
-            has_example = bool(re.search(r"```[a-zA-Z0-9+-]+", sec) or re.search(r"\b(example|case|demonstrat|scenario)\b", sec, re.IGNORECASE))
-            has_exercise = bool(re.search(r"<Quiz|<CodeExercise|<CodeRunner|<CaseStudy", sec) or re.search(r"\b(exercise|practice|try|quiz|lab)\b", sec, re.IGNORECASE))
-            
-            if not has_example:
-                warnings.append(f"Section '{sec_title}' has no clear code block or example signal.")
-            if not has_exercise and idx == len(h2_sections) - 1:
-                # Last section should ideally lead to practice
-                warnings.append(f"Lesson does not conclude with an interactive/exercise component.")
-    else:
-        warnings.append("No ## subheadings found; lesson should be structured with subheadings.")
+    warnings.extend(structure_warnings(body))
 
     # 4. Interactive Component Props & client:load Check
-    for comp in ["Quiz", "CodeRunner", "CodeExercise", "CaseStudy"]:
-        pattern = re.compile(rf"<{comp}\b([^>]*)/?>", re.DOTALL)
+    for comp in ["Quiz", "CodeRunner", "CodeExercise", "CaseStudy", "SqlRunner"]:
+        # Match props, treating backtick strings as indivisible (they can contain >)
+        pattern = re.compile(rf"<{comp}\b((?:[^>`]|`[^`]*`)+)\s*/?>", re.DOTALL)
         for match in pattern.finditer(body):
             props_block = match.group(1)
             # Must use client:load
             if "client:load" not in props_block:
                 errors.append(f"<{comp}> component is missing 'client:load'")
             
-            # Check for non-canonical props
-            prop_names = re.findall(r"\b([a-zA-Z0-9:]+)(?=\s*=)", props_block)
+            prop_names = component_prop_names(props_block)
             allowed = COMPONENT_PROPS[comp]
             for p in prop_names:
                 if p not in allowed:
@@ -128,7 +250,6 @@ def verify_lesson(path, check_links=False):
         errors.append("Completely unsourced lesson (no References heading and no source-tracking comments)")
     elif not ref_heading:
         warnings.append("Has source tracking comments but lacks a visible 'References & Further Reading' section")
-
     # 6. Extract URLs for checking
     urls = URL_RE.findall(body)
     checked_urls = []
@@ -139,10 +260,39 @@ def verify_lesson(path, check_links=False):
             future_to_url = {executor.submit(check_url, url): url for url in urls}
             for future in as_completed(future_to_url):
                 url, ok, status = future.result()
-                if not ok:
+                if ok is False:
                     errors.append(f"Dead or invalid reference URL: {url} ({status})")
+                elif ok is None:
+                    warnings.append(f"Reference URL could not be verified automatically: {url} ({status})")
                 else:
                     checked_urls.append(url)
+
+    # 7. Visible Technical Comments Check
+    # Strip code blocks, inline code, and JSX to avoid false positives
+    clean_body = re.sub(r"^```[^\n]*\n.*?^```\s*$", " ", body, flags=re.MULTILINE | re.DOTALL)
+    clean_body = re.sub(r"`[^`]*`", " ", clean_body)
+    
+    # Strip JSX braces recursively
+    prev_len = -1
+    while len(clean_body) != prev_len:
+        prev_len = len(clean_body)
+        clean_body = re.sub(r"\{[^{}]*\}", " ", clean_body)
+        
+    # Strip HTML-like JSX tags
+    clean_body = re.sub(r"<[^>]+>", " ", clean_body)
+    
+    # Check for visible block comments /* and */
+    if "/*" in clean_body:
+        errors.append("Contains visible block comment start '/*' (must be wrapped in curly braces: '{/* comment */}')")
+    if "*/" in clean_body:
+        errors.append("Contains visible block comment end '*/' (must be wrapped in curly braces: '{/* comment */}')")
+        
+    # Check for visible single-line comments //
+    for line_idx, line in enumerate(clean_body.splitlines(), start=1):
+        stripped_line = line.strip()
+        if stripped_line.startswith("//"):
+            if not re.match(r"^//\S+\.\S+", stripped_line):
+                errors.append(f"Contains visible single-line comment '//' (line {line_idx}: '{stripped_line}')")
 
     return errors, warnings, checked_urls
 

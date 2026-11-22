@@ -1,31 +1,37 @@
-FROM node:20 AS builder
+FROM node:26.7.0-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Install Python and scientific libraries for build-time diagram rendering
+# Install Java, Graphviz, and Python scientific libraries for build-time diagram rendering
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    default-jre-headless \
+    graphviz \
     python3 \
     python3-matplotlib \
     python3-numpy \
     python3-pandas \
     && rm -rf /var/lib/apt/lists/*
 
-# Install workspace dependencies
+# Install dependencies
 COPY package*.json ./
-COPY apps/main/package.json apps/main/package.json
 RUN npm ci
 
-# Install Playwright Chromium for CI
+# Download and verify pinned PlantUML jar before copying source
+COPY tools/download-plantuml.mjs ./tools/download-plantuml.mjs
+ENV LIBREUNI_PLANTUML_JAR=/app/tools/plantuml.jar
+RUN node tools/download-plantuml.mjs
+
+# Install Playwright Chromium for CI and course PDF generation
 RUN npx playwright install --with-deps chromium
 
-# Build the static site
+# Build the static site and copy the UX audit report into dist/
 COPY . .
-RUN npm run build:all
+RUN npm run build
 
 FROM nginx:alpine AS runner
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /app/apps/main/dist /usr/share/nginx/html
+COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
 

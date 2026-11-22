@@ -1,0 +1,268 @@
+---
+title: Sequential State
+course: computer-architecture
+description: Clocks, latches, flip-flops, registers, and finite-state machines.
+prerequisites:
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
+outcomes:
+  - Model registers and finite-state controllers as transition systems with explicit reset, timing, and illegal-state behavior.
+  - Derive next-state logic for counters, handshakes, timers, and clock-domain crossings.
+  - Test boundary-cycle behavior and defend a state invariant against missed events or off-by-one errors.
+omissions:
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
+estimatedMinutes: 540
+assessment: Given a state machine and timing convention, produce its transition trace, prove the safety invariant, and repair one reset or timeout counterexample.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+
+Combinational logic answers a question about the present inputs. A processor, however, must remember a program counter, register contents, outstanding requests, protocol phase, and architectural mode. That memory is *state*. Sequential logic is the disciplined combination of storage elements and combinational next-state logic. Its correctness depends on both a functional relation—what state should follow what inputs—and a temporal relation—when a new state is allowed to become visible.
+
+This chapter develops the synchronous design model used by most digital systems. It distinguishes latches from edge-triggered registers, derives setup and hold constraints, models finite-state machines formally, and treats asynchronous inputs and reset as sources of metastability and illegal behavior. The purpose is not to draw a traffic light but to make timing and state invariants explicit enough that a pipeline controller, bus arbiter, or cache controller can be reasoned about and tested.
+
+## State as a mathematical transition system
+
+A synchronous machine can be modeled as a tuple $(S,I,O,\delta,\lambda)$: a set of states $S$, input alphabet $I$, output alphabet $O$, transition function $\delta:S\times I\to S$, and output function $\lambda$. At discrete clock boundaries, if the current state is $s_t$ and the sampled input is $i_t$, then
+
+$$
+s_{t+1}=\delta(s_t,i_t),\qquad o_t=\lambda(s_t,i_t) \text{ or } o_t=\lambda(s_t),
+$$
+
+depending on whether the machine is Mealy or Moore. A Mealy output may respond combinationally to an input during a state; a Moore output depends only on registered state. Moore outputs often simplify timing and avoid input glitches at an interface, while Mealy machines may use fewer states and respond within a cycle. Neither is universally superior; the interface contract decides whether an output may change between clock edges.
+
+The state set is an abstraction. A two-bit register physically has four encodings, but a protocol may use only `00`, `01`, and `10`; `11` is illegal. The transition function must define what happens from an illegal encoding, usually by moving to a safe recovery state. Leaving an encoding unconstrained is not the same as proving it unreachable. Faults, reset races, soft errors, X-propagation in simulation, and design bugs can all make an “impossible” state observable.
+
+**Worked example: a request controller.** Let states be `IDLE`, `BUSY`, and `ERROR`. In `IDLE`, a request starts work and transitions to `BUSY`; no request keeps the machine in `IDLE`. In `BUSY`, completion transitions to `IDLE`, while a detected fault transitions to `ERROR`. In `ERROR`, reset returns to `IDLE` and all normal inputs are ignored. The safety invariant is that a request is accepted only in `IDLE`; the liveness assumption is that a `BUSY` operation eventually either completes or reports a fault. The hardware design is incomplete until the priority between simultaneous completion and fault is specified.
+
+The diagram completes that contract: reset has highest priority in every state, fault wins over completion in `BUSY`, and a request during `BUSY` is not queued. All ordinary transitions sample inputs on the active edge; the global reset rule is omitted from the arrows for legibility.
+
+<PlantUML code={`@startuml
+[*] --> IDLE : reset
+IDLE --> BUSY : request / accept pulse
+IDLE --> IDLE : no request
+BUSY --> ERROR : fault
+BUSY --> IDLE : completion AND NOT fault
+BUSY --> BUSY : neither completion nor fault
+ERROR --> ERROR : no reset
+ERROR --> IDLE : reset
+note right of BUSY
+No new acceptance while busy.
+Reset overrides all inputs.
+end note
+@enduml`} />
+
+**Trace challenge.** Starting in `IDLE`, sample `(request, completion, fault)` as `(1,0,0)`, `(1,1,1)`, then `(1,1,0)`, with reset absent. Predict the post-edge states and count accepted requests.
+
+<ExerciseSolution title="Check the state trace">
+
+The states are `BUSY`, `ERROR`, `ERROR`. Exactly one request is accepted, at the first edge. Fault outranks completion at the second edge; the third request cannot escape `ERROR` without reset. Accepting another request while busy would violate the specified no-queue contract.
+
+</ExerciseSolution>
+
+<Quiz client:load title="State the transition"
+  question="What is required to specify a synchronous state machine?"
+  options={["Only a list of outputs observed after selected input sequences", "A state space, next-state rule, output rule, and clock/reset assumptions", "A random seed used to choose one transition at each edge", "A cache-line size that fixes how many states can be stored"]}
+  correctIndex={1}
+  explanation="A transition system needs state and rules for how inputs change it. Clock and reset assumptions determine when the mathematical transition is applied."
+/>
+
+## Latches, flip-flops, and registers
+
+A level-sensitive latch is transparent during an enable phase and holds its previous value otherwise. If enable is high, $Q$ follows $D$ after propagation delay; if enable is low, $Q$ is stable. A pair of latches driven by complementary phases can form an edge-triggered element. A flip-flop is commonly abstracted as sampling $D$ at a clock edge and retaining that sample until the next active edge:
+
+$$
+Q(t^+)=D(t_{sample}),
+$$
+
+where $t^+$ denotes the state just after the edge. A register is a bank of such storage elements, often with a shared clock-enable and reset. The abstract edge-triggered model prevents a combinational path from “seeing through” a storage element during the active edge, which makes cycle-by-cycle reasoning compositional.
+
+The abstraction has limits. A physical flip-flop needs its input stable for a setup interval before the edge and a hold interval after it. If the input changes too close to the edge, the internal feedback may take an unusually long time to resolve to 0 or 1: metastability. The output is not a third logical value in the final system, but it can violate downstream timing while resolving. No finite synchronizer can make metastability impossible; it reduces the probability that unresolved behavior reaches logic by giving the first stage time to settle.
+
+Two flip-flops in series are a common clock-domain crossing synchronizer for a single slowly changing control bit. The first may become metastable; the second samples it one cycle later. This is not safe for a multi-bit bus whose bits can settle on different cycles, nor does it preserve every pulse if the source toggles faster than the destination can observe. Multi-bit data requires a protocol such as a handshake, asynchronous FIFO, gray-coded pointer scheme, or a formally justified sampling method.
+
+<CaseStudy client:load
+  title="A correct truth table can still miss timing"
+  scenario="A register's input changes 50 ps before the clock edge, but its setup requirement is 90 ps. Simulation using only Boolean values reports the expected next state."
+  question="Which conclusion is justified?"
+  options={["Functional logic is insufficient; the setup violation can make capture unreliable", "The register must capture correctly because its combinational truth table is correct", "Only hold time matters before an active edge, so no violation occurred", "The clock period can be ignored whenever the next-state equation is deterministic"]}
+  correctIndex={0}
+  explanation="Sequential correctness includes timing constraints. Violating setup time can produce an incorrect or metastable capture even when the Boolean next-state function is correct."
+/>
+
+## Timing constraints
+
+> **Definition.** Synchronous edge-triggered timing holds if and only if every register-to-register path satisfies both the **setup constraint** $t_{\mathrm{cq,max}} + t_{\mathrm{comb,max}} + t_{\mathrm{setup}} \le T + t_{\mathrm{skew}}$ and the **hold constraint** $t_{\mathrm{cq,min}} + t_{\mathrm{comb,min}} \ge t_{\mathrm{hold}} + t_{\mathrm{skew,hold}}$.
+
+In a single-clock path, a launching register changes after the clock-to-Q delay $t_{cq}$, combinational logic requires $t_{comb}$, and the receiving register requires data to arrive at least $t_{setup}$ before the next edge. With clock period $T$ and skew $t_{skew}$, a simplified setup constraint is
+
+$$
+t_{cq,max}+t_{comb,max}+t_{setup}\le T+t_{skew}.
+$$
+
+The corresponding hold constraint is a lower-bound condition: the launching register’s earliest change plus the shortest combinational delay must not reach the receiving register too soon after the same edge. A simplified form is
+
+$$
+t_{cq,min}+t_{comb,min}\ge t_{hold}+t_{skew,hold}.
+$$
+
+Increasing the clock period can repair setup failure but cannot generally repair hold failure. This distinction matters in pipeline design: a path may be slow enough to miss the next edge, or so short that new data corrupts the old sample immediately after the edge. Adding a register changes latency and may repair setup while creating a new architectural timing contract.
+
+**Worked timing calculation.** Suppose $t_{cq,max}=80$ ps, the worst combinational path is 620 ps, setup time is 90 ps, and the worst skew provides 20 ps of relief. Then $T\ge80+620+90-20=770$ ps, so the frequency bound from this path is approximately 1.30 GHz. If the shortest path has $t_{cq,min}=40$ ps and $t_{comb,min}=15$ ps, with hold requirement 45 ps and no helpful hold skew, the hold inequality is satisfied at 55 ps. Notice that the setup and hold calculations use different extrema; averaging delays would be unsound.
+
+Clock gating and enables add another layer of correctness. A register with enable $e$ has next-state equation $D=e\cdot f(s,i)+\bar e\cdot s$, meaning it retains state when disabled. A gated clock physically suppresses clock transitions and can save power, but the gate itself must be designed so enable changes cannot create a spurious pulse. A synchronous enable is usually easier to verify than ad hoc combinational clock gating.
+
+## Finite-state-machine design flow
+
+> **Example.** In a ready/valid handshake controller, a transfer occurs on a rising clock edge if and only if $\mathrm{valid} \land \mathrm{ready} = 1$; once the sender asserts $\mathrm{valid} = 1$, it is forbidden to deassert $\mathrm{valid}$ or mutate the payload until the clock edge where $\mathrm{ready} = 1$ completes the transfer.
+
+A robust design flow begins with an interface contract rather than an encoding. First define events, inputs, outputs, safety properties, liveness assumptions, reset behavior, and simultaneous-event priority. Next identify the smallest state that distinguishes futures: two histories may share a state only if every possible future input produces equivalent outputs and transitions. Then write a state-transition table or graph, choose an encoding, derive next-state logic, and verify the implementation against the transition relation.
+
+State minimization is a behavioral question. If two states produce different outputs for the same input, they cannot be merged. If their outputs match, they can be merged only when their successor states are themselves equivalent under every input. This is the same idea as distinguishing prefixes in automata theory, now applied to a clocked controller. One-hot encoding uses a separate bit for each state, binary encoding uses roughly $\lceil\log_2|S|\rceil$ bits, and gray-like encodings can reduce simultaneous bit changes. Encoding affects physical timing and fault detection but not the abstract machine.
+
+**Worked example: a ready/valid interface.** Suppose a producer presents `valid` and data, and a consumer presents `ready`. A transfer occurs on a clock edge exactly when `valid && ready`. If the producer is allowed to keep data stable while waiting, the controller needs `EMPTY` and `FULL` states: `EMPTY` may accept a new item, `FULL` holds an item until transfer. If simultaneous dequeue and enqueue are permitted, `FULL` with both signals high may remain `FULL` while replacing the data; if not, the enqueue must be rejected. The choice changes throughput and must be stated. A common bug is to clear `valid` as soon as it is asserted rather than when the handshake condition is true, losing data when the consumer is not ready.
+
+## Counters, timers, and derived state
+
+> **Warning.** Off-by-one timeout bugs arise when a countdown register is loaded with $N$ at acceptance edge $t_0$ without specifying whether expiration is tested on the pre-decrement state ($q_t = 0$, expiring after $N+1$ edges) or the post-decrement state ($q_{t+1} = 0$, expiring after $N$ edges).
+
+A counter is a register plus an increment, decrement, hold, or load function. For a $w$-bit modulo counter, $q_{t+1}=(q_t+1)\bmod2^w$. A timer that must represent a duration of $N$ cycles needs a clear convention: does zero mean “expired now,” does it count the current edge, and can reload occur on the expiration edge? Off-by-one errors are semantic errors in $\delta$, not merely coding mistakes.
+
+**Worked example: a three-cycle timeout.** If a request is accepted at edge $t_0$ and the specification says failure should be raised if completion has not arrived by the third subsequent edge, then the relevant checks occur at $t_1,t_2,t_3$. Load 3 at $t_0$ and, at each later edge without completion, decrement then test the new value: it becomes 2, 1, 0 and expires at $t_3$. An equivalent convention loads 2 and tests the old value for zero before decrementing: old values at $t_1,t_2,t_3$ are 2, 1, 0. Loading 2 and testing after decrement instead expires at $t_2$, one edge too early. State whether completion wins over timeout at $t_3$, and test durations 0, 1, 2, 3, and 4 explicitly; duration zero needs its own acceptance-edge rule.
+
+Derived state should be minimized when it can be recomputed without ambiguity. Storing both a count and an `empty` flag creates a consistency invariant; if one updates and the other does not, the controller can accept or discard data incorrectly. Redundant state is justified when it improves timing or power, but then the equality and update invariants must be asserted.
+
+## Reset and initialization
+
+> **Warning.** Releasing an asynchronous reset without synchronizing its deassertion edge to the local clock domain can violate reset-recovery timing on a subset of state flip-flops, throwing a multi-bit FSM or one-hot controller into an unreachable illegal state on the very first active clock edge.
+
+Reset establishes an initial state but does not automatically initialize every physical bit in every technology. A synchronous reset is sampled by the clock; an asynchronous reset can affect state between edges but introduces deassertion timing concerns. A common safe pattern asserts reset asynchronously for rapid containment and deasserts it synchronously per clock domain.
+
+**Reset strategies and timing boundaries:**
+
+| Reset architecture | Assertion timing | Deassertion timing | Hardware failure mode / race condition |
+| --- | --- | --- | --- |
+| **Pure synchronous** | On active clock edge | On active clock edge | Cannot reset if clock is stopped or gated; requires larger gates in logic path |
+| **Raw asynchronous** | Immediate (level-triggered) | Asynchronous to clock | Deassertion near clock edge violates recovery/removal timing, causing metastability |
+| **Synchronized deassertion** | Immediate (asynchronous) | Synchronized via 2-FF chain | Clean deassertion aligned to clock; eliminates cross-register reset skew |
+
+```verilog
+// Reset synchronizer: asynchronous assertion, synchronous deassertion
+always @(posedge clk or posedge async_rst) begin
+    if (async_rst) begin
+        rst_meta <= 1'b1;
+        rst_sync <= 1'b1;
+    end else begin
+        rst_meta <= 1'b0;
+        rst_sync <= rst_meta;
+    end
+end
+```
+
+Reset values should be chosen for safety, not convenience. A bus arbiter should not grant multiple owners after reset; a valid/data queue should begin empty; a privilege controller should begin in the least-authority state. If the state encoding has illegal patterns, reset should enter a legal recovery state and the transition logic should route illegal encodings there as well.
+
+Reset is also a protocol event. Downstream logic must know when outputs are meaningful, and cross-domain consumers must not observe one domain leaving reset while another remains held. A design that “works after reset” in simulation may fail in hardware if deassertion violates recovery/removal timing or if memories and registers initialize differently.
+
+## Verification and invariants
+
+> **Remark.** Inductive invariant verification proves $I(s_0)$ at reset and $\forall s, i.\; I(s) \Rightarrow I(\delta(s, i))$ across all $2^{|I|}$ input combinations—including simultaneous events such as `enqueue && dequeue` or `completion && timeout`.
+
+The strongest FSM tests are derived from properties. Safety properties say something bad never occurs: never grant two mutually exclusive resources, never dequeue an empty queue, never assert `done` without a prior accepted request. Liveness properties say something good eventually occurs under assumptions: every accepted request eventually completes or faults, a waiting arbiter eventually grants a continuously requesting client, and a nonempty queue eventually dequeues when the consumer remains ready.
+
+An invariant proof has the form: establish the property in every initial state, assume it before an edge, and show every allowed transition preserves it. For a one-entry queue, the invariant is `valid=0` iff no item is stored, and `valid=1` implies stored data is stable until a handshake. The proof must consider no operation, enqueue only, dequeue only, and simultaneous enqueue/dequeue. Omitting the simultaneous case is a classic completeness failure.
+
+Simulation explores traces; formal verification can quantify over all input combinations within a bounded or inductive model. Neither replaces a correct environment assumption. An assertion that assumes `ready` is always high proves little if the actual integration allows backpressure.
+
+<ExerciseSet>
+
+<Exercise id="ex-seq-fsm-controller-design" type="construct" level="application" title="Finite State Machine Controller Design">
+
+Design a four-state elevator controller for floors 0 and 1. Specify state, request input, motor output, door output, reset behavior, illegal-state recovery, and simultaneous arrival/request priority.
+
+<ExerciseSolution hint="Construct state transition diagrams and truth tables with explicit current and next state assignments.">
+
+A correct solution has explicit states such as `IDLE_0`, `MOVING_TO_1`, `IDLE_1`, and `MOVING_TO_0`, with outputs derived from state. A request received while moving must be queued, ignored, or merged by specification; silently choosing one is not a design. Illegal state encodings should disable the motor and return to a known idle state after reset or fault recovery.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-seq-setup-hold-timing" type="verify" level="application" title="Setup and Hold Timing Constraint Equations">
+
+A path has $t_{cq,max}=120$ ps, $t_{comb,max}=1.4$ ns, setup 80 ps, and clock skew of -30 ps. Compute the minimum clock period and explain the sign of skew in your equation.
+
+<ExerciseSolution hint="Calculate maximum clock frequency from flip-flop clock-to-Q delay, combinational logic, and setup margins.">
+
+The bound is $T\ge120+1400+80-(-30)=1630$ ps, because negative skew makes the receiving edge effectively earlier relative to the launching edge. The maximum frequency is about 613.5 MHz. The exact sign convention can vary, but the physical question is whether skew gives or removes available setup time.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-seq-metastability-synchronizers" type="describe" level="transfer" title="Metastability and Multi-Clock Synchronizers">
+
+Explain why synchronizing each bit of a binary counter independently can produce a value that never existed in the source domain. Give a safer transfer protocol.
+
+<ExerciseSolution hint="Explain the mean time between failures (MTBF) when crossing asynchronous clock domains with dual flip-flops.">
+
+Bits do not cross at the same instant. A source changing from `0111` to `1000` can be sampled as `1111`, a mixed value never held by the source. Use a gray-coded counter for pointer transfer when its one-bit transition property is proven, or transfer data with a request/acknowledge handshake or asynchronous FIFO.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-seq-ready-valid-protocol" type="construct" level="transfer" title="Ready/Valid Handshake Protocol State Table">
+
+Write a complete transition table for a one-entry ready/valid buffer, including simultaneous enqueue and dequeue. State whether it supports fall-through behavior.
+
+<ExerciseSolution hint="Specify valid and ready assertion rules to prevent data loss or duplicate reads across boundaries.">
+
+The buffer is empty when `valid=0`. Enqueue without dequeue stores data and sets valid; dequeue without enqueue clears valid; neither preserves state; both can replace data and preserve valid if the protocol permits throughput one per cycle. Fall-through requires an additional combinational path from input to output when empty and a different timing contract; a registered buffer does not fall through.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-seq-queue-storage-invariant" type="prove" level="transfer" title="Queue Storage Invariant Verification">
+
+Prove the queue-valid invariant for the four cases of input handshake and output handshake. Identify the case that changes the stored data without changing occupancy.
+
+<ExerciseSolution hint="Prove that enqueue and dequeue operations maintain FIFO order and correct full/empty status flags.">
+
+In an empty state, only an accepted enqueue makes valid true. In a full state, only an accepted dequeue without enqueue makes it false. Neither handshake preserves it. Simultaneous handshake replaces the stored item and preserves occupancy. The proof must include the fact that the producer holds input data stable while `valid && !ready`.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-seq-state-encoding-tradeoffs" type="describe" level="synthesis" title="One-Hot vs Binary State Encoding Trade-offs">
+
+Compare one-hot and binary state encoding for 12 states. Discuss flip-flop count, decode complexity, illegal encodings, and timing rather than declaring one universally better.
+
+<ExerciseSolution hint="Compare flip-flop count, combinational decode logic speed, and power dissipation between encoding strategies.">
+
+One-hot uses 12 state bits and often simple local decode. Of its $2^{12}=4096$ bit patterns, exactly 12 have one asserted bit, leaving 4084 illegal encodings, including all-zero and multi-hot values. Binary uses four bits: 12 encodings represent states and four of the 16 encodings remain unused. Binary decode may create deeper logic. Physical fanout, power, synthesis technology, and fault model determine the choice; both schemes need defined illegal-state behavior.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-seq-asynchronous-reset" type="construct" level="synthesis" title="Asynchronous Reset Assertion with Synchronous Release">
+
+Give a reset design for a multi-clock system with a producer, consumer, and asynchronous external interrupt. Identify which signals require synchronization and which require a handshake.
+
+<ExerciseSolution hint="Explain how reset synchronizers prevent metastable transitions when releasing circuit resets.">
+
+Reset release should be synchronized independently in each clock domain. A single-bit interrupt request needs synchronization or an asynchronous capture circuit; a multi-bit event needs a handshake or FIFO. The producer and consumer need a defined reset interaction so neither treats stale valid/data as a new transfer.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
+
+
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: lecture notes and examinations](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [MIT 6.004 learning objectives](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)

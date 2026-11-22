@@ -1,0 +1,377 @@
+---
+import { getCollection, type CollectionEntry, render } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import CourseSidebar from '../../components/CourseSidebar.astro';
+import LessonBrief from '../../components/LessonBrief.astro';
+import StudyToolsRail from '../../components/StudyToolsRail';
+import { ChevronLeft, ChevronRight, ListTree } from 'lucide-react';
+import { getLessonsByCourse, type OrderedLesson } from '../../utils/lessons';
+import { renderInlineMarkdownMath } from '../../utils/inlineFormat.mjs';
+
+export async function getStaticPaths() {
+  const lessons = await getCollection('lessons');
+  const courses = await getCollection('courses');
+
+  // Pre-calculate course data to avoid expensive lookups per page
+  const courseMap = Object.fromEntries(courses.map(c => [c.id, c]));
+
+  const courseLessonsMap = await getLessonsByCourse(lessons);
+
+  const paths: any[] = [];
+  for (const courseId in courseLessonsMap) {
+    const courseLessons = courseLessonsMap[courseId];
+    const course = courseMap[courseId];
+
+    courseLessons.forEach((lesson, index) => {
+      paths.push({
+        params: { slug: lesson.id },
+        props: {
+          lesson,
+          course,
+          courseLessons,
+          nextLesson: courseLessons[index + 1] ? {
+            slug: courseLessons[index + 1].id,
+            data: {
+              title: courseLessons[index + 1].data.title,
+              kind: courseLessons[index + 1].data.kind,
+              label: courseLessons[index + 1].data.label,
+            }
+          } : null,
+          prevLesson: courseLessons[index - 1] ? {
+            slug: courseLessons[index - 1].id,
+            data: {
+              title: courseLessons[index - 1].data.title,
+              kind: courseLessons[index - 1].data.kind,
+              label: courseLessons[index - 1].data.label,
+            }
+          } : null
+        },
+      });
+    });
+  }
+  return paths;
+}
+
+interface Props {
+  lesson: CollectionEntry<'lessons'>;
+  course: CollectionEntry<'courses'>;
+  courseLessons: OrderedLesson[];
+  nextLesson: { slug: string, data: { title: string; kind?: string; label?: string } } | null;
+  prevLesson: { slug: string, data: { title: string; kind?: string; label?: string } } | null;
+}
+
+const { lesson, course, courseLessons, nextLesson, prevLesson } = Astro.props;
+const { Content, headings } = await render(lesson);
+const lessonIndex = courseLessons.findIndex((item) => item.id === lesson.id);
+const lessonPosition = lessonIndex >= 0 ? lessonIndex + 1 : undefined;
+
+const KIND_NAMES: Record<string, string> = {
+  lesson: 'Lesson',
+  lab: 'Lab',
+  problems: 'Problem set',
+  recap: 'Recap sheet',
+  practice: 'Practice',
+};
+
+const pageKind = (lesson.data as any).kind || 'lesson';
+const isLessonOrLab = pageKind === 'lesson' || pageKind === 'lab';
+
+const resolveCoverLabel = (cov: string): string => {
+  const fullId = `${lesson.data.course}/${cov}`;
+  const match = courseLessons.find((item) => item.id === fullId || item.id === cov);
+  if (!match) return cov;
+  return match.data.label ? `${match.data.label} · ${match.data.title}` : match.data.title;
+};
+---
+
+<Layout title={`${lesson.data.title} - ${course?.data.title}`} description={lesson.data.description}>
+  <CourseSidebar courseId={lesson.data.course} currentSlug={lesson.id} lessons={courseLessons} />
+
+  <main class="flex-1 bg-light-bg dark:bg-dark-bg min-w-0">
+        <div id="lesson-container" data-lu-source={`src/content/lessons/${lesson.id}.mdx; rendered by src/pages/lessons/[...slug].astro`} class="mx-auto max-w-5xl px-5 py-8 sm:px-7 md:px-10 md:py-12">
+        <header class="mb-8 border-b border-light-border pb-7 dark:border-dark-border md:mb-10">
+            <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+                <div class="flex min-w-0 items-center gap-2">
+                    <a href={`${import.meta.env.BASE_URL}courses/${lesson.data.course}`} class="inline-flex min-h-11 items-center text-[11px] font-black uppercase tracking-[0.14em] text-primary hover:opacity-80 transition-opacity">{course?.data.title}</a>
+                    <span class="text-light-muted dark:text-dark-muted">/</span>
+                    <span class="break-words text-[11px] font-black uppercase tracking-[0.14em] text-light-muted dark:text-dark-muted">{lesson.data.module || 'Intro'}</span>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-3">
+                  {lessonPosition && (
+                    <span class="text-xs font-semibold tabular-nums text-light-muted dark:text-dark-muted">
+                      Page {lessonPosition} of {courseLessons.length}
+                    </span>
+                  )}
+                  <StudyToolsRail client:load lessonSlug={lesson.id} lessonTitle={lesson.data.title} />
+                </div>
+            </div>
+            <h1 class="max-w-4xl break-words text-4xl font-black leading-[1.08] tracking-tight text-light-text dark:text-dark-text md:text-6xl">{lesson.data.title}</h1>
+            {lesson.data.description && <p class="mt-4 max-w-3xl text-base leading-relaxed text-light-muted dark:text-dark-muted md:text-lg">{lesson.data.description}</p>}
+            <div class="mt-5 flex flex-wrap items-center gap-3 md:hidden">
+              <button id="sidebar-toggle" type="button" aria-expanded="false" aria-controls="course-sidebar" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-2 text-sm font-bold text-primary">
+                <ListTree size={17} /> Course contents
+              </button>
+            </div>
+        </header>
+
+        {isLessonOrLab && (
+          <LessonBrief
+            kind={pageKind}
+            module={lesson.data.module}
+            prerequisites={(lesson.data as any).prerequisites}
+            outcomes={(lesson.data as any).outcomes}
+            assessment={(lesson.data as any).assessment}
+            omitted={(lesson.data as any).omissions}
+            estimatedMinutes={lesson.data.estimatedMinutes}
+            headings={headings}
+          />
+        )}
+
+        {pageKind === 'problems' && (
+          <div class="mb-10 rounded-2xl border border-light-border bg-light-surface p-6 dark:border-dark-border dark:bg-dark-surface not-prose">
+            <div class="flex flex-wrap items-baseline justify-between gap-3 pb-4 border-b border-light-border dark:border-dark-border">
+              <div>
+                <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Chapter problem set</p>
+                <h2 class="mt-1 text-2xl font-black text-light-text dark:text-dark-text">Deep and Challenge Problems</h2>
+              </div>
+              <span class="text-xs font-bold text-light-muted dark:text-dark-muted">
+                Estimated time: {lesson.data.estimatedMinutes} min
+              </span>
+            </div>
+            <div class="mt-4 grid gap-4 md:grid-cols-2">
+              <div>
+                <h3 class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Covers</h3>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  {((lesson.data as any).covers || []).map((cov: string) => (
+                    <a
+                      href={`${import.meta.env.BASE_URL}lessons/${lesson.data.course}/${cov}`}
+                      class="inline-flex items-center rounded-lg border border-light-border dark:border-dark-border bg-light-bg dark:bg-dark-bg px-2.5 py-1 text-xs font-bold text-primary hover:border-primary/50 transition-colors"
+                    >
+                      {resolveCoverLabel(cov)}
+                    </a>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Target Outcomes</h3>
+                <ul class="mt-2 list-disc space-y-1 pl-4 text-xs text-light-muted dark:text-dark-muted">
+                  {((lesson.data as any).outcomes || []).map((out: string) => (
+                    <li set:html={renderInlineMarkdownMath(out)} />
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div class="mt-4 pt-4 border-t border-light-border/60 dark:border-dark-border/60 flex flex-wrap items-center gap-4 text-xs font-semibold text-light-muted dark:text-dark-muted">
+              <span>Levels: recall · application · transfer · synthesis</span>
+              <span>★ = Challenge problem</span>
+            </div>
+          </div>
+        )}
+
+        {pageKind === 'recap' && (
+          <div class="mb-10 rounded-2xl border border-light-border bg-light-surface p-6 dark:border-dark-border dark:bg-dark-surface not-prose">
+            <div class="flex flex-wrap items-baseline justify-between gap-3 pb-4 border-b border-light-border dark:border-dark-border">
+              <div>
+                <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Chapter recap sheet</p>
+                <h2 class="mt-1 text-2xl font-black text-light-text dark:text-dark-text">Condensed Reference</h2>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary">
+                  A4 Printable Reference
+                </span>
+                <span class="text-xs font-bold text-light-muted dark:text-dark-muted">
+                  {lesson.data.estimatedMinutes} min review
+                </span>
+              </div>
+            </div>
+            <div class="mt-4">
+              <h3 class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Covered Lessons</h3>
+              <div class="mt-2 flex flex-wrap gap-2">
+                {((lesson.data as any).covers || []).map((cov: string) => (
+                  <a
+                    href={`${import.meta.env.BASE_URL}lessons/${lesson.data.course}/${cov}`}
+                    class="inline-flex items-center rounded-lg border border-light-border dark:border-dark-border bg-light-bg dark:bg-dark-bg px-2.5 py-1 text-xs font-bold text-primary hover:border-primary/50 transition-colors"
+                  >
+                    {resolveCoverLabel(cov)}
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {pageKind === 'practice' && (
+          <div class="mb-10 rounded-2xl border border-light-border bg-light-surface p-6 dark:border-dark-border dark:bg-dark-surface not-prose">
+            <div class="flex flex-wrap items-baseline justify-between gap-3 pb-4 border-b border-light-border dark:border-dark-border">
+              <div>
+                <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Comprehensive practice</p>
+                <h2 class="mt-1 text-2xl font-black text-light-text dark:text-dark-text">Problem Workshop</h2>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary">
+                  Interactive Generator
+                </span>
+                <span class="text-xs font-bold text-light-muted dark:text-dark-muted">
+                  {lesson.data.estimatedMinutes} min practice
+                </span>
+              </div>
+            </div>
+            <div class="mt-4">
+              <h3 class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Covered Topics</h3>
+              <div class="mt-2 flex flex-wrap gap-2">
+                {((lesson.data as any).covers || []).map((cov: string) => (
+                  <a
+                    href={`${import.meta.env.BASE_URL}lessons/${lesson.data.course}/${cov}`}
+                    class="inline-flex items-center rounded-lg border border-light-border dark:border-dark-border bg-light-bg dark:bg-dark-bg px-2.5 py-1 text-xs font-bold text-primary hover:border-primary/50 transition-colors"
+                  >
+                    {resolveCoverLabel(cov)}
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <article data-lu-source={`src/content/lessons/${lesson.id}.mdx; rendered by src/pages/lessons/[...slug].astro:98`} class="prose prose-slate dark:prose-invert max-w-none
+            prose-headings:text-light-text dark:prose-headings:text-dark-text prose-headings:font-black prose-headings:tracking-tight
+            prose-p:text-light-text dark:prose-p:text-dark-text prose-p:leading-[1.9] prose-p:my-5 prose-p:font-medium text-lg
+            prose-code:before:content-none prose-code:after:content-none
+            prose-pre:rounded-3xl prose-pre:shadow-2xl
+            prose-strong:text-light-text dark:prose-strong:text-dark-text prose-strong:font-black
+            prose-li:text-light-text dark:prose-li:text-dark-text prose-li:leading-[1.85] prose-li:my-2 prose-li:font-medium
+            prose-img:rounded-[2rem] prose-img:shadow-2xl">
+            <Content />
+        </article>
+
+        <nav aria-label="Lesson sequence" class="mt-16 border-t border-light-border pt-8 dark:border-dark-border">
+          <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <a href={`${import.meta.env.BASE_URL}courses/${lesson.data.course}`} class="inline-flex min-h-11 items-center gap-2 rounded-xl px-3 text-sm font-bold text-light-muted transition-colors hover:bg-primary/5 hover:text-primary dark:text-dark-muted">
+              <ListTree size={17} /> Course outline
+            </a>
+
+            {pageKind !== 'recap' && (
+              <button
+                id="mark-completed"
+                type="button"
+                aria-pressed="false"
+                class="group inline-flex min-h-11 items-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-500/5 px-4 text-sm font-bold text-emerald-700 transition-colors hover:bg-emerald-500/10 dark:text-emerald-300"
+              >
+                <span id="complete-icon" class="flex h-5 w-5 items-center justify-center rounded-full border-2 border-current">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" class="hidden"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+                <span id="complete-text">Mark complete</span>
+              </button>
+            )}
+          </div>
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            {prevLesson ? (
+              <a href={`${import.meta.env.BASE_URL}lessons/${prevLesson.slug}`} class="group flex min-h-24 items-center gap-3 rounded-2xl border border-light-border bg-light-surface p-4 text-light-text transition-colors hover:border-primary/50 hover:text-primary dark:border-dark-border dark:bg-dark-surface dark:text-dark-text">
+                <ChevronLeft size={20} className="shrink-0" />
+                <span class="min-w-0">
+                  <span class="label-caps block">Previous · {KIND_NAMES[prevLesson.data.kind || 'lesson'] || 'Lesson'}{prevLesson.data.label ? ` · ${prevLesson.data.label}` : ''}</span>
+                  <span class="mt-1 block font-bold leading-snug">{prevLesson.data.title}</span>
+                </span>
+              </a>
+            ) : <span class="hidden sm:block" />}
+
+            {nextLesson ? (
+              <a href={`${import.meta.env.BASE_URL}lessons/${nextLesson.slug}`} class="group flex min-h-24 items-center justify-between gap-3 rounded-2xl border border-primary/40 bg-primary/5 p-4 text-light-text transition-colors hover:bg-primary/10 dark:text-dark-text">
+                <span class="min-w-0 text-right sm:ml-auto">
+                  <span class="label-caps block text-primary">Next · {KIND_NAMES[nextLesson.data.kind || 'lesson'] || 'Lesson'}{nextLesson.data.label ? ` · ${nextLesson.data.label}` : ''}</span>
+                  <span class="mt-1 block font-bold leading-snug">{nextLesson.data.title}</span>
+                </span>
+                <ChevronRight size={20} className="shrink-0 text-primary" />
+              </a>
+            ) : (
+              <a href={`${import.meta.env.BASE_URL}courses/${lesson.data.course}`} class="flex min-h-24 items-center justify-center rounded-2xl border border-primary/40 bg-primary/5 p-4 text-center font-bold text-primary transition-colors hover:bg-primary/10">Return to course overview</a>
+            )}
+          </div>
+        </nav>
+    </div>
+  </main>
+</Layout>
+
+<script is:inline define:vars={{ slug: lesson.id, courseId: lesson.data.course }}>
+  const completeBtn = document.getElementById('mark-completed');
+  const completeText = document.getElementById('complete-text');
+  const completeIcon = document.getElementById('complete-icon');
+
+  const completedKey = `completed-${slug}`;
+  const lastVisitedKey = `last-visited-${courseId}`;
+
+  localStorage.setItem(lastVisitedKey, slug);
+
+  function setCompleteButtonState(isCompleted) {
+    if (!completeBtn) return;
+    if (isCompleted) {
+      completeBtn.classList.remove(
+        'bg-emerald-500/5',
+        'hover:bg-emerald-500/10',
+        'text-emerald-700',
+        'dark:text-emerald-300',
+        'border-emerald-500/50'
+      );
+      completeBtn.classList.add('bg-emerald-700', 'hover:bg-emerald-800', 'text-white', 'border-emerald-700');
+      completeBtn.setAttribute('aria-pressed', 'true');
+      if (completeText) completeText.innerText = 'Completed';
+    } else {
+      completeBtn.classList.remove(
+        'bg-emerald-700',
+        'hover:bg-emerald-800',
+        'bg-emerald-500',
+        'text-white',
+        'border-emerald-700',
+        'border-emerald-500'
+      );
+      completeBtn.classList.add(
+        'bg-emerald-500/5',
+        'hover:bg-emerald-500/10',
+        'text-emerald-700',
+        'dark:text-emerald-300',
+        'border-emerald-500/50'
+      );
+      completeBtn.setAttribute('aria-pressed', 'false');
+      if (completeText) completeText.innerText = 'Mark complete';
+    }
+    const checkSvg = completeIcon?.querySelector('svg');
+    if (checkSvg) {
+      checkSvg.classList.toggle('hidden', !isCompleted);
+      checkSvg.classList.toggle('block', isCompleted);
+    }
+  }
+
+  setCompleteButtonState(localStorage.getItem(completedKey) === 'true');
+
+  completeBtn?.addEventListener('click', () => {
+    const nextCompleted = localStorage.getItem(completedKey) !== 'true';
+    if (nextCompleted) {
+      localStorage.setItem(completedKey, 'true');
+    } else {
+      localStorage.removeItem(completedKey);
+    }
+    setCompleteButtonState(nextCompleted);
+    window.dispatchEvent(new CustomEvent('lesson-completed', { detail: { slug, completed: nextCompleted } }));
+  });
+</script>
+
+<style is:global>
+    @reference '../../styles/global.css';
+    .prose :where(pre):not(:where(.not-prose, .not-prose *)) {
+        @apply bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border shadow-sm;
+        padding: 1.5rem !important;
+        border-radius: 1.5rem !important;
+    }
+    .prose :where(code):not(:where(.not-prose, .not-prose *)) {
+        @apply text-primary font-bold;
+    }
+    .prose :where(pre):not(:where(.not-prose, .not-prose *)) code {
+        background-color: transparent !important;
+        color: inherit !important;
+        padding: 0 !important;
+    }
+    .prose > h1:first-child {
+        display: none !important;
+    }
+</style>

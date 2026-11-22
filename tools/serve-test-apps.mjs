@@ -11,14 +11,19 @@ const CONTENT_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm',
+  '.pdf': 'application/pdf',
 };
+
+const servers = [];
 
 function createStaticServer({ name, root, port }) {
   const rootDir = path.resolve(process.cwd(), root);
   if (!fs.existsSync(rootDir)) throw new Error(`Build output missing: ${rootDir}`);
 
   const server = http.createServer((req, res) => {
-    let filePath = path.join(rootDir, req.url === '/' ? '/index.html' : req.url);
+    const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://127.0.0.1').pathname);
+    let filePath = path.join(rootDir, pathname === '/' ? '/index.html' : pathname);
     if (!fs.existsSync(filePath) || !filePath.startsWith(rootDir)) filePath = null;
     if (filePath && fs.statSync(filePath).isDirectory()) filePath = path.join(filePath, 'index.html');
     if (!filePath || !fs.existsSync(filePath)) { res.writeHead(404); res.end('Not found'); return; }
@@ -30,10 +35,17 @@ function createStaticServer({ name, root, port }) {
   return server;
 }
 
-const servers = [];
-for (const app of [{ name: 'main', root: 'apps/main/dist', port: Number(process.env.MAIN_PORT ?? 4321) }]) {
-  try { servers.push(createStaticServer(app)); } catch (e) { console.error(e.message); process.exit(1); }
+try {
+  servers.push(createStaticServer({ name: 'LibreUni', root: 'dist', port: Number(process.env.MAIN_PORT ?? 4321) }));
+} catch (e) { console.error(e.message); process.exit(1); }
+
+function cleanup() {
+  servers.forEach(s => {
+    s?.closeAllConnections?.();
+    s?.close();
+  });
+  process.exit(0);
 }
 
-process.on('SIGINT', () => { servers.forEach(s => s.close()); process.exit(0); });
-process.on('SIGTERM', () => { servers.forEach(s => s.close()); process.exit(0); });
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);

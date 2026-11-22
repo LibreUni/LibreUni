@@ -1,0 +1,113 @@
+---
+import { getStatementById } from '../utils/statementRegistry.mjs';
+
+interface Props {
+  id: string;
+  label?: string;
+  showTitle?: boolean;
+}
+
+const { id, label, showTitle = false } = Astro.props;
+const statement = getStatementById(id);
+
+if (!statement) {
+  throw new Error(`[Ref Error] Unresolved <Ref id="${id}"> in lesson. Ensure that a <MathStatement id="${id}"> exists in the course.`);
+}
+
+const displayKind = statement.kindLabel;
+const displayNumber = statement.number;
+
+// Determine target URL: relative hash if on the same page (or course PDF), or cross-lesson link
+const normalizeSegments = (pathname: string) =>
+  pathname.replace(/\.html$/, '').replace(/\/+$/, '').split('/').filter(Boolean);
+const segments = normalizeSegments(Astro.url.pathname);
+const isPdfSource =
+  segments.at(-1) === 'pdf-source' && segments.at(-2) === statement.courseId;
+const isCurrentLesson =
+  isPdfSource ||
+  (segments.at(-2) === statement.courseId && segments.at(-1) === statement.lessonSlug);
+const targetUrl = isCurrentLesson
+  ? `#${id}`
+  : `${import.meta.env.BASE_URL}lessons/${statement.courseId}/${statement.lessonSlug}#${id}`;
+---
+
+<a
+  href={targetUrl}
+  data-ref-id={id}
+  data-statement-kind={statement.kind}
+  data-statement-number={displayNumber}
+  class="lu-ref inline whitespace-nowrap font-semibold text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary hover:opacity-90 transition-opacity"
+  aria-label={`Reference to ${displayKind} ${displayNumber}: ${statement.title}`}
+>{label ? (
+    <span>{label}</span>
+  ) : showTitle && statement.title ? (
+    <><span class="lu-ref-kind">{displayKind}</span>{' '}<span class="lu-ref-number">{displayNumber}</span>{' '}<span class="lu-ref-title font-medium text-light-muted dark:text-dark-muted">({statement.title})</span></>
+  ) : (
+    <><span class="lu-ref-kind">{displayKind}</span>{' '}<span class="lu-ref-number">{displayNumber}</span></>
+  )}<template data-math-preview>
+    <div class="math-preview-content">
+      <div class="math-preview-label">{displayKind} {displayNumber}</div>
+      {statement.title && <div class="math-preview-title">{statement.title}</div>}
+      <div class="math-preview-body" set:html={statement.previewHtml || statement.preview}></div>
+    </div>
+  </template></a>
+
+<script>
+  const setupRefPreviews = () => {
+    if (document.documentElement.dataset.refPreviewsReady) return;
+    document.documentElement.dataset.refPreviewsReady = 'true';
+
+    const refLinks = document.querySelectorAll<HTMLAnchorElement>('a.lu-ref, a[data-ref-id]');
+    let tooltip: HTMLDivElement | null = null;
+    let hideTimer: number | undefined;
+
+    const hide = () => {
+      if (tooltip) tooltip.remove();
+      tooltip = null;
+    };
+
+    const show = (link: HTMLAnchorElement) => {
+      window.clearTimeout(hideTimer);
+      const source = link.querySelector<HTMLTemplateElement>('template[data-math-preview]');
+      if (!source) return;
+
+      hide();
+      tooltip = document.createElement('div');
+      tooltip.className = 'math-preview-tooltip';
+      tooltip.setAttribute('role', 'tooltip');
+      tooltip.append(source.content.cloneNode(true));
+      document.body.append(tooltip);
+      link.setAttribute('aria-describedby', 'math-preview-tooltip');
+      tooltip.id = 'math-preview-tooltip';
+
+      const rect = link.getBoundingClientRect();
+      const margin = 12;
+      const width = Math.min(480, window.innerWidth - margin * 2);
+      tooltip.style.width = `${width}px`;
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const left = Math.max(margin, Math.min(rect.left, window.innerWidth - tooltipRect.width - margin));
+      const above = rect.top - tooltipRect.height - margin;
+      const top = above >= margin ? above : Math.min(window.innerHeight - tooltipRect.height - margin, rect.bottom + margin);
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${Math.max(margin, top)}px`;
+    };
+
+    refLinks.forEach((link) => {
+      link.addEventListener('pointerenter', () => show(link));
+      link.addEventListener('pointerleave', () => {
+        hideTimer = window.setTimeout(hide, 80);
+      });
+      link.addEventListener('focus', () => show(link));
+      link.addEventListener('blur', hide);
+    });
+
+    window.addEventListener('scroll', hide, { passive: true });
+    window.addEventListener('resize', hide, { passive: true });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupRefPreviews, { once: true });
+  } else {
+    setupRefPreviews();
+  }
+</script>

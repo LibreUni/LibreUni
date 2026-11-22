@@ -3,7 +3,19 @@ import { expect, test } from '@playwright/test';
 
 const A11Y_ROUTES = [
   { name: 'main home', url: 'http://127.0.0.1:4321/' },
-  { name: 'main Python lesson', url: 'http://127.0.0.1:4321/lessons/python/intro.html' },
+  { name: 'architecture hazard model', url: 'http://127.0.0.1:4321/lessons/computer-architecture/hazards-and-branches.html' },
+  { name: 'database query model', url: 'http://127.0.0.1:4321/lessons/database-systems/query-plans.html' },
+  { name: 'database storage engines', url: 'http://127.0.0.1:4321/lessons/database-systems/storage-engines.html' },
+  { name: 'database indexes B-tree model', url: 'http://127.0.0.1:4321/lessons/database-systems/indexes.html' },
+  { name: 'database SQL lab', url: 'http://127.0.0.1:4321/lessons/database-systems/sql-lab.html' },
+  { name: 'OS scheduler model', url: 'http://127.0.0.1:4321/lessons/operating-systems/cpu-scheduling.html' },
+  { name: 'calculus limits and assessments', url: 'http://127.0.0.1:4321/lessons/calculus-intro/limits.html' },
+  { name: 'calculus problem sets', url: 'http://127.0.0.1:4321/lessons/calculus-intro/limits-derivatives-problems.html' },
+  { name: 'OS scheduler lab and code exercise', url: 'http://127.0.0.1:4321/lessons/operating-systems/scheduler-lab.html' },
+  { name: 'courses catalog', url: 'http://127.0.0.1:4321/courses.html' },
+  { name: 'development telemetry', url: 'http://127.0.0.1:4321/development.html' },
+  { name: 'learning path', url: 'http://127.0.0.1:4321/careers/software-engineer.html' },
+  { name: 'main About page', url: 'http://127.0.0.1:4321/about.html' },
 ];
 
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
@@ -23,20 +35,29 @@ function formatViolations(violations) {
 }
 
 test.describe('automated accessibility checks', () => {
-  for (const route of A11Y_ROUTES) {
-    test(`${route.name} has no serious axe violations`, async ({ page }, testInfo) => {
-      await page.goto(route.url, { waitUntil: 'domcontentloaded' });
-      await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  for (const mode of ['light', 'dark']) {
+    for (const route of A11Y_ROUTES) {
+      test(`${route.name} (${mode} mode) has no serious axe violations`, async ({ browser }, testInfo) => {
+        const context = await browser.newContext({ colorScheme: mode });
+        const page = await context.newPage();
+        try {
+          const response = await page.goto(route.url, { waitUntil: 'domcontentloaded' });
+          expect(response?.ok(), 'An accessible 404 page is not evidence about the requested route').toBe(true);
+          await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
 
-      const scan = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
-      const blockingViolations = scan.violations.filter((violation) => BLOCKING_IMPACTS.has(violation.impact));
+          const scan = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+          const blockingViolations = scan.violations.filter((violation) => BLOCKING_IMPACTS.has(violation.impact));
 
-      await testInfo.attach(`${route.name} axe results`, {
-        body: JSON.stringify(formatViolations(scan.violations), null, 2),
-        contentType: 'application/json',
+          await testInfo.attach(`${route.name} (${mode}) axe results`, {
+            body: JSON.stringify(formatViolations(scan.violations), null, 2),
+            contentType: 'application/json',
+          });
+
+          expect(formatViolations(blockingViolations)).toEqual([]);
+        } finally {
+          await context.close();
+        }
       });
-
-      expect(formatViolations(blockingViolations)).toEqual([]);
-    });
+    }
   }
 });

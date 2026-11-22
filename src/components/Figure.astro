@@ -1,0 +1,80 @@
+---
+import { getBlockById } from '../utils/statementRegistry.mjs';
+import { renderFigure, renderCaptionMath } from '../lib/plot/index.mjs';
+
+interface Props {
+  id: string;
+  size?: 'normal' | 'thumb';
+  collapsed?: boolean;
+  summary?: string;
+  caption?: string;
+  class?: string;
+}
+
+const {
+  id,
+  size = 'normal',
+  collapsed = false,
+  summary = 'Show the graph',
+  caption,
+  class: className = '',
+} = Astro.props;
+
+// Load all figures dynamically using import.meta.glob
+const figureModules = import.meta.glob('../figures/**/*.mjs', { eager: true }) as Record<string, any>;
+
+let spec: any = null;
+for (const [pathKey, mod] of Object.entries(figureModules)) {
+  if (pathKey.endsWith(`/${id}.mjs`)) {
+    spec = mod.default || mod;
+    break;
+  }
+}
+
+if (!spec) {
+  throw new Error(`[Figure Error] Figure spec with id "${id}" not found under src/figures/`);
+}
+
+const record = getBlockById(id);
+const displayNumber = record?.number || '';
+const rawCaption = caption || spec.caption;
+const renderedCaption = rawCaption ? renderCaptionMath(rawCaption) : '';
+const hasCaptionSlot = Astro.slots.has('caption') || Astro.slots.has('default');
+
+const renderOptions = size === 'thumb' ? { width: 480, height: 280 } : { width: 640, height: 380 };
+const { svg } = renderFigure({ ...spec, id }, renderOptions);
+---
+
+<figure
+  id={!collapsed && size !== 'thumb' ? id : undefined}
+  data-figure-id={id}
+  class={`lu-figure my-6 not-prose ${size === 'thumb' ? 'max-w-md mx-auto' : 'max-w-2xl mx-auto'} ${className}`}
+>
+  {collapsed ? (
+    <details class="lu-figure-disclosure group rounded-xl border border-light-border dark:border-dark-border bg-light-surface/50 dark:bg-dark-surface/50 p-4">
+      <summary class="cursor-pointer font-bold text-sm text-primary hover:underline flex items-center justify-between list-none">
+        <span>{summary}</span>
+        <span class="text-xs text-light-muted dark:text-dark-muted font-normal">(Click to reveal)</span>
+      </summary>
+      <div class="mt-4 pt-4 border-t border-light-border/60 dark:border-dark-border/60">
+        <div class="lu-fig-svg-wrap rounded-xl overflow-hidden border border-light-border/40 dark:border-dark-border/40 bg-white dark:bg-dark-bg p-2 shadow-sm" set:html={svg} />
+        {(renderedCaption || hasCaptionSlot) && (
+          <figcaption class="mt-2.5 text-center text-xs font-medium text-light-muted dark:text-dark-muted">
+            {displayNumber && <span class="font-bold text-light-text dark:text-dark-text">Figure {displayNumber}: </span>}
+            {hasCaptionSlot ? <slot name="caption"><slot /></slot> : <span set:html={renderedCaption} />}
+          </figcaption>
+        )}
+      </div>
+    </details>
+  ) : (
+    <div>
+      <div class="lu-fig-svg-wrap rounded-xl overflow-hidden border border-light-border/40 dark:border-dark-border/40 bg-white dark:bg-dark-bg p-2 shadow-sm" set:html={svg} />
+      {(renderedCaption || hasCaptionSlot) && (
+        <figcaption class="mt-2.5 text-center text-xs sm:text-sm font-medium text-light-muted dark:text-dark-muted">
+          {displayNumber && <span class="font-bold text-light-text dark:text-dark-text">Figure {displayNumber}: </span>}
+          {hasCaptionSlot ? <slot name="caption"><slot /></slot> : <span set:html={renderedCaption} />}
+        </figcaption>
+      )}
+    </div>
+  )}
+</figure>

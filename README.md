@@ -36,7 +36,7 @@ LibreUni is built on the belief that high-quality, university-level education sh
 
 ## ✨ Features
 
-- 📚 **Comprehensive Curriculum:** University-level courses ranging from C/C++ and Git to Machine Learning and Philosophy.
+- 📚 **Comprehensive Curriculum:** Foundational courses spanning Introduction to Calculus, Computer Architecture, Operating Systems, and Database Systems.
 - ⚡ **Interactive Learning:** Built-in interactive components like `<Quiz />` and `<CodeRunner />`.
 - 📊 **Rich Content:** Support for KaTeX (mathematical typesetting) and PlantUML (architecture diagrams) within lessons.
 - 🚀 **Blazing Fast:** Powered by Astro for static site generation and optimal performance.
@@ -54,11 +54,9 @@ LibreUni is built on the belief that high-quality, university-level education sh
 
 ```text
 LibreUni/
-├── apps/
-│   └── main/                  # LibreUni Astro application
-│       ├── src/               # Pages, components, and course content
-│       ├── astro.config.mjs
-│       └── package.json
+├── src/                       # Pages, components, and course content
+├── astro.config.mjs           # Astro configuration
+├── package.json               # Application dependencies and scripts
 ├── .github/
 │   └── workflows/             # CI: quality checks, scheduled maintenance, Dependabot
 ├── docker/
@@ -71,9 +69,9 @@ LibreUni/
 │   └── visual/                # Visual regression capture
 ├── tools/                     # Build and test helpers
 ├── Dockerfile                 # Multi-stage static site builder
-├── lighthouserc.cjs           # Lighthouse CI config
+├── lighthouserc.cjs           # Lighthouse audit config
 ├── playwright.config.mjs      # Playwright test config
-└── package.json               # Root workspace entrypoint
+└── package-lock.json          # Locked dependencies
 ```
 
 ## 🚀 Getting Started
@@ -82,7 +80,7 @@ Follow these steps to set up the project locally for development.
 
 ### Prerequisites
 
-- Node.js (v18 or higher recommended)
+- Node.js 26 (the CI/container runtime; Node.js >=22.12.0 is supported by the package engine)
 - Python 3.x (for running content validation scripts)
 
 ### Installation
@@ -115,16 +113,16 @@ Run the local quality pipeline with:
 
 ```bash
 npm run test:install
-npm test
+npm run check:required
 ```
 
-The pipeline builds the static site, runs Playwright smoke tests on desktop/mobile, generates a UX report with color-blind contrast and element spacing analysis, and runs Lighthouse CI budgets on main branch pushes. See [docs/TESTING.md](docs/TESTING.md) for the full command list and report locations.
+`check:required` runs content, build, desktop/mobile browser, and UX gates. Run `npm test` (alias for `npm run check:full`) before a release-quality handoff to add Lighthouse. CI runs the required layers on pushes and pull requests, with Lighthouse intentionally limited to pushes on `main`. See [docs/agent-rules/VALIDATION.md](docs/agent-rules/VALIDATION.md) for the full command list and report locations.
 
 ### CI Pipeline
 
 | Workflow | Trigger | Jobs |
 |---|---|---|
-| `quality.yml` | Push/PR on main | Validate content → Build + e2e + UX + Lighthouse → Publish quality badges → Deploy reports to Pages |
+| `quality.yml` | Push/PR on main | Named content → build → e2e → UX gates; Lighthouse, badges, and Pages deploy on `main` pushes |
 | `scheduled.yml` | Weekly Sunday | Dead link check, dependency audit (opens issues on failure) |
 | `dependabot.yml` | Monthly | Auto PRs for npm and Actions dependency updates |
 
@@ -169,21 +167,23 @@ If you prefer Coolify's source/static flow instead of Docker:
 
 1. Keep the repository root as the base directory.
 2. Use `npm install` as the install command.
-3. Use `npm run build` as the build command.
-4. Publish `apps/main/dist` as the static output directory.
+3. Use `npm run build:all` as the build command (requires Java, Graphviz, `npm run setup:plantuml`, and Playwright Chromium for diagram and PDF generation; otherwise use Coolify's **Dockerfile** build pack).
+4. Publish `dist` as the static output directory.
 
 ## 🤝 Contributing
 
 We welcome contributions from the community! Whether it's fixing a typo, adding a new lesson, or improving the platform's features, your help is appreciated.
 
 **Before you start:**
-Please read our [RULES.md](docs/RULES.md) carefully. It contains the complete set of rules for lesson structure, writing style, and quality standards that ensure LibreUni maintains its tone.
+Please read our [agent router](AGENTS.md) first. It sends each task through a shared baseline and the relevant rules under [docs/agent-rules](docs/agent-rules/), including the general rules for lesson structure, writing style, and quality standards.
 
-AI agents and coding assistants must also start with [AGENTS.md](AGENTS.md), which points to the required project rules, sourcing workflow, UX guidance, and validation commands.
+AI agents and coding assistants must also start with [AGENTS.md](AGENTS.md), which points to the required project rules, sourcing workflow, UX guidance, validation commands, and the small Git-reviewed context for durable decisions.
+
+All coding harnesses use the same repository router. Course work, research, UI changes, PlantUML, and validation each have focused guidance under [docs/agent-rules](docs/agent-rules/); the harness does not select a different LibreUni workflow.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+3. Commit your changes (`git commit -m '[Add] Short description of change'`)
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 

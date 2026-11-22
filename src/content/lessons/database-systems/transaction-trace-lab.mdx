@@ -1,0 +1,237 @@
+---
+title: Transaction Trace Lab
+course: database-systems
+kind: lab
+description: Work adversarial schedules from reads through locks, commit, crash, retry, and externally visible effects.
+prerequisites:
+  - SQL update predicates, keys, constraints, and aggregate invariants
+  - Transactions, isolation anomalies, precedence graphs, and deadlock reasoning
+  - Write-ahead logging and the distinction between commit and an external side effect
+outcomes:
+  - Annotate a schedule with reads, writes, locks or versions, conflicts, commit outcomes, and the first violated invariant.
+  - Construct and repair lost-update, write-skew, and deadlock traces without conflating their causes.
+  - Locate the durable and externally visible boundaries in an order, payment, and outbox trace.
+  - Defend a retry policy using an idempotency key, a transaction outcome, and a failure model.
+omissions:
+  - This lab does not implement a DBMS scheduler, lock manager, or payment provider.
+  - Distributed consensus and multi-region failover are bounded to the trace assumptions; their protocols are studied separately.
+estimatedMinutes: 720
+assessment: Given an unfamiliar interleaving with a crash or retry, produce a complete trace, classify its anomaly or recovery state, repair the invariant at the correct boundary, and explain what evidence a production test must retain.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
+
+
+A trace is a proof artifact. A final table can look plausible after a lost update, a write skew, a deadlock victim, or a crash replay; the trace retains the operations, visibility rules, and failure boundary that distinguish them. Use the notation below before proposing a lock level or an ORM setting.
+
+{/* Source tracking: Schedule notation, serializability, strict locking, WAL commit boundaries, and retry reasoning are synthesized from CMU 15-445/645 materials and PostgreSQL transaction/recovery documentation. The lab traces and prompts are original. */}
+
+## Record enough state to replay the decision
+
+> **Definition.** A useful transaction trace records each transaction's ordered reads and writes, lock/version state, commit or abort outcome, durable-log boundary, and any effect sent outside the database.
+
+| Notation | Meaning | Question it answers |
+| --- | --- | --- |
+| **r1(x=20)** | T1 read 20 from x | which version did T1 base its decision on? |
+| **w2(x=13)** | T2 wrote 13 | which operations conflict? |
+| **X1(x)** | T1 holds an exclusive lock on x | why is T2 waiting or allowed through? |
+| **C1** / **A1** | T1 commits / aborts | may its writes become visible? |
+| **L=911 durable** | log through LSN 911 is stable | what can recovery rely on after a crash? |
+
+<PlantUML code={`@startuml
+participant "buyer request" as B
+participant "T1" as T1
+database "inventory" as I
+participant "outbox worker" as W
+participant "payment provider" as P
+B -> T1 : reserve 7 units
+T1 -> I : conditional update; insert outbox
+T1 -> I : COMMIT
+W -> I : claim committed outbox event
+W -> P : charge with idempotency key
+note right of P
+The external call follows a
+known commit, but may be retried.
+end note
+@enduml`} />
+
+The first question is always semantic: what must remain true? The second is operational: at what read, write, commit, or recovery point is that truth enforced? A trace missing either cannot diagnose the system.
+
+### Prediction — insufficient evidence
+
+A support log says “stock became 13 after two requests for 7.” It contains only final row values. Name two distinct explanations that remain possible.
+
+<ExerciseSolution hint="Final values discard order and visibility.">
+A lost update can produce 13 from initial stock 20 when both transactions read 20 and overwrite each other. A correctly serialized system could also produce 13 after one request succeeds and a compensating restock changes the value. The missing data are the read versions, statement outcomes, commit order, and any intervening events; final state alone is not a concurrency proof.
+</ExerciseSolution>
+
+## Trace a lost update without smuggling in oversell
+
+> **Example.** Start with **stock = 20**. Two buyers each request 7. The intended serial outcome after two accepted requests is 6; using 20 keeps lost update distinct from a separate insufficient-stock rule.
+
+| Step | T1 | T2 | Stored stock | Consequence |
+| --- | --- | --- | ---: | --- |
+| 1 | read 20 |  | 20 | T1 plans 13 |
+| 2 |  | read 20 | 20 | T2 also plans 13 |
+| 3 | write 13; commit |  | 13 | one decrement recorded |
+| 4 |  | write 13; commit | 13 | second decrement lost |
+
+A weak implementation reads stock in the application and executes an unconditional write. A row-local repair puts the condition and decrement in one SQL statement: **update stock only when stock is at least the requested amount**. The affected-row count distinguishes reservation from rejection. A lock or serializable protocol can also serialize the read-modify-write, but the conditional statement expresses the invariant directly.
+
+### Worked trace — complete the repair trace
+
+Assume T1 performs the conditional decrement first and commits. T2 performs the same conditional decrement after T1. Fill in T2's affected-row outcome and final stock.
+
+<ExerciseSolution>
+T1 changes 20 to 13. T2 sees 13, and its condition **stock >= 7** remains true, so it changes 13 to 6 and affects one row. If the initial stock were 10, T1 would leave 3 and T2 would affect zero rows. Conflating the 10-unit case with a lost update hides whether the design lost a write or correctly rejected an oversell.
+</ExerciseSolution>
+
+<Quiz client:load
+  title="Evidence beyond the final value"
+  question="A support log shows stock = 13 after two requests for 7 units, starting from initial stock = 20. Evaluate which evidence sources reliably diagnose whether an anomaly occurred:"
+  options={[
+    {
+      id: "claim-trace-evidence",
+      text: "Read versions, statement row-count outcomes, and commit timestamps distinguish a lost update from a serialized retry.",
+      isCorrect: true,
+      feedback: "Correct. Detailed operation traces establish visibility and execution order, which the final scalar value completely obscures."
+    },
+    {
+      id: "claim-audit-compensations",
+      text: "Audit logs showing compensating supplier restocks explain why a serialized execution could legitimately terminate at stock 13.",
+      isCorrect: true,
+      feedback: "Correct. An intervening restock event (+7) followed by two serialized sales (-7, -7) also results in 13."
+    },
+    {
+      id: "claim-scalar-proof",
+      text: "The final scalar value 13 alone mathematically proves that a lost update occurred during concurrent execution.",
+      isCorrect: false,
+      feedback: "Incorrect. The final value 13 could arise from a single sale succeeding while the second was rejected or compensated."
+    },
+    {
+      id: "claim-config-guarantee",
+      text: "A database configured for repeatable read guarantees that no interleaving anomaly could have occurred during execution.",
+      isCorrect: false,
+      feedback: "Incorrect. Configuration labels do not prove runtime safety: write skew and application-level race conditions can still manifest."
+    }
+  ]}
+  explanation="Final database state discards order, visibility, and side effects. Diagnostic proof requires an execution trace showing statements, row counts, commit timestamps, and external compensations."
+/>
+
+## Trace write skew as a predicate failure
+
+> **Counterexample.** The invariant “at least one doctor remains on call” spans a set of rows. T1 changes doctor A; T2 changes doctor B. No row is written twice, yet both can jointly violate the predicate.
+
+<PlantUML code={`@startuml
+participant "T1" as T1
+participant "T2" as T2
+database "on_call(A,B)" as D
+T1 -> D : read A=true, B=true
+T2 -> D : read A=true, B=true
+T1 -> D : set A=false; COMMIT
+T2 -> D : set B=false; COMMIT
+note right of D
+Final predicate:
+exists on_call = false
+end note
+@enduml`} />
+
+A row-level optimistic version check can accept both writes because their write sets are disjoint. Repairs include serializable validation, predicate/range protection, or a single summary row updated as part of the rule. The trade-off is expected aborts or contention at the shared boundary.
+
+### Prediction — identify the false repair
+
+Which repair is insufficient by itself: lock A only, lock both currently on-call rows, serializable transaction, or update a protected on-call-count row?
+
+<ExerciseSolution>
+Locking A only is insufficient because T2 changes B. Locking both rows can work only if every transaction that could change membership follows the same discipline and range changes are also controlled; it is brittle. Serializable validation or a protected count/summary row gives a shared conflict boundary. The key gap is the predicate, not the absence of a row lock.
+</ExerciseSolution>
+
+## Trace waiting, deadlock, and a chosen abort
+
+> **Definition.** A waits-for edge T1 → T2 means T1 waits for a lock held by T2. A cycle is a deadlock; deadlock detection breaks it by aborting at least one transaction.
+
+| Step | T1 | T2 | Waits-for graph |
+| --- | --- | --- | --- |
+| 1 | holds X(order 7) |  | none |
+| 2 |  | holds X(stock 9) | none |
+| 3 | waits for X(stock 9) |  | T1 → T2 |
+| 4 |  | waits for X(order 7) | T1 ↔ T2 |
+
+> **Remark (Victim selection is not a correctness proof).** Aborting T2 releases stock 9 and lets T1 proceed, but the policy should consider rollback work and age. More importantly, the aborted transaction may need a retry protocol that avoids repeating a notification or payment that already escaped the database boundary.
+
+### Transfer — order, crash, and webhook retry
+
+Design the event order for: reserve stock, write an order, charge a provider, and send a confirmation. A crash can happen after any step; the provider can send the same webhook twice and out of order.
+
+<ExerciseSolution hint="Make the database state transition and the retry key durable before depending on external delivery.">
+In one transaction, insert the order in a pending state, reserve stock conditionally, store a unique provider-event/idempotency key, and insert an outbox record; then commit. A worker invokes the provider with that key and records only legal monotonic payment transitions in later transactions. Deduplicate webhook IDs with a unique constraint, and send confirmation from a committed outbox. Recovery can replay unclaimed outbox records; it must not infer a payment from a network timeout.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-trace-lost-update-distinction" type="describe" level="recall" title="Differentiating Lost Updates from Serial Compensations">
+
+Given a log indicating an inventory record transitions from 20 to 13 after two customer purchase requests for 7 units, describe what specific timeline artifacts are required to definitively prove whether a lost update occurred.
+
+<ExerciseSolution hint="Inspect read timestamps, statement outcomes, and external audit logs.">
+
+To prove whether a lost update occurred, the timeline must establish: (1) whether transaction $T_2$ read the initial value 20 (lost update) or the committed value 13; (2) whether $T_2$'s decrement statement actually affected a row or was rejected by a conditional check (`rows affected = 0`); and (3) whether an external supplier restock event (+7 units) occurred between two serialized sales. Scalar end-state alone is ambiguous.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-trace-write-skew-witness" type="verify" level="application" title="Write Skew Interleaving Trace Verification">
+
+Consider transactions $T_1$ and $T_2$ operating under snapshot isolation on rows $A=\text{true}$ and $B=\text{true}$ with invariant $A \lor B$. Verify why schedule $r_1(A, B)\; r_2(A, B)\; w_1(A=\text{false})\; w_2(B=\text{false})\; c_1\; c_2$ violates the invariant despite zero lock or write-write conflicts.
+
+<ExerciseSolution hint="Trace the disjoint write sets against the joint invariant predicate.">
+
+Under snapshot isolation, $T_1$ reads snapshot $\{A=\text{true}, B=\text{true}\}$ and decides it is safe to set $A=\text{false}$ because $B$ is true. Concurrently, $T_2$ reads the identical snapshot and sets $B=\text{false}$ because $A$ is true. Because $T_1$ modifies item $A$ and $T_2$ modifies item $B$, their write sets $\{A\}$ and $\{B\}$ are completely disjoint. Both commit without error, leaving $A=\text{false}$ and $B=\text{false}$, directly violating $A \lor B$.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-trace-deadlock-victim-recovery" type="construct" level="application" title="Deadlock Wait-For Graph and Victim Selection Policy">
+
+Construct a 4-step execution trace involving transactions $T_1$ and $T_2$ and resources `order_7` and `stock_9` that produces a circular wait under strict 2PL. Specify a heuristic for victim selection that minimizes aborted work.
+
+<ExerciseSolution hint="Have each transaction acquire one resource and subsequently request the resource held by the other.">
+
+Trace:
+1. $T_1$ acquires exclusive lock $X(\text{order\_7})$.
+2. $T_2$ acquires exclusive lock $X(\text{stock\_9})$.
+3. $T_1$ requests $X(\text{stock\_9})$ and blocks ($T_1 \to T_2$).
+4. $T_2$ requests $X(\text{order\_7})$ and blocks ($T_2 \to T_1$).
+The wait-for graph has cycle $T_1 \leftrightarrow T_2$. A sound victim selection policy aborts the younger transaction or the transaction that has generated fewer write-ahead log bytes, minimizing rollback work and lock churn.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-trace-idempotent-outbox-transfer" type="generalise" level="transfer" title="Crash-Safe Payment and Webhook Event Choreography">
+
+Design an idempotent, crash-safe transaction sequence that coordinates reserving local inventory, writing an order, calling an external payment gateway, and handling duplicate out-of-order webhook notifications.
+
+<ExerciseSolution hint="Commit local state and outbox record before external network calls; deduplicate incoming webhooks.">
+
+1. Local transaction: In a single database transaction, insert `orders(id, status='pending')`, execute conditional stock reservation `UPDATE inventory SET stock = stock - 1 WHERE stock >= 1`, generate an idempotency key `k`, and insert an `outbox` task record with `k`. Commit.
+2. Gateway invocation: A worker reads the outbox task and dispatches the payment charge with key `k`.
+3. Webhook handling: Incoming payment webhooks carry key `k`. The endpoint attempts `INSERT INTO processed_events (event_id, idempotency_key) VALUES (...)`. If a unique-key collision occurs, it immediately returns HTTP 200 without reprocessing. Otherwise, it updates `orders` status to `paid` within an atomic transaction.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* [PostgreSQL: Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+* [PostgreSQL: Write-Ahead Logging](https://www.postgresql.org/docs/current/wal-intro.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

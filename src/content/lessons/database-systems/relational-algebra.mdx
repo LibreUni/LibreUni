@@ -1,0 +1,261 @@
+---
+title: "Relational algebra: derive a query before SQL"
+course: database-systems
+description: Use selection, projection, joins, difference, and product to state precisely which tuples a query should return.
+prerequisites:
+  - Relation schemas, instances, keys, and grain
+  - Sets, predicates, Cartesian products, and functions
+outcomes:
+  - Translate a scoped data question into relational-algebra operators with compatible schemas.
+  - Trace an algebra expression over small relations and state the grain of every intermediate result.
+  - Justify or reject a simple inner-join rewrite, including its semantic preconditions.
+omissions:
+  - Full query-optimizer search, SQL window functions, recursion, and cost estimation are outside this lesson.
+estimatedMinutes: 420
+assessment: Given a deployment dataset and a requirement involving all required services, derive an algebra expression, trace it, and identify one unsafe rewrite under outer-join or bag semantics.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import MathProof from '../../../components/MathProof.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import Ref from '../../../components/Ref.astro';
+import RelationalAlgebraPlayground from '../../../components/playgrounds/RelationalAlgebraPlayground';
+
+
+Relational algebra gives a compact way to answer “what rows?” before a SQL dialect, a query plan, or a UI obscures the question. Its greatest practical use is not memorizing symbols. It is exposing a missing condition, an incompatible difference, or a changed result grain early.
+
+> **Definition.** An algebra expression takes one or more relations as input and produces another relation. Name the output schema and grain after every nontrivial operator; this is how you notice an accidental duplication or lost attribute.
+
+{/* Source tracking: The operator-based relational query model is synthesized from Codd’s 1970 relational model paper and the relational-algebra treatment in Ramakrishnan and Gehrke’s *Database Management Systems*. */}
+
+## The operators we will use
+
+<MathStatement id="ra-operators" kind="definition" title="Set-relational operators">
+
+For a relation $R$ and predicate $\theta$:
+
+$$
+\sigma_{\theta}(R) = \{t \in R \mid \theta(t)\}
+$$
+
+- **Selection** $\sigma_{\theta}(R)$ keeps tuples satisfying $\theta$.
+- **Projection** $\pi_{A,B}(R)$ keeps named attributes and removes duplicate tuples under set semantics.
+- **Rename** $\rho_{new\_name \leftarrow old\_name}(R)$ changes a relation or attribute name so an expression is well-formed.
+- **Product** $R \times S$ pairs every tuple of $R$ with every tuple of $S$.
+- **Join** $R \bowtie_{R.a = S.a} S$ is a selected product with compatible joined attributes.
+- **Difference** $R - S$ keeps tuples in $R$ that are not in $S$; $R$ and $S$ must have compatible schemas.
+</MathStatement>
+
+## Trace a query, not just its notation
+
+Use these fixed relations for region `us-east`.
+
+**`Node`:**
+
+| `node_id` | `tier` |
+| --- | --- |
+| worker-01 | edge |
+| worker-02 | core |
+| worker-03 | edge |
+
+**`RequiredService`:**
+
+| `service_id` |
+| --- |
+| S101 |
+| S201 |
+
+**`Deployment`:**
+
+| `node_id` | `service_id` | `region` |
+| --- | --- | --- |
+| worker-01 | S101 | us-east |
+| worker-01 | S201 | us-east |
+| worker-02 | S101 | us-east |
+| worker-02 | S201 | eu-west |
+| worker-03 | S101 | us-east |
+
+> **Worked example.** “Which nodes are hosting service S101 in us-east?” starts with selection, then projection:
+
+$$
+\pi_{node\_id}\bigl(\sigma_{service\_id = \text{'S101'} \land region = \text{'us-east'}}(Deployment)\bigr)
+= \{\text{worker-01}, \text{worker-02}, \text{worker-03}\}.
+$$
+
+The selected relation still has grain “one deployment.” The projected result has grain “one node that meets the condition.” That change is intentional.
+
+### Predict the intermediate result
+
+What is the schema and tuple set of
+
+$$
+\pi_{node\_id,service\_id}\bigl(\sigma_{region = \text{'us-east'}}(Deployment)\bigr)?
+$$
+
+<ExerciseSolution hint="Selection leaves all attributes in place; projection then drops only `region`.">
+
+Its schema is `(node_id, service_id)` and its tuples are `(worker-01, S101)`, `(worker-01, S201)`, `(worker-02, S101)`, and `(worker-03, S101)`. The result says that a node hosts a service during the chosen regional scope; it no longer states the region, so do not reuse it for a multi-region question without rebuilding the scope.
+</ExerciseSolution>
+
+### Make the same operations visible
+
+The playground contains a separate fixed deployment fixture. Use it to perform one selection, compare bag versus set projection, and inspect an equijoin. Before each step, say whether you expect its output grain to be one deployment, one service, or a joined pair.
+
+<RelationalAlgebraPlayground client:load />
+
+> **Warning.** This visual model intentionally excludes `NULL`, outer joins, nonunique join keys, ordering, and optimizer behavior. It teaches a clean set-oriented core; SQL introduces those additional semantics later.
+
+## “All required services” is a missing-pair problem
+
+The word **all** often tempts people into a vague division operator. Derive it by enumerating what should exist and subtracting what is absent.
+
+> **Example.** Find nodes that host every required service in `us-east`. First make every expected node/service pair. Then remove pairs that have no matching deployment.
+
+$$
+\begin{aligned}
+Deployed &= \pi_{node\_id,service\_id}\bigl(\sigma_{region = \text{'us-east'}}(Deployment)\bigr) \\
+Expected &= \pi_{node\_id}(Node) \times RequiredService \\
+Missing &= Expected - Deployed \\
+Answer &= \pi_{node\_id}(Node) - \pi_{node\_id}(Missing)
+\end{aligned}
+$$
+
+`Expected` and `Deployed` both have schema `(node_id, service_id)`, so the difference is defined. For the data above, `Missing` contains `(worker-02, S201)`, `(worker-03, S201)`; `Answer` is `{worker-01}`.
+
+> **Invariant.** Before taking a union, intersection, or difference, verify compatible schemas and attribute meanings. Two columns both named `id` are not automatically compatible if one is a node identifier and the other is a service identifier.
+
+### Apply the derivation
+
+A query specification requires finding nodes that host every required service **and** belong to the `edge` tier. Where should the tier condition go: in `Deployed`, `Expected`, or the final answer?
+
+<ExerciseSolution hint="The tier condition restricts which nodes are required to satisfy all pairs, not what counts as a matching deployment.">
+
+Restrict the candidate nodes before forming expected pairs:
+
+$$
+Eligible = \sigma_{tier = \text{'edge'}}(Node), \qquad
+Expected = \pi_{node\_id}(Eligible) \times RequiredService.
+$$
+
+Then use the same `Missing` and final subtraction pattern with `Eligible`. Filtering only the final answer can be correct for a simple output filter, but it unnecessarily constructs missing pairs for nodes that were never candidates and obscures the requirement.
+</ExerciseSolution>
+
+## A rewrite needs stated assumptions
+
+Algebra helps explain why an optimizer can sometimes move work earlier.
+
+<MathStatement id="ra-pushdown" kind="proposition" title="Safe inner-join selection pushdown">
+
+For set relations, an inner join, and a two-valued predicate $\theta_R$ that mentions only attributes of $R$:
+
+$$
+\sigma_{\theta_R}(R \bowtie_{R.a = S.a} S)
+= \sigma_{\theta_R}(R) \bowtie_{R.a = S.a} S.
+$$
+</MathStatement>
+
+<MathProof id="ra-pushdown-proof" for="ra-pushdown" collapsible>
+
+A joined tuple survives the left expression exactly when its `R` component satisfies $\theta_R$. Because the predicate reads no `S` attribute, filtering `R` first removes exactly those same joined tuples. The statement does not claim the two expressions have equal cost, nor does it cover outer joins or SQL's three-valued predicate behavior.
+</MathProof>
+
+> **Counterexample.** With a left outer join, moving a predicate about the right relation from `WHERE` into a pre-join filter can preserve unmatched left rows that the original `WHERE` condition removes. For example, if `R` has one row and `S` has none, `WHERE S.flag = 'Y'` removes the null-extended row after the join. The same condition inside the right input still lets the left outer join emit it. The expressions are not interchangeable.
+
+> **Warning.** SQL normally uses bag semantics and three-valued logic. An algebra law stated for sets and two-valued predicates is a reasoning aid, not permission to apply it blindly to a SQL query.
+
+### Check a proposed rewrite
+
+An engineer changes
+
+$$
+\sigma_{R.region = \text{'us-east'}}(R \bowtie_{R.node\_id = S.node\_id} S)
+$$
+
+to
+
+$$
+\sigma_{R.region = \text{'us-east'}}(R) \bowtie_{R.node\_id = S.node\_id} S.
+$$
+
+List the three facts you would check before accepting the rewrite.
+
+<ExerciseSolution hint="Match the proposition's assumptions one by one.">
+
+Check that the join is inner, the predicate reads only `R` attributes, and the intended semantics support the stated selection law (including how duplicate rows and `NULL` values are handled in the actual SQL dialect). Also confirm that `region` means the same thing at this point in the expression; an alias or prior rename can change that fact.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-ra-intermediate-grain" type="describe" level="recall" title="Intermediate Schema and Tuple Projection">
+
+Given relation schema $Deployment(node\_id, service\_id, region)$ and selection $\sigma_{region = \text{'us-east'}}(Deployment)$, determine the schema and result grain of $\pi_{node\_id,service\_id}\bigl(\sigma_{region = \text{'us-east'}}(Deployment)\bigr)$. Explain why dropping $region$ affects subsequent multi-region queries.
+
+<ExerciseSolution hint="Selection preserves all attributes; projection then retains only node_id and service_id.">
+
+The output schema is $(node\_id, service\_id)$ with tuples representing nodes actively hosting a service in us-east. Because $region$ is omitted from the projected schema, the output relation loses geographic context and cannot be directly intersected with other regions without reapplying a region qualifier.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-ra-pushdown-validation" type="verify" level="application" title="Inner-Join Pushdown Precondition Check">
+
+An engineer proposes rewriting $\sigma_{R.region = \text{'us-east'}}(R \bowtie_{R.node\_id = S.node\_id} S)$ into $\sigma_{R.region = \text{'us-east'}}(R) \bowtie_{R.node\_id = S.node\_id} S$. Referring to <Ref id="ra-pushdown" />, verify whether this rewrite is valid under two-valued set semantics, and identify one condition under which it fails for outer joins.
+
+<ExerciseSolution hint="Check predicate attribute dependency and outer-join null extension semantics.">
+
+Under two-valued set semantics, the rewrite is valid because the selection predicate references only attributes of $R$ and the join is an inner equijoin. For a left outer join where the predicate references $S$ instead (e.g. $S.active = \text{'Y'}$), pushing the predicate into $S$ retains non-matching $R$ tuples with NULL padding, whereas the post-join filter eliminates them.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-ra-universal-derivation" type="construct" level="application" title="Universal Division via Difference Formulation">
+
+Let $Node(node\_id, tier)$, $RequiredService(service\_id)$, and $Deployment(node\_id, service\_id, region)$ be set relations. Using relational algebra operators from <Ref id="ra-operators" />, construct an expression that returns all nodes in the `edge` tier that host every service in $RequiredService$ in region `us-east`.
+
+<ExerciseSolution hint="Restrict candidate nodes first before constructing the Cartesian product of expected pairs.">
+
+Define candidate edge nodes and expected pairs:
+$$
+\begin{aligned}
+Eligible &= \sigma_{tier = \text{'edge'}}(Node) \\
+Expected &= \pi_{node\_id}(Eligible) \times RequiredService \\
+Deployed &= \pi_{node\_id,service\_id}\bigl(\sigma_{region = \text{'us-east'}}(Deployment)\bigr) \\
+Missing &= Expected - Deployed \\
+Answer &= \pi_{node\_id}(Eligible) - \pi_{node\_id}(Missing)
+\end{aligned}
+$$
+Filtering candidates before forming the product avoids generating missing pairs for unrelated tiers.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-ra-dual-difference-transfer" type="generalise" level="transfer" title="Constrained Core-Service Deployment Derivation">
+
+Let $Node(node\_id)$, $Service(service\_id)$, $Deployed(node\_id, service\_id, region)$, and $Core(service\_id)$ be set relations. Derive an algebra expression for nodes that host every core service in `us-east` but host no non-core service in that region. State the compatibility of schemas in every difference operation.
+
+<ExerciseSolution hint="Derive universal deployment of Core, then subtract the set of nodes with non-core deployments.">
+
+First isolate us-east deployments: $Active = \pi_{node\_id,service\_id}(\sigma_{region = \text{'us-east'}}(Deployed))$. Compute nodes hosting all core services:
+$$
+\begin{aligned}
+ExpectedCore &= \pi_{node\_id}(Node) \times Core \\
+AllCore &= \pi_{node\_id}(Node) - \pi_{node\_id}(ExpectedCore - Active)
+\end{aligned}
+$$
+Next isolate non-core services: $NonCore = \pi_{service\_id}(Service) - Core$ (both schema $(service\_id)$). Find nodes with any non-core service: $HasNonCore = \pi_{node\_id}(Active \bowtie NonCore)$. The final answer is $AllCore - HasNonCore$. Both operands have schema $(node\_id)$.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+- [E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (IBM Research, 1970)](https://research.ibm.com/publications/a-relational-model-of-data-for-large-shared-data-banks)
+- [Ramakrishnan and Gehrke, *Database Management Systems*: open-access contents](https://pages.cs.wisc.edu/~dbbook/openAccess/secondEdition/dbbook.toc.html)
+- [PostgreSQL: `SELECT`](https://www.postgresql.org/docs/current/sql-select.html)

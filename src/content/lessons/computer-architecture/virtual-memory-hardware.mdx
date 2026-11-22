@@ -1,0 +1,242 @@
+---
+title: Virtual-Memory Hardware
+course: computer-architecture
+description: Page tables, translation lookaside buffers, protection, and faults.
+prerequisites:
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
+outcomes:
+  - Decompose virtual addresses and derive multi-level page-table, TLB, permission, and physical-address behavior.
+  - Trace TLB misses, page faults, copy-on-write, cache aliases, ASIDs, and invalidation across address spaces.
+  - Prove that translation and permission changes cannot expose a reused frame or stale authority.
+omissions:
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
+estimatedMinutes: 600
+assessment: Given a page size, table geometry, access type, and stale-TLB scenario, derive the walk/fault path and specify the ordering needed for safe reuse.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PageTablePlayground from '../../../components/playgrounds/PageTablePlayground';
+
+Virtual memory is an address-translation and protection system that gives each process an address space with a private naming convention, even though physical memory is shared. The illusion is not “infinite RAM” by itself. It is a contract among the ISA, memory-management unit (MMU), operating system, page tables, translation caches, and fault handler. A load from virtual address $v$ either returns the byte authorized by the current address space, or produces a defined fault without silently reading another process’s data.
+
+## Pages and address decomposition
+
+> **Definition.** For page size $2^p$ bytes, virtual-address translation decomposes $VA = (\mathrm{VPN} \ll p) \mid \mathrm{offset}$ where $\mathrm{offset} = VA \mathbin{\&} (2^p - 1)$ is invariant across translation and the MMU maps $\mathrm{VPN} \mapsto (\mathrm{PFN}, \mathrm{perms})$ to form $PA = (\mathrm{PFN} \ll p) \mid \mathrm{offset}$ when $\mathrm{perms}$ authorize the access.
+
+If the page size is $2^p$ bytes, a virtual address divides into a virtual page number (VPN) and a page offset. The low $p$ bits are the offset and remain unchanged through translation; the upper bits identify the virtual page. A page-table entry maps the VPN to a physical frame number (PFN), so the physical address is
+
+$$
+PA=(PFN\ll p)\;|\;(VA\mathbin{\&}(2^p-1)).
+$$
+
+The page offset is not translated because every page and frame have the same size. This fixed-size mapping permits a process’s virtual pages to occupy noncontiguous physical frames, removes external fragmentation from page allocation, and allows the OS to give different processes different mappings for the same virtual address.
+
+**Worked trace: virtual-to-physical translation.** For a 32-bit address and 4 KiB pages, $p=12$. Address `0x12345` has offset `0x345` and VPN `0x12`. If the page table maps VPN `0x12` to PFN `0x9AB`, the physical address is `0x9AB345`. Relocating the page changes the PFN and therefore the high physical address bits, but not the offset `0x345`. The same virtual address in another process may map to a different frame or be invalid.
+
+Page size is a trade-off. Larger pages reduce page-table entries and TLB pressure and make sequential transfers more efficient, but increase internal fragmentation, fault granularity, and the amount of data transferred when only one byte is needed. Small pages improve allocation precision and reduce wasted transfer but require more translation metadata. Architectures may support multiple page sizes so applications can choose based on workload.
+
+<Quiz client:load title="Translate safely"
+  question="What does a page-table translation add to a virtual address?"
+  options={["Only a new numeric base used to shorten the virtual address", "A physical-frame mapping plus permission and validity checks", "A cache-replacement policy selected independently for each translated page", "A compiler optimization that removes all repeated loads from memory"]}
+  correctIndex={1}
+  explanation="Translation maps a virtual page to a frame while hardware checks present, readable, writable, executable, and other protection bits."
+/>
+
+## Page-table structures
+
+A flat page table has one entry for every virtual page, which is wasteful for sparse address spaces. A multi-level page table divides the VPN into indexes. A top-level entry points to a lower-level table only when that region is used; unused portions need no allocated table. The physical address is formed from the final PTE’s PFN and the original offset.
+
+For a 48-bit virtual address and 4 KiB pages, there are 36 VPN bits. If each page-table page holds 512 eight-byte entries, each level consumes 9 VPN bits, so four levels cover 36 bits. A translation walk reads one entry per level, checks validity and permissions, and obtains the final PFN. The walk itself requires memory accesses and can be more expensive than the data load, motivating TLBs and page-walk caches.
+
+Page-table entries commonly contain a present/valid bit, read/write and execute permissions, user/supervisor access, accessed/reference state, dirty state, caching attributes, and the PFN. The exact bit meanings are ISA-specific. A PTE with a valid bit clear may indicate an unmapped page, a swapped-out page encoded by the OS, or a reserved fault state. Hardware must not interpret OS-private encodings as ordinary physical addresses.
+
+<CaseStudy client:load
+  title="A TLB miss is not a page fault"
+  scenario="A load misses in the TLB. The page-table entry is present, readable, and maps to a resident physical frame."
+  question="Which sequence should the hardware or operating system perform?"
+  options={["Walk the page table, refill the translation, and retry the load", "Read the page from storage, allocate a frame, and resume later", "Reject the process because every translation miss violates protection", "Flush the data cache because translation and caching cannot overlap"]}
+  correctIndex={0}
+  explanation="A TLB miss means the translation is absent from the cache, not that the page is absent from memory. A valid present PTE supplies the mapping; a page fault is needed only for absence or another exceptional condition."
+/>
+
+## TLBs and translation performance
+
+> **Definition.** A Translation Lookaside Buffer (TLB) caches active $(\mathrm{ASID}, \mathrm{VPN}) \mapsto (\mathrm{PFN}, \mathrm{flags})$ entries; with TLB hit time $t_{\mathrm{TLB}}$, miss rate $m_{\mathrm{TLB}}$, and page-table walk penalty $t_{\mathrm{walk}}$, translation adds $t_{\mathrm{TLB}} + m_{\mathrm{TLB}} t_{\mathrm{walk}}$ to unoverlapped memory accesses.
+
+The translation lookaside buffer (TLB) caches recent VPN-to-PFN translations together with address-space identity and permission metadata. On a TLB hit, the MMU can form the physical address without walking the page table. On a TLB miss, hardware or software performs a page walk; if the PTE is valid, the translation is installed and the instruction retries or continues. A page fault is different: the translation is absent or disallowed and requires the operating system.
+
+TLB reach is the number of bytes covered by cached translations. A TLB with 64 entries and 4 KiB pages covers 256 KiB if all entries are useful and nonoverlapping. A sequential scan over a larger region may have good cache locality but poor TLB locality if it revisits pages after the TLB has evicted their translations. Huge pages increase reach but can waste memory and complicate allocation.
+
+**Worked effective access time.** Suppose a TLB hit costs 1 cycle, a TLB miss with a four-entry page walk costs 20 additional cycles, and the data cache hit costs 4 cycles after translation. With a 2% TLB miss rate and no page faults, the average cost is approximately $1+0.02\cdot20+4=5.4$ cycles under the stated additive model. If a page walk accesses the same cache hierarchy as data, the costs are not independent; a serious analysis must state whether the 20-cycle figure already includes cache effects.
+
+## Protection and address spaces
+
+Virtual memory enforces isolation through permissions and address-space selection. A user process should not read kernel pages, execute data pages when non-executable policy forbids it, or write read-only code. A context switch changes the active page-table root or address-space identifier. TLB entries from the old process must be invalidated or tagged so a matching VPN cannot reuse an old process’s translation.
+
+| Page Protection Bit | Evaluated Condition | Hardware Action on Violation | Use Case / Security Invariant |
+| :--- | :--- | :--- | :--- |
+| `U` (User) | `U = 0` and Current Privilege Mode is User | Trap: Page Fault (Permission Violation) | Prevents user-mode code from reading or writing kernel memory |
+| `R` (Read) | Read access requested with `R = 0` | Trap: Load Page Fault | Prevents access to unmapped or execute-only memory regions |
+| `W` (Write) | Store access requested with `W = 0` | Trap: Store Page Fault | Enforces read-only shared text and copy-on-write page protections |
+| `X` (Execute) | Instruction fetch requested with `X = 0` | Trap: Instruction Page Fault | Enforces $W \oplus X$ (Data Execution Prevention) on data/stack pages |
+| `ASID` Tag | TLB lookup with mismatched address space | Suppresses TLB match; forces page walk | Prevents cross-process translation reuse without flushing TLB |
+
+Shared memory is an intentional exception. Two processes can map the same physical frame at different virtual addresses, perhaps with read-only permission or controlled write access. Shared library text can be mapped read-only into many processes; copy-on-write pages can be shared until one process writes, at which point the OS allocates a private frame and updates that process’s PTE.
+
+The permission check belongs to the access, not merely the page-table lookup. An instruction fetch, data read, and data write may have different permission requirements. A TLB entry must cache all permissions relevant to future use, or the MMU must recheck them. Reusing a translation while ignoring a permission change is a security violation.
+
+The explorer uses deliberately small 256-byte pages so the offset is the low eight bits. For process A, address `0x4a3` names VPN 4 and offset `0xa3`; its cached translation maps to frame 2, giving `0x2a3`. Predict what changes if the process or access permission changes. A cache hit cannot override permissions, and equal virtual addresses in different address spaces need not have equal translations.
+
+<PageTablePlayground client:load />
+
+## Page faults and demand paging
+
+> **Warning.** Because a page-fault exception restarts the faulting instruction after the OS repairs the mapping, the processor pipeline must squash the faulting load/store and all younger instructions before any architectural register or memory state is modified.
+
+A page fault is a controlled exception caused by an absent or prohibited translation. The hardware records the faulting virtual address, access type, instruction context, and cause. The operating system examines the PTE and process policy. It may allocate a zero-filled page, load a file-backed page, fetch a swapped-out page, perform copy-on-write, or deliver a segmentation/access error to the process.
+
+| Sequence Step | Active Agent | Action Taken | State Transformation |
+| :---: | :--- | :--- | :--- |
+| 1 | Hardware MMU | Detects invalid PTE (`V = 0`) or permission violation | Captures faulting address in `stval` / `CR2`, cause in `scause` |
+| 2 | Processor Pipeline | Squashes faulting instruction and younger pipeline slots | Restores architectural registers to pre-instruction checkpoint |
+| 3 | Trap Dispatch | Switches to supervisor mode; jumps to kernel `trap_vector` | Hardware saves `sepc` (faulting instruction PC); disables interrupts |
+| 4 | OS Page Fault Handler | Identifies cause: anonymous demand page, file-backed, or COW | Allocates physical frame; populates data from backing store |
+| 5 | OS Memory Subsystem | Installs valid PTE (`V = 1`, permissions, PFN) in RAM | Executes `sfence.vma` / `invlpg` to invalidate stale TLB entries |
+| 6 | Hardware Return | Handler executes `sret` / `iret` | Restores user privilege mode; restarts faulting instruction at `sepc` |
+
+The fault handler must be restartable. The faulting instruction generally has not committed its architectural effect; after the mapping is repaired, the instruction is retried. If the instruction performed a partially visible device operation before faulting, ordinary restart assumptions do not apply, which is one reason memory-mapped I/O and access permissions need precise architecture rules.
+
+Demand paging creates an additional timing regime. A TLB miss may cost tens of cycles; a page fault may cost millions of cycles because storage or decompression is involved. A benchmark that averages both without reporting fault counts can mistake a small number of faults for random CPU noise. Working-set size, replacement policy, locality, and prefetch decisions determine whether paging improves capacity or causes thrashing.
+
+## Replacement and dirty state
+
+> **Example.** When the hardware page walker or TLB sets the PTE Accessed (`A = 1`) bit on any read/write and the Dirty (`D = 1`) bit on any store, the OS page reclaimer can discard a clean file-backed frame (`D = 0`) immediately upon eviction, whereas a dirty frame (`D = 1`) must be written back to storage before its physical frame is reallocated.
+
+When physical frames are scarce, the OS chooses a victim page. The accessed/reference bit approximates use; the dirty bit says whether a private or writable page differs from its backing store. A clean file-backed page can be discarded and re-read. A dirty anonymous or file-backed page must be written before reuse. The OS may use clock-like approximations rather than exact LRU because tracking every reference is expensive.
+
+The page-replacement analogy to cache replacement is useful but incomplete. A cache line is normally replaced by hardware in a microsecond-scale critical path; a page is managed by software and may involve storage, process scheduling, and asynchronous write-back. A page fault also changes the process’s mapping and protection state, not just a data copy.
+
+## Cache and virtual-memory interaction
+
+> **Lemma.** A Virtually Indexed, Physically Tagged (VIPT) cache with line size $2^b$ bytes and $2^s$ sets is free of virtual-address synonyms in hardware if and only if $b + s \le p$ (equivalently, the size of one cache way $2^{b+s}$ does not exceed the page size $2^p$), because all set-index bits then come from the untranslated page offset.
+
+A memory access can require both translation and cache lookup. In a physically indexed, physically tagged (PIPT) cache, translation occurs first, then the physical address selects the cache set and tag. This is simple for synonyms but adds translation latency. A virtually indexed, physically tagged cache can overlap some lookup with translation, but the page offset must contain enough bits for the index or aliases require special handling.
+
+| Architecture Class | Set Index Derivation | Tag Match Derivation | Translation Critical Path | Synonym Vulnerability |
+| :--- | :--- | :--- | :--- | :--- |
+| **PIPT** (Physically Indexed, Physically Tagged) | Physical address | Physical tag | Cache access waits for TLB translation | None (physical address is unambiguous) |
+| **VIVT** (Virtually Indexed, Virtually Tagged) | Virtual address | Virtual tag | Translation bypassed on cache hit | High (requires ASID tags and synonym flushes) |
+| **VIPT** (Virtually Indexed, Physically Tagged) | Virtual offset ($b+s \le p$) | Physical tag | Index lookup overlaps concurrently with TLB walk | None if way size $\le$ page size; aliases possible otherwise |
+
+The page offset and cache block offset are related but not identical. If page size is 4 KiB and line size is 64 bytes, the low 6 bits select a byte within a cache line while the low 12 bits select a byte within a page. If the cache has 64 sets, its 6-bit index also lies within the page offset; this permits the cache to begin indexing before translation finishes. If the index extends above the page offset, different virtual pages may map to the same cache set unpredictably and synonym management becomes harder.
+
+Address-space identifiers (ASIDs) tag TLB entries with a process identity, reducing full TLB flushes on context switch. Cache lines are usually tagged by physical address in a PIPT design, so a shared physical frame has one coherent cache identity even when mapped at different virtual addresses. The exact implementation may use virtual tags, page coloring, or explicit invalidation; the architectural requirement is that permitted aliases observe a coherent memory value and prohibited aliases cannot bypass permissions.
+
+## Translation invalidation and concurrency
+
+> **Warning.** Clearing a PTE's valid or writable bit in RAM does not revoke access on cores that still hold the old translation in their private TLBs: the OS must complete local TLB invalidation (`sfence.vma` / `invlpg`) and synchronous remote TLB shootdown IPIs before freeing or repurposing the physical frame.
+
+Changing a page table is a concurrent operation. A CPU may have a stale TLB entry while the OS updates the PTE. An invalidation instruction or interprocessor shootdown ensures that other cores stop using the old translation before the frame is reused or permissions are weakened. The OS must order page-table writes, TLB invalidation, and reuse of physical memory. Otherwise one process may access a frame after it has been reassigned to another.
+
+| Shootdown Phase | Initiating Core (Core 0) | Target Cores (Cores 1..N) | Synchronization Invariant |
+| :---: | :--- | :--- | :--- |
+| Phase 1: PTE Update | Clears PTE valid bit (`V = 0`) in RAM | Executing threads using stale TLB | PTE is invalid in memory; old mappings still cached |
+| Phase 2: IPI Broadcast | Issues interprocessor interrupt (IPI) to cores running process | Receive IPI; enter kernel shootdown trap handler | Initiator spins waiting on atomic acknowledge counter |
+| Phase 3: Local Invalidate | Executes local `sfence.vma va, asid` | Execute local `sfence.vma va, asid`; increment ack | All private TLBs flush matching virtual translation |
+| Phase 4: Frame Reclaim | Observes all acks received; reclaims or reassigns physical frame | Return from trap handler to user mode | No CPU can access freed frame through stale mapping |
+
+Permission upgrades and downgrades require different reasoning. Before making a page writable, the OS must ensure the intended private copy exists. Before removing access, it must ensure no core can continue using a stale cached translation. A correct PTE in memory is not sufficient evidence that every processor has observed it.
+
+<ExerciseSet>
+
+<Exercise id="ex-vm-multilevel-va-decomp" type="construct" level="application" title="Multilevel Page Table Virtual Address Decomposition">
+
+Decompose virtual address `0x123456789abc` for 4 KiB pages and four 9-bit page-table indexes, ordered from level 4 (top) to level 1 (leaf). The leaf PTE supplies PFN `0xABCDE`. Identify all fields and compute the physical address.
+
+<ExerciseSolution hint="Extract VPN levels and page offset bits from a 48-bit or 64-bit virtual memory address.">
+
+Four 9-bit indexes consume 36 VPN bits and the 12-bit offset completes 48 bits. From the most-significant VPN bits downward, the indexes are $36,209,179,393$ (level 4 through level 1), and the offset is `0xabc`. With leaf PFN `0xABCDE`, $PA=(0xABCDE\ll12)|0xABC=0xABCDEABC$; the offset is preserved exactly. A different page-table walk ordering must be stated rather than silently swapping levels.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-tlb-reach-page-sizes" type="verify" level="application" title="TLB Reach Comparison Across Page Sizes">
+
+Compare TLB reach for 64 entries with 4 KiB pages and 2 MiB pages. State the fragmentation trade-off.
+
+<ExerciseSolution hint="Calculate total addressable memory covered by fixed TLB entries when using 4 KiB versus 2 MiB huge pages.">
+
+64 entries cover 256 KiB with 4 KiB pages and 128 MiB with 2 MiB pages. Huge pages improve reach and reduce walk pressure but can waste up to nearly a page per allocation and make fine-grained protection or sharing less flexible.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-cow-fault-control-flow" type="describe" level="transfer" title="Copy-On-Write Fault Control Sequence">
+
+Explain the complete control flow for a copy-on-write fault after a `fork`-like operation.
+
+<ExerciseSolution hint="Mark shared page table entries read-only and allocate fresh physical frames on first write trap.">
+
+Mark shared pages read-only, let both processes point to the same frame, and fault on a write. The handler verifies the fault is a valid copy-on-write case, allocates a private frame, copies data, updates only the writer’s PTE to writable, invalidates the stale translation, and retries the store. A failed allocation must not leave the page writable.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-tlb-hit-rate-amat" type="verify" level="transfer" title="TLB Hit Rate Impact on Effective Access Time">
+
+Compute AMAT-like cost for a TLB with hit/miss probabilities and a data cache, stating whether costs overlap.
+
+<ExerciseSolution hint="Compute average memory access time taking into account multi-level page walk penalties on TLB misses.">
+
+Use $t_{hit}+m_{TLB}t_{walk}+t_{cache}$ only if the stated costs are additive and page walks do not evict data. If translation and cache lookup overlap, use a conditional timing model rather than adding both full latencies.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-stale-tlb-cross-core" type="describe" level="transfer" title="Stale TLB Entries and Cross-Core Shootdown">
+
+Explain why stale TLB entries can become a security issue when a physical frame is reused.
+
+<ExerciseSolution hint="Explain why revoking permissions in memory requires interprocessor interrupt shootdowns across all cores.">
+
+If process A’s translation remains cached after the frame is assigned to process B, A may read or write B’s physical memory through the old mapping. ASIDs, shootdowns, and ordered reuse prevent this stale authority.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-pipt-vs-vipt-tradeoffs" type="describe" level="synthesis" title="PIPT vs VIPT Cache Hierarchy Trade-offs">
+
+Compare PIPT and virtually indexed/physically tagged caches in terms of latency, synonyms, and page-offset constraints.
+
+<ExerciseSolution hint="Compare virtually indexed physically tagged caches with PIPT regarding translation latency and page coloring.">
+
+PIPT avoids virtual synonyms naturally but waits for translation before cache tag/index work. VIPT can overlap index lookup when index bits lie within the page offset, but aliases mapping one frame at different virtual addresses may require synonym handling or page coloring.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-vm-page-table-perm-invariants" type="formalise" level="synthesis" title="Page Table Permission Security Invariants">
+
+Design page-table and fault-handler invariants that prevent a user process from writing a read-only shared code page.
+
+<ExerciseSolution hint="Enforce user vs supervisor and write-xor-execute (W^X) bit configurations to prevent privilege escalation.">
+
+A user PTE for shared code has user-read and execute permission but no write permission; hardware checks the TLB-cached permission on every store. The kernel changes permissions only through validated transitions, invalidates translations after updates, and never reuses a frame until all stale translations are removed.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
+
+
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: virtual memory and memory hierarchy notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [Cornell CS 3410: Virtual Memory](https://www.cs.cornell.edu/courses/cs3410/2024fa/notes/vm.html)
+* [UC Berkeley CS 61C: virtual memory and cache interaction](https://notes.cs61c.org/content/vm/memory-hierarchy-full/)

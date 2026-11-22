@@ -1,0 +1,1 @@
+export function decode(value,width){const modulus=2**width,residue=((value%modulus)+modulus)%modulus; return {residue,bits:residue.toString(2).padStart(width,'0'),signed:residue>=modulus/2?residue-modulus:residue};}

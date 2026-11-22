@@ -1,0 +1,426 @@
+---
+title: Storage Devices and I/O Scheduling
+course: operating-systems
+description: Connect block-request policy to magnetic geometry, SSD translation and parallelism, queueing delay, fairness, and durability boundaries without treating every device as a disk head.
+prerequisites:
+  - Device queues, interrupts, DMA, descriptor ownership, and completion semantics
+  - Rates, averages, percentiles, and dimensional analysis
+  - Files, logical block addresses, and basic persistence terminology
+outcomes:
+  - Decompose magnetic-disk service time into queueing, seek, rotation, and transfer terms, with each assumption stated.
+  - Execute FCFS, SSTF, SCAN, and deadline-style request decisions and expose their throughput, starvation, and fairness boundaries.
+  - Explain why SSD/NVMe scheduling depends on queue parallelism, flash translation, garbage collection, and tail latency rather than mechanical head distance.
+  - Use Little's law and measured latency distributions to test queue-depth and throughput claims for an unfamiliar storage workload.
+omissions:
+  - RAID coding, zoned-storage command design, filesystem allocation, persistent-memory programming, and detailed flash error correction require dedicated treatment.
+  - The disk-scheduling simulator models cylinder movement on a magnetic disk; it does not convert movement to time or represent SSD internals.
+estimatedMinutes: 330
+assessment: Given a mixed read/write workload, one magnetic device and one solid-state device, compute policy traces and queue requirements, identify starvation and media-model errors, and defend a media-aware scheduler using throughput, tail latency, fairness, and write-order evidence.
+---
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+
+import PlantUML from '../../../components/PlantUML.astro';
+import DiskSchedulingPlayground from '../../../components/playgrounds/DiskSchedulingPlayground';
+import Quiz from '../../../components/Quiz';
+
+
+A scheduler sorts every block request by logical block address because that reduced seek distance on a magnetic disk. The same policy is deployed on an NVMe SSD. Requests from one latency-sensitive process wait behind a long adjacent run, while the SSD's independent internal channels remain underfilled. “Sequential is faster” was promoted from a device-specific observation to a universal rule.
+
+Storage scheduling sits between workload intent and a device whose service function may be mechanical, solid-state, virtualized, or remote. A policy is defensible only when its cost model matches the medium and its objective includes more than aggregate throughput.
+
+> **Media-aware scheduling contract.** Request order must be justified by measured or specified device behavior, queue semantics, fairness boundaries, and durability constraints. Logical address proximity alone is not a universal service-time metric.
+
+## The block layer does not erase the medium
+
+Applications and filesystems issue operations on logical byte or block ranges. The storage stack may merge, split, queue, prioritize, and dispatch them. A controller or device can reorder again, serve requests in parallel, cache writes, or translate logical addresses internally.
+
+<PlantUML
+  code={`@startuml
+title "Where one logical block request can be reordered"
+rectangle "processes\nlatency and throughput objectives" as APP
+rectangle "filesystem / page cache\nallocation and writeback" as FS
+rectangle "block layer\nmerge, priority, scheduler" as BLK
+rectangle "driver queues\nsubmission and completion" as DRV
+rectangle "controller firmware\ncache and internal scheduling" as CTRL
+rectangle "medium\nmagnetic geometry or flash arrays" as MEDIA
+APP --> FS : read/write ranges
+FS --> BLK : block requests + flags
+BLK --> DRV : dispatch order
+DRV --> CTRL : commands
+CTRL --> MEDIA : physical operations
+MEDIA --> CTRL : completion state
+CTRL --> DRV : completion
+DRV --> BLK : status + latency
+@enduml`}
+/>
+
+The observable latency of request $i$ can be decomposed as
+
+$$
+T_i=T_{queue,i}+T_{controller,i}+T_{medium,i}+T_{transfer,i}+T_{completion,i}.
+$$
+
+The decomposition prevents one useful optimization—such as reducing seek—from being mistaken for the entire response time.
+
+**Retrieval — identify hidden reordering.** A filesystem submits writes A then B, and the driver rings one queue doorbell. Name two lower layers that may still reorder work and the interface feature needed when A must become durable before B.
+
+<ExerciseSolution title="Reveal the diagnostic answer">
+
+Controller firmware and the medium's internal scheduler/translation layer may reorder. The host needs an ordering/durability mechanism defined by the device protocol, such as an ordered dependency, flush, or force-unit-access semantics as appropriate. Submission order alone is not a durability proof. Exact commands are protocol-specific and are outside the assessed filesystem-recovery scope.
+
+</ExerciseSolution>
+
+## Magnetic disks pay mechanical positioning cost
+
+A simplified magnetic-disk access has
+
+$$
+T_{medium}=T_{seek}+T_{rotation},
+$$
+
+followed by transfer. Seek moves the actuator to the target track/cylinder; rotational latency waits for the desired sector to pass under the head. With rotation rate $R$ revolutions/minute and uniformly distributed angular position,
+
+$$
+E[T_{rotation}]=\frac{1}{2}\frac{60}{R}\text{ seconds}.
+$$
+
+At 7,200 RPM, one revolution is 8.33 ms and average rotational latency under the uniform-angle model is 4.17 ms.
+
+{/* Source tracking: Mechanical seek and rotation definitions were checked against Seagate magnetic-drive product manuals; numeric examples below are declared teaching assumptions, not claims about a current product. */}
+
+### Worked trace: service-time estimate
+
+Assume a magnetic disk with measured 8 ms seek for a particular distance, 7,200 RPM, sustained transfer 200 MB/s, no queueing, and no controller-cache hit. A 64 KiB request has
+
+$$
+T_{transfer}=\frac{65{,}536}{200{,}000{,}000}\text{ s}=0.328\text{ ms}.
+$$
+
+The estimate is
+
+$$
+8+4.17+0.328=12.498\text{ ms}.
+$$
+
+This is not a constant per-request law. Seek is nonlinear in distance, rotational position is not always uniform, adjacent sectors can stream, controller caches can satisfy a request, and zone geometry changes transfer rates.
+
+### Cylinder movement is a proxy, not time
+
+Classical scheduling traces use total cylinder movement because nearby requests often reduce mechanical positioning. For initial head 53 and queue
+
+```text
+98, 183, 37, 122, 14, 124, 65, 67
+```
+
+the supplied model produces:
+
+| Policy | Service path | Movement |
+| --- | --- | ---: |
+| FCFS | `53→98→183→37→122→14→124→65→67` | 640 cylinders |
+| SSTF | `53→65→67→37→14→98→122→124→183` | 236 cylinders |
+| SCAN upward | `53→65→67→98→122→124→183→199→37→14` | 331 cylinders |
+
+SSTF wins this movement total, but repeatedly arriving nearby requests can postpone a distant request indefinitely. SCAN trades some movement for directional progress. The model's SCAN travels to cylinder 199 before reversing; LOOK would reverse at the final request in the direction, producing a different path.
+
+**Application — expose starvation.** The head starts at 50. A request at 190 waits while one request arrives every service interval, alternating between cylinders 49 and 51. Trace the first six SSTF choices and state whether any finite waiting bound follows from the policy.
+
+<ExerciseSolution title="Reveal the adversarial trace">
+
+At each choice, a newly arrived request one cylinder away is closer than 190, so SSTF can alternate around 50 and postpone 190 for all six choices—and indefinitely if arrivals continue. No finite waiting bound follows from pure nearest-request selection. Adding an age/deadline rule changes the policy and can bound postponement under stated dispatch assumptions.
+
+</ExerciseSolution>
+
+<Quiz client:load
+  title="Storage device characteristics and scheduling invariants"
+  question="Evaluate each statement regarding magnetic hard drives, solid-state drives, and IO scheduling algorithms:"
+  options={[
+    { id: "opt-io-rotational-latency", text: "At 7200 RPM with uniform angular arrival, the expected rotational latency is exactly 4.17 milliseconds.", isCorrect: true },
+    { id: "opt-io-sstf-starvation", text: "Shortest Seek Time First (SSTF) minimizes head movement but can starve requests located at distant cylinders.", isCorrect: true },
+    { id: "opt-io-ssd-cylinder-model", text: "Solid-state drives benefit from elevator SCAN scheduling because flash memory cells require mechanical seek.", isCorrect: false },
+    { id: "opt-io-littles-law-burst", text: "Littles law guarantees that increasing queue depth always increases throughput without raising request latency.", isCorrect: false }
+  ]}
+  explanation="Expected rotational delay at 7200 RPM is half a revolution (4.17 ms). SSTF can indefinitely starve requests far from the active head track. SSDs have no moving mechanical heads so cylinder seeking is meaningless, and Little's law shows that queue depth equals throughput times latency, meaning excessive queueing inflates latency once device capacity is saturated."
+/>
+
+## Experiment: compare movement and fairness
+
+The simulator uses cylinders `0..199`, a single magnetic head, a fixed request batch, and movement equal to absolute cylinder-distance sums. FCFS preserves listed arrival order. SSTF chooses the nearest pending cylinder, breaking equal distances by the workload's current list order. SCAN moves upward, reaches cylinder 199 when lower requests remain, then reverses. It omits rotation, transfer length, deadlines, writes, caches, and new arrivals.
+
+**Prediction — choose an objective before a policy.** On the mixed queue above, which policy has the least movement? Which policy gives the strongest service-order argument to the oldest request from the information provided?
+
+<DiskSchedulingPlayground client:load />
+
+**Transfer — change the medium.** Reinterpret the same request numbers as SSD logical block addresses. Identify every visual quantity that loses physical meaning, then name three measurements that would replace cylinder movement in an SSD scheduler evaluation.
+
+<ExerciseSolution title="Reveal the media-model boundary">
+
+For the prediction, SSTF has the least movement on the fixed mixed batch, while FCFS gives the strongest argument about the oldest request because it preserves listed arrival order. After changing the medium, head position, path slope, cylinder distance, direction, and endpoint reversal lose their mechanical meaning. Logical adjacency may still help merging or sequential prefetch, but it does not reveal flash-channel placement or FTL physical location. Useful SSD measurements include throughput/IOPS, mean and tail completion latency, queue occupancy, device utilization, read/write mix, write amplification or bytes written, fairness, and per-queue/core contention.
+
+</ExerciseSolution>
+
+## FCFS, SSTF, SCAN, and deadlines optimize different contracts
+
+> **Example.** Suppose read requests at cylinders `52, 54, 56` arrive continuously while a read at cylinder `180` has been queued for 45 ms. Pure SSTF services `52, 54, 56` first and starves `180`; a deadline scheduler maintains both a sector-sorted tree and a FIFO expiration list (e.g., 50 ms read expiration), switching from sector-ordered dispatch to the expired FIFO head as soon as `180`'s age crosses the deadline threshold.
+
+| Policy | Useful property | Failure boundary | Repair direction |
+| --- | --- | --- | --- |
+| FCFS | transparent arrival order | long seeks and convoy effects | merge/batch without erasing age |
+| SSTF | low next seek under cylinder proxy | starvation of distant requests | age or deadline override |
+| SCAN | directional progress | endpoint travel; unequal waiting by position | LOOK/C-SCAN or deadlines |
+| deadline hybrid | limits age while batching locality | tuning couples throughput and latency | measure read/write classes and tails |
+
+A deadline scheduler can keep requests in both address order and age order. It dispatches batches by address for locality but checks whether an old request must be served. The guarantee is only as strong as the precise timer, batch, and lower-layer assumptions. Linux's documented deadline scheduler, for example, exposes separate expiration and batch controls rather than claiming exact completion deadlines.
+
+{/* Source tracking: Deadline batching and expiration behavior were verified against Linux kernel deadline I/O scheduler documentation. */}
+
+### Worked policy decision: interactive reads and bulk writes
+
+A magnetic drive receives 4 KiB interactive reads with a 20 ms start-service objective and 1 MiB sequential background writes. Pure FCFS lets a long write run delay reads. Pure read priority can starve writeback and eventually block the filesystem. A hybrid may:
+
+- merge adjacent writes into bounded batches;
+- dispatch reads preferentially;
+- force any request whose age exceeds its class threshold;
+- cap consecutive reads so dirty writeback progresses; and
+- measure **start-service** and completion separately.
+
+The design is incomplete without queue-depth and arrival assumptions. A deadline cannot be guaranteed if admitted work exceeds device capacity and no request can be rejected or degraded.
+
+## SSDs replace a head with translation and parallelism
+
+> **Definition.** A Flash Translation Layer (FTL) maintains a dynamic mapping $\mathrm{LBA} \mapsto \mathrm{PPA}$ from host logical block addresses to physical flash pages, writing updated blocks out-of-place into erased pages, marking old physical pages stale, and asynchronously compacting valid pages across erase blocks via garbage collection.
+
+NAND flash cannot overwrite a programmed page in place. A flash translation layer (FTL) maps host logical blocks to physical flash pages, writes updates out of place, and reclaims erase blocks through garbage collection. Thus consecutive logical addresses need not remain physically adjacent, and background firmware work can produce variable latency.
+
+{/* Source tracking: FTL logical-to-physical remapping, out-of-place updates, and garbage collection were verified against Kim et al.'s BPLRU primary paper and related USENIX flash-storage research. */}
+
+An NVMe interface exposes memory-based submission and completion queues and supports substantial parallelism. Host software can map queues to CPUs and keep multiple commands outstanding. The important scheduling dimensions shift toward:
+
+- enough queue depth to expose device parallelism without unbounded waiting;
+- avoiding one global software lock or queue bottleneck;
+- read/write and latency-class isolation;
+- merge/split overhead and transfer size;
+- firmware garbage-collection tail latency;
+- flush/order semantics; and
+- fairness across processes, cgroups, or virtual machines.
+
+Linux's blk-mq documentation explicitly contrasts mechanical disks—where head-position ordering addressed random-access cost—with solid-state devices that have no mechanical parts and can process requests in parallel.
+
+{/* Source tracking: Host multiqueue motivation and the HDD/SSD distinction were verified against Linux blk-mq documentation; current NVMe queue terminology was checked against the NVM Express specification site. */}
+
+### Counterexample: LBA sorting can reduce parallelism
+
+Suppose SSD requests at LBAs 100–107 map internally across eight channels, while LBAs 108–115 happen to contend on one flash die after FTL remapping. A host policy that assumes the second run is “more sequential” has no evidence for physical service cost. Issuing enough independent work and observing completions may exploit parallelism better than serializing by LBA. The exact mapping is usually controller-private, so the claim must be measurement-driven.
+
+## Queue depth, throughput, and latency obey a conservation relation
+
+For a stable observed system, Little's law relates long-run average outstanding requests $N$, effective completion rate $\lambda$, and average time in the system $W$:
+
+$$
+N=\lambda W.
+$$
+
+{/* Source tracking: Conditions and meaning of N=lambda W were checked against John D. C. Little's 1961 primary proof; it is used as an observation identity, not a complete latency model. */}
+
+At 100,000 completed operations/s and 400 µs mean end-to-end storage time,
+
+$$
+N=100{,}000\times0.0004=40
+$$
+
+requests are outstanding on average. A queue cap of 16 cannot coexist with both measured values in a stable closed domain; at least one of rate, latency, scope, or measurement is different. Little's law does not say that setting queue depth to 40 will cause 100,000 IOPS. Service capacity and arrival behavior determine whether that operating point is reachable.
+
+### Mean latency does not protect the tail
+
+Two devices can both average 400 µs while one completes every request near 400 µs and the other pauses during garbage collection. Report p50, p95/p99, maximum within a defined run, and the full workload conditions. A scheduler that improves mean throughput while multiplying p99 latency may violate an interactive-service objective.
+
+**Application — audit a benchmark.** A report claims 150,000 IOPS at 600 µs mean latency with “queue depth 32.” Use Little's law to identify the inconsistency and list two possible scope explanations.
+
+<ExerciseSolution title="Reveal the audit">
+
+The two measured values imply average outstanding work `150,000 × 0.0006 = 90`, not 32. Possible explanations include 32 queues each with more than one outstanding request, a per-thread queue-depth label while 90 requests exist system-wide, latency measured over a broader layer than the reported queue, or throughput and latency taken from different intervals. The result may be valid, but the term “queue depth 32” is underspecified.
+
+</ExerciseSolution>
+
+## Boundary cases that defeat one-number policies
+
+> **Warning.** Optimizing a storage scheduler solely for aggregate IOPS or cylinder distance breaks correctness or tail-latency contracts when upper layers require write-barrier durability (`REQ_PREFLUSH` / `REQ_FUA`), when virtual-disk layers hide an underlying SSD or network store, or when aggressive request merging delays small latency-critical reads.
+
+### Writes have ordering and durability semantics
+
+A scheduler may reorder independent writes but must preserve barriers and dependencies expressed by upper layers and supported by the device. Completion to software can mean accepted, cached, or durable depending on the protocol and flags. A filesystem cannot infer power-loss durability from queue order alone.
+
+### Virtual disks conceal another scheduler
+
+A guest sees logical blocks presented by a virtual device. The host may map them to a file, network store, SSD, or thin-provisioned volume. Guest cylinder optimization can fight host scheduling. The guest should rely on advertised features and measurement rather than inventing physical geometry.
+
+### Shingled and zoned media alter random-write rules
+
+Some magnetic and solid-state devices expose zones with sequential-write constraints. They are not modeled as ordinary random-write disks. Naming zoned storage without teaching its command/state model would not establish mastery, so it remains outside scope.
+
+### Queue merging can violate latency isolation
+
+Merging adjacent requests lowers per-command overhead, but waiting to form a large merge can delay a small urgent request. Merge windows need bounds tied to service objectives.
+
+> **Remark.** This lesson bridges the low-level device ring protocols of Device I/O, Interrupts, and DMA with the persistent data layouts and crash-recovery logs of the filesystem sequence: the scheduler may reorder independent requests for throughput or fairness, but must never violate explicit persistence barriers required by write-ahead logging.
+
+<ExerciseSet>
+
+<Exercise id="ex-io-hdd-service-time-decomposition" type="verify" level="application" title="Decomposing Hard Disk Drive Access Latency and Service Time">
+
+A magnetic disk operates with the following parameters:
+- Rotational speed: 10,000 RPM.
+- Average seek time: $T_{\text{seek}} = 4.2\text{ ms}$.
+- Sustained media transfer rate: $150\text{ MB/s}$ ($150 \times 10^6\text{ bytes/s}$).
+- Controller and bus overhead: $T_{\text{overhead}} = 0.1\text{ ms}$.
+
+1. Calculate the rotational period and the expected rotational latency $T_{\text{rot}}$ assuming uniform angular arrival.
+2. Calculate the transfer time $T_{\text{xfer}}$ for a 64 KiB ($65{,}536\text{ byte}$) block request.
+3. Compute the total expected service time $T_{\text{service}}$ for an isolated random 64 KiB read request.
+
+<ExerciseSolution hint="One revolution at 10,000 RPM is 60 / 10000 seconds. Expected rotational delay is half a revolution.">
+
+1. **Rotational latency:**
+   The duration of one complete revolution is:
+   $$
+   T_{\text{rev}} = \frac{60\text{ s}}{10{,}000} = 0.006\text{ s} = 6.0\text{ ms}.
+   $$
+   Assuming uniform angular position of the desired sector upon head arrival at the cylinder:
+   $$
+   E[T_{\text{rot}}] = \frac{1}{2} T_{\text{rev}} = 3.0\text{ ms}.
+   $$
+2. **Transfer time:**
+   $$
+   T_{\text{xfer}} = \frac{65{,}536\text{ bytes}}{150 \times 10^6\text{ bytes/s}} \approx 0.000437\text{ s} \approx 0.437\text{ ms}.
+   $$
+3. **Total expected service time:**
+   $$
+   T_{\text{service}} = T_{\text{seek}} + E[T_{\text{rot}}] + T_{\text{xfer}} + T_{\text{overhead}} = 4.2 + 3.0 + 0.437 + 0.1 = 7.737\text{ ms}.
+   $$
+   Notice that mechanical positioning (seek + rotation = $7.2\text{ ms}$) accounts for over 93% of the total access time.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-io-disk-scheduling-algorithms" type="construct" level="application" title="Comparing FCFS, SSTF, and SCAN Traversal Distances">
+
+A disk queue holds requests for cylinders $\langle 95, 180, 34, 119, 11, 123, 62, 64 \rangle$ in arrival order. The read/write head is currently positioned at cylinder 50 and moved from cylinder 40 (moving upward toward higher cylinders).
+1. Trace the head movement sequence and compute the total cylinder distance for First-Come First-Served (FCFS).
+2. Trace the sequence and total cylinder distance for Shortest Seek Time First (SSTF).
+3. Trace the sequence and total cylinder distance for SCAN (Elevator algorithm, reversing at cylinder 199).
+
+<ExerciseSolution hint="SSTF selects the closest pending cylinder; SCAN sweeps upward to the boundary then sweeps downward.">
+
+1. **FCFS:**
+   Path: $50 \rightarrow 95 \rightarrow 180 \rightarrow 34 \rightarrow 119 \rightarrow 11 \rightarrow 123 \rightarrow 62 \rightarrow 64$.
+   Distances:
+   $|95-50| + |180-95| + |34-180| + |119-34| + |11-119| + |123-11| + |62-123| + |64-62|$
+   $= 45 + 85 + 146 + 85 + 108 + 112 + 61 + 2 = 644\text{ cylinders}$.
+
+2. **SSTF:**
+   Starting at 50, find nearest remaining:
+   - Nearest to 50 is 62 ($|62-50| = 12$).
+   - Nearest to 62 is 64 ($|64-62| = 2$).
+   - Nearest to 64 is 34 ($|34-64| = 30$, vs 95 which is 31).
+   - Nearest to 34 is 11 ($|11-34| = 23$).
+   - Nearest to 11 is 95 ($|95-11| = 84$).
+   - Nearest to 95 is 119 ($|119-95| = 24$).
+   - Nearest to 119 is 123 ($|123-119| = 4$).
+   - Nearest to 123 is 180 ($|180-123| = 57$).
+   Path: $50 \rightarrow 62 \rightarrow 64 \rightarrow 34 \rightarrow 11 \rightarrow 95 \rightarrow 119 \rightarrow 123 \rightarrow 180$.
+   Total distance: $12 + 2 + 30 + 23 + 84 + 24 + 4 + 57 = 236\text{ cylinders}$.
+
+3. **SCAN (Elevator upward):**
+   Services all higher cylinders in ascending order up to 199, then reverses downward:
+   - Upward pass: $50 \rightarrow 62 \rightarrow 64 \rightarrow 95 \rightarrow 119 \rightarrow 123 \rightarrow 180 \rightarrow 199$.
+   - Reversal downward: $199 \rightarrow 34 \rightarrow 11$.
+   Total distance: $(199 - 50) + (199 - 11) = 149 + 188 = 337\text{ cylinders}$.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-io-littles-law-storage-sizing" type="construct" level="transfer" title="Applying Little's Law to Storage Queue Depth Sizing">
+
+An enterprise NVMe SSD benchmark reports a sustained random read throughput of $\lambda = 500{,}000\text{ IOPS}$ at an average request latency of $W = 160\ \mu\text{s}$.
+1. Use Little's law ($L = \lambda W$) to calculate the average number of concurrent requests $L$ in flight across the host driver and SSD controller queues.
+2. If the host application uses a single submission queue with a maximum depth limit of 32, what is the maximum achievable throughput if latency remains at $160\ \mu\text{s}$?
+3. What happens to request latency if the application increases queue depth to 256 while device service capacity is capped at 500,000 IOPS?
+
+<ExerciseSolution hint="L = lambda * W. If L is capped, lambda = L / W. If lambda is capped, W = L / lambda.">
+
+1. **Average in-flight requests $L$:**
+   $$
+   L = \lambda \cdot W = (500{,}000\text{ requests/s}) \times (160 \times 10^{-6}\text{ s}) = 80\text{ requests}.
+   $$
+2. **Throughput at queue depth limit 32:**
+   With $L \le 32$ and mean service latency $W = 160\ \mu\text{s}$:
+   $$
+   \lambda_{\text{max}} = \frac{L_{\text{max}}}{W} = \frac{32}{160 \times 10^{-6}\text{ s}} = 200{,}000\text{ IOPS}.
+   $$
+   A queue depth of 32 leaves the SSD under-utilized, achieving only 40% of its rated 500,000 IOPS capacity.
+3. **Queue inflation and latency explosion:**
+   Once device throughput saturates at $\lambda_{\text{sat}} = 500{,}000\text{ IOPS}$, raising queue depth to $L = 256$ cannot increase throughput. Instead, requests accumulate in queues:
+   $$
+   W_{\text{inflated}} = \frac{L}{\lambda_{\text{sat}}} = \frac{256}{500{,}000\text{ s}^{-1}} = 0.000512\text{ s} = 512\ \mu\text{s}.
+   $$
+   Average latency increases by more than $3.2\times$ solely due to queueing delay (bufferbloat).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-io-ssd-parallelism-vs-locality" type="describe" level="application" title="Internal Flash Hierarchy and Multi-Queue NVMe Concurrency">
+
+Contrast the physical architecture of an NVMe solid-state drive with a magnetic hard drive. Explain why traditional single-queue elevator schedulers degrade SSD performance, whereas NVMe multi-queue (blk-mq) architectures optimize it.
+
+<ExerciseSolution hint="Consider mechanical actuators versus multiple parallel flash channels, chips, dies, and planes.">
+
+- **Physical contrast:**
+  - Hard disk drives have a single mechanical arm with heads that can read or write only one cylinder/track at any given millisecond. Performance depends strictly on minimizing physical seek distance and rotational delay.
+  - Solid-state drives contain no moving parts. Flash storage is organized into multiple independent flash channels (e.g., 8–16 channels), each connected to multiple flash chips, dies, and planes. A modern SSD can execute 32–64 flash page reads simultaneously in parallel across independent dies.
+- **Why elevator scheduling degrades SSDs:**
+  Sorting block requests by LBA in an elevator queue serializes requests into a single bottlenecked thread, pays CPU lock contention overhead, and suppresses the queue depth needed to keep multiple internal flash channels active simultaneously. Furthermore, logical block addresses do not correspond to physical flash die locations due to Flash Translation Layer (FTL) wear-leveling mappings.
+- **NVMe Multi-Queue (blk-mq) architecture:**
+  NVMe provides up to 64,000 separate submission/completion queues, each supporting 64,000 commands. By dedicating per-CPU-core queues that bypass cross-core lock synchronization, the OS dispatches deep concurrent streams of requests directly to controller hardware, maximizing internal flash die parallelism.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-io-barrier-flush-durability" type="prove" level="synthesis" title="Proving Write Ordering Failures Under Reordered Storage Caches">
+
+A database system appends a transaction record to block $B_{\text{log}}$ and then updates user balance in block $B_{\text{data}}$.
+1. Prove that if the drive controller possesses a volatile write cache and reorders writes, a power failure can produce unrecoverable database corruption unless an explicit cache flush or FUA command is issued.
+2. Contrast the semantics of `REQ_PREFLUSH` and `REQ_FUA` in modern operating system block layers.
+
+<ExerciseSolution hint="Show an interleaving where data reaches stable flash before log data is persisted.">
+
+1. **Proof of corruption under cache reordering:**
+   - The database relies on the Write-Ahead Logging (WAL) invariant:
+     $$
+     \text{Persist}(B_{\text{log}}) \prec \text{Persist}(B_{\text{data}}).
+     $$
+   - The operating system submits $B_{\text{log}}$ followed by $B_{\text{data}}$.
+   - The disk controller acknowledges both writes immediately upon placing them into its volatile write-back DRAM cache.
+   - The disk controller firmware's internal scheduler writes $B_{\text{data}}$ to persistent magnetic platters or NAND flash first, because $B_{\text{data}}$ is closer to the current head or open flash block.
+   - Before $B_{\text{log}}$ is drained from the volatile cache, a power failure occurs.
+   - Upon recovery, $B_{\text{data}}$ contains the committed transaction modifications, but $B_{\text{log}}$ has vanished. The recovery engine cannot undo or redo the transaction, leaving database state permanently inconsistent.
+   Hence, software submission order alone is insufficient; explicit hardware barriers are strictly required.
+
+2. **PREFLUSH versus FUA semantics:**
+   - `REQ_PREFLUSH`: Instructs the storage controller to synchronously flush all dirty blocks currently resident in its volatile write-back cache to non-volatile media before executing the current command.
+   - `REQ_FUA` (Force Unit Access): Instructs the controller that the specific I/O block carried by this command must be written directly to persistent non-volatile media before completing and returning success to the host, bypassing or write-through flushing the volatile cache for this request.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+- [Linux kernel: Multi-Queue Block I/O Queueing Mechanism](https://docs.kernel.org/block/blk-mq.html)
+- [Linux kernel: Deadline I/O scheduler tunables](https://docs.kernel.org/6.2/block/deadline-iosched.html)
+- [NVM Express Base Specification landing page and current ratified revision](https://nvmexpress.org/specification/nvm-express-base-specification/)
+- [NVM Express Base Specification, Revision 2.3 (archived primary specification)](https://nvmexpress.org/wp-content/uploads/NVM-Express-Base-Specification-Revision-2.3-2025.08.01-Ratified.pdf)
+- [H. Kim et al., “BPLRU: A Buffer Management Scheme for Improving Random Writes in Flash Storage” (FAST 2008)](https://www.usenix.org/legacy/events/fast08/tech/full_papers/kim/kim_html/)
+- [Seagate Savvio 15K.2 SAS Product Manual, seek and access-time definitions](https://www.seagate.com/content/dam/seagate/migrated-assets/www-content/support-content/documentation/product%20manuals/en-us/enterprise/Savvio/Savvio%2015K.2/100516230g.pdf)
+- [John D. C. Little, “A Proof for the Queuing Formula: L = λW” (1961)](https://doi.org/10.1287/opre.9.3.383)

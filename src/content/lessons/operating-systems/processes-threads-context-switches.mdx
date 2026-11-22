@@ -1,0 +1,330 @@
+---
+title: Processes, Threads, and Context Switches
+course: operating-systems
+description: Separate resource ownership from execution state, then derive the two-level xv6 switch through trapframes, kernel stacks, scheduler contexts, and process-state invariants.
+prerequisites:
+  - RISC-V calling convention, traps, and privilege return
+  - Virtual address spaces and page-table identity
+  - C structs, stacks, and state-machine invariants
+outcomes:
+  - Distinguish a process, thread, address space, protection domain, kernel stack, trapframe, and scheduler context by ownership and lifetime.
+  - Trace runnable, running, sleeping, and zombie transitions while naming the lock or exclusive ownership needed at each cut.
+  - Explain why xv6 saves all user registers at trap entry but only `ra`, `sp`, and callee-saved registers in `swtch`.
+  - Diagnose context corruption, double-running, and lost-continuation defects from register and state traces.
+omissions:
+  - Thread-library implementation, language runtime scheduling, CPU migration policy, NUMA placement, and memory-ordering proofs are deferred.
+  - Extended floating-point/vector context, debug registers, hardware transactional state, and architecture-specific lazy-save policies are bounded to an audit question.
+  - Xv6 rev5 has one user thread per process; POSIX multi-thread semantics are used only to separate the concepts.
+estimatedMinutes: 330
+assessment: Audit an unfamiliar context-switch implementation by reconstructing state ownership, proving no execution context is simultaneously active on two CPUs, and producing traces that expose two named save/restore defects.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+
+import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
+
+
+A kernel saves every user register before preemption, chooses another process, and restores that process's user registers. It still crashes. The missing state is the suspended kernel call chain: stack pointer, return address, and preserved registers needed to resume inside the first process's trap handler. A user trapframe answers “how does this thread return to user code?” A scheduler context answers “how does this kernel thread resume its suspended C execution?” Neither subsumes the other.
+
+{/* Source tracking: The two-level switch and saved-state split were checked against xv6 tag `xv6-riscv-rev5`, commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`, in `proc.h`, `proc.c`, `swtch.S`, `trampoline.S`, and `trap.c`; register preservation was checked against the official RISC-V psABI. */}
+
+### Prediction — two continuations
+
+Process $A$ enters the kernel on a timer interrupt and calls the scheduler, which runs $B$. Name the exact continuation that must be stored for each arrow:
+
+```text
+A user → A kernel → per-CPU scheduler → B kernel → B user
+```
+
+<ExerciseSolution hint="A privilege return and a C return consume different saved program counters.">
+`A user → A kernel` stores A's user PC in trap state/trapframe and all user-visible registers in A's trapframe. `A kernel → scheduler` stores the return address into the suspended kernel call chain plus A's kernel SP and callee-saved registers in A's scheduler context. `scheduler → B kernel` restores B's kernel SP/return path, resuming where B last yielded or at its first-run trampoline. `B kernel → B user` restores B's trapframe and uses `sret`. If the answer names one generic PC, it misses two independently nested stacks and return mechanisms.
+</ExerciseSolution>
+
+## Ownership model: process is not thread
+
+A useful decomposition is:
+
+> **Definition.** A process groups resources and authority; a thread is one schedulable flow of control through those resources.
+
+| Entity | Owns or denotes | Shared by threads in one process? | Required to resume one thread? |
+| --- | --- | ---: | ---: |
+| **Process** | resource container: address space, descriptor table, credentials, limits, process relationships | yes | identity only |
+| **Thread** | one flow of control and scheduling state | no | yes |
+| **Address space** | virtual-to-physical mappings and permissions | normally yes | select or confirm translation context |
+| **Protection domain** | authority boundary enforced by hardware/software | normally yes | identify access rights |
+| **User stack** | user call chain and automatic storage for one thread | no | yes, via saved user SP |
+| **Kernel stack** | privileged call chain while servicing one thread | no | yes, via saved kernel SP |
+| **Trapframe** | full user architectural state at a controlled entry | no | yes for kernel-to-user return |
+| **Scheduler context** | kernel callee-saved continuation across `swtch` | no | yes for scheduler-to-kernel return |
+
+POSIX defines threads in one process as separate flows of control with per-thread scheduling attributes while memory reachable by address is accessible to all live threads in that process. Thus threads provide concurrency, not mutual protection. A process may contain one thread; the concepts remain distinct because resource and execution lifetimes differ.
+
+{/* Source tracking: POSIX.1-2024 Base Definitions §3.190 supports the thread/shared-address-space claims. xv6 Chapter 7 supplies the one-thread-per-process teaching implementation. */}
+
+### Retrieval — classify state after a thread switch
+
+Threads $T_1$ and $T_2$ belong to one process. The kernel switches from $T_1$ to $T_2$ on the same CPU. Classify each item as necessarily changed, possibly changed, or normally shared: page-table root, user SP, kernel SP, descriptor table, signal mask, CPU register file, current-working directory.
+
+<ExerciseSolution>
+User SP, kernel SP, and the active CPU register file necessarily change because they encode each thread's continuation. The page-table root normally remains shared, though an implementation may reload it or use thread-specific mappings. Descriptor table and current-working directory are normally process resources. A POSIX signal mask is per-thread, so it may change. The diagnostic mistake is using “context switch” as shorthand for “replace every process resource.”
+</ExerciseSolution>
+
+<Quiz client:load
+  title="Context Switch Save Sets Classification Matrix"
+  question="Evaluate each statement regarding the differences between the user trapframe and the kernel scheduler context in RISC-V:"
+  options={[
+    { id: "opt-ctx-trap-all", text: "The user trapframe preserves all 31 general registers because asynchronous traps can interrupt any live register.", isCorrect: true },
+    { id: "opt-ctx-swtch-callee", text: "The kernel swtch() function preserves only callee-saved registers because it conforms to the standard C calling ABI.", isCorrect: true },
+    { id: "opt-ctx-swtch-machine", text: "Context switching executes in machine mode where hardware automatically pushes temporary registers to memory.", isCorrect: false },
+    { id: "opt-ctx-trapframe-callee", text: "User-space system calls require saving only callee-saved registers into the trapframe prior to kernel entry.", isCorrect: false }
+  ]}
+  explanation="User traps can interrupt arbitrary live registers requiring complete trapframe saves. In contrast, swtch() is invoked as a C function call where the compiler already preserved caller-saved registers on the kernel stack."
+/>
+
+## Process state is a global invariant
+
+Xv6 rev5 uses `UNUSED`, `USED`, `SLEEPING`, `RUNNABLE`, `RUNNING`, and `ZOMBIE`. These names encode both lifetime and scheduling eligibility.
+
+<PlantUML code={String.raw`
+state UNUSED
+state USED
+state RUNNABLE
+state RUNNING
+state SLEEPING
+state ZOMBIE
+
+[*] --> UNUSED
+UNUSED --> USED : allocate slot, trapframe, page table
+USED --> RUNNABLE : publish initialized process
+RUNNABLE --> RUNNING : scheduler selects while holding p->lock
+RUNNING --> RUNNABLE : yield or preemption
+RUNNING --> SLEEPING : register wait condition, then sched
+SLEEPING --> RUNNABLE : matching wakeup
+RUNNING --> ZOMBIE : exit records status, then sched
+ZOMBIE --> UNUSED : parent wait reaps resources
+
+note right of RUNNING
+  Exactly one CPU owns a RUNNING process.
+  Its per-CPU current pointer agrees.
+end note
+note bottom of SLEEPING
+  A wakeup protocol must couple
+  the predicate with the state transition.
+end note
+`} />
+
+Three invariants constrain every transition:
+
+1. **Exclusive execution:** a process is `RUNNING` on at most one CPU, and that CPU's current-process pointer names it.
+2. **Continuation ownership:** a non-running process has a saved kernel context sufficient for its next scheduler entry; a running process's live registers/stack are owned by its CPU.
+3. **Queue/state agreement:** every selection data structure agrees with the process state; a sleeping or zombie process is not selectable.
+
+xv6 protects process state and context with `p->lock`. The scheduler acquires that lock before observing `RUNNABLE`, changes the state to `RUNNING`, installs `c->proc`, and switches while the lock remains part of the handoff protocol. This unusual lock transfer prevents another CPU from selecting the same process during the interval when its execution ownership is moving.
+
+{/* Source tracking: State names, lock ownership, scheduler loop, and `sched()` preconditions are derived from xv6 rev5 `kernel/proc.h` and `kernel/proc.c`, Chapter 7 of the official rev5 book. */}
+
+### Application — the double-run interleaving
+
+Two CPUs scan the process table. Rewrite the following broken selection as a minimal interleaving that runs process $P$ twice:
+
+```c
+if (p->state == RUNNABLE) {
+    p->state = RUNNING;
+    switch_to(p);
+}
+```
+
+Then state the linearization point in a repaired design.
+
+<ExerciseSolution>
+CPU 0 reads `RUNNABLE`; CPU 1 reads `RUNNABLE`; CPU 0 writes `RUNNING`; CPU 1 writes `RUNNING`; both install and restore P's context. Concurrent stacks/registers then corrupt one logical continuation. In the repaired xv6-style design, acquisition of `p->lock` serializes the check-and-transition; the successful write `RUNNABLE → RUNNING` while holding the lock is the selection linearization point. An atomic state compare-and-swap could serialize that field, but it would still need a protocol for context and CPU-pointer ownership.
+</ExerciseSolution>
+
+## Why there are two save sets
+
+At user trap entry, arbitrary user code can have live values in every allocatable register. The kernel did not call that code under a C ABI that permits clobbering caller-saved registers. Entry assembly therefore saves the complete user register state needed for transparent resumption.
+
+At `swtch(old, new)`, the compiler emitted an ordinary function call. Under the RISC-V calling convention, `s0`–`s11` and `sp` must be preserved across calls; the return address determines where the suspended call resumes. Caller-saved temporaries and argument registers need not be saved by `swtch`: if the C caller needs one after the call, the compiler has already preserved it according to the ABI, often on the kernel stack. Xv6 rev5 stores:
+
+```text
+context = { ra, sp, s0, s1, ..., s11 }
+```
+
+`swtch` has no privileged instruction. It stores the old set through `a0`, loads the new set through `a1`, then executes `ret`. Because `ra` came from the new context, `ret` continues the other kernel thread.
+
+{/* Source tracking: The save set is read directly from xv6 rev5 `kernel/swtch.S` and `kernel/proc.h`. The preservation rationale is supported by the RISC-V psABI integer register convention. */}
+
+### Register audit — kill two plausible bugs
+
+For each mutation, predict the earliest reliable failure mechanism rather than a single output string.
+
+1. omit `s3` from both save and restore;
+2. save `ra` correctly but restore `sp` from the old context rather than the new.
+
+<ExerciseSolution>
+1. A suspended C function with a live value allocated to `s3` resumes with the next thread's value. The symptom depends on compiler allocation; force it with assembly or a function that keeps distinct sentinel values live across repeated yields. The failure is an ABI-preservation violation.
+2. Control returns to the new thread's `ra` while using the old thread's kernel stack. Returns, spills, and local accesses combine two call chains, quickly corrupting frames or returning through attacker/unrelated data. A test must give stacks distinct canaries and alternate contexts; merely checking that a switch occurred may pass once.
+</ExerciseSolution>
+
+## Worked trace: timer preemption of process A
+
+Assumptions: one hart; $A$ is in user mode; $B$ is `RUNNABLE`; the timer event is recognized; scheduling policy selects $B$.
+
+> **Example.** The trace crosses user state, A's kernel continuation, the per-CPU scheduler, and B's continuation; no single save record owns all four cuts.
+
+| Cut | Active execution | Durable user state | Durable kernel continuation | Process state |
+| ---: | --- | --- | --- | --- |
+| 0 | $A$ user registers/stack | none required yet | none; $A$ not in kernel | $A$ `RUNNING`, $B$ `RUNNABLE` |
+| 1 | $A$ trap-entry assembly | $A$ trapframe being filled | $A$ kernel stack selected | unchanged |
+| 2 | $A$ timer handler | complete $A$ trapframe | live on $A$ kernel stack | unchanged |
+| 3 | `yield()` | complete | handler call chain + `swtch` caller live | $A$: `RUNNING→RUNNABLE` under lock |
+| 4 | per-hart scheduler | complete | $A$ context now stores SP/RA/s-registers | $A$ runnable; CPU owns scheduler context |
+| 5 | $B$ kernel continuation | $B$ trapframe | $B$ context restored; $B$ kernel stack active | $B$: `RUNNABLE→RUNNING` |
+| 6 | $B$ user continuation | $B$ registers/stack restored | kernel continuation remains latent | $B$ running in user mode |
+
+There is no direct `swtch(A, B)` in xv6. $A$ switches to the per-CPU scheduler context; the scheduler later switches to $B$. This coroutine structure centralizes policy and maintains a scheduler stack not owned by either process.
+
+### Trace calculation — count transitions, not names
+
+Starting at cut 0, count (a) privilege transitions, (b) `swtch` calls, and (c) address-space changes needed before $B$ reaches user mode in xv6 rev5. State assumptions.
+
+<ExerciseSolution hint="A context switch and a privilege transition are independent events.">
+There is one U-to-S transition on A's timer trap and one S-to-U transition on B's eventual `sret`: two privilege transitions. There are two `swtch` executions: A-to-scheduler and scheduler-to-B. xv6's user trap entry switches from A's user page table to the kernel page table, and B's return switches from the kernel page table to B's user page table: two `satp` installations, with required fences in the trampoline. A path that resumes B already inside the kernel still needs only the first page-table switch until B returns. The count depends on the explicit starting/ending cuts and xv6's mapping design.
+</ExerciseSolution>
+
+## Worked trace: blocking read and wakeup
+
+Assumptions: $A$ calls a pipe read when the pipe is empty but still has a writer; $B$ later writes data.
+
+> **Example.** Blocking preserves a suspended kernel continuation, while wakeup changes eligibility rather than transferring execution immediately.
+
+1. $A$ holds `pi->lock` and observes `nread == nwrite && writeopen` in rev5 `piperead`.
+2. $A$ calls the combined `sleep(&pi->nread, &pi->lock)`. Inside `sleep(chan, lk)`, it acquires A's `p->lock` **before** releasing `pi->lock`, then records `chan` and changes `RUNNING→SLEEPING`. A writer cannot complete a matching `wakeup` through the gap: after acquiring `pi->lock`, it must also acquire A's `p->lock` before changing A's state.
+3. `sleep` calls `sched()` while holding A's `p->lock`. The user trapframe remains unchanged; the saved kernel context now resumes after that `sched()` call.
+4. $B$ acquires `pi->lock`, writes bytes, and calls `wakeup(&pi->nread)`. `wakeup` acquires A's `p->lock`, changes `SLEEPING→RUNNABLE`, and releases it. Wakeup establishes eligibility; it does not run A.
+5. A scheduler eventually selects $A$. `swtch` returns inside `sleep`; A clears `chan`, releases its `p->lock`, reacquires `pi->lock`, returns to `piperead`, and reevaluates the `while` predicate.
+6. The read copies available bytes through rev5's checked `copyout`, releases the pipe lock, and the trap-return path resumes A after the system call.
+
+The context switch preserves control; the predicate protocol preserves meaning. A perfect register save cannot repair a lost wakeup.
+
+{/* Source tracking: This trace targets xv6 rev5 commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`. `kernel/proc.c` lines 537–584 define combined `sleep(void *chan, struct spinlock *lk)` and `wakeup(void *chan)`; `kernel/pipe.c` lines 105–129 supply the empty-pipe predicate, channel, and checked copy. Pipe EOF/data policy is also supported by POSIX `read()`. */}
+
+### Transfer — wakeup is not execution
+
+Why is changing `SLEEPING → RUNNING` in `wakeup()` unsafe on a multicore kernel, even if an idle CPU exists?
+
+<ExerciseSolution>
+`RUNNING` asserts ownership by one CPU and requires a restored live context and consistent per-CPU current pointer. `wakeup()` only establishes eligibility; it has not selected a CPU, acquired a scheduler context, or performed a switch. The correct transition is to `RUNNABLE`, after which the scheduler's serialized selection establishes execution ownership. Direct dispatch is possible in another design, but it must perform the full ownership protocol rather than relabel state.
+</ExerciseSolution>
+
+## Boundary cases that expose false equivalences
+
+| Claim | Counterexample | Correct distinction |
+| --- | --- | --- |
+| “Every system call context-switches.” | A fast `getpid` can enter and return to the same thread without scheduling another. | mode switch is not scheduling switch |
+| “Every context switch changes processes.” | Two threads in one process share its address space/resources. | thread switch need not replace process state |
+| “Every process switch flushes all translation state.” | Tagged TLBs/ASIDs can retain entries; kernel designs differ. | logical address-space switch is not necessarily a full hardware flush |
+| “A blocked thread consumes no resources.” | It retains stacks, descriptors, mappings, and wait metadata. | not running is not nonexistent |
+| “A zombie is still schedulable because it has a process slot.” | A zombie retains exit status for its parent but has no executable continuation. | lifetime state is not eligibility |
+
+> **Warning.** A mode switch, context switch, process switch, and address-space switch can coincide, but none logically implies all the others.
+
+### Counterexample — copying a process structure
+
+A kernel implements `fork` by byte-copying its entire process structure, including the spinlock, kernel stack pointer, and scheduler context. Explain at least three independent failures.
+
+<ExerciseSolution>
+The copied lock may appear held by a nonexistent owner or duplicate internal wait state. The kernel-stack pointer aliases the parent's stack, so parent and child corrupt one call chain. The scheduler context resumes at the parent's suspended kernel PC with parent-specific stack/register assumptions rather than a controlled child-first-return path. Descriptor objects also need reference-counted duplication rather than arbitrary pointer ownership. Correct creation copies selected semantics and constructs fresh synchronization/execution state.
+</ExerciseSolution>
+
+> **Remark.** Any architectural extension that introduces vector registers, floating-point units, or inter-core thread migration must explicitly expand the kernel continuation ownership table before altering the assembly switch sequence.
+
+<ExerciseSet>
+
+<Exercise id="ex-ctx-thread-vs-process-state" type="describe" level="application" title="Classifying Thread-Private Continuations vs Process-Shared Resources">
+
+In a multi-threaded Unix environment, classify which architectural and operating-system resources must be swapped during a thread switch within the same process versus a full process context switch across distinct address spaces.
+
+<ExerciseSolution hint="Determine which registers and memory structures define an execution continuation versus an address space.">
+
+During a thread switch within the same process, the kernel swaps only thread-private execution state: the kernel stack pointer (`sp`), user stack pointer, architectural CPU register file (callee-saved registers in cooperative switches, or full trapframe in preemptive switches), thread-local storage base pointers, and thread-specific signal masks. The virtual address space (`satp` root page table), open file descriptor table, current working directory, and shared memory segments remain unchanged. During a full process context switch, the kernel additionally reloads `satp` (flushing or tagging TLBs with ASIDs), switches process credential contexts, and points to a distinct descriptor table.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-trapframe-vs-swtch-abi" type="verify" level="application" title="C ABI Invariants in Context Switching vs Asynchronous Traps">
+
+Explain why the kernel `swtch(&old->context, &new->context)` assembly routine on RISC-V saves only callee-saved registers (`ra`, `sp`, `s0..s11`), whereas the user-to-kernel `trapframe` must save all 31 general-purpose registers.
+
+<ExerciseSolution hint="Contrast the caller/callee contract of a standard C function call with an arbitrary asynchronous interrupt.">
+
+The `swtch()` routine is invoked as a standard C function call by the kernel scheduler. According to the RISC-V calling convention (ABI), the compiler automatically generates code to spill any caller-saved temporary registers (`t0..t6`, `a0..a7`) that contain live values across the call onto the thread kernel stack. Thus, `swtch()` only needs to preserve callee-saved registers to restore the C execution context. In contrast, an asynchronous user trap (such as a timer interrupt) can strike at any arbitrary instruction boundary where any or all of the 31 user registers hold live values; the kernel has no compiler guarantees and must save every user register to preserve transparency.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-process-state-double-run" type="formalise" level="transfer" title="Multicore Mutual Exclusion and Double-Execution Prevention">
+
+Consider a multicore system where two idle CPU cores run `scheduler()` loops concurrently. State the exact locking invariant and state transition linearization point that prevents both cores from selecting the same `RUNNABLE` process and executing it simultaneously on two CPUs.
+
+<ExerciseSolution hint="Analyze the atomic state check and lock acquisition in xv6 proc.c scheduler loop.">
+
+The invariant is: No process struct can have state `RUNNING` on more than one CPU, and a thread kernel stack can be active on at most one CPU core simultaneously. To linearize selection, the scheduler on each CPU acquires the candidate process lock (`acquire(&p->lock)`), checks `if (p->state == RUNNABLE)`, updates `p->state = RUNNING`, and calls `swtch()` while still holding `p->lock`. The newly scheduled process releases `p->lock` only after running on the new CPU core. Any competing CPU scheduler attempting to acquire `p->lock` spins until the state transition to `RUNNING` is complete, whereupon it observes `p->state != RUNNABLE` and skips it.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-pipe-read-wakeup-trace" type="describe" level="transfer" title="Execution Trace of Blocking Pipe Read and Waiter Wakeup">
+
+Trace the process state transitions, queue manipulations, and context switches when Process $A$ blocks reading an empty pipe, Process $B$ writes data to the pipe, and Process $A$ is subsequently scheduled and completes its read.
+
+<ExerciseSolution hint="Trace the lock handoff between pipe lock and process lock during sleep() and wakeup().">
+
+1. Process $A$ acquires the pipe lock, discovers the pipe buffer is empty, and calls `sleep(&pipe->nread, &pipe->lock)`.
+2. Inside `sleep()`, $A$ acquires `a->lock`, releases `pipe->lock`, updates `a->state = SLEEPING`, records the channel `a->chan = &pipe->nread`, and calls `sched()` to switch context to the per-CPU scheduler.
+3. The CPU scheduler releases `a->lock` and schedules another process.
+4. Process $B$ runs, acquires `pipe->lock`, copies bytes into the pipe buffer, and calls `wakeup(&pipe->nread)`.
+5. `wakeup()` scans the process table, acquires `p->lock` for each sleeping process, and upon matching `p->chan == &pipe->nread`, updates `p->state = RUNNABLE` and releases `p->lock`.
+6. Later, an idle CPU scheduler acquires `a->lock`, observes `a->state == RUNNABLE`, sets `a->state = RUNNING`, and switches context to $A$.
+7. $A$ resumes inside `sleep()`, re-acquires `pipe->lock`, releases `a->lock`, reads the newly written bytes from the buffer, releases `pipe->lock`, and returns to user space.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-fork-structure-aliasing" type="construct" level="synthesis" title="Failure Modes of Direct Struct Byte-Copying in Fork Implementation">
+
+A junior operating systems engineer attempts to optimize `fork()` by executing a raw memory copy (`memcpy(child_proc, parent_proc, sizeof(struct proc))`). Detail three catastrophic failure modes that manifest during execution.
+
+<ExerciseSolution hint="Identify synchronization objects, stack pointers, and kernel continuations that cannot be aliased.">
+
+1. Lock corruption and deadlock: The copied spinlock (`child->lock`) inherits the locked/unlocked state and holder ID of the parent. If copied while held or contended, the child lock is poisoned, leading to deadlocks or assertion panics in the scheduler.
+2. Kernel stack aliasing: The child struct inherits the parent kernel stack pointer (`sp`). When the child runs, its push and pop operations overwrite active stack frames of the parent, resulting in immediate kernel call chain corruption.
+3. Scheduler continuation aliasing: The child inherits the parent scheduler context (`context.ra` and `context.sp`). Rather than returning through the dedicated `forkret` entry point that prepares a fresh user trapframe return, the child resumes at the parent suspended kernel continuation with parent-specific local variables.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-ctx-multicore-context-switch-audit" type="construct" level="synthesis" title="Designing Context Switching for Multi-Threaded Processes with Migration">
+
+Design the context switch protocol for a multi-threaded kernel supporting multiple kernel threads per address space and core migration. Detail when `satp` must be reloaded, how thread-local register state is managed, and how migration across cores preserves cache and TLB consistency.
+
+<ExerciseSolution hint="Check whether incoming and outgoing threads share the same page table root to optimize MMU reloads.">
+
+1. Address space check: The context switch routine inspects `prev->proc == next->proc`. If both threads belong to the same process, reloading `satp` and issuing `sfence.vma` is bypassed, eliminating unnecessary TLB invalidation overhead. If switching across distinct processes, `satp` is updated to `next->proc->pagetable` and an address-space-tagged TLB sync is executed.
+2. Thread-local state: The user thread-pointer register (`tp` or thread-local base CSR) is restored from `next->trapframe->tp`.
+3. Migration safety: If a thread migrates from CPU $i$ to CPU $j$, CPU $j$ acquires `thread->lock` before switching. The release fence in the lock ensures all stores from CPU $i$ are visible to CPU $j$. Lazy floating-point/vector registers must be explicitly saved from CPU $i$ hardware registers before allowing CPU $j$ to activate the thread.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+1. MIT PDOS, [*xv6: a simple, Unix-like teaching operating system*](https://pdos.csail.mit.edu/6.1810/2025/xv6/book-riscv-rev5.pdf), Chapter 7.
+2. MIT PDOS, xv6 rev5 [`kernel/proc.h`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/proc.h), [`kernel/proc.c` combined sleep/wakeup path](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/proc.c#L537-L584), [`kernel/pipe.c` read path](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/pipe.c#L105-L129), [`kernel/swtch.S`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/swtch.S), and [`kernel/trap.c`](https://github.com/mit-pdos/xv6-riscv/blob/7d7adbb1b0acbd67c9766a20d0f9900fef2789fa/kernel/trap.c).
+3. RISC-V International, [RISC-V ABIs Specification](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/), integer register convention (CC BY 4.0).
+4. The Open Group, [POSIX.1-2024 Base Definitions](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap03.html), definition of a live thread.
+5. The Open Group, [POSIX.1-2024 `read()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html), empty-pipe blocking and EOF behavior.

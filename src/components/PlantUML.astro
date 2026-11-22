@@ -1,0 +1,238 @@
+---
+import plantumlEncoder from 'plantuml-encoder';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
+import { highlightCode } from './SyntaxHighlighter';
+import { findPlantUmlDiagnostics } from '../../scripts/plantuml-diagnostics.mjs';
+
+interface Props {
+  code: string;
+  theme?: string;
+  bookOnly?: boolean;
+}
+
+const { code, theme, bookOnly = false } = Astro.props;
+
+// PlantUML does not accept literal line breaks inside quoted labels. MDX
+// template literals and child content can turn author-facing \n notation into
+// real newlines, so normalize those breaks at the renderer boundary.
+const escapeQuotedLineBreaks = (source: string) => {
+  let result = '';
+  let quoted = false;
+  let escaped = false;
+
+  for (const char of source) {
+    if (char === '"' && !escaped) quoted = !quoted;
+    if (char === '\n' && quoted) {
+      result += '\\n';
+    } else {
+      result += char;
+    }
+    escaped = char === '\\' && !escaped;
+    if (char !== '\\') escaped = false;
+  }
+
+  return result;
+};
+
+// Add theme custom by default if not specified
+let processedCode = escapeQuotedLineBreaks(code.trim())
+    .replace(/^@startuml\s*/i, '')
+    .replace(/\s*@enduml$/i, '');
+
+const highlightedCode = highlightCode(processedCode);
+
+// Create a cache directory if it doesn't exist
+const CACHE_DIR = path.resolve('./src/puml-cache');
+if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+const ERROR_LOG = path.resolve('./puml-errors.log');
+const resolvePlantUmlJar = () => {
+  if (process.env.LIBREUNI_PLANTUML_JAR) {
+    return process.env.LIBREUNI_PLANTUML_JAR;
+  }
+  const candidatePaths = [
+    path.resolve('./tools/plantuml.jar'),
+    path.resolve('./.cache/plantuml/plantuml.jar'),
+    '/usr/share/plantuml/plantuml.jar',
+  ];
+  return candidatePaths.find((candidate) => fs.existsSync(candidate)) || path.resolve('./tools/plantuml.jar');
+};
+
+const plantUmlJar = resolvePlantUmlJar();
+
+const hash = crypto.createHash('md5').update(processedCode + (theme || '')).digest('hex');
+const idPrefix = `puml-${hash.slice(0, 8)}-`;
+const cacheFile = path.join(CACHE_DIR, `${hash}.svg`);
+
+const normalizeSvg = (svg: string, prefix: string) => {
+  // PlantUML uses explicit white fills on several element types. Keep the
+  // diagram background transparent so dark-mode inversion cannot turn some
+  // otherwise identical nodes into opaque black boxes.
+  let normalized = svg.replace(/(\sfill\s*=\s*["'])(?:#ffffff|white)(["'])/gi, '$1transparent$2');
+
+  // Idempotently scope SVG IDs and internal references per diagram hash so
+  // multiple diagrams on the same page never emit duplicate DOM IDs.
+  const prefixId = (id: string) => (id.startsWith(prefix) ? id : `${prefix}${id}`);
+  normalized = normalized
+    .replace(/\bid=(["'])([^"']+)\1/g, (_m, q, id) => `id=${q}${prefixId(id)}${q}`)
+    .replace(/\burl\(#([^)]+)\)/g, (_m, id) => `url(#${prefixId(id)})`)
+    .replace(/\b((?:xlink:)?href=)(["'])#([^"']+)\2/g, (_m, attr, q, id) => `${attr}${q}#${prefixId(id)}${q}`);
+
+  // Strip lengthAdjust and textLength so browsers render SVG text with standard kerning
+  // instead of stretching/compressing individual glyphs into artificial gaps.
+  normalized = normalized.replace(/\s*(?:lengthAdjust|textLength)\s*=\s*["'][^"']*["']/gi, '');
+
+  if (/\spreserveAspectRatio\s*=/.test(normalized)) {
+    normalized = normalized.replace(/\spreserveAspectRatio\s*=\s*["'][^"']*["']/i, ' preserveAspectRatio="xMidYMid meet"');
+  } else {
+    normalized = normalized.replace(/<svg\b/i, '<svg preserveAspectRatio="xMidYMid meet"');
+  }
+
+  return normalized;
+};
+
+const skinParams = `
+ skinparam backgroundColor transparent
+ skinparam shadowing false
+ skinparam DefaultFontName "Inter", "system-ui", sans-serif
+ skinparam DefaultFontSize 12
+ <style>
+ root {
+   Padding 8
+ }
+ </style>
+ skinparam RoundCorner 12
+ skinparam MaxMessageSize 150
+ skinparam wrapWidth 200
+ skinparam nodesep 50
+ skinparam ranksep 50
+`;
+
+let finalCode = `@startuml\n`;
+if (!processedCode.includes('!theme') && theme !== 'none') {
+    finalCode += `!theme plain\n`;
+}
+finalCode += `${skinParams}\n${processedCode}\n@enduml`;
+
+const encoded = plantumlEncoder.encode(finalCode);
+const primaryUrl = `https://www.plantuml.com/plantuml/svg/${encoded}`;
+const secondaryUrl = `https://plantuml-service.fly.dev/svg/${encoded}`; 
+
+let svgContent = '';
+
+// Try to load from cache first
+if (fs.existsSync(cacheFile)) {
+  svgContent = normalizeSvg(fs.readFileSync(cacheFile, 'utf-8'), idPrefix);
+} else {
+  let remoteSucceeded = false;
+  // Remote rendering is opt-in. This keeps builds local, deterministic, and
+  // free of unexpected network activity or desktop integrations.
+  if (process.env.LIBREUNI_PLANTUML_REMOTE === '1') try {
+    // Use global fetch if available; otherwise skip remote attempt
+    let res;
+    if (typeof fetch === 'function') {
+      res = await fetch(primaryUrl);
+    } else {
+      throw new Error('global fetch unavailable');
+    }
+
+    if (res.ok) {
+      const txt = await res.text();
+      if (txt && txt.trim().startsWith('<svg')) {
+        svgContent = normalizeSvg(txt, idPrefix);
+        fs.writeFileSync(cacheFile, svgContent);
+        console.log(`[PlantUML] Remote cached: ${hash.substring(0, 8)}`);
+        remoteSucceeded = true;
+      } else {
+        throw new Error('Remote returned non-SVG');
+      }
+    } else {
+      throw new Error(`Remote HTTP ${res.status}`);
+    }
+  } catch (remoteErr: any) {
+    console.log(`[PlantUML] Remote render failed for ${hash.substring(0,8)}: ${remoteErr.message}. Falling back to local.`);
+  }
+
+  if (!remoteSucceeded) {
+    console.log(`[PlantUML] Generating diagram locally: ${hash.substring(0, 8)}...`);
+    try {
+      if (!fs.existsSync(plantUmlJar)) {
+        throw new Error(
+          `PlantUML jar not found at "${plantUmlJar}". Set LIBREUNI_PLANTUML_JAR or run "node tools/download-plantuml.mjs"`
+        );
+      }
+      // Build-time rendering must stay headless: never launch a desktop
+      // PlantUML viewer while an agent or CI job is generating lessons.
+      svgContent = execSync(`java -Djava.awt.headless=true -jar ${plantUmlJar} -pipe -tsvg`, {
+      input: finalCode,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024
+      });
+          
+      // Clean up background, preserve aspect ratio, and save to cache.
+      svgContent = normalizeSvg(svgContent, idPrefix);
+      fs.writeFileSync(cacheFile, svgContent);
+      console.log(`[PlantUML] Cached: ${hash.substring(0, 8)}`);
+
+    } catch (e: any) {
+      console.error(`[PlantUML] ERROR rendering diagram ${hash.substring(0, 8)} locally: ${e.message}`);
+          
+      const pageUrl = Astro.url.pathname;
+      const errorMsg = `\n[${new Date().toISOString()}] PAGE: ${pageUrl}\nHASH: ${hash}\nERROR: ${e.message}\nCODE:\n@startuml\n${processedCode}\n@enduml\n----------------------------------------\n`;
+      fs.appendFileSync(ERROR_LOG, errorMsg);
+
+      svgContent = `
+      <div class="w-full text-center py-10 bg-rose-50/50 dark:bg-rose-900/10 rounded-xl border border-rose-200 dark:border-rose-900/30">
+        <div class="inline-flex p-3 bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-400 rounded-xl mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <h4 class="font-black text-rose-900 dark:text-rose-100 uppercase tracking-tighter text-sm mb-1">Diagram Rendering Error</h4>
+        <p class="text-[10px] font-bold text-rose-400/80 uppercase tracking-widest leading-relaxed px-4">The PlantUML generation failed (remote + local).</p>
+                
+        <div class="mt-8 mx-auto max-w-[90%] text-left">
+          <div class="flex items-center justify-between mb-2 px-4">
+            <div class="text-[9px] font-black text-light-muted dark:text-dark-muted uppercase tracking-[0.2em] opacity-50">Source Definition</div>
+            <a href="${primaryUrl.replace('/svg/', '/uml/')}" target="_blank" class="text-[9px] font-black text-primary uppercase tracking-[0.2em] hover:underline">Open in Editor ↗</a>
+          </div>
+          <pre class="bg-white/50 dark:bg-black/20 p-6 rounded-xl border border-rose-100 dark:border-rose-900/20 font-mono text-xs overflow-x-auto text-light-text dark:text-dark-text opacity-70">@startuml\n${processedCode}\n@enduml</pre>
+        </div>
+      </div>
+      `;
+      // We purposefully DO NOT cache the error content so it retries and logs again on next build
+    }
+  }
+}
+
+const diagnostics = findPlantUmlDiagnostics(svgContent);
+if (diagnostics.length) {
+  throw new Error(
+    `[PlantUML] ${Astro.url.pathname} diagram ${hash.substring(0, 8)} rendered with diagnostics:\n${diagnostics.join('\n')}`,
+  );
+}
+---
+
+<div class:list={['diagram-frame lu-card-tier3 my-8 flex flex-col items-center p-4 md:p-6 transition-colors w-full max-w-5xl mx-auto', { 'book-only-diagram': bookOnly, 'book-only': bookOnly }]} data-diagram-kind="PlantUML">
+  <div class="diagram-toolbar">
+    <div class="diagram-zoom-controls" role="group" aria-label="Diagram zoom controls">
+      <button type="button" class="diagram-zoom-btn" data-diagram-action="zoom-out" aria-label="Zoom out" title="Zoom out (Ctrl + −)">−</button>
+      <button type="button" class="diagram-zoom-reset" data-diagram-action="reset" aria-label="Reset zoom" title="Reset view (Ctrl + 0)">100%</button>
+      <button type="button" class="diagram-zoom-btn" data-diagram-action="zoom-in" aria-label="Zoom in" title="Zoom in (Ctrl + +)">+</button>
+    </div>
+    <details class="diagram-source group/source">
+      <summary class="diagram-source-summary" aria-label="Show PlantUML source">Code</summary>
+      <div class="diagram-source-code group/code">
+         <button type="button" class="diagram-copy-button absolute top-3 right-3 px-2 py-1 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-[10px] font-bold uppercase tracking-wider opacity-0 group-hover/code:opacity-100 transition-opacity z-10 hover:bg-slate-200 dark:hover:bg-slate-700 shadow-sm text-slate-700 dark:text-slate-300" aria-label="Copy code" data-code={processedCode}>Copy</button>
+         <pre class="m-0 p-4 max-h-[min(28rem,60vh)] overflow-auto text-[0.78rem] leading-[1.55] rounded-[1rem]"><code set:html={highlightedCode}></code></pre>
+      </div>
+    </details>
+  </div>
+  <div class="diagram-render w-full flex justify-center rounded-lg bg-white p-3 dark:bg-slate-100">
+    <Fragment set:html={svgContent} />
+  </div>
+  <div class="diagram-zoom-hint" aria-hidden="true">Ctrl + scroll to zoom</div>
+</div>

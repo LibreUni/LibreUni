@@ -1,0 +1,243 @@
+---
+title: Concurrency Control
+course: database-systems
+description: Compare the protocols that turn concurrent reads and writes into an admissible history.
+prerequisites:
+  - Transaction histories, conflict serializability, and application invariants
+  - Directed graphs, timestamps, and basic set reasoning
+  - SQL update predicates and the difference between a row and a predicate
+outcomes:
+  - Trace strict two-phase locking, including lock compatibility, waits-for edges, and deadlock resolution.
+  - Compare locking, timestamp ordering, optimistic validation, and MVCC by their validation point and failure mode.
+  - Choose a concurrency-control boundary for a row, range, or aggregate invariant and predict its contention cost.
+  - Design a retry path that does not duplicate non-transactional side effects.
+omissions:
+  - Lock-free index algorithms, full serializable-snapshot-isolation proofs, and vendor lock-manager tuning are outside scope.
+  - Distributed concurrency protocols and consensus are treated in distributed-data work rather than as local lock-manager variants.
+estimatedMinutes: 480
+assessment: Given an unseen schedule, lock table, or read/write-set trace, identify the protocol's decision point, prove or refute the intended serial order, and propose a bounded retry or deadlock repair.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
+
+
+Two customers buy the last unit at the same instant. Each transaction reads `available = 1`, computes `1 - 1 = 0`, and writes `0`. Both commits succeed, the stock never becomes negative, and two units are sold from one. No individual statement is wrong; the interleaving is.
+
+| Step | T1 | T2 | Last written `available` (not necessarily committed) |
+| ---: | --- | --- | ---: |
+| 1 | read 1 | | 1 |
+| 2 | | read 1 | 1 |
+| 3 | write 0 | | 0 |
+| 4 | | write 0 | 0 |
+| 5 | commit | commit | 0 |
+
+The lost update is the motivating problem. Isolation names an allowed history; concurrency control is the mechanism that admits or rejects individual operations on the path to that history. A stock row can be protected with a lock, a version check, a timestamp rule, or serializable dependency tracking. Those mechanisms fail differently, so a system design must choose an error it can handle rather than merely demand “no races.”
+
+This schedule also shows why the repair must match the invariant. A conditional update `SET available = available - 1 WHERE available >= 1` prevents the negative count without an explicit read, while a plain read-then-write needs a lock or version check that spans both steps. The protocol is chosen from the invariant, not from a preference for one lock mode.
+
+<Quiz client:load
+  title="Why two commits are not enough"
+  question="Both transactions in the lost-update schedule commit successfully without error. Evaluate which assertions regarding this concurrent execution are correct:"
+  options={[
+    {
+      id: "claim-serial-violation",
+      text: "The concurrent execution sold two units from one in stock, producing a history that is not equivalent to any serial ordering.",
+      isCorrect: true,
+      feedback: "Correct. In any serial execution, the second transaction would observe available = 0 and fail to complete the sale."
+    },
+    {
+      id: "claim-local-vs-global",
+      text: "Local transaction commit success under weak isolation does not guarantee preservation of global business invariants.",
+      isCorrect: true,
+      feedback: "Correct. Read Committed permits lost updates because each statement reads a fresh snapshot without locking across statements."
+    },
+    {
+      id: "claim-retry-cure",
+      text: "Automatic retries on application commit errors would have naturally prevented this lost update anomaly without code changes.",
+      isCorrect: false,
+      feedback: "Incorrect. Because neither transaction encountered a conflict or error, no commit failure occurred to trigger a retry."
+    },
+    {
+      id: "claim-performance-only",
+      text: "This lost update is purely a transient performance degradation caused by row lock contention rather than an integrity failure.",
+      isCorrect: false,
+      feedback: "Incorrect. The anomaly is a permanent semantic integrity failure where committed stock disagrees with actual goods sold."
+    }
+  ]}
+  explanation="Each transaction's local operations were valid in isolation, but their interleaving produced a non-serializable history. Concurrency control must serialize operations, reject conflicting updates, or require atomic conditional expressions."
+/>
+
+{/* Source tracking: Locking, waits-for graphs, MVCC, and transaction-control trade-offs are synthesized from PostgreSQL's explicit-locking and transaction-isolation documentation and CMU 15-445/645 materials. Protocol traces and examples are original. */}
+
+## Strict two-phase locking blocks unsafe orderings
+
+> **Definition.** In two-phase locking, a transaction acquires locks during a growing phase and releases them only during a shrinking phase. A **strict** variant keeps write locks until commit or abort, preventing other transactions from reading or overwriting uncommitted writes.
+
+| Requested lock | Existing shared | Existing exclusive |
+| --- | --- | --- |
+| shared | compatible | wait |
+| exclusive | wait | wait |
+
+<PlantUML code={`@startuml
+participant "T1" as T1
+participant "lock manager" as L
+participant "T2" as T2
+T1 -> L : X(A) granted
+T2 -> L : S(A) waits
+T1 -> L : write A; COMMIT; release A
+L -> T2 : S(A) granted
+note right of L
+T2 cannot read T1's
+uncommitted value.
+end note
+@enduml`} />
+
+Strictness is a recovery aid as well as a serializability tool: no committed transaction has observed a value that must later be undone. It can still reduce concurrency when a long transaction holds a hot row. A carefully bounded critical transaction is often more important than choosing an exotic lock mode.
+
+### Application — lock the fact, not the screen
+
+A reservation flow reads inventory, calls a remote payment service for 10 seconds, then decrements inventory. Should it hold an exclusive database lock during the call?
+
+<ExerciseSolution hint="A database lock protects a local invariant; remote latency makes the protected interval unbounded.">
+No. Holding the lock causes a slow external system to serialize unrelated reservations and can create deadlocks. First record an idempotent payment intent or outbox state, perform the remote call outside the inventory-critical transaction, then execute a short conditional reservation transaction. The repair is an explicit state machine, not a longer lock.
+
+For one inventory row, the critical statement can be:
+
+```sql
+UPDATE inventory
+SET available = available - :quantity
+WHERE sku = :sku AND available >= :quantity;
+```
+
+The caller must inspect the affected-row count. `1` commits the reservation; `0` means the attempt lost the race or the request is no longer satisfiable and must not be treated as success. A serialization/deadlock error may be retried with the same idempotency key, bounded attempts, and backoff; a committed success must be returned from the idempotency record rather than applied twice. The predicate is necessary but not, by itself, evidence that an aggregate invariant spanning several stock rows is protected.
+</ExerciseSolution>
+
+## Deadlock is a graph, not “a slow query”
+
+> **Invariant.** A waits-for graph has an edge $T_i \rightarrow T_j$ when $T_i$ waits for a lock held by $T_j$. A directed cycle means no member of that cycle can proceed without an abort or external intervention.
+
+<PlantUML code={`@startuml
+rectangle "T1\nholds X(order 7)\nwaits X(stock 9)" as T1
+rectangle "T2\nholds X(stock 9)\nwaits X(order 7)" as T2
+T1 --> T2 : waits for stock 9
+T2 --> T1 : waits for order 7
+note bottom of T2
+Cycle: select a victim,
+abort it, release its locks,
+then retry safely.
+end note
+@enduml`} />
+
+Detection periodically finds cycles and aborts a victim. Prevention imposes an ordering, such as always locking inventory before orders. Timeouts are simpler but can abort work that would have completed and may miss an operational root cause. Victim selection weighs age, work done, locks held, and rollback cost; it must never assume the transaction's external side effects can be undone by database rollback.
+
+### Prediction — break the cycle
+
+T1 holds **warehouse/5** and waits for **sku/9**; T2 holds **sku/9** and waits for **warehouse/5**. Give one prevention and one detection response.
+
+<ExerciseSolution>
+Prevention: define and enforce a global lock order, for example **(warehouse_id, sku)** sorted lexicographically, so both transactions request warehouse 5 before sku 9. Detection: record T1 → T2 and T2 → T1, abort a chosen victim, roll back its database work, then retry only if its operation uses an idempotency key or has no exposed external effect. Retrying without that boundary can duplicate messages or charges.
+</ExerciseSolution>
+
+## Protocols move the conflict check to different times
+
+> **Worked example.** A flash-sale counter has frequent writes to one row; an analytics dashboard reads millions of rows and rarely writes. One protocol need not optimize both workloads.
+
+| Protocol | When it rejects/confirms conflict | Strength | Cost / failure mode |
+| --- | --- | --- | --- |
+| strict 2PL | lock request | clear exclusion and recoverable writes | waits and deadlocks |
+| timestamp ordering | operation violates timestamp order | no deadlocks | restarts under hot contention |
+| optimistic control | commit-time read/write-set validation | readers run freely when conflicts are rare | expensive wasted work on conflict |
+| MVCC | version visibility plus write/serializability validation | readers often avoid writer blocking | old-version retention; write skew unless stronger validation |
+
+Timestamp ordering and optimistic control do not make conflicts disappear: they shift them into aborts. MVCC makes a snapshot readable, not necessarily serializable. A high-contention counter may prefer a single conditional update or a sharded/aggregated representation over a broad transaction that repeatedly aborts.
+
+**Worked example — snapshot isolation permits write skew.** Two doctors are on call, and the invariant is “at least one doctor remains on call.” T1 reads the on-call set $\{\text{Alice},\text{Bob}\}$ and removes Alice; T2 concurrently reads the same set and removes Bob. Under snapshot isolation each transaction reads a consistent snapshot and writes a different row, so neither write conflicts with the other. Both commit, and the invariant is false. The conflict is on the predicate “the on-call set has size at least two,” not on a single row. Repairs include serializable isolation with predicate or summary-row protection, a constraint enforced by a coordinated operation, or a design that makes the aggregate a versioned object. Retrying one transaction after commit is insufficient because neither transaction observed a write conflict.
+
+> **Remark (Why unconditional retry on serialization failure is unsafe).** The database transaction can be retried only if its inputs are still valid and it has not already produced an irreversible effect. Put an idempotency key in the committed database state, defer messages through an outbox, and make the consumer deduplicate. A retry loop without a limit, backoff, or idempotency boundary turns contention into duplication.
+
+## Granularity must match the invariant
+
+> **Warning.** A row lock is not a predicate lock. Locking the rows already returned by an on-call predicate may not prevent another transaction from inserting or changing a row that changes the predicate's truth.
+
+| Invariant | Suitable shared boundary | Common false repair |
+| --- | --- | --- |
+| one seat never sold twice | one inventory/seat row plus conditional update | read value in application, then unconditional write |
+| no duplicate username | unique constraint | rely on an application mutex |
+| at least one doctor on call | serializable predicate protection or summary row | lock only the doctor being changed |
+| total monthly credit ≤ limit | tenant-month summary row or serializable validation | lock each newly inserted invoice |
+
+### Transfer — predict contention before implementing
+
+A service records one million page views per minute and must display an approximate dashboard every minute; it also records money transfers requiring exact balances. Which path may tolerate commutative or delayed aggregation, and which cannot?
+
+<ExerciseSolution hint="Separate the semantic requirement from the shared data shape.">
+Page-view counters can be sharded, buffered, or eventually aggregated when a bounded delay/error is acceptable. Money transfers require an exact invariant at commit and need a transaction/constraint boundary that prevents overdraft. Applying exact locking to every page view wastes concurrency; applying approximate aggregation to balances changes the financial contract.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-cc-2pl-deadlock-detection" type="verify" level="application" title="Strict 2PL Deadlock Precedence Cycle Detection">
+
+Consider two transactions under strict two-phase locking: $T_1$ holds an exclusive lock on row $A$ and requests an exclusive lock on row $B$; $T_2$ holds an exclusive lock on row $B$ and requests an exclusive lock on row $A$. Construct the wait-for graph, verify why this state is a deadlock, and describe how the engine resolves it.
+
+<ExerciseSolution hint="Draw directed edges from the waiting transaction to the lock-holding transaction.">
+
+The wait-for graph contains directed edges: $T_1 \to T_2$ (since $T_1$ waits for $B$ held by $T_2$) and $T_2 \to T_1$ (since $T_2$ waits for $A$ held by $T_1$). The resulting cycle $T_1 \to T_2 \to T_1$ represents a circular wait where neither transaction can progress. The engine's deadlock detector identifies the cycle and aborts one transaction (the victim), rolling back its operations and releasing its locks so the other can proceed.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cc-lock-granularity-limits" type="describe" level="recall" title="Row-Level Lock Inadequacy for Predicate Constraints">
+
+Explain why executing `SELECT * FROM Doctor WHERE on_call = true FOR UPDATE;` in PostgreSQL fails to protect against phantom inserts that violate predicate-level business invariants.
+
+<ExerciseSolution hint="Row locks attach only to currently existing tuples returned by the query.">
+
+`SELECT ... FOR UPDATE` acquires row-level locks strictly on existing physical tuples matching the predicate at query execution time. It cannot lock nonexistent rows. A concurrent transaction can insert a brand new `Doctor` record that satisfies the predicate, committing without waiting on existing row locks. Preventing phantom violations requires true predicate locks (SSI), table-level locking, or explicit locks on a parent anchor row.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cc-conditional-update-design" type="construct" level="application" title="Atomic Conditional Write for Inventory Reservation">
+
+Write an atomic SQL update statement that decrements inventory item 42 by 1 while strictly guaranteeing that available stock never drops below zero, without requiring an explicit application-side lock or prior select.
+
+<ExerciseSolution hint="Include the non-negative invariant directly in the WHERE clause and inspect row count.">
+
+```sql
+UPDATE inventory
+SET available = available - 1
+WHERE item_id = 42
+  AND available >= 1;
+```
+If the statement affects 1 row, the reservation succeeded atomically within single-statement execution. If it affects 0 rows, stock was exhausted, and the application safely rejects the purchase without race conditions.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cc-contention-sharding-transfer" type="generalise" level="transfer" title="Workload-Aware Concurrency Control: Exact vs. Commutative Aggregation">
+
+A social platform handles 100,000 post like increments per second and 500 bank balance transfers per second. Contrast how concurrency control should be architected for the like counter versus the bank balance.
+
+<ExerciseSolution hint="Determine whether operation order matters and whether intermediate states violate invariant constraints.">
+
+Like increments are commutative ($+1$ can be applied in any order) and tolerate eventual consistency: they should be sharded into $N$ counter slots per post or buffered in an in-memory queue and flushed in batches, avoiding single-row lock serialization. In contrast, bank balance transfers are non-commutative with zero error tolerance: an account must never overdraw, requiring strict serializable isolation or row-level `FOR UPDATE` serialization on account balances at commit time.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* [PostgreSQL: Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html)
+* [PostgreSQL: Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

@@ -1,0 +1,135 @@
+---
+import { getStatementById } from '../utils/statementRegistry.mjs';
+import Ref from './Ref.astro';
+
+type StatementKind = 'definition' | 'lemma' | 'theorem' | 'proposition' | 'corollary' | 'example' | 'remark' | 'invariant' | 'warning' | 'convention';
+
+interface Reference {
+  id: string;
+  label?: string;
+}
+
+interface Props {
+  id: string;
+  kind?: StatementKind;
+  title: string;
+  number?: string;
+  proofId?: string;
+  dependsOn?: Reference[];
+}
+
+const {
+  id,
+  kind = 'theorem',
+  title,
+  number,
+  proofId,
+  dependsOn = [],
+} = Astro.props;
+
+const statement = id ? getStatementById(id) : null;
+const dynamicNumber = statement?.number || number;
+const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+const statementLabel = dynamicNumber ? `${label} ${dynamicNumber}` : label;
+---
+
+<section id={id} data-math-statement data-statement-kind={kind} class={`math-statement lu-statement lu-statement-${kind} not-prose scroll-mt-24`} aria-labelledby={`${id}-heading`}>
+  <div class="math-statement-header">
+    <div id={`${id}-heading`} class="math-statement-heading m-0">
+      <span class="math-statement-kind">{statementLabel}</span>
+      <span class="math-statement-title">{title}</span>
+    </div>
+  </div>
+
+  {dependsOn.length > 0 && (
+    <p class="mb-2.5 mt-1 text-xs font-medium text-light-muted dark:text-dark-muted flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+      <span class="font-semibold text-light-text dark:text-dark-text">Builds on:</span>
+      {dependsOn.map((reference, index) => (
+        <span class="whitespace-nowrap">
+          <Ref id={reference.id} label={reference.label} />{index < dependsOn.length - 1 ? ',' : ''}
+        </span>
+      ))}
+    </p>
+  )}
+
+  <div class="math-statement-body prose prose-slate dark:prose-invert max-w-none">
+    <slot />
+  </div>
+
+  <template data-math-preview>
+    <div class="math-preview-content">
+      <div class="math-preview-label">{statementLabel}</div>
+      <div class="math-preview-title">{title}</div>
+      <div class="math-preview-body"><slot /></div>
+    </div>
+  </template>
+</section>
+
+<script>
+  const setupMathPreviews = () => {
+    if (document.documentElement.dataset.mathPreviewsReady) return;
+    document.documentElement.dataset.mathPreviewsReady = 'true';
+
+    const links = document.querySelectorAll<HTMLAnchorElement>('a[href^="#"]:not(.lu-ref):not([data-ref-id])');
+    let tooltip: HTMLDivElement | null = null;
+    let hideTimer: number | undefined;
+
+    const getStatement = (link: HTMLAnchorElement) => {
+      const id = decodeURIComponent(link.getAttribute('href')?.slice(1) || '');
+      if (!id) return null;
+      return Array.from(document.querySelectorAll<HTMLElement>('[data-math-statement]'))
+        .find((statement) => statement.id === id) || null;
+    };
+
+    const hide = () => {
+      if (tooltip) tooltip.remove();
+      tooltip = null;
+    };
+
+    const show = (link: HTMLAnchorElement) => {
+      window.clearTimeout(hideTimer);
+      const statement = getStatement(link);
+      const source = statement?.querySelector<HTMLTemplateElement>('template[data-math-preview]');
+      if (!source) return;
+
+      hide();
+      tooltip = document.createElement('div');
+      tooltip.className = 'math-preview-tooltip';
+      tooltip.setAttribute('role', 'tooltip');
+      tooltip.append(source.content.cloneNode(true));
+      document.body.append(tooltip);
+      link.setAttribute('aria-describedby', 'math-preview-tooltip');
+      tooltip.id = 'math-preview-tooltip';
+
+      const rect = link.getBoundingClientRect();
+      const margin = 12;
+      const width = Math.min(480, window.innerWidth - margin * 2);
+      tooltip.style.width = `${width}px`;
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const left = Math.max(margin, Math.min(rect.left, window.innerWidth - tooltipRect.width - margin));
+      const above = rect.top - tooltipRect.height - margin;
+      const top = above >= margin ? above : Math.min(window.innerHeight - tooltipRect.height - margin, rect.bottom + margin);
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${Math.max(margin, top)}px`;
+    };
+
+    links.forEach((link) => {
+      if (!getStatement(link)) return;
+      link.addEventListener('pointerenter', () => show(link));
+      link.addEventListener('pointerleave', () => {
+        hideTimer = window.setTimeout(hide, 80);
+      });
+      link.addEventListener('focus', () => show(link));
+      link.addEventListener('blur', hide);
+    });
+
+    window.addEventListener('scroll', hide, { passive: true });
+    window.addEventListener('resize', hide, { passive: true });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupMathPreviews, { once: true });
+  } else {
+    setupMathPreviews();
+  }
+</script>

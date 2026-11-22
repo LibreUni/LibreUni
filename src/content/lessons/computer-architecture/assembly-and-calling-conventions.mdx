@@ -1,0 +1,460 @@
+---
+title: Assembly and Calling Conventions
+course: computer-architecture
+description: Stack frames, register allocation, calls, returns, and ABI contracts.
+prerequisites:
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
+outcomes:
+  - Trace calls, returns, stack frames, register classes, argument passing, and spills under an explicit ABI.
+  - Design recursion, tail calls, unwinding, and reentrant code while preserving caller/callee and alignment invariants.
+  - Diagnose an ABI or control-flow failure from machine state rather than source syntax.
+omissions:
+  - VLIW instruction bundling and static software pipelining are omitted in favor of dynamic RISC conventions.
+  - Multi-pass DWARF exception frame unwinding and language-specific data areas (LSDA) are treated in compiler construction.
+  - Hardware cryptographic pointer authentication (PAC) and capabilities (CHERI) are reserved for advanced security modules.
+estimatedMinutes: 540
+assessment: Given an ABI and an assembly trace, reconstruct stack/register state across nested calls, then repair the smallest sequence that corrupts a return address or callee-saved register.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeExercise from '../../../components/CodeExercise';
+import PlantUML from '../../../components/PlantUML.astro';
+
+Assembly language exposes the contract between source-level procedures and the instruction-set architecture. A compiler can hide register names and stack offsets in a high-level language, but it cannot avoid choosing where arguments live, how a return address survives a call, which registers a callee must preserve, or how an aggregate is laid out. These choices form an application binary interface (ABI). An ABI is not just a compiler preference: separately compiled modules, debuggers, profilers, operating-system signal handlers, foreign-function interfaces, and hand-written assembly all depend on it.
+
+## From source to machine state
+
+> **Definition.** An Application Binary Interface (ABI) calling convention partitions architectural registers into **caller-saved** (volatile across a `call`, owned by the callee during execution) and **callee-saved** (non-volatile across a `call`, which the callee must restore to their entry values before `ret`), and fixes the stack-pointer alignment and argument/return locations at every procedure boundary.
+
+Consider a function $f(x,y)=x+2y$. At the source level, parameters are abstract values and the result is an abstract integer. At the assembly level, an ABI may place `x` and `y` in argument registers, compute `2y` with a shift or add, add `x`, place the result in a return register, and jump back through a link register. The function’s correctness has two parts: its arithmetic result is correct, and it preserves every part of the calling convention it does not own.
+
+The compiler’s liveness analysis identifies values needed after each instruction. A register can be reused only when its old value is dead or has been saved. A callee-saved register is an interprocedural liveness contract: the caller may keep a value there across a call, so the callee must preserve it. A caller-saved register is scratch space: the caller must save it if it remains live across a call. Neither classification makes a register intrinsically safe or unsafe; it specifies responsibility.
+
+<Quiz client:load title="Trace the call"
+  question="Evaluate which statements accurately describe the binary interface obligations established by an ABI calling convention:"
+  options={[
+    {
+      id: "claim-register-contract",
+      text: "Calling conventions define explicit ownership rules dividing hardware registers into caller-saved and callee-saved partitions.",
+      isCorrect: true,
+      feedback: "Correct. The convention establishes interprocedural liveness contracts across function invocation boundaries."
+    },
+    {
+      id: "claim-stack-alignment",
+      text: "ABIs specify required stack pointer alignment (such as 16 bytes in RV64) and argument spill frame layouts.",
+      isCorrect: true,
+      feedback: "Correct. Stack alignment and frame organization guarantee compatibility across independently compiled translation units."
+    },
+    {
+      id: "claim-syntax-only",
+      text: "A calling convention is purely a high-level language syntax constraint that carries zero machine-level register obligations.",
+      isCorrect: false,
+      feedback: "Incorrect. The ABI is a concrete binary interface contract governing physical registers and stack memory."
+    },
+    {
+      id: "claim-cache-eviction",
+      text: "Calling conventions dictate the exact hardware cache lines that the processor memory hierarchy must evict during a call.",
+      isCorrect: false,
+      feedback: "Incorrect. Cache replacement is dynamically managed by cache controller logic, not software calling conventions."
+    }
+  ]}
+  explanation="Calling conventions establish binary contracts for argument registers, callee-saved preservation, return values, and stack alignment, enabling independently compiled objects to interoperate correctly."
+/>
+
+## Calls, returns, and link state
+
+A call transfers control to a target while recording a return address. One ISA may write the link into a dedicated register; another may push it on the stack; a compiler may synthesize either using ordinary instructions. A return loads the saved address into the PC. If the callee itself makes another call and uses the same link register, it must save the caller’s link first. Leaf functions that make no calls can sometimes leave it in the link register, but a function cannot assume it is a leaf if a later implementation introduces a call for profiling, allocation, or error handling.
+
+**Worked call trace.** Let `main` call `f`, and `f` call `g`. At the call from `main`, the link register holds the address after the call. On entry to `f`, that link is its return address, but `f` must save it before calling `g`. The call to `g` overwrites the link with the address after the nested call. After `g` returns, `f` restores its saved link and returns to `main`. If `f` omits the save, it returns to the instruction after the call to `g`, often looping or executing the wrong code. This failure is independent of whether the arithmetic inside `f` is correct.
+
+The sequence exposes the two distinct continuations. `M` means the instruction after `main`'s call; `F` means the instruction after `f`'s call. The stack slot is private to this invocation of `f`.
+
+<PlantUML code={`@startuml
+participant main as M
+participant f as F
+collections "f stack frame" as S
+participant g as G
+M -> F : call; link = M
+F -> S : save link M
+F -> G : nested call; link = F
+G --> F : return to F
+F -> S : restore link M
+F --> M : return to M
+@enduml`} />
+
+> **Pause & Predict: The Silent Leaf Function Bug.** Suppose an engineer writes a performance-critical leaf function in assembly that performs no function calls. It uses `t0..t2` for computation, reads arguments from `a0..a1`, and returns using `ret` (jumping to `ra`) without allocating a stack frame. Later, another developer adds an assertion macro: `assert(val >= 0);`. If the assertion fails, the macro calls `__assert_fail(msg, file, line)`. What catastrophic bug occurs when the assertion fails? Commit your reasoning before opening the analysis below.
+
+<ExerciseSolution
+  hint="Think about what happens to the return address register `ra` when the processor executes a call instruction (`call` / `jal`)."
+  title="Reveal analysis"
+  hintTitle="Show hint"
+>
+
+**Analysis:**
+The function silently **ceases to be a leaf function** along the failure branch!
+When `jal __assert_fail` executes, the hardware automatically overwrites the return register `ra` with the address of the instruction immediately following the call to `__assert_fail`.
+Because the function never saved the caller's original `ra` onto the stack in a prologue, the caller's continuation address is permanently destroyed. If `__assert_fail` returns or attempts to unwind, execution will loop infinitely or jump into invalid memory.
+**Rule**: Any function that can execute even a conditional, exceptional, or debugging call must be compiled with a non-leaf stack frame that spills `ra`.
+
+</ExerciseSolution>
+
+**Transfer check.** Suppose `g` itself calls `h`. Does `f` need an extra slot to preserve `g`'s return address?
+
+> **Remark (Continuation ownership in nested calls).** When `g` itself calls `h`, `f` does not need an extra slot to preserve `g`'s return address. `g` owns preservation of its incoming link before calling `h`; its invocation needs a separate save location. `f` preserves only its own continuation to `main`. A global shared return-address slot would fail under recursion or reentrancy because another invocation would overwrite it.
+
+<CaseStudy client:load
+  title="The callee corrupted its caller"
+  scenario="A function stores a temporary value in a callee-saved register and returns without restoring it. Its own return value is correct, but the caller later computes with corrupted state."
+  question="Evaluate which diagnostic evidence demonstrates this ABI contract violation:"
+  options={[
+    {
+      id: "claim-register-diff",
+      text: "Inspecting callee-saved register contents at function entry and comparing them immediately upon return reveals unpreserved caller state.",
+      isCorrect: true,
+      feedback: "Correct. Comparing preserved registers across the call boundary provides unambiguous proof of callee-saved corruption."
+    },
+    {
+      id: "claim-stack-disassembly",
+      text: "Disassembling the callee epilogue to confirm absent restoration loads from stack slots proves procedural contract violation.",
+      isCorrect: true,
+      feedback: "Correct. Showing that the function returns without executing restoring loads from its frame confirms the defect."
+    },
+    {
+      id: "claim-return-val-only",
+      text: "Verifying that the callee's return register a0 holds the mathematically expected result guarantees zero ABI corruption.",
+      isCorrect: false,
+      feedback: "Incorrect. The callee's computational return value can be perfectly correct while still destroying caller registers."
+    },
+    {
+      id: "claim-source-scope",
+      text: "High-level language variable scoping rules automatically prevent machine registers from being clobbered across procedure calls.",
+      isCorrect: false,
+      feedback: "Incorrect. Compilers map high-level scopes to physical registers according to ABI rules; register clobbering occurs at machine level."
+    }
+  ]}
+  explanation="Calling conventions are boundary contracts. Comparing callee-saved registers before entry and after return definitively exposes whether a callee restored caller state."
+/>
+
+## Stack frames and alignment
+
+The stack is a conventionally downward-growing region, though the ISA need not require that direction. A frame may contain the return address, saved callee registers, local variables, spill slots, outgoing arguments, and alignment padding. The stack pointer identifies the current allocation boundary; a frame pointer, when used, provides a stable reference if the stack pointer moves during the procedure.
+
+A prologue allocates space and saves required state. An epilogue restores state, deallocates space, and returns. The ABI typically requires a stack alignment such as 16 bytes at a call boundary so that vector values, nested frames, and system interfaces can assume aligned storage. Alignment padding is not available for arbitrary data unless the frame layout accounts for it.
+
+**Worked frame layout.** Suppose a function needs a saved return address (8 bytes), two saved registers (16 bytes), a 24-byte local array, and 16-byte alignment at calls. The raw total is 48 bytes, already a multiple of 16; a 48-byte frame can be allocated. If the raw total were 40 bytes, the frame would need 8 bytes of padding to reach 48. The prologue must establish the final stack pointer before storing at offsets, and the epilogue must restore in the reverse ownership order. A hand-written function that allocates 40 bytes while the ABI requires 16-byte alignment can fail only when a callee uses an aligned load, making the bug input- or call-path-dependent.
+
+Stack frames are not automatically safe storage. A pointer to a local that escapes after return refers to reclaimed storage; a buffer write beyond its bounds can overwrite a return address or saved register. The architecture supplies memory access and privilege rules, while the ABI and compiler supply layout conventions. Control-flow integrity, shadow stacks, stack canaries, and memory tagging are additional defenses, not consequences of an ordinary call instruction.
+
+## Parameter passing and return values
+
+ABIs classify scalar arguments, floating-point arguments, vectors, and aggregates. Small values often travel in registers; larger or variably sized values may use memory. A structure return may be implemented by a hidden pointer argument to caller-provided storage, shifting the visible argument positions. Variadic functions need metadata or a register-save area so the callee can retrieve arguments beyond those named in the prototype.
+
+**Worked example: placing a mixed argument list (RV64 psABI).** Consider
+
+```c
+struct pair { long x, y; };            /* 16 bytes = 2 x XLEN */
+long sum4(long a, long b, long c, struct pair p, long d);
+```
+
+`a`, `b`, and `c` occupy `a0`–`a2`. The 16-byte `p` occupies the register pair `a3`/`a4`, with the lower-addressed eight bytes in `a3`; `d` then occupies `a5`. The placement is not left to the compiler's preference: the psABI fixes it so separately compiled callers and callees agree. Three consequences follow.
+
+* If `p` were 24 bytes, it would exceed $2\times\mathrm{XLEN}$ and be passed by reference: the visible argument list would contain the address of `p` in `a3`, and `d` would move to `a4`.
+* If only one argument register remained for a 16-byte aggregate, the first eight bytes would go in that register and the second eight bytes on the stack; the psABI does not pad the aggregate to force a register pair.
+* A returned `struct pair` uses `a0`/`a1`. A larger return aggregate is returned by reference: the caller allocates storage and passes its address as an implicit first argument, shifting the visible arguments by one.
+
+Narrow scalars are widened by the same agreement. An integer argument narrower than XLEN is widened according to its signedness to 32 bits and then sign-extended to XLEN. Consequently a 32-bit `unsigned int` with bit 31 set arrives with the upper 32 bits set, not zeroed; a callee that reads the full register as a zero-extended 64-bit value is wrong. A hand-written callee that reads only the low 32 bits is immune to the upper bits.
+
+The caller and callee must agree on signedness and width. Passing a 32-bit value in a 64-bit register may require sign extension or zero extension. A callee that assumes the wrong extension can interpret `0xFFFFFFFF` as -1 or 4,294,967,295. The same concern applies to Boolean values, pointers, and enum representations. ABI documentation is therefore part of the type system at a module boundary.
+
+## Recursion and reentrancy
+
+Recursion works because each invocation has distinct storage for its parameters, locals, and return continuation. A recursive factorial function must preserve its current argument and return address while the smaller call executes. The invariant is that every active frame contains enough information to resume its caller and combine the recursive result with its own pending operation.
+
+**Worked recursion trace.** For `fact(3)`, the first frame stores 3 and a continuation “multiply by 3.” The second stores 2 and continuation “multiply by 2.” The third stores 1 and returns 1. The second resumes, computes 2, returns; the first resumes, computes 6, returns. If the implementation keeps the argument only in a caller-saved register across the recursive call, the nested invocation may overwrite it and the multiplication uses the wrong value. A stack slot or callee-saved register is required.
+
+Reentrancy adds interruption. An interrupt or signal handler may run while a procedure has partially updated a frame or global data. The handler’s ABI specifies which registers it saves and how it returns. Lock-free or signal-safe code must also avoid calling routines that assume nonreentrant global state. The ordinary function-call proof is insufficient if asynchronous control transfers can observe intermediate state.
+
+## Tail calls and frame reuse
+
+A tail call occurs when a function’s final action is to call another function and return its result without additional work. The current frame can be reused if arguments are placed according to the callee’s convention and the caller’s continuation is no longer needed. This turns recursion into iteration for tail-recursive functions and prevents unbounded stack growth.
+
+**Worked example: tail recursion versus a pending multiplication.** The natural factorial, for $n \ge 0$,
+
+```c
+long fact(long n) { return n <= 1 ? 1 : n * fact(n - 1); }
+```
+
+is not a tail call: after `fact(n - 1)` returns, the caller must still multiply by `n`, so every level needs a live frame holding `n` and `ra`. Rewriting with an accumulator,
+
+```c
+long fact_acc(long n, long acc) {
+    return n <= 1 ? acc : fact_acc(n - 1, n * acc);
+}
+```
+
+makes the recursive call the final action. Every level has the same argument layout, so the implementation can place the new `n` and `acc` in `a0`/`a1` and jump to the entry point without writing a new link:
+
+```asm
+fact_acc:
+    li   t0, 1
+    ble  a0, t0, .Ldone
+    mul  a1, a0, a1        # acc = n * acc
+    addi a0, a0, -1
+    j    fact_acc          # tail call: ra still points to fact_acc's caller
+.Ldone:
+    mv   a0, a1
+    ret
+```
+
+For `fact_acc(4, 1)`, the trace is `(4,1) -> (3,4) -> (2,12) -> (1,24)`, returning 24 with one active frame rather than four. The reuse is valid only because the callee’s argument layout matches the current one, every callee-saved register has already been restored, and no cleanup or unwind action remains. If the implementation emitted `call fact_acc` instead of `j fact_acc`, it would overwrite `ra`; without saving the caller's link, the eventual return would be incorrect. An ordinary correct recursive call must preserve that link, typically using a separate frame per invocation.
+
+Tail-call eligibility is constrained by ABI details: outgoing arguments may require more space, callee-saved registers must already be restored, and a frame address observable by debugging or exception machinery may prevent reuse. A compiler cannot apply tail-call elimination merely because the source expression looks final; it must preserve unwind, security, and calling-convention semantics.
+
+## Spills and register allocation
+
+The register allocator colors an interference graph or uses a related strategy to assign live values to a finite register set. Values whose live ranges overlap cannot share a register. When pressure exceeds available registers, the allocator inserts spills: stores to stack slots and reloads before uses. Spilling changes instruction count, memory traffic, cache behavior, and possibly exception points.
+
+**Worked liveness example.** In a loop with induction variable `i`, pointer `p`, accumulator `sum`, and temporary `t`, `i`, `p`, and `sum` may be live across the loop body while `t` is dead after its use. If a call occurs inside the body, the three long-lived values must be placed in callee-saved registers or saved by the caller around the call. A naive allocator that counts variables rather than live ranges may spill unnecessarily; an allocator that ignores the call boundary may lose values.
+
+## Debugging and unwinding
+
+A debugger needs to reconstruct source-level frames from machine state. Frame pointers make this straightforward but consume a register; frame-pointer omission relies on compact unwind metadata describing how to recover the previous stack pointer and return address. Exceptions and signals need equivalent metadata to walk through optimized code, inlined functions, and partially completed prologues.
+
+**Worked example: reconstructing one caller frame.** Suppose the current function uses `s0` as a frame pointer that points to the caller’s stack pointer, and it has stored `ra` at `s0 - 8` and the caller’s `s0` at `s0 - 16`. With `s0 = 0x8000_0020`, the saved `ra` is at `0x8000_0018` and the saved `s0` at `0x8000_0010`. If memory contains `ra = 0x4000_01a4` and saved `s0 = 0x8000_0040`, the debugger reconstructs the caller as `PC = 0x4000_01a4`, `sp = 0x8000_0020`, and `s0 = 0x8000_0040`; the next frame’s saved `ra` is then at `0x8000_0038`. The chain is a linked list through memory, not a language-level call stack.
+
+Compilers that omit the frame pointer encode the same facts as unwind rules tied to PC ranges. A minimal CFI fragment for a 32-byte frame is
+
+```asm
+fib:
+    .cfi_startproc
+    addi sp, sp, -32
+    .cfi_def_cfa_offset 32
+    sd   ra, 24(sp)
+    .cfi_offset ra, -8
+    sd   s0, 16(sp)
+    .cfi_offset s0, -16
+    ...
+    .cfi_endproc
+```
+
+The CFA is the caller’s `sp`, `sp + 32` after allocation. `.cfi_offset ra, -8` means the saved `ra` lives at `CFA - 8`, which is `24(sp)`; `.cfi_offset s0, -16` means `16(sp)`. Unwinding from any PC uses the row that covers that PC, so a prologue that adjusts `sp` before updating the CFI row becomes unwalkable in that interval. This is why hand-written assembly that omits `.cfi_*` directives can return correctly yet still break exception propagation or a profiler’s backtrace.
+
+A correct ABI implementation therefore has a temporal prologue contract: at each instruction boundary where an asynchronous event may occur, the unwind rule must describe where saved registers and the return address reside. Hand-written assembly that omits unwind metadata can break exception propagation even if ordinary calls return correctly.
+
+## Security-sensitive call boundaries
+
+Indirect calls and returns use target addresses that may be corrupted by memory bugs or speculative mechanisms. Control-flow integrity restricts targets to a valid policy; shadow stacks maintain a protected copy of return addresses; pointer authentication or capabilities can bind pointers to context on suitable ISAs. These mechanisms change the calling convention’s security properties but still rely on the same basic invariant: a return must transfer control to the intended continuation.
+
+ABI boundaries also define privilege transitions. A system-call stub places arguments in kernel-defined registers, executes a trap instruction, and handles the return convention. The kernel validates pointers and sizes before accessing user memory; it cannot trust that a user-provided pointer remains mapped or unchanged between checks and use. The architecture supplies privilege separation, but correctness requires a complete protocol across the boundary.
+
+### Worked Trace: RISC-V (RV64) Stack Frame Lifecycle in Recursive Call
+
+Consider compiling the recursive Fibonacci step:
+```c
+int fib(int n) {
+    if (n <= 1) return n;
+    return fib(n - 1) + fib(n - 2);
+}
+```
+
+Under the standard RISC-V standard calling convention (psABI):
+* `a0` holds the incoming argument `n` and the return value.
+* `ra` holds the return link address.
+* `s0` is a callee-saved register preserved across calls.
+* The stack pointer `sp` must remain 16-byte aligned at all call boundaries.
+
+The function must preserve three values across calls: `ra`, the caller’s original `s0`, and the result of `fib(n - 1)` while `fib(n - 2)` runs; it also keeps `n` in the callee-saved `s0`. Those values need distinct storage. The saved `s0` and the spill cannot share a slot: storing the spilled result into the slot that holds saved `s0` silently replaces the caller’s `s0` with a Fibonacci value, and the epilogue then restores the wrong register.
+
+**Step 1: Frame Allocation & Register Preservation (Prologue)**
+```asm
+fib:
+    addi sp, sp, -32      # 32 bytes: two saved registers + one spill slot, 16-byte aligned
+    sd   ra, 24(sp)       # Save return address link
+    sd   s0, 16(sp)       # Save callee-preserved register s0
+                          # 0(sp) and 8(sp) remain available for spills
+```
+
+**Step 2: Base Case Test & Recursive Call Preparation**
+```asm
+    li   t0, 1
+    ble  a0, t0, .Lbase   # If n <= 1, jump to base case return
+    mv   s0, a0           # Preserve original n in callee-saved s0 across nested calls
+    addi a0, a0, -1       # Argument a0 = n - 1
+    call fib              # Recursive call: fib(n - 1), returns result in a0
+```
+
+**Step 3: State Reconstruction Across Calls**
+```asm
+    # a0 contains fib(n - 1). Spill it to its own slot while computing fib(n - 2):
+    sd   a0, 0(sp)        # Spill fib(n - 1) to the dedicated slot at 0(sp)
+    addi a0, s0, -2       # a0 = n - 2 (using preserved s0)
+    call fib              # Recursive call: fib(n - 2), returns result in a0
+    ld   t1, 0(sp)        # Reload fib(n - 1) from its slot
+    add  a0, a0, t1       # Return value = fib(n - 2) + fib(n - 1)
+    j    .Lexit
+```
+
+**Step 4: Epilogue & Stack Restoration**
+```asm
+.Lbase:
+    # a0 already holds n (0 or 1)
+.Lexit:
+    ld   s0, 16(sp)       # Restore caller's original s0 from its own slot
+    ld   ra, 24(sp)       # Restore caller's original return address
+    addi sp, sp, 32       # Deallocate stack frame
+    ret                   # Return to caller via jr ra
+```
+
+The 32-byte size is not arbitrary: after the 16-byte-aligned `sp` is decremented by 32, it remains 16-byte aligned at each `call`. Slots `0(sp)` and `8(sp)` are free spill space; the saved `s0` at `16(sp)` and saved `ra` at `24(sp)` are never reused for temporaries. A 16-byte frame with the spill written to `0(sp)` overwrites saved `s0`. The function may then return the correct Fibonacci number while corrupting its caller’s callee-saved register, a calling-convention violation that appears only after the caller uses `s0`.
+
+<CodeExercise
+  client:load
+  title="Complete the RV64 non-leaf prologue and epilogue"
+  description="Fill in the stack-pointer adjustments and save/restore offsets so that `ra` and `s0` are preserved across nested calls in a 32-byte 16-byte-aligned frame."
+  code={String.raw`fib:
+    addi sp, sp, [!blank!]
+    sd   ra, [!blank!](sp)
+    sd   s0, 16(sp)
+    ...
+.Lexit:
+    ld   s0, [!blank!](sp)
+    ld   ra, 24(sp)
+    addi sp, sp, [!blank!]
+    ret`}
+  answers={["-32", "24", "16", "32"]}
+  explanation="The prologue decrements sp by 32 (preserving 16-byte alignment), saves ra at 24(sp) and s0 at 16(sp), leaving 0(sp)..15(sp) for spill slots. The epilogue restores s0 from 16(sp) and ra from 24(sp) before adding 32 back to sp."
+/>
+
+
+### Counterexample & Failure Mode: Stack Smashing & Return Address Corruption
+
+What happens when software violates stack frame boundaries? Consider a standard C routine that allocates a stack buffer:
+```c
+void vulnerable_read() {
+    char buf[16];
+    gets(buf); // Unbounded user input
+}
+```
+
+1. **Stack Memory Layout**:
+   For one common 64-bit frame layout, the compiler allocates 16 bytes for `buf` at `0(sp)`, then one saved callee register at `16(sp)`, then the saved return address `ra` at `24(sp)`. The exact offsets are ABI- and compiler-dependent; the invariant that matters is that `ra` is stored above the buffer in this layout, so a write past the buffer can reach it.
+
+2. **The Buffer Overflow Attack**:
+   * If an attacker supplies 24 bytes of payload, the buffer fills `0..15` and clobbers saved registers `16..23`.
+   * If the attacker supplies 32 bytes, the final 8 bytes (`24..31`) directly overwrite the saved return address `ra`.
+
+3. **Catastrophic Failure Mode**:
+   When `vulnerable_read` executes its epilogue:
+   ```asm
+   ld  ra, 24(sp)  # Loads attacker-controlled bytes into ra
+   ret             # Jumps directly to the attacker's address (PC = attacker_data)
+   ```
+   Instead of returning to `main`, the processor branches into arbitrary payload code or immediately crashes with `SIGSEGV`. This demonstrates that stack frames are purely logical abstractions over raw linear memory: hardware enforces no intrinsic partition between control metadata (`ra`) and local data arrays unless explicit hardware defenses (e.g., shadow stacks, non-executable stack pages, stack canaries) are activated.
+
+
+<ExerciseSet>
+
+<Exercise id="ex-asm-recursive-frame-layout" type="construct" level="application" title="Recursive Stack Frame Layout and 16-Byte Alignment">
+
+Design a stack frame for a recursive function with three 64-bit local variables, two function calls, one 32-byte vector spill area, and a 16-byte ABI alignment requirement. Show exact byte offsets, prologue allocation, and epilogue deallocation.
+
+<ExerciseSolution hint="Account for return address, callee-saved registers, local variables, and alignment padding.">
+
+Account for saved `ra` (8 B), saved `s0` (8 B), three local variables ($3 \times 8 = 24\text{ B}$), and vector spill (32 B). Raw sum = $8 + 8 + 24 + 32 = 72\text{ B}$. To satisfy 16-byte alignment, round up to $80\text{ B}$ (adding 8 B padding). Prologue decrements `sp` by 80 and saves `ra` and `s0`; epilogue restores them and increments `sp` by 80 before `ret`.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-asm-link-register-overwrite" type="verify" level="application" title="Link Register Overwrite in Nested Non-Leaf Invocations">
+
+Trace a non-leaf function $f$ that calls helper $g$. Explain what occurs if $f$ omits saving register `ra` onto the stack before issuing `jal g`, and identify the instruction address loaded into `PC` when $f$ executes `ret`.
+
+<ExerciseSolution hint="Trace what happens to the return address register ra when f invokes another procedure g.">
+
+When `f` executes `jal g`, the CPU hardware overwrites `ra` with the address of the instruction immediately following the call to $g$. If $f$ failed to spill its incoming return address to the stack, when $f$ subsequently executes `ret` (`jr ra`), it jumps to the instruction after the call to $g$ rather than returning to its original caller, entering an infinite loop or causing control-flow corruption.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-asm-caller-vs-callee-saved" type="describe" level="recall" title="Caller-Saved vs. Callee-Saved Register Classification">
+
+Classify registers `t0..t6`, `s0..s11`, and `a0..a7` under the standard RISC-V calling convention. Explain the interprocedural liveness contract governing which function bears responsibility for preservation across calls.
+
+<ExerciseSolution hint="Identify which registers must be preserved across procedure calls versus which can be clobbered.">
+
+`t0..t6` and `a0..a7` are caller-saved (temporary/argument) registers; if the caller needs their values after a call, the caller must spill them before issuing `jal`. `s0..s11` are callee-saved registers; the caller can assume their values survive untouched across calls, obligating the callee to spill and restore any of them it mutates.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-asm-frame-invariant-induction" type="prove" level="synthesis" title="Inductive Proof of Stack Frame Isolation">
+
+Formulate an inductive proof over recursion depth $n$ showing that a recursive factorial routine preserves its intermediate multipliers when parameters are stored in stack frame slots rather than caller-saved registers.
+
+<ExerciseSolution hint="State the base case and inductive step showing each frame retains isolated arguments and continuation.">
+
+Base case ($n \le 1$): The function returns 1 without recursive calls, preserving frame integrity.
+Inductive step: Assume frame isolation holds for recursion depth $k$. At depth $k+1$, the routine spills its argument $k+1$ and continuation `ra` into its private frame before calling `fact(k)`. By induction, the child call executes at a distinct stack offset (`sp - frame_size`) without modifying memory at `sp`. Upon child return, the caller reloads $k+1$ from its intact private frame and computes $(k+1) \cdot \text{fact}(k)$, preserving the invariant for all $n$.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-asm-tail-call-prerequisites" type="verify" level="application" title="Tail Call Optimization Prerequisites and Frame Deallocation">
+
+An optimizing compiler attempts to replace `call g; ret` with a direct jump `j g`. Specify three conditions under which this tail call optimization is illegal due to caller stack frame lifetime constraints.
+
+<ExerciseSolution hint="Check whether the caller still requires local stack variables after the callee returns.">
+
+Tail-call optimization is invalid if: (1) the caller passes pointers to its own local stack variables as arguments to $g$; (2) the caller has pending deferred cleanup or destructor actions that must run after $g$ completes; or (3) the callee requires larger outgoing stack arguments than the caller's frame can host without reallocation.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-asm-register-interference-graph" type="construct" level="application" title="Interference Graph Construction for Register Allocation">
+
+Construct a register interference graph for four variables $v_1, v_2, v_3, v_4$ whose live ranges are $[1, 4]$, $[2, 5]$, $[3, 6]$, and $[5, 7]$. Determine the minimum number of registers required to color the graph without spills.
+
+<ExerciseSolution hint="Add an undirected edge between any two variables whose live ranges overlap at any program point.">
+
+Interference edges connect variables whose intervals overlap:
+- $v_1$ overlaps with $v_2$ (at 2, 3, 4) and $v_3$ (at 3, 4).
+- $v_2$ overlaps with $v_1, v_3$ (at 3, 4, 5), and $v_4$ (at 5).
+- $v_3$ overlaps with $v_1, v_2$, and $v_4$ (at 5, 6).
+- $v_4$ overlaps with $v_2, v_3$.
+The maximum clique $\{v_1, v_2, v_3\}$ has size 3 (active simultaneously at time 3 and 4). Thus, the chromatic number is 3: three physical registers are both necessary and sufficient to allocate all variables without spilling.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-asm-syscall-pointer-validation" type="generalise" level="transfer" title="Pointer Validation and Security at System-Call Boundaries">
+
+Explain why an operating system kernel cannot rely on user-space pointers having been verified prior to executing an `ecall` / `syscall` instruction, and prescribe the required kernel validation procedure.
+
+<ExerciseSolution hint="Consider concurrency, unmapped memory, and privilege escalation if user addresses are dereferenced directly.">
+
+User-space pointers cannot be trusted because concurrent user threads can unmap or remap memory (TOCTOU race), pass addresses residing within kernel address space to read protected data, or trigger page faults inside critical kernel code. The kernel must validate that the user pointer and range reside entirely within the user address partition, verify memory permissions, and perform transfers using copy-with-fault-handling primitives (`copy_from_user`).
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* Patterson, D. A., & Waterman, A. (2017). *The RISC-V Reader: An Open Architecture Atlas*, Chapter 3 ("Assembly Language and Calling Conventions"). Strawberry Canyon LLC.
+* Bryant, R. E., & O'Hallaron, D. R. (2016). *Computer Systems: A Programmer's Perspective* (3rd ed.), Chapter 3 ("Machine-Level Representation of Programs"). Pearson.
+* RISC-V International (2023). *RISC-V ABIs Specification (psABI)*. GitHub Repository: `riscv-non-isa/riscv-elf-psabi-doc`.
+* DWARF Standards Committee (2017). *DWARF Debugging Information Format, Version 5*. https://dwarfstd.org/doc/DWARF5.pdf.
+

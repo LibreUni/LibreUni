@@ -1,0 +1,314 @@
+---
+title: Binary Design Lab
+course: computer-architecture
+kind: lab
+description: Design, encode, decode, and verify a binary device record.
+prerequisites:
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
+outcomes:
+  - Specify a binary record's fields, widths, signedness, byte order, reserved values, and versioning contract.
+  - Implement and test encode/decode state transitions, rejecting malformed or ambiguous records.
+  - Defend portability with round-trip, boundary, mutation, and compatibility evidence.
+omissions:
+  - Variable-length entropy compression schemes (DEFLATE, protobuf varints) and self-describing serialization (ASN.1, Avro) are omitted to focus on deterministic fixed-width binary record parsing.
+  - Cryptographic message authentication (HMAC, signatures) is deferred to Network Security; CRC-16 is evaluated purely as an error-detecting code.
+  - Electrical device physics and full RTL syntheses are outside scope.
+estimatedMinutes: 420
+assessment: Given a binary format and hostile byte stream, derive the parser state, reject invalid lengths/fields, and prove valid round-trip preservation.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+
+This lab turns representation theory into an interface that another engineer could implement. Design a 16-byte binary record for a sensor sample and a parser that is safe under malformed input. The record must contain a version, flags, signed temperature, unsigned pressure, timestamp, sequence number, and checksum. You must specify bit widths, byte order, alignment, valid ranges, reserved encodings, checksum coverage, and behavior when the record is truncated or inconsistent.
+
+## Specification before encoding
+
+Choose a wire format rather than inheriting the host machine’s struct layout. Host padding, compiler ABI, endianness, and alignment are not stable interchange contracts. Let byte 0 contain an 8-bit version, byte 1 flags, bytes 2–3 a signed 16-bit temperature in hundredths of a degree, bytes 4–7 an unsigned pressure in pascals, bytes 8–11 a 32-bit timestamp, bytes 12–13 a 16-bit sequence, and bytes 14–15 a CRC or checksum. State that all multibyte fields use big-endian order.
+
+The version field supports evolution, but a parser must define whether it accepts unknown versions. Flags need a mask of defined bits; reserved bits should be zero in canonical encodings and rejected or ignored according to policy. Temperature has a signed range $[-327.68,327.67]$ degrees if represented in hundredths. Pressure’s valid physical range may be narrower than the unsigned bit range; validation belongs above bit decoding and should not be conflated with syntax validity.
+
+> **Pause & Predict: The Packed Struct Portability Trap.** Why should systems engineers never parse incoming network or sensor byte streams using a C struct cast like `struct Sensor* s = (struct Sensor*)buf;` even with `#pragma pack(1)`? Consider CPU alignment traps, endianness, and aliasing rules before opening the analysis below.
+
+<ExerciseSolution
+  hint="Consider what happens when an ARM Cortex-M0 accesses a 32-bit integer at an odd address, or when an x86 host decodes a big-endian network packet."
+  title="Reveal analysis"
+  hintTitle="Show hint"
+>
+
+**Analysis:**
+Directly overlaying a C struct onto a byte stream introduces three fatal hazards:
+1. **Hardware Alignment Traps**: On architectures requiring strict natural alignment (such as ARMv6-M Cortex-M0 or older SPARC/MIPS cores), reading a 32-bit field (`uint32_t pressure`) from an unaligned offset generates an immediate **HardFault / Bus Error** hardware trap exception.
+2. **Endianness Corruption**: A multi-byte integer serialized in network big-endian order (`0x00018BCD`) read on a little-endian host (such as x86-64 or ARM64) is silently interpreted in reverse as `0xCD8B0100` ($3{,}448{,}439{,}040$ Pa instead of $101{,}325$ Pa).
+3. **Compiler Undefined Behavior**: The C standard prohibits aliasing arbitrary byte buffers through incompatible struct pointers (the strict aliasing rule). Compilers may optimize out subsequent memory re-reads entirely.
+
+**Rule**: Always deserialize byte streams by explicitly shifting and masking individual octets (`val = (buf[0] << 24) | (buf[1] << 16) | ...`).
+
+</ExerciseSolution>
+
+<Quiz client:load title="Specify before encode"
+  question="Why must a binary wire format be formally specified before implementing bit-manipulation and serialization routines?"
+  options={[
+    {
+      id: "claim-endian-boundaries",
+      text: "Field widths, endianness, and reserved values establish the semantic contract that parser routines must preserve.",
+      isCorrect: true,
+      feedback: "Correct. A bit pattern has meaning only through an explicit format specification defining boundaries and byte order."
+    },
+    {
+      id: "claim-adversarial-boundaries",
+      text: "Formal field constraints define unambiguous rejection boundaries for malformed, truncated, or hostile inputs.",
+      isCorrect: true,
+      feedback: "Correct. Specifications define which input streams must be rejected to prevent buffer overruns or domain corruption."
+    },
+    {
+      id: "claim-independent-encoding",
+      text: "Bitwise serialization decisions are mathematically independent of the error modes and values observable by consumers.",
+      isCorrect: false,
+      feedback: "Incorrect. The encoding choices directly dictate precision, sign interpretation, and observable failure modes."
+    },
+    {
+      id: "claim-compiler-optimization",
+      text: "Formal wire format specifications prevent C compilers from optimizing bitwise shifts, masks, and byte conversions.",
+      isCorrect: false,
+      feedback: "Incorrect. Compilers aggressively optimize valid bitwise masking and shifting code regardless of format documentation."
+    }
+  ]}
+  explanation="A bit pattern has meaning only through a format contract. Writing code without a specification introduces boundary ambiguities and vulnerability to malformed input."
+/>
+
+## Worked encoding
+
+Suppose version is 1, flags are `0b00000101`, temperature is -12.34°C, pressure is 101325 Pa, timestamp is 1,700,000,000, and sequence is 42. Temperature scales to -1234. Its 16-bit two’s-complement encoding is $65536-1234=64302=0xFB2E$. Big-endian bytes are `FB 2E`. Pressure is `0x00018BCD`; timestamp and sequence are encoded similarly. The parser must sign-extend `0xFB2E` before dividing by 100; interpreting it as unsigned produces 643.02 and a physically absurd but representable value.
+
+The checksum must cover a defined byte range and have a defined initial value, polynomial or addition rule, reflection policy, and byte order. A simple sum can detect many accidental errors but is weak against rearrangements and deliberate changes. A CRC gives stronger burst-error detection under its specified polynomial, but it is not authentication. If the record crosses an adversarial boundary, add a cryptographic integrity mechanism rather than treating CRC as a security control.
+
+<CaseStudy client:load
+  title="Verify before minimizing"
+  scenario="A lab minimizes a four-input control function directly from prose. The resulting circuit is small, but one reserved input combination unexpectedly asserts write-enable."
+  question="Evaluate which engineering design artifacts are essential before performing logic minimization on control circuits:"
+  options={[
+    {
+      id: "claim-truth-table",
+      text: "A complete truth table specifying explicit outputs for reserved and unassigned inputs prevents accidental control assertions.",
+      isCorrect: true,
+      feedback: "Correct. Defining behavior for all $2^n$ inputs ensures minimization algorithms cannot assign unsafe values to don't-care states."
+    },
+    {
+      id: "claim-dont-care-policy",
+      text: "Unused input patterns must be explicitly assigned safe default outputs rather than treated as unconstrained don't-cares.",
+      isCorrect: true,
+      feedback: "Correct. Leaving critical control lines like write-enable as arbitrary don't-cares can cause illegal bus writes."
+    },
+    {
+      id: "claim-gate-target",
+      text: "Selecting an aggressive gate-count target before defining behavioral truth tables mathematically guarantees circuit safety.",
+      isCorrect: false,
+      feedback: "Incorrect. Optimization targets dictate physical gate count, not semantic correctness or safe fault handling."
+    },
+    {
+      id: "claim-schematic-copy",
+      text: "Copying vendor reference schematics without interface contracts ensures zero unexpected assertions under invalid inputs.",
+      isCorrect: false,
+      feedback: "Incorrect. Different systems enforce distinct interface invariants; schematics cannot substitute for local truth tables."
+    }
+  ]}
+  explanation="Minimization preserves the function it is given. Complete truth tables and deliberate don't-care assignments define safe behavior across all input combinations."
+/>
+
+## Parser state and failure behavior
+
+A safe parser first checks that at least 16 bytes are available before reading any field. It then decodes into a temporary typed structure, checks version and reserved bits, verifies checksum before trusting payload, validates scaled ranges and sequence policy, and only then publishes the sample. If input may be streamed, use a state machine that accumulates exactly the required header and body bytes; never assume one read returns one record.
+
+The order is a security and correctness boundary. Checking physical range before checking that the bytes belong to a complete record can read beyond the buffer. Publishing temperature before checksum verification can expose attacker-controlled data to control logic. Updating the last-seen sequence before all validation succeeds can permanently reject a later valid record. Use a temporary object and a commit point: prior to commit, parsing is private speculation; after commit, every field satisfies the record invariant.
+
+Failure categories should be distinguishable: truncated input, unsupported version, invalid reserved bits, checksum failure, range violation, and replayed sequence. A caller may choose to drop a corrupt sample but should not treat a checksum failure as a valid zero measurement. Error paths must not leave partially updated shared state.
+
+**Worked malformed cases.** A 15-byte buffer must be rejected before the parser reads the checksum. A record with version 2 may be rejected or dispatched to a versioned parser, but the default parser must not interpret new fields using old offsets. A valid checksum over a temperature outside the physical sensor range is syntactically valid but semantically invalid. A sequence lower than the last accepted value may be stale, wrapped, or out of order; the protocol must state which.
+
+## Implementation and portability
+
+Implement field access with explicit shifts and masks or byte reads, not a packed host struct whose layout is compiler-dependent. Check arithmetic before conversion: a signed input converted to unsigned can become large, and scaling a value can overflow an intermediate type even when the final physical range would fit. Use a wider intermediate and checked multiplication/addition.
+
+The encoder should be the inverse of the decoder on canonical values. Property-based tests can generate valid records, encode and decode them, and assert equality. Negative tests mutate one bit, truncate each possible length, set every reserved bit, and exercise minimum/maximum values. A parser that passes only a hand-written happy-path sample has not established a robust representation contract.
+
+### Worked Trace: 16-Byte Sensor Frame Serialization & Decoupled Verification
+
+Let us construct a step-by-step serialization and parser trace for a complete 16-byte sensor telemetry frame:
+
+**Input Data Specification**:
+* Version = 1 (`0x01`, 1 byte)
+* Flags = `0b00000101` (`0x05`, active + calibrated bits, 1 byte)
+* Temperature = $-12.34^\circ\text{C}$ (signed 16-bit fixed point, $100\times$ scale)
+  * Scaled integer: $-1234$.
+  * 16-bit two's complement: $65536 - 1234 = 64302 = \text{0xFB2E}$.
+* Pressure = $101325\text{ Pa}$ (unsigned 32-bit integer)
+  * Hexadecimal: `0x0001_8BCD` (4 bytes).
+* Timestamp = $1{,}700{,}000{,}000$ Unix epoch seconds (unsigned 32-bit integer)
+  * Hexadecimal: `0x6554_F100` (4 bytes).
+* Sequence ID = 42 (unsigned 16-bit integer)
+  * Hexadecimal: `0x002A` (2 bytes).
+
+**Step 1: Byte Layout & Big-Endian Octet Placement**
+```text
+Byte [00]: 0x01                  (Version = 1)
+Byte [01]: 0x05                  (Flags = 0b00000101)
+Byte [02..03]: 0xFB, 0x2E        (Temp: high byte 0xFB, low byte 0x2E)
+Byte [04..07]: 0x00, 0x01, 0x8B, 0xCD (Pressure: 0x00018BCD)
+Byte [08..11]: 0x65, 0x54, 0xF1, 0x00 (Timestamp: 0x6554F100)
+Byte [12..13]: 0x00, 0x2A        (Sequence: 0x002A)
+```
+
+**Step 2: Checksum / CRC-16 Calculation (Bytes 0–13)**
+Using CRC-16-CCITT (polynomial $x^{16} + x^{12} + x^5 + 1 = \text{0x1021}$, init `0xFFFF`):
+* Processing the 14 payload bytes yields CRC value `0x9D47`.
+* Byte [14..15]: `0x9D, 0x47`.
+* Full wire frame: `01 05 FB 2E 00 01 8B CD 65 54 F1 00 00 2A 9D 47` (exactly 16 bytes).
+
+**Step 3: Invariant Verification during Decoding**
+1. Length Check: $16 \ge 16$ bytes present.
+2. Checksum Verification: Compute CRC over bytes 0..13, compare against `(buf[14] << 8) | buf[15]`. Matches `0x9D47`.
+3. Safe Fixed-Point Reconstruction:
+   ```c
+   int16_t raw_temp = (int16_t)((buf[2] << 8) | buf[3]); // Preserves signedness: 0xFB2E -> -1234
+   double temp_c = (double)raw_temp / 100.0;             // Yields exact -12.34
+   ```
+
+
+### Counterexample & Failure Mode: The Fixed-Point Unsigned Sign-Extension Disaster
+
+What occurs when a decoder misclassifies the signedness of a fixed-point telemetry stream?
+Consider an environmental sensor deployed in an Antarctic research station measuring $-25.00^\circ\text{C}$.
+
+1. **The Correct Wire Pattern**:
+   * Scaled value: $-2500$.
+   * Two's complement 16-bit encoding: $65536 - 2500 = 63036 = \text{0xF63C}$.
+   * Wire bytes: `F6 3C`.
+
+2. **The Naive Parser Flaw**:
+   Suppose the receiving firmware decodes the bytes as an unsigned integer before scaling:
+   ```c
+   uint16_t raw = (uint16_t)((buf[2] << 8) | buf[3]); // Evaluates to 63036
+   float temp = raw / 100.0f;                         // Computes 63036 / 100.0 = +630.36 C!
+   ```
+
+3. **Systemic Failure Mode**:
+   * Instead of $-25^\circ\text{C}$, the flight computer or environmental monitor reads $+630.36^\circ\text{C}$ (hotter than molten lead).
+   * Emergency cooling protocols trigger, fire suppressants discharge, or heaters shut off in sub-zero conditions, destroying equipment.
+   * **Root Cause**: The software treated bitfield syntax as an unsigned scalar rather than enforcing the two's complement arithmetic invariant defined in the interface contract.
+
+
+<ExerciseSet>
+
+<Exercise id="ex-bin-byte-layout" type="construct" level="application" title="Byte-Offset Specification and Alignment Table">
+
+Produce a byte-offset specification table for a 16-byte telemetry record with explicit field names, widths, signedness, integer scaling factors, valid ranges, and endianness, without relying on compiler-dependent struct padding.
+
+<ExerciseSolution hint="Specify explicit bit/byte widths, signedness, valid numerical ranges, and endianness for every field.">
+
+A complete table names every byte and makes no reliance on host padding. The signed temperature field must explicitly specify two’s complement before scaling; pressure and timestamps must state whether all bit patterns are syntactically valid.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-bin-twos-comp-encoding" type="construct" level="application" title="Two's-Complement Signed Fixed-Point Encoding">
+
+Derive the encoded byte sequences for five representative sensor samples, including minimum and maximum representable temperatures and negative scaling boundaries.
+
+<ExerciseSolution hint="Convert negative scaled values using modular complement arithmetic before emitting high-order bytes.">
+
+Encode negative scaled temperature as $2^{16}-|x|$ and emit high byte first. Check the result by decoding the emitted bytes and comparing the integer scaled value before converting to floating point.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-bin-streaming-parser" type="describe" level="application" title="Streaming Parser State Machine and Buffer Framing">
+
+Specify a streaming parser state machine with explicit framing states (header, payload, checksum) and deterministic error rejection paths for partial reads.
+
+<ExerciseSolution hint="Define explicit states (header, payload, checksum) and deterministic error rejection paths.">
+
+States should collect header/body bytes, then checksum, then validate and publish. Each read may return fewer bytes than requested. On any error, discard the current record and do not retain partial data as a future header unless the framing protocol says how resynchronization works.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-bin-crc-error-detection" type="verify" level="application" title="CRC Error Detection and Bit-Flip Sensitivity">
+
+Define a 16-bit CRC polynomial and demonstrate mathematical detection of single-bit corruption and two-byte transpositions over the telemetry frame.
+
+<ExerciseSolution hint="Specify polynomial, initial value, and bit coverage to detect single-bit flips and transpositions.">
+
+A CRC specification must include polynomial, initial value, reflection, final XOR, and coverage. Demonstrate the computed checksum before and after mutation; do not claim security or collision resistance from an unspecified sum.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-bin-backward-compat" type="construct" level="transfer" title="Version-2 Extension and Backward Compatibility">
+
+Design a version-2 record extension that enables legacy version-1 parsers to safely reject newer frames while version-2 parsers decode both generations.
+
+<ExerciseSolution hint="Ensure version-1 parsers reject newer versions cleanly while version-2 parsers can decode legacy frames.">
+
+Put new records under version 2 and keep byte offsets unambiguous. A version-1 parser should reject version 2 before interpreting payload, while a version-2 parser can decode a shared prefix and additional fields.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-bin-round-trip-proof" type="prove" level="synthesis" title="Encode-Decode Bijective Round-Trip Invariant Proof">
+
+Provide a formal proof sketch showing that decoding an encoded canonical sample $D(E(x))$ bijectively recovers $x$ for all valid domain values.
+
+<ExerciseSolution hint="Show field-level injectivity, exact integer scaling preservation, and invertibility of byte reversal.">
+
+Show each field’s encoding is injective over its valid range, byte reversal is undone by decoding, sign extension inverts two’s-complement encoding, and scaling uses an exact integer representation. Canonicality excludes alternate encodings.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-bin-fuzz-matrix" type="generalise" level="transfer" title="Hostile Byte Stream Mutation and Fuzzing Matrix">
+
+Construct an adversarial test matrix containing truncated frames, reserved bit corruptions, out-of-range sensor readings, and invalid checksums, stating expected parser outcomes.
+
+<ExerciseSolution hint="Include zero-length frames, partial truncations, reserved-field mutations, and out-of-range sensor values.">
+
+Include length 0, every length 1–15, exact 16, extra trailing bytes, all-zero/all-one values, signed boundaries, each reserved bit, one-bit and burst mutations, stale sequence, and physical limits. Expected outcomes must distinguish reject, accept, and accept-with-warning.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## Proof obligations
+
+Let $E$ be the encoder and $D$ the decoder. For every canonical sample $x$ in the declared domain, the primary correctness property is $D(E(x))=x$.
+
+This requires more than matching a few examples: each field encoding must be injective, scaling must use an exact integer representation, byte-order reversal must be involutive, and the checksum computed by the decoder must equal the encoder’s checksum over the same bytes.
+
+A second property is rejection soundness: if a byte string fails length, version, reserved-bit, checksum, or range validity, the decoder must not publish a sample. A third is framing progress: after rejecting a record, the streaming parser must either discard exactly the documented frame or resynchronize according to an explicit delimiter rule.
+
+Prove the properties compositionally. First prove field encode/decode lemmas, then prove concatenation preserves offsets, then prove checksum agreement, and finally prove the parser’s commit condition. This mirrors hardware refinement: a large interface becomes manageable when each boundary has a local invariant and the composition preserves it.
+
+## Assessment standard
+
+An excellent lab report contains a complete byte-level specification, integer derivations, pseudocode with failure states, generated examples, a test matrix, and proofs tied to stated assumptions. It explains why a packed C struct is insufficient, why CRC is not authentication, why a checksum can be valid for semantically invalid data, and how a future version remains unambiguous. A report that only prints a hexadecimal sample has demonstrated encoding practice but not architectural competence.
+
+An independent engineer or automated test harness should be able to implement the encoder and parser independently from the report and obtain identical bytes for every canonical example.
+
+## References & Further Reading
+
+* IEEE Computer Society. (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). IEEE.
+* Patterson, D. A., & Hennessy, J. L. (2020). *Computer Organization and Design: The Hardware/Software Interface (RISC-V Edition)*, Chapter 2 & 3. Morgan Kaufmann.
+* Software Engineering Institute, Carnegie Mellon University. (2021). *SEI CERT C Coding Standard: Rules for Developing Safe, Reliable, and Secure Systems*. Addison-Wesley.
+

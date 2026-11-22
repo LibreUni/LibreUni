@@ -1,0 +1,394 @@
+---
+title: "SQL lab: build and verify an allocation report"
+course: database-systems
+kind: lab
+description: Use a deterministic allocation fixture to execute and explain joins, grouped reports, anti-joins, and schema constraints.
+prerequisites:
+  - "SQL querying: joins, clause order, grouping, NULL, and `NOT EXISTS`"
+  - "Schema review: grain, keys, foreign keys, and check constraints"
+outcomes:
+  - Load the fixed allocation fixture in the in-browser SQLite runner or a disposable PostgreSQL database, and state the expected result before running a query.
+  - Build zero-safe grouped reports and NULL-safe anti-joins in SQL, then verify the claims that are portable across SQLite and PostgreSQL.
+  - Use adversarial rows and PostgreSQL `EXPLAIN` evidence to separate query correctness from a performance observation.
+omissions:
+  - The browser runner executes read-only SQLite against the fixed fixture. It does not provide a PostgreSQL planner, multi-statement mutation, production deployment, transaction-concurrency testing, or vendor portability certification.
+estimatedMinutes: 720
+assessment: Construct a query portfolio containing a result contract, SQL, predicted and observed edge-case rows, constraint tests, and a brief explanation of one plan observation.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import CodeExercise from '../../../components/CodeExercise';
+import SqlRunner from '../../../components/SqlRunner';
+
+
+Every task uses the same fixed fixture and expected edge cases. The embedded runner executes read-only SQLite in the browser, so a wrong join or a misplaced predicate produces a real result rather than a plausible hand trace. SQLite and PostgreSQL both support aggregate `FILTER`, but a SQLite result is not evidence of PostgreSQL-specific behavior. Use a disposable local PostgreSQL database for constraint error text and PostgreSQL plans.
+
+| Evidence path | What it establishes | What it does not establish |
+| --- | --- | --- |
+| In-browser SQLite runner | executable join, grouping, and `NOT EXISTS` result semantics for this fixture | PostgreSQL-specific planner, MVCC, constraint error text, or isolation behavior |
+| PostgreSQL 18 fixture | PostgreSQL syntax, constraints, `FILTER`, and an observed `EXPLAIN` plan | behavior of other engines or every workload |
+
+Record the engine and version with every observed result. In the runner, `SELECT sqlite_version();` reports the bundled SQLite version. Do not use SQLite output as evidence that a PostgreSQL-specific statement or plan executed.
+
+> **Definition.** A lab result contract states the output grain, inclusion rules, ordering, and test rows before execution. A query is not complete because it returns plausible rows on a happy-path dataset.
+
+## Lab brief and evidence checklist
+
+| Artifact | What to include | Evidence of success |
+| --- | --- | --- |
+| Zero-safe allocation report | Contract, query, predicted table | Service pools with zero active allocations remain |
+| Anti-join | Contract, query, predicted table | A client with only an other-region allocation is correctly included |
+| Constraint probes | Four deliberately invalid writes | Each is rejected by the intended key, foreign key, or check |
+| Plan observation (optional) | `EXPLAIN` output and one cautious claim | A measured plan fact, not a promise that all data will use that plan |
+
+> **Warning.** The browser runner is read-only and sandboxed to this fixture; it is not a production client. Do not run lab statements against a shared or production schema, and do not treat SQLite acceptance as proof of PostgreSQL behavior.
+
+{/* Source tracking: SQL query semantics, `SELECT` clause behavior, `EXPLAIN`, and constraints in this lab are synthesized from PostgreSQL’s current documentation. */}
+
+## Create the fixed fixture
+
+The browser runner below loads this fixture into SQLite automatically. To test PostgreSQL-specific behavior, load these statements into a disposable PostgreSQL database; the tables also support hand tracing.
+
+```sql
+CREATE TABLE client (
+  client_id    integer PRIMARY KEY,
+  display_name text NOT NULL
+);
+
+CREATE TABLE service_pool (
+  pool_id      integer PRIMARY KEY,
+  service_code text NOT NULL,
+  region       text NOT NULL,
+  capacity     integer NOT NULL CHECK (capacity >= 0)
+);
+
+CREATE TABLE allocation (
+  client_id integer NOT NULL REFERENCES client(client_id),
+  pool_id   integer NOT NULL REFERENCES service_pool(pool_id),
+  status    text NOT NULL CHECK (status IN ('active', 'queued', 'suspended')),
+  memory_gb integer CHECK (memory_gb IS NULL OR memory_gb BETWEEN 0 AND 100),
+  PRIMARY KEY (client_id, pool_id)
+);
+
+INSERT INTO client (client_id, display_name) VALUES
+  (1, 'Ada'), (2, 'Bo'), (3, 'Cy'), (4, 'Dee');
+
+INSERT INTO service_pool (pool_id, service_code, region, capacity) VALUES
+  (10, 'S101', 'us-east-1', 2),
+  (11, 'S201', 'us-east-1', 1),
+  (12, 'S301', 'us-east-1', 2),
+  (13, 'S101', 'us-west-2', 2);
+
+INSERT INTO allocation (client_id, pool_id, status, memory_gb) VALUES
+  (1, 10, 'active', 87),
+  (2, 10, 'suspended', 40),
+  (3, 11, 'queued', NULL),
+  (4, 13, 'active', 93);
+```
+
+| Relation | Fixture facts |
+| --- | --- |
+| `client` | Ada, Bo, Cy, and Dee exist |
+| `service_pool` | S101, S201, S301 are in us-east-1; S101 also has an older us-west-2 pool |
+| `allocation` | Ada has active allocation in S101; Bo is suspended; Cy is queued; Dee has active allocation only in us-west-2 |
+
+### Execute the fixture
+
+The runner creates the tables and rows above in SQLite. Predict the warm-up report before pressing **Run query**, then change the query and explain every difference.
+
+<SqlRunner
+  client:load
+  title="Service allocation fixture"
+  description="Count active allocations per us-east-1 service pool. Predict three rows, including the zero counts, before running."
+  schema={`CREATE TABLE client (
+  client_id    integer PRIMARY KEY,
+  display_name text NOT NULL
+);
+CREATE TABLE service_pool (
+  pool_id      integer PRIMARY KEY,
+  service_code text NOT NULL,
+  region       text NOT NULL,
+  capacity     integer NOT NULL CHECK (capacity >= 0)
+);
+CREATE TABLE allocation (
+  client_id integer NOT NULL REFERENCES client(client_id),
+  pool_id   integer NOT NULL REFERENCES service_pool(pool_id),
+  status    text NOT NULL CHECK (status IN ('active', 'queued', 'suspended')),
+  memory_gb integer CHECK (memory_gb IS NULL OR memory_gb BETWEEN 0 AND 100),
+  PRIMARY KEY (client_id, pool_id)
+);
+INSERT INTO client (client_id, display_name) VALUES
+  (1, 'Ada'), (2, 'Bo'), (3, 'Cy'), (4, 'Dee');
+INSERT INTO service_pool (pool_id, service_code, region, capacity) VALUES
+  (10, 'S101', 'us-east-1', 2),
+  (11, 'S201', 'us-east-1', 1),
+  (12, 'S301', 'us-east-1', 2),
+  (13, 'S101', 'us-west-2', 2);
+INSERT INTO allocation (client_id, pool_id, status, memory_gb) VALUES
+  (1, 10, 'active', 87),
+  (2, 10, 'suspended', 40),
+  (3, 11, 'queued', NULL),
+  (4, 13, 'active', 93);`}
+  initialQuery={`SELECT p.service_code,
+       COUNT(a.client_id) AS active_allocations
+FROM service_pool AS p
+LEFT JOIN allocation AS a
+  ON a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+GROUP BY p.pool_id, p.service_code
+ORDER BY p.service_code;`}
+/>
+
+> **Invariant.** `allocation` has grain “one client's status in one service pool.” Its composite primary key forbids two simultaneous rows for the same client/pool pair. The foreign keys forbid an allocation for an unknown client or service pool.
+
+### Warm-up prediction
+
+Before writing SQL, list the us-east-1 service pools and the count of rows whose status is `active`. Do not count `suspended` or `queued` rows.
+
+<ExerciseSolution hint="Filter the allocation rows by status first, then keep every current-region service pool.">
+
+The desired report has S101 with count 1, S201 with count 0, and S301 with count 0. The fixed fixture has no active row for S201 or S301. This table is the oracle for the first task, not an optional afterthought.
+</ExerciseSolution>
+
+## Task 1: keep service pools with zero active allocations
+
+**Result contract:** one row per service pool in `us-east-1`, including pools with no active allocations; columns are `pool_id`, `service_code`, `active_allocations`, and `is_full`; ordered by service code then pool ID.
+
+Start with this skeleton. Decide where the status condition belongs before running it.
+
+<CodeExercise
+  client:load
+  title="Complete the matching and grouping contract"
+  code={String.raw`SELECT p.pool_id,
+       p.service_code,
+       [!blank!] AS active_allocations,
+       [!blank!] AS is_full
+FROM service_pool AS p
+LEFT JOIN allocation AS a
+  [!blank!] a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+[!blank!] p.pool_id, p.service_code, p.capacity
+ORDER BY p.service_code, p.pool_id`}
+  answers={["COUNT(a.client_id)", "COUNT(a.client_id) >= p.capacity", "ON", "GROUP BY"]}
+  explanation="`COUNT(a.client_id)` counts only real matches, so a null-extended service pool reports zero; compare that count with capacity for `is_full`. The status predicate belongs in `ON`: moving it to `WHERE` removes the pools this report must include. `GROUP BY` states the one-row-per-pool grain."
+/>
+
+```sql
+SELECT p.pool_id,
+       p.service_code,
+       COUNT(a.client_id) AS active_allocations,
+       COUNT(a.client_id) >= p.capacity AS is_full
+FROM service_pool AS p
+LEFT JOIN allocation AS a
+  ON a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+GROUP BY p.pool_id, p.service_code, p.capacity
+ORDER BY p.service_code, p.pool_id;
+```
+
+> **Worked example.** The left join emits each us-east-1 service pool even when no active right row exists. `COUNT(a.client_id)` ignores the null-extended value, so it produces zero for S201 and S301; `COUNT(*)` would instead count the left row and be wrong for this contract.
+
+**Expected `Task 1` result** (SQLite evaluates boolean comparisons such as `>=` as `0` / `1`, whereas PostgreSQL returns `false` / `true`):
+
+| `pool_id` | `service_code` | `active_allocations` | `is_full` |
+| --- | --- | --- | --- |
+| 10 | S101 | 1 | 0 |
+| 11 | S201 | 0 | 0 |
+| 12 | S301 | 0 | 0 |
+
+### Break it on purpose
+
+Move `a.status = 'active'` into `WHERE`, then predict the result. Why is S201 absent even though it has an allocation row?
+
+<ExerciseSolution hint="`WHERE` filters after NULL extension and after the right-side status is visible.">
+
+Only S101 remains. S201's only match has status `queued`, so the `WHERE` predicate is false; S301 has a null-extended status, so the predicate is `UNKNOWN`. Both are removed. The query has changed from “all service pools, count active matches” to “service pools with at least one active match.”
+</ExerciseSolution>
+
+> **Counterexample.** A query can be syntactically valid, return a count, and still fail the report contract. A test dataset containing only service pools with active allocations would not expose this `ON`/`WHERE` bug; zero and nonqualifying cases must be seeded deliberately.
+
+## Task 2: find clients with no active allocation in region us-east-1
+
+**Result contract:** one row per client who has no `active` allocation in a us-east-1 service pool; ordered by client ID.
+
+Complete the absence test, then compare your result with the fixture.
+
+<CodeExercise
+  client:load
+  title="Reconstruct the correlated absence test"
+  code={String.raw`SELECT c.client_id, c.display_name
+FROM client AS c
+WHERE [!blank!] (
+  SELECT 1
+  FROM allocation AS a
+  JOIN service_pool AS p ON p.pool_id = a.pool_id
+  WHERE [!blank!]
+    AND a.status = 'active'
+    AND p.region = 'us-east-1'
+);`}
+  answers={["NOT EXISTS", "a.client_id = c.client_id"]}
+  explanation="`NOT EXISTS` states the required absence directly and is NULL-safe. The correlated equality is what binds the subquery to one outer client; without it the subquery answers a global question instead of a per-client one."
+/>
+
+```sql
+SELECT c.client_id, c.display_name
+FROM client AS c
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM allocation AS a
+  JOIN service_pool AS p ON p.pool_id = a.pool_id
+  WHERE a.client_id = c.client_id
+    AND a.status = 'active'
+    AND p.region = 'us-east-1'
+)
+ORDER BY c.client_id;
+```
+
+> **Worked example.** Bo is included because suspended is not active. Cy is included because queued is not active. Dee is included because the only active row is in us-west-2. Ada is excluded because the correlated subquery finds the active us-east-1 S101 allocation.
+
+**Expected `Task 2` result:**
+
+| `client_id` | `display_name` |
+| --- | --- |
+| 2 | Bo |
+| 3 | Cy |
+| 4 | Dee |
+
+> **Warning.** Do not replace this query with `NOT IN (SELECT client_id FROM allocation)` without a precise proof about NULL and the omitted region/status conditions. `NOT EXISTS` states the required correlated absence directly.
+
+### Change the requirement
+
+The platform policy changes “no active allocation” to “no active **or queued** allocation.” Which predicate changes, and which expected row disappears?
+
+<ExerciseSolution hint="The region boundary is unchanged. Only the accepted allocation states change.">
+
+Change the correlated condition to `a.status IN ('active', 'queued')`. Cy disappears because Cy is queued in S201 for us-east-1. Bo remains because suspended is still excluded; Dee remains because the only row is in us-west-2.
+</ExerciseSolution>
+
+## Task 3: test the schema, not just the queries
+
+For each proposed write, predict the intended rejection. In a local PostgreSQL lab, issue each in its own transaction and roll it back after the expected error.
+
+| Proposed fact | Constraint that should reject it |
+| --- | --- |
+| Add a second `(1, 10, 'active', 91)` row | Composite primary key on `(client_id, pool_id)` |
+| Add `(1, 999, 'active', 91)` | Foreign key to `service_pool` |
+| Add `(1, 11, 'active', -4)` | Memory allocation range check |
+| Add `(1, 11, 'active', 101)` | Memory allocation range check |
+
+```sql
+BEGIN;
+INSERT INTO allocation (client_id, pool_id, status, memory_gb)
+VALUES (1, 999, 'active', 91);
+-- PostgreSQL reports a foreign-key violation here.
+ROLLBACK;
+```
+
+> **Invariant.** Constraint tests are part of the schema's behavior specification. A successful `SELECT` cannot prove that invalid state is impossible; each rule needs at least one adversarial write that targets it.
+
+### Diagnose a missing rule
+
+The infrastructure team now says “a full service pool may not gain another active allocation.” Can you express that correctly with the existing row-local `CHECK` constraints? State what is missing from the lab design.
+
+<ExerciseSolution hint="Capacity depends on multiple allocation rows, but a CHECK sees its own row's values.">
+
+No. `capacity` and the count of active allocation rows live in different rows/relations, so an ordinary row-local check cannot safely compare them. The design needs a transaction-aware allocation operation or another coordinated integrity mechanism, plus concurrency tests. This lab intentionally stops before transaction isolation and does not pretend a check constraint solves it.
+</ExerciseSolution>
+
+## Task 4: make a cautious plan observation (optional)
+
+Run the zero-safe report with PostgreSQL's read-only plan command:
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT p.pool_id,
+       p.service_code,
+       COUNT(a.client_id) AS active_allocations
+FROM service_pool AS p
+LEFT JOIN allocation AS a
+  ON a.pool_id = p.pool_id
+ AND a.status = 'active'
+WHERE p.region = 'us-east-1'
+GROUP BY p.pool_id, p.service_code
+ORDER BY p.service_code, p.pool_id;
+```
+
+Record exactly one observation that the output supports, such as “on this four-pool fixture, PostgreSQL chose a sequential scan.” Do **not** conclude that a sequential scan is always best or that the plan proves semantic correctness.
+
+> **Remark (Optional extension on testing an index hypothesis).** In a disposable lab only, add an index after recording the baseline, rerun the same `EXPLAIN`, and compare the actual rows as well as the plan. For a tiny fixture PostgreSQL may rationally keep a sequential scan. The experiment teaches that a physical change is a cost hypothesis, while the report contract is a correctness obligation.
+
+<ExerciseSet>
+
+<Exercise id="ex-lab-conditional-aggregation" type="construct" level="application" title="Conditional Aggregation with Status Filtering">
+
+Write a PostgreSQL query against `service_pool(pool_id, service_code, region)` and `allocation(client_id, pool_id, status)` that reports `(service_code, active_count, queued_count)` for all us-east-1 service pools, preserving pools with zero allocations. Use standard SQL aggregate `FILTER` clauses.
+
+<ExerciseSolution hint="Use a LEFT JOIN from service_pool to allocation and aggregate using FILTER (WHERE ...).">
+
+```sql
+SELECT p.service_code,
+       COUNT(*) FILTER (WHERE a.status = 'active') AS active_count,
+       COUNT(*) FILTER (WHERE a.status = 'queued') AS queued_count
+FROM service_pool AS p
+LEFT JOIN allocation AS a
+  ON a.pool_id = p.pool_id
+WHERE p.region = 'us-east-1'
+GROUP BY p.pool_id, p.service_code
+ORDER BY p.service_code;
+```
+`COUNT(*) FILTER (WHERE ...)` evaluates conditions over right-side matches while preserving empty service pools with count 0.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-lab-multi-row-check-invariant" type="verify" level="application" title="Capacity Check Constraint Scope Limitation">
+
+A developer attempts to enforce a service pool capacity limit by writing `CHECK ((SELECT COUNT(*) FROM allocation a WHERE a.pool_id = pool_id) <= capacity)` inside a table definition. Verify why standard SQL rejects or fails to guarantee this constraint under concurrent transactions.
+
+<ExerciseSolution hint="Check constraints are evaluated strictly on the single modified row and cannot safely query dynamic foreign tables.">
+
+Standard SQL table check constraints evaluate predicates over the immediate columns of the mutated row; subqueries in `CHECK` constraints are either explicitly disallowed by RDBMS engines or susceptible to race conditions under non-serializable isolation levels, where concurrent commits can exceed capacity without seeing each other's inserts.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-lab-explain-plan-interpretation" type="describe" level="recall" title="Query Plan Execution vs. Correctness Semantics">
+
+Explain why observing a sequential scan in `EXPLAIN ANALYZE` on a four-row fixture does not indicate an optimization defect or justify adding an index.
+
+<ExerciseSolution hint="Compare disk page fetch overhead with sequential cache hits on small tables.">
+
+For small relations occupying a single disk page, a sequential scan reads the single page directly into cache without paying the additional overhead of traversing an index B-tree. The optimizer correctly minimizes cost based on catalog statistics. Physical plans reflect cost models, not relational correctness contracts.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-lab-dual-status-report-transfer" type="generalise" level="transfer" title="Multi-Status Allocation Reporting with Null Preservation">
+
+Design test cases for the multi-status allocation query. Identify two adversarial seed rows that expose bugs in: (1) moving status checks to `WHERE`, and (2) using unfiltered `COUNT(*)`.
+
+<ExerciseSolution hint="Provide a service pool with only suspended allocations, and a service pool with zero allocations.">
+
+1. Seed a service pool with only a `suspended` allocation: moving status checks into `WHERE` removes this pool entirely instead of reporting counts `(0, 0)`.
+2. Seed a service pool with zero allocations: using unfiltered `COUNT(*)` reports count 1 due to the null-extended joined row, whereas `COUNT(*) FILTER (...)` or `COUNT(a.client_id)` correctly yields 0.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+- [PostgreSQL 18: `SELECT`](https://www.postgresql.org/docs/18/sql-select.html)
+- [PostgreSQL 18: Constraints](https://www.postgresql.org/docs/18/ddl-constraints.html)
+- [PostgreSQL 18: `EXPLAIN`](https://www.postgresql.org/docs/18/sql-explain.html)
+- [PostgreSQL 18: Table Expressions and Joins](https://www.postgresql.org/docs/18/queries-table-expressions.html)

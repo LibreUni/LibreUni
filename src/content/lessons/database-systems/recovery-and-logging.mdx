@@ -1,0 +1,248 @@
+---
+title: Recovery and Logging
+course: database-systems
+description: Derive crash recovery from durable log prefixes, page LSNs, transaction outcomes, and verified restore paths.
+prerequisites:
+  - Pages, dirty buffers, checksums, and write-ahead ordering
+  - Transactions, commit/abort outcomes, and strict handling of uncommitted writes
+  - "Basic failure models: process crash, storage loss, accidental deletion, and corruption"
+outcomes:
+  - Determine which log and page state is durable at a crash point and what recovery may safely expose.
+  - Trace redo and undo decisions using transaction status and page/log sequence numbers.
+  - Explain why a replica, a WAL archive, and a backup answer different recovery questions.
+  - Design a restore drill that tests an RPO/RTO claim with integrity evidence.
+omissions:
+  - "ARIES is taught at the protocol level: analysis, redo, undo, page LSNs, and compensation log records. A complete industrial implementation, filesystem journaling, storage-controller failure modes, and proprietary backup products are deferred."
+  - Multi-region quorum durability is treated as a distributed-system contract rather than inferred from local WAL alone.
+estimatedMinutes: 480
+assessment: Given a crash image with page LSNs, log records, transaction states, and a recovery objective, derive the legal redo/undo result and propose a restore test that could falsify the claim.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import RecoveryLogPlayground from '../../../components/playgrounds/RecoveryLogPlayground';
+import Quiz from '../../../components/Quiz';
+
+
+A commit response is a promise about a failure boundary. If a power loss follows an acknowledged order but precedes the page write, the order must still be recoverable. If a data page reaches storage before the log record explaining it, recovery loses its evidence. Logging is therefore a protocol for reconstructing a legal state, not an audit trail added after the fact.
+
+{/* Source tracking: WAL ordering, redo information, backup/recovery concepts, and point-in-time recovery are synthesized from PostgreSQL documentation and CMU 15-445/645 materials. The compact log traces and exercises are original. */}
+
+## A durable log prefix orders safe writes
+
+> **Invariant.** Before a changed data page reaches durable storage, the log records describing that page change must be durable. Before a client receives a durable-commit acknowledgement, the commit record must be durable under the stated configuration.
+
+| LSN | Transaction | Record | Durable before crash? |
+| ---: | --- | --- | --- |
+| 900 | T1 | begin | yes |
+| 901 | T1 | set stock 20 → 13 | yes |
+| 902 | T1 | commit | yes |
+| 903 | T2 | begin | yes |
+| 904 | T2 | set stock 13 → 6 | yes |
+| 905 | T2 | commit | no |
+
+<PlantUML code={`@startuml
+participant "transaction" as T
+participant "log manager" as L
+participant "buffer page 42" as B
+database "durable storage" as D
+T -> L : append update LSN 901
+T -> B : change page; pageLSN=901
+L -> D : force log through 901
+B -> D : flush page 42
+T -> L : append commit
+L -> D : force commit before acknowledgement
+@enduml`} />
+
+The stable log prefix ending at 904 supports T1's commit. A crash before 905 becomes durable cannot honestly expose T2 as committed. A data page may contain an update before its transaction commits; recovery's transaction status decides whether to preserve, undo, or hide it. Page LSNs make redo idempotent: if a page already reflects LSN 901 or later, reapplying 901 is unnecessary.
+
+### Prediction — a page beats its log
+
+A page reflecting LSN 911 reaches storage, but the log is durable only through 910. Why is this STEAL-without-WAL failure mode an error even if the update happens to be correct?
+
+<ExerciseSolution hint="Recovery needs a durable explanation for every durable page effect.">
+The durable page contains an effect whose redo/undo record may be absent. After a crash, recovery cannot determine whether the change belonged to a committed transaction, reconstruct an overwritten older value, or repeat the operation safely on another page. WAL forbids this ordering; correctness is not established by observing one lucky final value.
+</ExerciseSolution>
+
+## Redo repeats history; undo removes losers
+
+> **Definition.** A **winner** has a durable commit record at crash time. A **loser** began but lacks a durable commit. Recovery repeats durable changes that are missing from pages and removes or hides loser effects according to its log and visibility design.
+
+<RecoveryLogPlayground client:load />
+
+Advance the durable prefix in the playground and state the committed state before revealing it. The model intentionally exposes one committed transaction and one unfinished transaction; it is a small reasoning model, not a complete implementation of checkpoints or compensation log records.
+
+<PlantUML code={`@startuml
+rectangle "analysis\nclassify winners and losers" as A
+rectangle "redo\nrepeat missing durable effects" as R
+rectangle "undo\nremove loser effects" as U
+rectangle "consistent restart state" as S
+A --> R
+R --> U
+U --> S
+note right of R
+A page LSN prevents
+duplicate redo.
+end note
+@enduml`} />
+
+### Worked trace — crash after page flush
+
+T1 writes stock 20 → 13 at LSN 901 and commits at 902. The page flushed at LSN 901 before the crash. T2's update at 904 may be present in the buffer, but its data-page effect has not reached durable storage; T2 has no durable commit. Recovery sees page LSN 901, skips redundant redo of 901, and starts from a state that includes T1 but not T2. If T2's update had reached the page, recovery would undo or make it invisible because T2 is a loser.
+
+> **Remark (Duality of redo and undo passes).** A committed log record can survive while its changed page does not. Redo brings persistent pages up to the durable committed history. Undo handles the opposite case: a page can contain a loser update that reached storage before the crash. Neither pass substitutes for the other.
+
+## ARIES makes undo repeatable
+
+{/* Source tracking: Analysis, redo, undo, and compensation log records are synthesized from Mohan et al., ARIES (1992); the LSN trace is original. */}
+
+The three-phase sketch above becomes a real recovery protocol only when an interrupted undo can itself survive a crash. ARIES adds **compensation log records** (CLRs) and a per-transaction **undo-next LSN** so that recovery never repeats an undo it already performed.
+
+> **Definition.** A compensation log record (CLR) describes an undo action and carries an `undoNextLSN`, the next earlier record in that transaction's undo chain to examine. That record can be a begin record rather than another update. A CLR is redo-only: it can be replayed during redo but is not itself undone.
+
+**Worked trace.** T2 begins at LSN 903, updates stock at 904, and crashes without a durable commit. During undo, recovery appends CLR 906 for the reversal with `undoNextLSN = 903` and applies the undo. WAL requires that CLR to be durable before its changed page is flushed. Suppose 906 is durable and recovery crashes again before finishing. On restart, redo can repeat 906 if its effect is missing from the page; undo resumes at 903 instead of undoing 904 again. If the CLR was not durable, recovery follows the durable log instead: WAL prevents the corresponding undo page effect from having been safely flushed first.
+
+| Phase | Reads | Produces | Key invariant |
+| --- | --- | --- | --- |
+| Analysis | log from the last checkpoint | transaction table, dirty-page table | every loser is identified before any undo |
+| Redo | log forward from the smallest dirty-page `recLSN` found during analysis | pages brought to their logged history | page LSN skips changes already present |
+| Undo | losers' log records backward | CLRs and restored pre-images | `undoNextLSN` advances exactly once per action |
+
+Analysis starts from the checkpoint designated by the master record and reconstructs transaction and dirty-page state. A fuzzy checkpoint records active transactions and dirty pages while work continues; the dirty-page table can contain a `recLSN` older than the checkpoint, so redo can start earlier. The correctness claim depends on WAL and the recovery protocol, not merely checkpoint frequency.
+
+> **Warning.** A CLR is not an application-level compensating transaction. It repairs physical recovery state. Reversing a shipped order, a sent email, or a payment requires an idempotent business compensation and cannot be inferred from a database undo record.
+
+<Quiz client:load
+  title="Why undo needs its own log record"
+  question="Transaction T3 has updates at LSN 20 and LSN 30. Recovery writes a durable CLR for undoing 30 with undoNextLSN = 20, then crashes. Evaluate which recovery principles apply:"
+  options={[
+    {
+      id: "claim-follow-undonext",
+      text: "Upon restart, the undo pass follows undoNextLSN to LSN 20, avoiding redundant re-undo of the modification at LSN 30.",
+      isCorrect: true,
+      feedback: "Correct. ARIES uses undoNextLSN pointers to ensure an interrupted recovery never duplicates undo work."
+    },
+    {
+      id: "claim-clr-redo-only",
+      text: "The CLR is a redo-only log record during the redo phase to bring the data page up to its logged post-undo state.",
+      isCorrect: true,
+      feedback: "Correct. CLRs are replayed during repeating-history redo but are never themselves undone during rollback."
+    },
+    {
+      id: "claim-repeat-undo",
+      text: "Recovery must undo LSN 30 a second time because the original update record remains in the durable log history.",
+      isCorrect: false,
+      feedback: "Incorrect. CLRs prevent repeating undo actions, which would corrupt data pages if operations are not idempotent."
+    },
+    {
+      id: "claim-clr-commits",
+      text: "Appending a CLR automatically marks the transaction committed and releases all locks before restart.",
+      isCorrect: false,
+      feedback: "Incorrect. A CLR records an undo step of an active or aborted loser transaction; it does not commit the transaction."
+    }
+  ]}
+  explanation="A durable CLR describes an undo action and points backward via undoNextLSN to the next undone record. Redo reapplies the CLR if needed, and undo resumes at undoNextLSN."
+/>
+
+## Recovery objectives require distinct artifacts
+
+> **Warning.** A streaming replica improves failover capability; it is not automatically a historical backup. An accidental delete or logical corruption can replicate quickly to every replica.
+
+| Artifact | Main question answered | Cannot replace |
+| --- | --- | --- |
+| WAL / transaction log | how to recover changes after a base state | a base copy once retention is exhausted |
+| full or incremental backup | what durable base can be restored | recent changes without logs or later backups |
+| replica | how quickly can service continue after a node loss | an independently retained historical restore point |
+| checksum / invariant test | did restored bytes and domain facts survive? | the data copy itself |
+
+A stated recovery point objective (RPO) is acceptable data loss, measured in time or transactions. A recovery time objective (RTO) is acceptable restoration time. They are claims until a restore drill measures them. A backup file existing in object storage is not evidence that it restores, replays logs, starts, and passes business invariants.
+
+### Application — design a restore drill
+
+The product claims RPO ≤ 5 minutes and RTO ≤ 60 minutes after a bad migration. State a drill that can disprove either number.
+
+<ExerciseSolution>
+Capture a known workload and timestamps, take the documented base backup, retain the required WAL/archive interval, then introduce the bad migration. Restore into an isolated environment to a target time no more than five minutes before the declared incident boundary. Measure elapsed time through startup and validation, compare row checksums where appropriate, and test domain invariants such as tenant ownership and nonnegative stock. Failure to reach the time target disproves RPO; exceeding the measured recovery budget disproves RTO.
+</ExerciseSolution>
+
+## Corruption and accidental change need different responses
+
+> **Example.** A checksum failure on one page calls for diagnosis, a known-good recovery source, and evidence that copies are independent. An accidental DELETE with a valid checksum calls for point-in-time recovery or controlled logical repair; checksum success says nothing about intended content.
+
+### Transfer — select the first safe action
+
+A replica is healthy but has already replayed an accidental tenant-wide deletion. A nightly backup exists and WAL is retained. What is the first safe recovery plan?
+
+<ExerciseSolution hint="Do not promote the replica merely because it is available; it has the same logical damage.">
+Preserve the primary, replica, backup, and WAL evidence; restore the backup plus WAL to an isolated target before the deletion; verify the tenant scope and invariants; then choose a controlled logical export/import or a promotion plan with client fencing. The replica can reduce outage time in a node-loss case, but here it is not an independent recovery source.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-rec-aries-clr-replay" type="verify" level="application" title="ARIES Compensation Log Record and Idempotent Restart">
+
+An active transaction $T_1$ modifies page $P$ at LSN 100. During crash recovery, ARIES undo writes CLR 105 with `undoNextLSN = null`, updating page $P$ to LSN 105. Before recovery completes, a second power outage occurs. Verify how the subsequent recovery restart handles CLR 105 and whether page $P$ is undone again.
+
+<ExerciseSolution hint="Check the repeating-history redo phase and CLR redo-only properties.">
+
+On the second restart, the analysis phase identifies CLR 105 in the log. During the repeating-history redo phase, if page $P$'s page LSN on disk is less than 105, CLR 105 is reapplied to restore the page image. Because CLR 105 has `undoNextLSN = null`, the undo phase recognizes that all actions of $T_1$ are already fully reversed and does not attempt any further undo on page $P$. The process is strictly idempotent.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rec-redo-undo-duality" type="describe" level="recall" title="Redo vs. Undo Duality in Write-Ahead Recovery">
+
+Explain why write-ahead logging recovery requires both a forward redo pass and a backward undo pass, and why neither pass can substitute for the other.
+
+<ExerciseSolution hint="Contrast unwritten committed pages with written uncommitted pages.">
+
+The redo pass is necessary because a transaction may commit while its dirty modified data pages remain in the volatile buffer pool without reaching disk (No-Force policy); redo replays logged updates to bring disk pages up to the committed state. The undo pass is necessary because dirty pages from active or uncommitted transactions may have been flushed to disk to free buffer frames (Steal policy); undo rolls back those uncommitted modifications to preserve transaction atomicity.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rec-rpo-rto-drill-design" type="construct" level="application" title="Falsifiable RPO/RTO Disaster Recovery Drill Design">
+
+An enterprise SLA specifies $\text{RPO} \le 5\text{ minutes}$ and $\text{RTO} \le 30\text{ minutes}$. Specify a rigorous disaster recovery test drill protocol that either experimentally proves compliance or produces a falsifying measurement.
+
+<ExerciseSolution hint="Establish a baseline workload with known timestamps, simulate catastrophic primary failure, and time restoration.">
+
+1. Baseline workload: Generate continuous synthetic transactions writing timestamped sequence rows.
+2. Simulated catastrophe: At timestamp $T_0$, ungracefully terminate the primary node (`kill -9`) and sever network storage.
+3. Restoration timing: At $T_0$, trigger restore automation using the latest base backup and WAL archives. Record elapsed wall-clock time until the recovered instance passes health checks and accepts read/write queries ($T_{\text{ready}}$). If $T_{\text{ready}} - T_0 > 30\text{ min}$, the SLA fails RTO.
+4. Data loss audit: Query the maximum transaction timestamp $T_{\text{last}}$ present in the restored database. If $T_0 - T_{\text{last}} > 5\text{ min}$, the SLA fails RPO.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rec-pitr-vs-replica-transfer" type="generalise" level="transfer" title="Point-in-Time Recovery vs. Streaming Replication for Logical Corruption">
+
+A developer mistakenly executes `DROP TABLE accounts;` on production. Within 100 milliseconds, the command is replicated to the hot standby replica. Contrast why promoting the streaming replica fails to recover the data, and prescribe the exact point-in-time recovery (PITR) procedure.
+
+<ExerciseSolution hint="Physical replication propagates logical drop commands immediately. PITR halts replay prior to the drop.">
+
+A physical streaming replica faithfully executes every WAL record emitted by the primary. The `DROP TABLE` command is immediately applied to the replica, destroying the table there as well.
+Prescribed PITR procedure:
+1. Preserve the WAL archive and base backup immediately; do not overwrite existing standby state.
+2. Provision an isolated recovery server and restore the latest full physical base backup taken prior to the incident.
+3. Configure recovery settings with `recovery_target_time` set to 1 second before the exact execution timestamp of the `DROP TABLE` statement (or target the transaction ID preceding the drop).
+4. Replay WAL archives up to the target boundary, verify table integrity, and export the recovered `accounts` relation back to the production environment.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* Mohan, C., Haderle, D., Lindsay, B., Pirahesh, H., & Schwarz, P. (1992). *ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging*. ACM TODS, 17(1), 94–162. (Analysis/redo/undo, page LSNs, and compensation log records.)
+* [PostgreSQL: Write-Ahead Logging](https://www.postgresql.org/docs/current/wal-intro.html)
+* [PostgreSQL: Continuous Archiving and Point-in-Time Recovery](https://www.postgresql.org/docs/current/continuous-archiving.html)
+* [PostgreSQL: Backup and Restore](https://www.postgresql.org/docs/current/backup.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

@@ -1,0 +1,247 @@
+---
+title: Multicore and SIMD
+course: computer-architecture
+description: Parallel execution, shared memory, vectorization, and scalability limits.
+prerequisites:
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
+outcomes:
+  - Derive multicore speedup limits and distinguish SIMD lanes, threads, synchronization, and shared-memory semantics.
+  - Trace coherence, false sharing, reductions, masks, scheduling imbalance, and bandwidth saturation.
+  - Choose a parallel decomposition and defend correctness, determinism, and scaling evidence.
+omissions:
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
+estimatedMinutes: 540
+assessment: Given a parallel kernel and machine limits, calculate a speedup ceiling, trace one race or false-sharing case, and propose a measurable repair.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import PlantUML from '../../../components/PlantUML.astro';
+
+When a single instruction stream cannot provide enough parallel work, architects add parallel execution resources. A multicore processor contains several cores, each with a program counter, registers, pipeline, and usually private upper-level caches, connected to shared memory or shared lower-level caches. SIMD (single instruction, multiple data) applies one instruction to multiple lanes of a vector register. Both approaches can increase throughput, but neither turns an inherently sequential algorithm into a parallel one. The limiting resources are serial dependencies, synchronization, memory bandwidth, communication, locality, and the cost of coordinating independent work.
+
+## Parallel speedup and its limits
+
+> **Theorem.** For a fixed workload with serial fraction $s \in (0, 1]$ and parallelizable fraction $1 - s$ across $P$ homogeneous processors, Amdahl's law bounds speedup by $S(P) = \frac{1}{s + (1 - s)/P} < \frac{1}{s}$.
+
+Let a fraction $s$ of a program be inherently serial and the remaining $1-s$ be perfectly parallel. With $P$ processors, Amdahl’s law gives
+
+$$
+S(P)=\frac{1}{s+(1-s)/P}.
+$$
+
+As $P\to\infty$, speedup approaches $1/s$. If $s=0.1$, the limit is 10× even with unlimited cores. Real programs also pay scheduling, synchronization, load imbalance, cache-coherence, and communication costs, so the observed speedup is lower.
+
+Gustafson’s law describes a scaled problem where the parallel portion grows with processor count. It can justify using more cores for larger datasets, but it does not invalidate Amdahl’s limit for a fixed problem. A performance claim must specify whether input size is fixed or scaled.
+
+**Worked example.** A workload is 90% parallel and runs in 100 seconds on one core. On 8 cores, the ideal time is $10+90/8=21.25$ seconds, speedup 4.71, not 8. If synchronization adds 2 seconds and load imbalance adds 10% to the parallel component, the real time is larger still. Measuring only the parallel kernel can hide serial setup and teardown that dominate end-to-end time.
+
+<Quiz client:load title="Bound the speedup"
+  question="Why can doubling the number of cores fail to double application speed?"
+  options={["Additional cores cannot execute instructions from the same compiled program", "Serial work, synchronization, memory bandwidth, and imbalance limit speedup", "Parallel programs stop using shared memory after work is divided", "Processor clock frequency necessarily halves whenever another core becomes active"]}
+  correctIndex={1}
+  explanation="Amdahl-style limits and shared resources constrain the useful parallel fraction. Extra cores may add contention rather than throughput."
+/>
+
+## Shared-memory execution model
+
+In a shared-memory model, threads communicate by loads and stores to a common address space. A thread’s registers and private cache are local; the shared memory abstraction is implemented through coherence and an interconnect. A data race occurs when conflicting accesses from different threads are not ordered by synchronization and at least one is a write. The language and ISA may treat a data race as undefined or weakly ordered, so “the hardware usually returns the latest value” is not a portable correctness argument.
+
+Locks provide mutual exclusion if acquire and release operations impose the required ordering. A producer should publish data before setting a ready flag with release semantics; a consumer should acquire the flag before reading the data. Without ordering, the consumer may see the flag while some data stores remain invisible or reordered.
+
+**Worked message-passing example.** The producer writes `payload=42`, then performs a release store `ready=1`. The consumer loops with an acquire load of `ready` and, after observing 1, reads `payload`. The synchronization creates a happens-before relation from the payload write to the consumer’s read. Replacing both with ordinary relaxed operations may permit the consumer to observe `ready=1` and an old payload under a weak memory model. Coherence of each individual location does not establish ordering between locations.
+
+<CaseStudy client:load
+  title="False sharing without shared variables"
+  scenario="Two threads update different counters placed on the same cache line. Performance collapses as cores increase even though no thread reads the other's counter."
+  question="Which mechanism best explains the slowdown?"
+  options={["Coherence repeatedly transfers ownership of the shared cache line", "SIMD lanes serialize because each counter has a different numeric value", "Branch prediction fails because threads execute the same loop body", "Virtual memory faults because each core needs a distinct address space"]}
+  correctIndex={0}
+  explanation="Coherence operates at cache-line granularity. Independent words on one line can therefore invalidate and transfer the line between cores, creating false sharing without a source-level data dependency."
+/>
+
+## Cache coherence and false sharing
+
+Each core may cache a line, so a write requires a coherence action. An invalidation protocol makes other copies invalid before or as the writer obtains ownership; an update protocol sends new data to sharers. MESI-like protocols track modified, exclusive, shared, and invalid states. A line in modified state is the current copy and must be written back or transferred before another agent obtains it.
+
+Coherence granularity is a cache line. If thread A increments `counterA` and thread B increments `counterB`, but both fields share one line, each write can invalidate the other core’s copy. This is false sharing: logically independent variables generate physical contention. Padding or alignment can separate them, but increases memory footprint and may affect locality.
+
+Coherence traffic is not free even when a value is correctly synchronized. A lock that bounces between cores causes ownership transfers; a producer-consumer queue may repeatedly move lines between private caches. A scalable algorithm reduces shared writes, batches communication, uses per-core data, or chooses a topology-aware layout.
+
+The sequence uses a simplified two-core write-invalidate protocol. Both copies initially share the same clean line. A writer waits for the other copy to become invalid before modifying the line. `M` means unique modified ownership; `S` means shared; `I` means invalid. A line cannot simultaneously be `M` on one core and `S` on another in this model. Directory routing and transient states are omitted.
+
+<PlantUML code={`@startuml
+participant "Core 0: initially S" as C0
+participant "Core 1: initially S" as C1
+C0 -> C1 : request exclusive ownership / invalidate
+C1 --> C0 : acknowledgement; C1 becomes I
+note left of C0: C0 becomes M; writes counterA
+C1 -> C0 : request exclusive ownership for counterB
+C0 --> C1 : current line data; C0 becomes I
+note right of C1: C1 becomes M; writes counterB
+@enduml`} />
+
+**Transfer check.** The two counters are distinct variables with one writer each. Why do the writes still exchange the line, and what changes if the counters occupy different lines?
+
+<ExerciseSolution title="Separate language independence from line ownership">
+
+The variables have independent writers, but a cache-line ownership request covers both words. On one shared line, each core must obtain the other core's latest copy before its own write. Separating the words onto different lines allows each core to retain ownership of its own line after warm-up. Padding changes physical sharing and footprint, not the synchronization rules of the programming language.
+
+</ExerciseSolution>
+
+## SIMD semantics
+
+> **Warning.** Counterexample: vectorizing `for (i = 1; i < N; i++) a[i] = a[i - 1] + b[i]` with a 4-lane SIMD load of `a[i-1 .. i+2]` produces wrong results because each iteration depends on the previous iteration's updated `a[i - 1]` (a loop-carried RAW dependence of distance 1).
+
+SIMD represents a vector as lanes of equal-width elements. A vector add performs lane-wise addition, optionally with masking, saturation, widening, or narrowing. The compiler can vectorize a loop when iterations are independent, memory accesses are regular enough, and the chosen operation has matching semantics.
+
+For `for i: c[i]=a[i]+b[i]`, four-lane SIMD loads four values from each array, performs four additions, and stores four results. The scalar remainder handles a length not divisible by four unless the ISA provides masked operations. Alignment may be required or merely performance-relevant depending on the instruction. Aliasing can block vectorization: if `c` overlaps `a`, a vector store might overwrite values that later scalar iterations still need.
+
+Floating-point vectorization can change results because reassociation is not generally valid under strict IEEE semantics. The sum `(a+b)+c` may round differently from `a+(b+c)`. A compiler needs permission from the language and numerical contract before reassociating reductions. Integer overflow has the same issue: modular vector addition may not match a checked scalar operation.
+
+## Branches and masks
+
+> **Example.** In a 8-lane SIMD loop with predicate mask $m = \texttt{0b00101101}$, predicated execution evaluates the vector instruction across all lanes and suppresses register/memory writes where $m_k = 0$, eliminating branch misprediction penalties at the cost of executing wasted lane work when $m$ is sparse.
+
+Data-dependent branches reduce SIMD efficiency because lanes may require different control paths. Masked execution computes both or selectively disables lanes. If only one lane satisfies a condition, executing the operation for all lanes may still be cheaper than scalarizing, but the cost depends on operation latency and branch predictability.
+
+**Worked conditional example.** To compute `max(a[i],0)`, a vector compare produces a mask, and a blend selects each lane from the input or zero. No branch is needed. For a rare expensive function `f(x)` taken by one lane, evaluating `f` for all lanes may be wasteful; compaction or scalar fallback may be better. The algorithmic condition is the same, but the hardware cost model differs.
+
+## Reduction and synchronization patterns
+
+> **Warning.** Reassociating an IEEE 754 floating-point reduction from a sequential left-fold into a SIMD/multicore tree reduction changes rounding order and can alter low-order bits or overflow behavior; bit-reproducible parallel reductions require either a fixed tree topology independent of thread scheduling or an widened/exact accumulator.
+
+A reduction such as summing an array has a dependency chain if written as one accumulator. SIMD uses partial sums in lanes, then combines them in a tree. A multicore reduction gives each thread a chunk, computes a local sum, and combines partials. The tree reduces span from $O(n)$ to $O(\log n)$ after parallel work, but floating-point order changes and synchronization/combination costs remain.
+
+| Reduction Step | Active Elements / Vector Lanes | Pairwise Computation | Cumulative Span ($D$) | Total Parallel Work ($W$) |
+| :---: | :--- | :--- | :---: | :---: |
+| Step 0 | 8 elements: $x_0, x_1, x_2, x_3, x_4, x_5, x_6, x_7$ | Initial data distribution | 0 | 0 operations |
+| Step 1 | 4 pairs: $(x_0+x_1), (x_2+x_3), (x_4+x_5), (x_6+x_7)$ | SIMD vector add (lane stride 1) | 1 addition | 4 operations |
+| Step 2 | 2 pairs: $(s_{01}+s_{23}), (s_{45}+s_{67})$ | SIMD vector add (lane stride 2) | 2 additions | 6 operations |
+| Step 3 | 1 final pair: $(s_{0123}+s_{4567})$ | Scalar or horizontal reduction add | 3 additions | 7 operations |
+
+Barrier synchronization lets threads exchange a phase boundary: no thread proceeds until all arrive. Barriers are safe only when every participating thread executes the same barrier count under the same control conditions. A thread that skips a barrier can deadlock its peers. Fences order memory operations but do not by themselves wait for another thread; a barrier usually combines a control rendezvous with memory-order semantics.
+
+## Scheduling and load balance
+
+> **Definition.** In the work-span task-graph model with total work $T_1 = W$ and critical-path span $T_\infty = D$, execution time $T_P$ on $P$ processors satisfies the lower bound $T_P \ge \max(W/P, D)$ and greedy-scheduler upper bound $T_P \le W/P + D$.
+
+Static partitioning assigns predictable chunks and has low overhead, but uneven work creates idle cores. Dynamic scheduling distributes tasks from a shared queue, improving balance at synchronization and contention cost. Work stealing lets idle workers take tasks from others, often scaling better for recursive irregular workloads but complicating locality and determinism.
+
+| Scheduling Strategy | Task Assignment Timing | Dispatch Overhead | Dynamic Imbalance Tolerance | Cache Locality Preservation |
+| :--- | :--- | :--- | :--- | :--- |
+| **Static Block** | Compile time / loop start | Minimal ($O(1)$ loop bounds arithmetic) | Poor (stragglers stall entire parallel phase) | High (contiguous chunks remain in local L1/L2 cache) |
+| **Dynamic Shared Queue** | Runtime worker demand | High (atomic locks/CAS on centralized queue) | High (fast workers drain more tasks) | Poor (tasks ping-pong between core cache domains) |
+| **Guided Self-Scheduling** | Dynamic decreasing chunks | Moderate (coarse initial chunks, fine tails) | Moderate-High (balances overhead vs imbalance) | Moderate (initial large chunks preserve spatial locality) |
+| **Work Stealing** | Thread-local deques + steal | Low on local work; contention only when idle | Exceptional (handles irregular recursive trees) | High (threads work locally until starvation occurs) |
+
+The critical path or span limits parallel speedup. If a task graph has total work $W$ and span $D$, an ideal lower bound with $P$ processors is at least $\max(W/P,D)$; scheduling overhead adds more. Amdahl’s serial fraction is one coarse view of span; a task graph exposes parallelism at finer granularity.
+
+## Memory bandwidth and locality
+
+> **Example.** For STREAM triad `A[i] = B[i] + s * C[i]` on 8-byte doubles (24 bytes moved per 2 FLOPs, or 32 bytes with write-allocate), arithmetic intensity is at most $2/24 = 0.083\,\text{FLOP/byte}$. On a socket with $40\,\text{GB/s}$ DRAM bandwidth, throughput is capped at $3.3\,\text{GFLOP/s}$ even if 16 cores provide $500\,\text{GFLOP/s}$ of vector compute.
+
+Adding cores can saturate shared memory bandwidth before compute units are full. A streaming loop may already approach the bandwidth ceiling on one or a few cores. Tiling, reuse, compression, and reducing bytes per result can improve scaling more than adding cores. NUMA systems make locality explicit: memory access cost depends on which socket owns the page, so first-touch allocation and thread placement matter.
+
+SIMD and multicore often amplify cache concerns. A four-lane vector accesses 16 bytes or more per instruction; multiple cores can evict each other’s lines or saturate a shared cache. Performance analysis should measure bandwidth, cache misses, coherence traffic, and utilization rather than infer scalability from core count.
+
+## Verification and determinism
+
+> **Remark.** Parallel verification must establish data-race freedom under the target memory model (every conflicting access pair ordered by happens-before) separately from numerical determinism across thread counts and SIMD widths.
+
+Parallel programs may be functionally nondeterministic even when each execution is legal. A race-free reduction with associative integer addition is deterministic in value; floating-point reduction may vary by order. Testing one schedule is insufficient. Stress tests vary thread placement, delays, input sizes, and scheduling; race detectors and model checkers can expose missing synchronization but depend on coverage and memory-model assumptions.
+
+The implementation must prove ownership and lifetime. A thread accessing a shared object needs a lock, atomic protocol, immutable snapshot, or documented data-race-free ownership transfer. A vector load needs bounds and alias assumptions. A DMA or device buffer adds another agent to the coherence and lifetime proof.
+
+<ExerciseSet>
+
+<Exercise id="ex-multi-amdahl-scaling-limits" type="verify" level="application" title="Amdahl's Law Scaling Limits">
+
+Apply Amdahl’s law to a 90% parallel workload on 4, 16, and unlimited cores.
+
+<ExerciseSolution hint="Apply $S = 1/((1-p) + p/N)$ with parallel fraction $p = 0.90$ across core counts $N \in \{4, 16, \infty\}$." >
+
+With $s=0.1$, speedups are $1/(0.1+0.9/4)=3.08$, $1/(0.1+0.9/16)=6.4$, and limit 10. These are ideal fixed-work results; synchronization and imbalance reduce them.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-acquire-release-protocol" type="construct" level="application" title="Acquire-Release Synchronization Protocol">
+
+Design a release/acquire message-passing protocol and explain why relaxed operations are insufficient.
+
+<ExerciseSolution hint="Contrast release stores and acquire loads with relaxed atomic operations for publishing shared data payloads.">
+
+The producer performs ordinary payload stores followed by a release store to `ready`; the consumer performs an acquire load and then reads the payload. The acquire/release pair establishes ordering. Relaxed operations provide atomicity for each location but not the cross-location publication guarantee.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-false-sharing-elimination" type="describe" level="transfer" title="False Sharing Elimination in Thread-Local Counters">
+
+Identify false sharing in a per-thread counter array and propose two layouts.
+
+<ExerciseSolution hint="Analyze how multiple cores updating adjacent counter array elements in the same cache line cause invalidation ping-pong.">
+
+Place counters in separate cache lines with padding or use per-core arrays aligned to line boundaries; alternatively aggregate less often. Padding costs memory, while frequent aggregation costs synchronization.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-simd-conditional-clamp" type="construct" level="transfer" title="SIMD Conditional Selection and Tail Handling">
+
+Vectorize a conditional clamp and handle a non-multiple-of-lane-count length.
+
+<ExerciseSolution hint="Use vector comparison masks or blend instructions for branches, and consider scalar cleanup loops for residual elements.">
+
+Use a compare mask and blend input with zero, then process the scalar tail or use a masked vector operation. Verify the length and avoid out-of-bounds masked loads under the ISA’s mask semantics.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-fp-reduction-reproducibility" type="describe" level="transfer" title="Floating-Point Non-Associativity in Parallel Reduction">
+
+Analyze a floating-point reduction under different tree shapes and state the reproducibility trade-off.
+
+<ExerciseSolution hint="Explain how changing reduction tree geometry or thread counts alters rounding order and numerical results.">
+
+A tree changes addition order and therefore rounding. Pairwise trees reduce error growth compared with a serial chain but may produce different last bits across thread counts. Reproducibility requires a fixed reduction tree or compensated/accurate summation policy.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-work-span-bounds" type="verify" level="synthesis" title="Work-Span Analysis and Speedup Bounds">
+
+Use work/span bounds to evaluate a task graph with 1,000 units of work and span 40 on 32 processors.
+
+<ExerciseSolution hint="Calculate $T_p \ge \max(T_1/p, T_\infty)$ using total work $T_1 = 1000$ and critical-path span $T_\infty = 40$ on $p = 32$ cores.">
+
+Work bound is $1000/32=31.25$ units and span bound is 40, so ideal time is at least 40 units. More processors cannot beat the critical path; scheduling overhead and dependencies make actual time larger.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-multi-bandwidth-saturation-ceiling" type="describe" level="synthesis" title="Multicore Scaling Under Memory Bandwidth Saturation">
+
+Explain why doubling cores may not improve a bandwidth-bound kernel.
+
+<ExerciseSolution hint="Consider what happens when aggregate off-chip memory traffic from all active cores meets the memory bus saturation ceiling.">
+
+Once memory bandwidth is saturated, extra cores compete for the same bytes. Improving locality, reducing traffic, increasing reuse, or using a higher-bandwidth memory system is required before additional arithmetic resources help.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
+
+
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: parallel-processing notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/resources/lecture-notes/)
+* [UC Berkeley CS 61C: multicore execution model](https://notes.cs61c.org/content/parallel-tlp/)
+* [MIT 6.004 learning objectives](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)

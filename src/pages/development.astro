@@ -1,0 +1,658 @@
+---
+import { getCollection } from 'astro:content';
+import Layout from '../layouts/Layout.astro';
+import { getLessonsByCourse } from '../utils/lessons';
+import smokeRecords from '../data/course-quality.json';
+const COMPONENTS = [
+  'Quiz',
+  'CodeRunner',
+  'CodeExercise',
+  'CaseStudy',
+  'FillInExercise',
+  'SqlRunner',
+  'PracticeGenerator',
+  'Exercise',
+  'Problem',
+  'Figure',
+  'MathStatement',
+];
+
+function analyzeLesson(body: string, data: any) {
+  const components = Object.fromEntries(COMPONENTS.map((name) => [name, (body.match(new RegExp(`<${name}\\b`, 'g')) || []).length]));
+  return { words: (body.match(/\w+/g) || []).length, components };
+}
+
+const courses = await getCollection('courses');
+const lessons = await getCollection('lessons');
+const lessonsByCourse = await getLessonsByCourse(lessons);
+const courseMetrics = courses
+  .map((course) => {
+    const courseLessons = lessonsByCourse[course.id] ?? [];
+    const modules = new Map<string, { lessons: number; characters: number }>();
+
+    for (const lesson of courseLessons) {
+      const module = modules.get(lesson.data.module ?? 'Overview') ?? { lessons: 0, characters: 0 };
+      module.lessons += 1;
+      module.characters += lesson.body.length;
+      modules.set(lesson.data.module ?? 'Overview', module);
+    }
+
+    const characters = [...modules.values()].reduce((total, module) => total + module.characters, 0);
+    const analyzedLessons = courseLessons.map(l => analyzeLesson(l.body, l.data));
+    const componentCounts = Object.fromEntries(COMPONENTS.map(name => [name, analyzedLessons.reduce((sum, l) => sum + (l.components[name] || 0), 0)]));
+    const smokeTest = (smokeRecords as Record<string, any>)[course.id]?.smokeTest ?? { status: 'not-run', errors: [] };
+
+    return {
+      course,
+      characters,
+      lessons: courseLessons.length,
+      modules: modules.size,
+      charactersPerLesson: courseLessons.length ? Math.round(characters / courseLessons.length) : 0,
+      charactersPerModule: modules.size ? Math.round(characters / modules.size) : 0,
+      lessonsPerModule: modules.size ? Number((courseLessons.length / modules.size).toFixed(1)) : 0,
+      averageWords: courseLessons.length ? Math.round(analyzedLessons.reduce((sum, l) => sum + l.words, 0) / courseLessons.length) : 0,
+      componentCounts,
+      smokeStatus: smokeTest.status,
+      smokeErrors: smokeTest.errors ?? [],
+    };
+  })
+  .sort((a, b) => a.course.data.title.localeCompare(b.course.data.title));
+
+const formatNumber = new Intl.NumberFormat('en-US');
+const courseData = courseMetrics.map(m => ({
+  id: m.course.id,
+  title: m.course.data.title,
+  category: m.course.data.category || 'General',
+  status: m.course.data.status,
+  characters: m.characters,
+  lessons: m.lessons,
+  modules: m.modules,
+  charactersPerLesson: m.charactersPerLesson,
+  charactersPerModule: m.charactersPerModule,
+  lessonsPerModule: m.lessonsPerModule,
+  averageWords: m.averageWords,
+  componentCounts: m.componentCounts,
+  smokeStatus: m.smokeStatus,
+  smokeErrors: m.smokeErrors,
+}));
+const encoded = Buffer.from(JSON.stringify(courseData)).toString('base64');
+---
+
+<Layout
+  title="Development - LibreUni"
+  description="Course metrics, principal component analysis, UX audit reports, and quality checks for maintaining LibreUni."
+>
+  <main id="ml-dashboard" class="flex-1 bg-light-bg dark:bg-dark-bg" data-courses={encoded}>
+    <section class="border-b border-light-border bg-white px-6 py-16 dark:border-dark-border dark:bg-dark-bg md:px-8 md:py-24">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.25em] text-primary">Development</p>
+        <h1 class="mt-4 text-5xl font-black uppercase leading-none tracking-tight text-light-text dark:text-dark-text md:text-7xl">Course Metrics and Smoke Tests</h1>
+        <p class="mt-6 max-w-3xl text-lg font-medium leading-relaxed text-light-muted dark:text-dark-muted">Generated UX findings, course metrics, and code smoke-test failures for maintaining LibreUni.</p>
+      </div>
+    </section>
+
+    <section class="mx-auto max-w-7xl px-6 py-12 md:px-8 md:py-16">
+      <div class="flex flex-wrap items-end justify-between gap-6">
+        <div>
+          <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Latest UX Audit</p>
+          <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Build report</h2>
+        </div>
+        <a class="btn-secondary !rounded-xl !px-5 !py-3 text-sm" href={`${import.meta.env.BASE_URL}development/ux/index.html`} target="_blank" rel="noopener noreferrer">Open full report</a>
+      </div>
+      <p class="mt-4 text-sm leading-relaxed text-light-muted dark:text-dark-muted"><code>npm run check:ux</code> or <code>npm run build</code> regenerates this report. It checks contrast, color-vision simulation, target sizes, overlap, and overflow across the representative routes.</p>
+      <iframe class="mt-8 h-[42rem] w-full rounded-2xl border border-light-border bg-white dark:border-dark-border dark:bg-dark-surface" src={`${import.meta.env.BASE_URL}development/ux/index.html`} title="Latest LibreUni UX report">
+        The UX report is unavailable. Run npm run check:ux or npm run build to generate it.
+      </iframe>
+    </section>
+
+    <section class="border-t border-light-border bg-white px-6 py-12 dark:border-dark-border dark:bg-dark-bg md:px-8 md:py-16">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Interactive Tools</p>
+        <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Developer Tools & Inspector</h2>
+        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">
+          Enable the live theme customizer and element inspector. When enabled, a floating <code class="bg-primary/10 text-primary px-1.5 py-0.5 rounded font-black">+</code> button will appear in the bottom-right corner of all pages.
+        </p>
+        <div class="mt-6 flex flex-wrap items-center gap-4">
+          <button id="toggle-dev-tools" type="button" class="btn-secondary !rounded-xl !px-6 !py-3 text-sm font-black transition-all">
+            Enable Developer Tools
+          </button>
+          <span id="dev-tools-status" class="text-xs font-bold text-light-muted dark:text-dark-muted">
+            Currently Disabled
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <section class="border-t border-light-border bg-light-surface/50 px-6 py-12 dark:border-dark-border dark:bg-dark-surface/40 md:px-8 md:py-16">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">PCA</p>
+        <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Principal Component Analysis</h2>
+        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">PCA reduces descriptive course metrics into principal components. The plots show patterns and outliers in course size and structure; they are not quality ratings.</p>
+
+        <div class="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div class="rounded-2xl border border-light-border bg-white p-6 dark:border-dark-border dark:bg-dark-bg">
+            <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Scree Plot</p>
+            <p class="mt-1 text-sm text-light-muted dark:text-dark-muted">Variance explained per principal component</p>
+            <svg id="scree-plot" class="mt-4 hidden h-64 w-full" viewBox="0 0 800 260" role="img" aria-label="PCA scree plot showing variance explained by each component"></svg>
+            <p id="scree-summary" class="mt-2 text-xs leading-relaxed text-light-muted dark:text-dark-muted"></p>
+          </div>
+
+          <div class="rounded-2xl border border-light-border bg-white p-6 dark:border-dark-border dark:bg-dark-bg">
+            <div class="flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Component Space</p>
+                <p class="mt-1 text-sm text-light-muted dark:text-dark-muted">Course positions on PCA axes</p>
+              </div>
+              <div class="flex gap-3 text-xs font-bold text-light-text dark:text-dark-text">
+                <label>X <select id="chart-x" class="ml-1 rounded-lg border border-light-border bg-light-bg px-2 py-1 dark:border-dark-border dark:bg-dark-surface"><option value="pca1">PCA 1</option><option value="characters">Total characters</option><option value="lessons">Lessons</option><option value="modules">Modules</option><option value="charactersPerLesson">Chars / lesson</option><option value="charactersPerModule">Chars / module</option><option value="lessonsPerModule">Lessons / module</option><option value="averageWords">Avg words</option></select></label>
+                <label>Y <select id="chart-y" class="ml-1 rounded-lg border border-light-border bg-light-bg px-2 py-1 dark:border-dark-border dark:bg-dark-surface"><option value="pca2">PCA 2</option><option value="characters">Total characters</option><option value="lessons">Lessons</option><option value="modules">Modules</option><option value="charactersPerLesson">Chars / lesson</option><option value="charactersPerModule">Chars / module</option><option value="lessonsPerModule">Lessons / module</option><option value="averageWords">Avg words</option></select></label>
+              </div>
+            </div>
+            <svg id="scatter-plot" class="mt-4 hidden h-64 w-full" viewBox="0 0 800 300" role="img" aria-label="Course metrics scatter plot on PCA axes"></svg>
+            <p id="chart-tooltip" class="mt-1 text-xs font-bold text-light-muted dark:text-dark-muted"></p>
+          </div>
+        </div>
+
+        <p id="chart-summary" class="mt-6 text-sm leading-relaxed text-light-muted dark:text-dark-muted"></p>
+      </div>
+    </section>
+
+    <section class="border-t border-light-border bg-white px-6 py-12 dark:border-dark-border dark:bg-dark-bg md:px-8 md:py-16">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Course Metrics</p>
+        <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Content by course</h2>
+        <div class="mt-8 overflow-x-auto rounded-2xl border border-light-border bg-white dark:border-dark-border dark:bg-dark-bg">
+          <table class="w-full min-w-[74rem] text-left text-sm">
+            <thead class="border-b border-light-border text-xs uppercase tracking-wider text-light-muted dark:border-dark-border dark:text-dark-muted">
+              <tr>
+                <th class="min-w-[12rem] px-5 py-4"><button type="button" data-sort="title" class="font-black">Course</button></th><th class="px-5 py-4"><button type="button" data-sort="status" class="font-black">Status</button></th><th class="px-5 py-4"><button type="button" data-sort="lessons" class="font-black">Lessons</button></th><th class="px-5 py-4"><button type="button" data-sort="modules" class="font-black">Modules</button></th><th class="px-5 py-4"><button type="button" data-sort="characters" class="font-black">Characters</button></th><th class="px-5 py-4"><button type="button" data-sort="charactersPerModule" class="font-black">Chars / module</button></th><th class="px-5 py-4"><button type="button" data-sort="charactersPerLesson" class="font-black">Chars / lesson</button></th><th class="px-5 py-4"><button type="button" data-sort="lessonsPerModule" class="font-black">Lessons / module</button></th><th class="px-5 py-4"><button type="button" data-sort="averageWords" class="font-black">Avg words</button></th><th class="min-w-[22rem] px-5 py-4">Components</th><th class="min-w-[9rem] px-5 py-4">Smoke test</th>
+              </tr>
+            </thead>
+            <tbody id="course-metrics" class="divide-y divide-light-border dark:divide-dark-border">
+              {courseMetrics.map((metric) => (
+                <tr class="align-top" data-title={metric.course.data.title} data-status={metric.course.data.status} data-lessons={metric.lessons} data-modules={metric.modules} data-characters={metric.characters} data-characters-per-module={metric.charactersPerModule} data-characters-per-lesson={metric.charactersPerLesson} data-lessons-per-module={metric.lessonsPerModule} data-average-words={metric.averageWords}>
+                  <td class="min-w-[12rem] px-5 py-4 font-black text-light-text dark:text-dark-text">{metric.course.data.title}</td>
+                  <td class="px-5 py-4"><span class="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-black uppercase tracking-wider text-blue-700 dark:text-blue-300">{metric.course.data.status}</span></td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{metric.lessons}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{metric.modules}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.characters)}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.charactersPerModule)}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.charactersPerLesson)}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{metric.lessonsPerModule}</td>
+                  <td class="px-5 py-4 font-bold text-light-text dark:text-dark-text">{formatNumber.format(metric.averageWords)}</td>
+                  <td class="min-w-[22rem] px-5 py-4 text-xs leading-6 text-light-muted dark:text-dark-muted">{COMPONENTS.map(name => `${name.replace('CaseStudy', 'Case')}: ${metric.componentCounts[name]}`).join(' · ')}</td>
+                  <td class:list={['min-w-[9rem] px-5 py-4 font-bold', metric.smokeStatus === 'passed' ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400']}>{metric.smokeStatus}{metric.smokeErrors.length ? ` (${metric.smokeErrors.length} warnings)` : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="border-t border-light-border bg-light-surface/50 px-6 py-12 dark:border-dark-border dark:bg-dark-surface/40 md:px-8 md:py-16">
+      <div class="mx-auto max-w-7xl">
+        <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Course Health</p>
+        <h2 class="mt-2 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Warnings and Improvement Points</h2>
+        <p class="mt-4 max-w-3xl text-sm leading-relaxed text-light-muted dark:text-dark-muted">Automated checks flag broken structure and supported code syntax. Passing these checks does not certify pedagogy, correctness, sourcing, or exercise quality.</p>
+
+        <div class="mt-8 flex flex-wrap items-center gap-4">
+          <span class="inline-flex items-center gap-1.5 rounded-full border-2 border-light-border bg-light-surface px-4 py-1.5 text-sm font-black dark:border-dark-border dark:bg-dark-surface">
+            <span class="flex h-5 w-5 items-center justify-center rounded-full bg-light-text text-xs text-light-bg dark:bg-dark-text dark:text-dark-bg">!</span>
+            High <span id="high-count" class="text-light-muted dark:text-dark-muted">0</span>
+          </span>
+          <span class="inline-flex items-center gap-1.5 rounded-full border border-light-border bg-light-surface px-4 py-1.5 text-sm font-black dark:border-dark-border dark:bg-dark-surface">
+            <span class="flex h-5 w-5 items-center justify-center rounded-full bg-light-muted text-xs text-light-bg dark:bg-dark-muted dark:text-dark-bg">?</span>
+            Medium <span id="medium-count" class="text-light-muted dark:text-dark-muted">0</span>
+          </span>
+          <span class="inline-flex items-center gap-1.5 rounded-full border border-dashed border-light-border bg-light-surface px-4 py-1.5 text-sm font-black dark:border-dark-border dark:bg-dark-surface">
+            <span class="flex h-5 w-5 items-center justify-center rounded-full border border-light-border text-xs text-light-muted dark:border-dark-border dark:text-dark-muted">i</span>
+            Low <span id="low-count" class="text-light-muted dark:text-dark-muted">0</span>
+          </span>
+        </div>
+
+        <div class="mt-6 flex flex-wrap gap-2">
+          <button type="button" data-filter="all" class="filter-btn rounded-xl border border-light-border bg-light-surface px-4 py-2 text-xs font-black uppercase tracking-wider text-light-text transition-all hover:bg-light-text hover:text-light-bg dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-text dark:hover:text-dark-bg">All</button>
+          <button type="button" data-filter="high" class="filter-btn rounded-xl border border-light-border bg-light-surface px-4 py-2 text-xs font-black uppercase tracking-wider text-light-text transition-all hover:bg-light-text hover:text-light-bg dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-text dark:hover:text-dark-bg">High</button>
+          <button type="button" data-filter="medium" class="filter-btn rounded-xl border border-light-border bg-light-surface px-4 py-2 text-xs font-black uppercase tracking-wider text-light-text transition-all hover:bg-light-text hover:text-light-bg dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-text dark:hover:text-dark-bg">Medium</button>
+          <button type="button" data-filter="low" class="filter-btn rounded-xl border border-light-border bg-light-surface px-4 py-2 text-xs font-black uppercase tracking-wider text-light-text transition-all hover:bg-light-text hover:text-light-bg dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-text dark:hover:text-dark-bg">Low</button>
+        </div>
+
+        <div id="warnings-list" class="mt-6 space-y-3"></div>
+        <p id="warnings-empty" class="mt-8 hidden text-center text-sm text-light-muted dark:text-dark-muted">No warnings match this filter.</p>
+
+        <div id="draft-warnings-container" class="mt-8 border-t border-light-border pt-6 dark:border-dark-border hidden">
+          <details class="group">
+            <summary class="flex cursor-pointer items-center justify-between text-sm font-bold text-light-muted transition hover:text-light-text dark:text-dark-muted dark:hover:text-dark-text select-none">
+              <span class="flex items-center gap-2">
+                <span>Draft/Hidden Course Warnings (Lower Priority)</span>
+                <span class="rounded-full bg-light-surface px-2.5 py-0.5 text-xs font-black text-light-muted dark:bg-dark-surface dark:text-dark-muted border border-light-border dark:border-dark-border" id="draft-count">0</span>
+              </span>
+              <span class="transition-transform group-open:rotate-180">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" /></svg>
+              </span>
+            </summary>
+            <div id="draft-warnings-list" class="mt-4 space-y-3 opacity-60 hover:opacity-100 transition-opacity"></div>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+</Layout>
+
+<script>
+const dashboard = document.getElementById('ml-dashboard');
+if (dashboard && dashboard.dataset.courses) {
+  const COURSES = JSON.parse(atob(dashboard.dataset.courses));
+
+  if (COURSES && COURSES.length > 0) {
+    const FEATURES = ['characters', 'lessons', 'modules', 'charactersPerLesson', 'charactersPerModule', 'lessonsPerModule', 'averageWords'];
+    const LABELS = {
+      pca1: 'PCA 1', pca2: 'PCA 2', characters: 'Total characters', lessons: 'Lessons', modules: 'Modules',
+      charactersPerLesson: 'Chars / lesson', charactersPerModule: 'Chars / module', lessonsPerModule: 'Lessons / module',
+      averageWords: 'Avg words',
+    };
+
+    const mean = (values) => values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
+    const distance = (a, b) => Math.hypot(...a.map((v, i) => v - b[i]));
+    const multiply = (mat, vec) => mat.map((row) => row.reduce((s, v, i) => s + v * vec[i], 0));
+    const normalize = (vec) => { const len = Math.hypot(...vec) || 1; return vec.map((v) => v / len); };
+    const powerIteration = (mat, seed) => {
+      let vec = normalize(seed);
+      for (let i = 0; i < 80; i++) vec = normalize(multiply(mat, vec));
+      const eigenvalue = vec.reduce((s, v, i) => s + v * multiply(mat, vec)[i], 0);
+      return { eigenvalue, vector: vec };
+    };
+
+    const raw = COURSES.map((c) => FEATURES.map((k) => Number(c[k])));
+    const standardized = raw.map((row) => row.map((v, col) => {
+      const values = raw.map((r) => r[col]);
+      const avg = mean(values);
+      const dev = Math.sqrt(mean(values.map((x) => (x - avg) ** 2))) || 1;
+      return (v - avg) / dev;
+    }));
+    const covariance = FEATURES.map((_, r) => FEATURES.map((__, c) => mean(standardized.map((row) => row[r] * row[c]))));
+
+    const maxComponents = Math.max(2, Math.min(FEATURES.length, COURSES.length - 1));
+    const components = [];
+    let current = covariance.map((r) => [...r]);
+    for (let i = 0; i < maxComponents; i++) {
+      const seed = FEATURES.map((_, idx) => ((idx + i) % 2 ? 1 : -1) / (idx + 1 + i * 0.1));
+      const pc = powerIteration(current, seed);
+      components.push(pc);
+      current = current.map((row, r) => row.map((v, c) => v - pc.eigenvalue * pc.vector[r] * pc.vector[c]));
+    }
+    const totalVar = components.reduce((s, c) => s + Math.max(0, c.eigenvalue), 0);
+    const varRatios = components.map((c) => totalVar > 0 ? Math.max(0, c.eigenvalue) / totalVar : 0);
+    const cumulative = varRatios.reduce((acc, v) => { acc.push(Math.min(1, (acc.at(-1) || 0) + v)); return acc; }, []);
+
+    COURSES.forEach((c, i) => {
+      c.pca1 = standardized[i].reduce((s, v, col) => s + v * components[0].vector[col], 0);
+      c.pca2 = standardized[i].reduce((s, v, col) => s + v * components[1].vector[col], 0);
+    });
+
+    // Group courses by actual domain category rather than running K-means on a small catalog.
+    const categories = Array.from(new Set(COURSES.map((c) => c.category || 'General')));
+    const origin = FEATURES.map(() => 0);
+    const catalogDist = standardized.map((row) => distance(row, origin));
+    COURSES.forEach((c, i) => {
+      c.categoryIndex = Math.max(0, categories.indexOf(c.category || 'General'));
+      c.profileDistance = catalogDist[i];
+    });
+
+    const escapeHtml = (value) =>
+      String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+
+    function renderScree() {
+      const svg = document.getElementById('scree-plot');
+      if (!svg) return;
+      svg.classList.remove('hidden');
+      const W = 800, H = 260, L = 50, R = 20, T = 20, B = 45;
+      const plotW = W - L - R, plotH = H - T - B;
+      const numBars = cumulative.length;
+      const barW = Math.min(64, (plotW / Math.max(1, numBars)) * 0.48);
+      const gap = (plotW - barW * numBars) / (numBars + 1);
+      let html = `<rect x="0" y="0" width="${W}" height="${H}" fill="none"/>`;
+      html += `<line x1="${L}" y1="${T}" x2="${L}" y2="${T + plotH}" stroke="currentColor" opacity="0.3"/>`;
+      html += `<line x1="${L}" y1="${T + plotH}" x2="${L + plotW}" y2="${T + plotH}" stroke="currentColor" opacity="0.3"/>`;
+      for (let pct = 0; pct <= 100; pct += 25) {
+        const y = T + plotH - (pct / 100) * plotH;
+        html += `<text x="${L - 6}" y="${y + 4}" text-anchor="end" font-size="10" fill="currentColor" opacity="0.5">${pct}%</text>`;
+        html += `<line x1="${L}" y1="${y}" x2="${L + plotW}" y2="${y}" stroke="currentColor" opacity="0.08" stroke-dasharray="3,3"/>`;
+      }
+      const pathData = [];
+      cumulative.forEach((cum, i) => {
+        const x = L + gap + i * (barW + gap);
+        const barH = cum * plotH;
+        const y = T + plotH - barH;
+        html += `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" fill="currentColor" opacity="${(0.15 + 0.25 * cum).toFixed(3)}" rx="3"/>`;
+        html += `<text x="${x + barW / 2}" y="${T + plotH + 16}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.6">PC${i + 1}</text>`;
+        pathData.push({ x: x + barW / 2, y });
+      });
+      let cumPath = '';
+      pathData.forEach((pt, i) => {
+        cumPath += `${i === 0 ? 'M' : 'L'}${pt.x} ${pt.y} `;
+      });
+      if (pathData.length) {
+        html += `<path d="${escapeHtml(cumPath.trim())}" fill="none" stroke="currentColor" stroke-width="2" opacity="0.6"/>`;
+        pathData.forEach((pt, i) => {
+          html += `<circle cx="${pt.x}" cy="${pt.y}" r="3.5" fill="currentColor" opacity="0.8"/>`;
+          html += `<text x="${pt.x}" y="${pt.y - 8}" text-anchor="middle" font-size="9" font-weight="bold" fill="currentColor" opacity="0.85">${(cumulative[i] * 100).toFixed(0)}%</text>`;
+        });
+      }
+      svg.innerHTML = html;
+      const pc2cum = cumulative[1] || 0;
+      const screeSummaryEl = document.getElementById('scree-summary');
+      if (screeSummaryEl) {
+        screeSummaryEl.textContent =
+          `PC1 explains ${(varRatios[0] * 100).toFixed(1)}%, cumulative PC1+PC2 explains ${(pc2cum * 100).toFixed(1)}% of variance across ${COURSES.length} courses (${numBars} non-zero principal components).`;
+      }
+    }
+
+    function renderScatter(xKey, yKey) {
+      const svg = document.getElementById('scatter-plot');
+      if (!svg) return;
+      svg.classList.remove('hidden');
+      const tooltip = document.getElementById('chart-tooltip');
+      const LEGEND_COLS = 4;
+      const LEGEND_ROW_H = 18;
+      const legendRows = Math.max(1, Math.ceil(categories.length / LEGEND_COLS));
+      const W = 800, H = 300, L = 64, R = 90, T = 10 + legendRows * LEGEND_ROW_H, B = 42;
+      const plotW = W - L - R, plotH = H - T - B;
+      const xVals = COURSES.map((c) => Number(c[xKey]));
+      const yVals = COURSES.map((c) => Number(c[yKey]));
+      const scale = (v, list, start, size, invert = false) => {
+        if (list.length === 0) return start + size / 2;
+        const mn = Math.min(...list), mx = Math.max(...list);
+        const ratio = mx === mn ? 0.5 : (v - mn) / (mx - mn);
+        return start + (invert ? 1 - ratio : ratio) * size;
+      };
+      let html = `<line x1="${L}" y1="${T}" x2="${L}" y2="${T + plotH}" stroke="currentColor" opacity="0.3"/>`;
+      html += `<line x1="${L}" y1="${T + plotH}" x2="${L + plotW}" y2="${T + plotH}" stroke="currentColor" opacity="0.3"/>`;
+      html += `<text x="${L + plotW / 2}" y="${H - 6}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.6">${escapeHtml(LABELS[xKey] || xKey)}</text>`;
+      html += `<text x="16" y="${T + plotH / 2}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.6" transform="rotate(-90,16,${T + plotH / 2})">${escapeHtml(LABELS[yKey] || yKey)}</text>`;
+      const categoryColors = ['#2563eb', '#059669', '#7c3aed', '#d97706', '#db2777', '#0891b2'];
+      categories.forEach((cat, i) => {
+        const col = i % LEGEND_COLS;
+        const row = Math.floor(i / LEGEND_COLS);
+        const lx = L + col * 165;
+        const ly = 16 + row * LEGEND_ROW_H;
+        const color = categoryColors[i % categoryColors.length];
+        html += `<circle cx="${lx}" cy="${ly}" r="4.5" fill="${escapeHtml(color)}"/><text x="${lx + 8}" y="${ly + 4}" font-size="10" font-weight="600" fill="currentColor" opacity="0.75">${escapeHtml(cat)}</text>`;
+      });
+      COURSES.forEach((c, i) => {
+        const x = scale(xVals[i], xVals, L + 16, plotW - 32);
+        const y = scale(yVals[i], yVals, T + 16, plotH - 32, true);
+        const color = categoryColors[c.categoryIndex % categoryColors.length];
+        const estLabelW = String(c.title || '').length * 6.4;
+        const flipRight = x + 10 + estLabelW > W - 10 || x > W - R - 40;
+        const labelX = flipRight ? x - 10 : x + 10;
+        html += `<circle cx="${x}" cy="${y}" r="6" fill="${escapeHtml(color)}" opacity="0.88" class="scatter-dot cursor-pointer" data-index="${i}"/>`;
+        html += `<text x="${labelX}" y="${y + 4}" text-anchor="${flipRight ? 'end' : 'start'}" font-size="10" font-weight="600" fill="currentColor" opacity="0.8">${escapeHtml(c.title)}</text>`;
+      });
+      svg.innerHTML = html;
+      svg.querySelectorAll('.scatter-dot').forEach((dot) => {
+        const i = Number(dot.dataset.index);
+        const c = COURSES[i];
+        const xv = Number(c[xKey]), yv = Number(c[yKey]);
+        dot.addEventListener('mouseenter', () => {
+          if (tooltip) {
+            tooltip.textContent = `${c.title} (${c.category}): ${LABELS[xKey]} ${xv.toLocaleString()}, ${LABELS[yKey]} ${yv.toLocaleString()}.`;
+          }
+        });
+        dot.addEventListener('mouseleave', () => { if (tooltip) tooltip.textContent = ''; });
+      });
+    }
+
+    function generateWarnings() {
+      const all = [];
+      for (const c of COURSES) {
+        const isDraft = c.status === 'draft';
+        for (const error of (c.smokeErrors || [])) {
+          all.push({
+            course: c.title,
+            isDraft,
+            severity: 'high',
+            message: error,
+            fix: 'Keep working on this course until every reported code block and structural smoke test passes. Run python3 scripts/course_stats.py after each fix.'
+          });
+        }
+        if (c.smokeStatus === 'not-run') all.push({ course: c.title, isDraft, severity: 'medium', message: 'Smoke tests have not produced a record for this course.', fix: 'Run python3 scripts/course_stats.py --write-quality.' });
+        if (c.modules === 1 && c.lessons > 3) {
+          all.push({
+            course: c.title,
+            isDraft,
+            severity: 'low',
+            message: 'Only one module with multiple lessons. Consider organizing into thematic modules.',
+            fix: "Update the course manifest at src/data/course-manifests/<course-id>.yml to organize lessons under multiple structured modules."
+          });
+        }
+        const unusedComponents = Object.entries(c.componentCounts || {})
+          .filter(([, count]) => Number(count) === 0)
+          .map(([name]) => name);
+        if (unusedComponents.length > 0) {
+          all.push({
+            course: c.title,
+            isDraft,
+            severity: 'low',
+            message: `Component coverage note: 0 instances of ${unusedComponents.join(', ')} across ${c.lessons} lessons.`,
+            fix: 'Optional: add where pedagogically appropriate for the subject domain (not all courses require every component family).'
+          });
+        }
+      }
+      return all;
+    }
+
+    function renderWarnings() {
+      const container = document.getElementById('warnings-list');
+      const empty = document.getElementById('warnings-empty');
+      if (!container || !empty) return;
+      const warnings = generateWarnings();
+      
+      const publicWarnings = warnings.filter((w) => !w.isDraft);
+      const draftWarnings = warnings.filter((w) => w.isDraft);
+      
+      const groups = { high: [], medium: [], low: [] };
+      for (const w of publicWarnings) groups[w.severity].push(w);
+      
+      const highCountEl = document.getElementById('high-count');
+      const mediumCountEl = document.getElementById('medium-count');
+      const lowCountEl = document.getElementById('low-count');
+      if (highCountEl) highCountEl.textContent = groups.high.length;
+      if (mediumCountEl) mediumCountEl.textContent = groups.medium.length;
+      if (lowCountEl) lowCountEl.textContent = groups.low.length;
+
+      const draftCountEl = document.getElementById('draft-count');
+      if (draftCountEl) draftCountEl.textContent = draftWarnings.length;
+
+      const draftContainer = document.getElementById('draft-warnings-container');
+      if (draftContainer) {
+        if (draftWarnings.length > 0) {
+          draftContainer.classList.remove('hidden');
+        } else {
+          draftContainer.classList.add('hidden');
+        }
+      }
+
+      const BORDER_MAP = { high: 'border-2', medium: 'border', low: 'border border-dashed' };
+      const ICON_MAP = { high: '!', medium: '?', low: 'i' };
+
+      function renderWarningCard(w, isDraft) {
+        const severity = w.sev || w.severity;
+        const borderClass = BORDER_MAP[severity] || 'border';
+        const iconChar = ICON_MAP[severity] || 'i';
+        const cardSurface = isDraft ? 'bg-white/60 dark:bg-dark-bg/60' : 'bg-white dark:bg-dark-bg';
+        const badgeBg = isDraft
+          ? 'bg-light-muted text-light-bg dark:bg-dark-muted dark:text-dark-bg'
+          : 'bg-light-text text-light-bg dark:bg-dark-text dark:text-dark-bg';
+        const titleClass = isDraft ? 'text-light-muted dark:text-dark-muted' : 'text-light-text dark:text-dark-text';
+        const courseLabel = isDraft ? `${w.course} (Draft)` : w.course;
+        const fixBoxClass = isDraft
+          ? 'bg-light-surface/30 dark:bg-dark-surface/30 border border-light-border/50 dark:border-dark-border/50'
+          : 'bg-light-surface/50 dark:bg-dark-surface/50 border border-light-border dark:border-dark-border';
+        const fixLabelClass = isDraft ? 'text-light-muted dark:text-dark-muted' : 'text-primary';
+        const fixHtml = w.fix
+          ? `
+            <div class="mt-3 rounded-lg ${escapeHtml(fixBoxClass)} p-2.5">
+              <p class="text-xs font-medium ${escapeHtml(titleClass)}">
+                <span class="${escapeHtml(fixLabelClass)} font-black uppercase tracking-wider text-[10px] mr-1">Suggested Fix:</span>${escapeHtml(w.fix)}
+              </p>
+            </div>
+          `
+          : '';
+
+        return `
+          <div class="warning-card rounded-xl ${escapeHtml(borderClass)} border-light-border ${escapeHtml(cardSurface)} p-4 dark:border-dark-border">
+            <div class="flex gap-3">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${escapeHtml(badgeBg)} text-xs font-black">${escapeHtml(iconChar)}</span>
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-sm font-black ${escapeHtml(titleClass)}">${escapeHtml(courseLabel)}</span>
+                  <span class="rounded border border-light-border bg-light-surface px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-light-muted dark:border-dark-border dark:bg-dark-surface dark:text-dark-muted">${escapeHtml(severity)}</span>
+                </div>
+                <p class="mt-1 text-sm leading-relaxed text-light-muted dark:text-dark-muted">${escapeHtml(w.message)}</p>
+                ${fixHtml}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      const ACTIVE_CLASSES = ['border-primary', 'dark:border-primary', 'border-2', 'bg-primary', 'dark:bg-primary', 'text-white', 'dark:text-white'];
+      const INACTIVE_CLASSES = [
+        'border-light-border',
+        'dark:border-dark-border',
+        'border',
+        'bg-light-surface',
+        'dark:bg-dark-surface',
+        'text-light-text',
+        'dark:text-dark-text',
+        'hover:bg-light-text',
+        'hover:text-light-bg',
+        'dark:hover:bg-dark-text',
+        'dark:hover:text-dark-bg',
+      ];
+      function setFilterButtonActive(button, active) {
+        if (active) {
+          button.classList.remove(...INACTIVE_CLASSES);
+          button.classList.add(...ACTIVE_CLASSES);
+          button.setAttribute('aria-pressed', 'true');
+        } else {
+          button.classList.remove(...ACTIVE_CLASSES);
+          button.classList.add(...INACTIVE_CLASSES);
+          button.setAttribute('aria-pressed', 'false');
+        }
+      }
+
+      function render(filter) {
+        const severities = filter === 'all' ? ['high', 'medium', 'low'] : [filter];
+        const items = severities.flatMap((sev) => groups[sev].map((w) => ({ ...w, sev })));
+        if (!items.length) {
+          container.innerHTML = '';
+          empty.classList.remove('hidden');
+        } else {
+          empty.classList.add('hidden');
+          container.innerHTML = items.map((w) => renderWarningCard(w, false)).join('');
+        }
+
+        // Render draft warnings in their own container list
+        const draftList = document.getElementById('draft-warnings-list');
+        if (draftList) {
+          draftList.innerHTML = draftWarnings.length === 0
+            ? ''
+            : draftWarnings.map((w) => renderWarningCard(w, true)).join('');
+        }
+      }
+
+      document.querySelectorAll('[data-filter]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('[data-filter]').forEach((b) => setFilterButtonActive(b, b === btn));
+          render(btn.dataset.filter);
+        });
+      });
+
+      document.querySelectorAll('[data-filter]').forEach((b) => setFilterButtonActive(b, b.dataset.filter === 'all'));
+      render('all');
+    }
+
+    const summaryEl = document.getElementById('chart-summary');
+    const pc2cum = cumulative[1] || 0;
+    if (summaryEl) {
+      summaryEl.textContent =
+        `PCA on 7 descriptive course metrics across ${COURSES.length} courses (${categories.join(', ')}). ${(varRatios[0] * 100).toFixed(1)}% of variance is captured by PC1 and ${(pc2cum * 100).toFixed(1)}% by PC1+PC2. Courses are grouped by subject category.`;
+    }
+
+    renderScree();
+    renderScatter('pca1', 'pca2');
+    renderWarnings();
+
+    document.querySelectorAll('[data-sort]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.sort;
+        const tbody = document.getElementById('course-metrics');
+        if (!tbody) return;
+        const rows = [...tbody.rows];
+        rows.sort((a, b) => {
+          const va = a.dataset[key], vb = b.dataset[key];
+          const na = Number(va), nb = Number(vb);
+          const isNumA = !Number.isNaN(na) && va !== '';
+          const isNumB = !Number.isNaN(nb) && vb !== '';
+          if (isNumA && isNumB) {
+            return na - nb;
+          }
+          return String(va).localeCompare(String(vb));
+        });
+        const dir = btn.dataset.dir = -(Number(btn.dataset.dir) || 1);
+        if (dir < 0) rows.reverse();
+        rows.forEach((row) => tbody.append(row));
+      });
+    });
+
+    const chartXSelect = document.getElementById('chart-x');
+    const chartYSelect = document.getElementById('chart-y');
+    if (chartXSelect && chartYSelect) {
+      chartXSelect.addEventListener('change', () => renderScatter(chartXSelect.value, chartYSelect.value));
+      chartYSelect.addEventListener('change', () => renderScatter(chartXSelect.value, chartYSelect.value));
+    }
+  }
+}
+
+// Developer Tools Toggle
+const toggleBtn = document.getElementById('toggle-dev-tools');
+const statusText = document.getElementById('dev-tools-status');
+
+if (toggleBtn && statusText) {
+  const updateStatus = () => {
+    const isEnabled = localStorage.getItem('lu:enable-dev-themer') === 'true';
+    if (isEnabled) {
+      toggleBtn.textContent = 'Disable Developer Tools';
+      toggleBtn.classList.remove('btn-secondary');
+      toggleBtn.classList.add('btn-primary');
+      statusText.textContent = 'Currently Enabled (floating "+" button visible at bottom-right)';
+      statusText.classList.remove('text-light-muted', 'dark:text-dark-muted');
+      statusText.classList.add('text-primary');
+    } else {
+      toggleBtn.textContent = 'Enable Developer Tools';
+      toggleBtn.classList.remove('btn-primary');
+      toggleBtn.classList.add('btn-secondary');
+      statusText.textContent = 'Currently Disabled';
+      statusText.classList.remove('text-primary');
+      statusText.classList.add('text-light-muted', 'dark:text-dark-muted');
+    }
+  };
+
+  toggleBtn.addEventListener('click', () => {
+    const isEnabled = localStorage.getItem('lu:enable-dev-themer') === 'true';
+    localStorage.setItem('lu:enable-dev-themer', isEnabled ? 'false' : 'true');
+    window.dispatchEvent(new Event('lu:toggle-dev-themer'));
+    updateStatus();
+  });
+
+  updateStatus();
+}
+</script>

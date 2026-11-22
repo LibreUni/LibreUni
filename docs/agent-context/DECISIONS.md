@@ -1,0 +1,168 @@
+# Operating decisions
+
+## D-0001 — Repository-native agent operating model
+
+- **Status:** accepted · 2026-07-19
+- **Decision:** LibreUni uses shared routed documentation, optional collaboration roles, durable Git-reviewed context, and ordinary host capabilities. It does not require a custom agent runtime, MCP server, API key, or proposal store.
+- **Rationale:** The existing canonical router and thin host adapters already provide host-neutral entry. Explicit contracts improve consistency without introducing a second execution system.
+- **Sources:** [`AGENTS.md`](../../AGENTS.md), [`docs/agent-rules/HOSTS.md`](../agent-rules/HOSTS.md), [`docs/agent-rules/ROLES.md`](../agent-rules/ROLES.md)
+
+## D-0002 — Named quality-gate contract
+
+- **Status:** accepted · 2026-07-19
+- **Decision:** `check:contract`, `check:content`, `check:build`, `check:e2e`, `check:ux`, and `check:lighthouse` are the named quality layers. `check:required` is the PR/push contract; `check:full` and `npm test` add Lighthouse for local release verification. CI invokes the same named layers and documents Lighthouse as a main-branch-only exception.
+- **Rationale:** A named contract prevents drift between package scripts, CI steps, and contributor documentation while retaining the existing main-branch Lighthouse cost policy.
+- **Sources:** [`package.json`](../../package.json), [`.github/workflows/quality.yml`](../../.github/workflows/quality.yml), [`docs/agent-rules/VALIDATION.md`](../agent-rules/VALIDATION.md)
+
+## D-0003 — Core curriculum is contract-first and transfer-oriented
+
+- **Status:** superseded by D-0005 (lesson shell) and D-0006 (curriculum scope)
+- **Decision:** The public CS/SWE core is organized as 10 sequenced courses and 238 lessons. Course manifests and [`docs/curriculum/COURSE_CROSSWALK.md`](../curriculum/COURSE_CROSSWALK.md) define prerequisites, progression, boundaries, and omitted specialist scope. Every lesson uses explicit prerequisite/outcome/omission/assessment metadata and the shared lesson shell supplies a compact learning contract, a semantic working model, a pre-reading prediction, and an end-of-lesson transfer check. Course-specific content remains responsible for the substantive examples, proofs, labs, and case decisions.
+- **Rationale:** A shared shell makes the learner-facing contract and interaction rhythm consistent without collapsing the disciplines into generic prose. Explicit boundaries make advanced or platform-specific claims auditable and prevent the core from pretending to be a complete specialist curriculum.
+- **Sources:** [`src/content.config.ts`](../../src/content.config.ts), the 10 files under [`src/data/course-manifests/`](../../src/data/course-manifests/), and superseding decision D-0005.
+
+## D-0004 — Lesson prose is checked for non-instructional filler
+
+- **Status:** accepted · 2026-08-23
+- **Decision:** The lesson verifier rejects visible conversational filler, chronological navigation, empty intensifiers, marketing framing, stock welcomes, and trivializing adverbs. The check is pattern-based, case-insensitive, and excludes fenced code and MDX source comments; it deliberately does not ban ordinary technical vocabulary by itself.
+- **Rationale:** High-quality instructional prose states the concept, constraint, evidence, or task directly. A source-level check prevents recurring editorial defects across the entire curriculum while preserving code samples and legitimate domain language.
+- **Sources:** [`scripts/verify_lessons.py`](../../scripts/verify_lessons.py), [`scripts/test_course_integrity.py`](../../scripts/test_course_integrity.py), [`docs/agent-rules/GENERAL.md`](../agent-rules/GENERAL.md), [`docs/agent-rules/COURSE_PEDAGOGY.md`](../agent-rules/COURSE_PEDAGOGY.md)
+
+## D-0005 — Lesson framing is compact; interactions belong to the learning sequence
+
+- **Status:** accepted · 2026-08-23 · amended by D-0012 (direct option classification/decision commitment replaces pre-reveal free-text prompts on Quiz and CaseStudy)
+- **Decision:** The lesson shell provides a collapsible brief and one sequence navigator. It does not inject a generic “working model,” pre-reading multiple-choice item, or end-of-page multiple-choice item. Originally `Quiz` and `CaseStudy` required unaided free-text prompts before revealing options (amended by `D-0012` to direct option classification and radio-decision commitment). Quantitative and stateful outcomes use named, lesson-specific playgrounds with accessible controls and static book representations.
+- **Rationale:** A course-wide template cannot supply a concept-specific model or valid assessment. Generic shell artifacts delayed the authored lesson, duplicated navigation, and made answer-length cues exploitable. Framing belongs in the shell; teaching representations and interactions belong beside the concept they explain.
+- **Sources:** [`src/pages/lessons/[...slug].astro`](../../src/pages/lessons/[...slug].astro), [`src/components/LessonBrief.astro`](../../src/components/LessonBrief.astro), [`src/components/Quiz.tsx`](../../src/components/Quiz.tsx), [`src/components/CaseStudy.tsx`](../../src/components/CaseStudy.tsx), [`src/components/InteractivePlayground.tsx`](../../src/components/InteractivePlayground.tsx), [`docs/agent-rules/COURSE_COMPONENTS.md`](../agent-rules/COURSE_COMPONENTS.md)
+
+## D-0006 — Three reference courses before catalog expansion
+
+- **Status:** superseded by D-0008 (4-course catalog) and D-0018 (career roadmap) · 2026-09-14
+- **Decision:** Computer Architecture, Operating Systems, and Database Systems are the active reference curriculum, connected by one learning path with preparation, actual course assessment gates, and cross-course synthesis. Retired courses and paths were removed from the active tree (remaining recoverable from Git history). Reference selection is not a claim of completed academic certification.
+- **Rationale:** Correct explanations, visual models, meaningful interaction, and transfer assessment must coexist in a small reviewable curriculum before its patterns are expanded. Path evidence remains local and explicitly self-attested, separate from reading progress.
+- **Sources:** user-approved survivor scope; [`COURSE_CROSSWALK.md`](../curriculum/COURSE_CROSSWALK.md), retired `systems-foundations.json` (superseded by `software-engineer.json` in D-0018), [`test_quality_contract.mjs`](../../scripts/test_quality_contract.mjs)
+
+## D-0007 — Pilot one course to reference quality, then port, then verify, then scale
+
+- **Status:** accepted · 2026-10-06
+- **Decision:** One course (Operating Systems, chosen by the owner 2026-10-06; Architecture second as the diagram-heavy template) is brought to reference quality first, with two owner-approved exemplar lessons. Its pattern is extracted and applied to Database Systems and Operating Systems; the trio is independently verified before any retired course is re-entered. Writers and verifiers are different agents; structural checks are never the acceptance criterion.
+- **Rationale:** The refactor's structure and tooling passed all gates while the repair contracts still found missing inputs, invalid counterexamples, and unshipped lab fixtures. Quality has to be defined by one exemplar before parallel production multiplies defects.
+- **Sources:** Historical `docs/refactor/PLAN.md`, `docs/refactor/STATE.md`, and `docs/curriculum/repair-contracts/` (purged after refactor completion; recoverable from Git history)
+
+## D-0008 — Add an Introduction to Calculus course (and recover its source)
+
+- **Status:** accepted · 2026-10-06 (12-page `calculus-intro` course active and verified)
+- **Decision:** A single-variable "Introduction to Calculus" course (Calculus 1 level, 7 core lessons + problem sets/recaps/practice, 28h) is recovered from `aaee234^` and rewritten against the current standard. Multivariable, series, differential equations, and analysis remain omitted from the active tree and recoverable from Git history. Its interactive-diagram pattern (single-claim playground, accessible control, static twin) is a reference for other courses, subject to D-0005's prediction and testing requirements.
+- **Rationale:** The trio assumes mathematical preparation it does not teach; a narrow course supplies it without becoming a full analysis curriculum. Recovery follows a per-lesson review standard rather than wholesale restoration.
+- **Sources:** [`src/data/course-manifests/calculus-intro.yml`](../../src/data/course-manifests/calculus-intro.yml) and Git history for deferred calculus topics (`aaee234^` and `refactor_230826` archive commits)
+
+## D-0009 — Dual lab-fixture and deterministic playground-model verification
+
+- **Status:** accepted · 2026-10-30
+- **Decision:** Operating Systems lab briefs reference upstream `xv6-riscv` revision 5 at commit `7d7adbb1b0acbd67c9766a20d0f9900fef2789fa`; learners obtain the upstream source separately. The repository also tests deterministic scheduler, Virtio queue, and rename models, alongside playground models.
+- **Rationale:** Pinned upstream anchors support reproducible kernel work; the smaller local models provide testable examples without presenting them as a kernel implementation or hardware benchmark.
+- **Sources:** [`scheduler-lab.mdx`](../../src/content/lessons/operating-systems/scheduler-lab.mdx), [`src/components/playgrounds/osLabModels.mjs`](../../src/components/playgrounds/osLabModels.mjs), [`scripts/test_os_models.mjs`](../../scripts/test_os_models.mjs).
+
+## D-0010 — Credit labels are derived from declared workload
+
+- **Status:** accepted · 2026-11-22 (adopted from 2026-11-02 provisional implementation)
+- **Decision:** `workloadHours` is the primary learner-facing study-time metric and remains separate from optional `ects` reference metadata. Course metadata records realistic workload-equivalence estimates of 1, 7.5, 7, and 7.5 ECTS for Introduction to Calculus (28h), Computer Architecture (187h), Database Systems (180h), and Operating Systems (189.5h) respectively, calibrated to an internal 22–28 hours-per-credit range. LibreUni does not award academic credit; actual ECTS award and recognition depend on an institution's assessment and policies.
+- **Rationale:** Keeping hours workload separate from ECTS while calibrating reference ECTS values to 22–28 hours per credit prevents unrealistic labels such as claiming 5 ECTS for a 28-hour preparatory module. That module remains a compact exception to the normal 150–200-hour course standard, not a full multi-module credit block.
+- **Sources:** [`src/content/courses/`](../../src/content/courses/), [`scripts/test_quality_contract.mjs`](../../scripts/test_quality_contract.mjs), [`course overview`](../../src/pages/courses/%5BcourseId%5D.astro), and the [European Commission's ECTS overview](https://education.ec.europa.eu/education-levels/higher-education/inclusive-and-connected-higher-education/european-credit-transfer-and-accumulation-system).
+
+## D-0011 — Database labs execute read-only SQL in the browser
+
+- **Status:** accepted · 2026-11-02
+- **Decision:** `SqlRunner` seeds a fresh fixed fixture into an in-browser SQLite database for each read-only query. SQL lab and SQL-querying use it to make result contracts executable. SQLite is not PostgreSQL; PostgreSQL-specific constraint errors, isolation, and plans require a PostgreSQL run.
+- **Rationale:** A paper-only SQL lab let a wrong join or a misplaced predicate look plausible. The component keeps the fixture deterministic and the execution sandboxed, while the lesson states the dialect boundary instead of hiding it.
+- **Sources:** [`src/components/SqlRunner.tsx`](../../src/components/SqlRunner.tsx), [`sql-lab.mdx`](../../src/content/lessons/database-systems/sql-lab.mdx), [`sql-querying.mdx`](../../src/content/lessons/database-systems/sql-querying.mdx), [`COURSE_COMPONENTS.md`](../agent-rules/COURSE_COMPONENTS.md).
+
+## D-0012 — Unified Component & Content Architecture
+
+- **Status:** accepted · 2026-11-04
+- **Decision:** All 75 lessons across the active curriculum adhere to a unified component design system, strict AST validation, and interactive assessment standards:
+  1. **Anti-feature removal:** Global answer-reveal/bypass shortcuts (`#toggle-solutions-btn`, `libreuni:exam-review`, `"Quick review: Reveal answer"`) are permanently removed.
+  2. **Design system tokens & contrast:** 3-tier elevation system (`.lu-card-tier1`, `.lu-card-tier2`, `.lu-card-tier3`), modern default theme with auto OS-theme detection, accessible WCAG AA contrast tokens across light and dark themes (dark mode primary accent resolved to `#93c5fd` via `--dark-accent-rgb: 147 197 253` and light-mode primary `#2563eb` via `--primary-rgb: 37 99 235` to prevent mid-tone blue contrast failure against `#111827`/`#1e293b` and `#ffffff`/`#f8fafc`), universal `cursor: pointer` on all buttons/summaries/radios, and standard rotating chevrons.
+  3. **Component standards (superseding D-0005's pre-reveal free-text prompts on `Quiz` and `CaseStudy`):** `ExerciseSolution` with multi-step hints, multi-claim matrix `Quiz` with `Correct` / `Incorrect` / unanswered `"I don't know"` option evaluation (with `Verify answers` always unlocked and uncollapsed inline feedback), radio-commitment `CaseStudy` with trade-off analysis, token-gap `CodeExercise` with keyboard submission, unified lab headers for `CodeRunner` and `SqlRunner`, and mathematical statements/proofs (`MathStatement`, `MathProof` with Q.E.D. `∎`).
+  4. **Automated AST linter & Remark pipeline:** `scripts/lint_platform_consistency.mjs` and `src/plugins/remark-lesson-structure.mjs` enforce 0 raw `<details>`, 0 redundant `# H1` headings, zero duplicate imports, and required lesson metadata across all 75 MDX documents.
+  5. **Dual-mode test verification:** E2E accessibility suite (`tests/e2e/accessibility.spec.mjs`) parameterizes Axe testing over both `light` and `dark` color schemes, alongside dedicated UX affordance suites (`tests/ux/buttons-and-contrast.spec.mjs`) ensuring zero unclickable or low-contrast interactive controls.
+- **Rationale:** Prevents component visual drift, maintains pedagogical integrity (requiring active learner retrieval rather than passive disclosure), and guarantees strict accessibility and layout stability across desktop and mobile form factors.
+- **Sources:** [`scripts/lint_platform_consistency.mjs`](../../scripts/lint_platform_consistency.mjs), [`src/plugins/remark-lesson-structure.mjs`](../../src/plugins/remark-lesson-structure.mjs), [`src/styles/global.css`](../../src/styles/global.css), [`tests/ux/buttons-and-contrast.spec.mjs`](../../tests/ux/buttons-and-contrast.spec.mjs), [`COURSE_COMPONENTS.md`](../agent-rules/COURSE_COMPONENTS.md), [`COURSE_STANDARD.md`](../agent-rules/COURSE_STANDARD.md).
+
+## D-0013 — Book-Grade Pedagogical Structure & Numbered Reference Architecture
+
+- **Status:** accepted · 2026-11-05 · amended by D-0014 (discriminated page/module kinds and 4–8 section exercises + 10–20 chapter problems)
+- **Decision:** LibreUni establishes a textbook-grade structural grammar adapted from canonical reference texts (Abbott, Martin, Huth & Ryan):
+  1. **Generated numbering & resolvable cross-references:** Statement and exercise numbers are generated dynamically by the build system from manifest position and document AST order rather than hardcoded in source. References use `<Ref id="..."/>`, resolving to statement kind, dynamic number, and title with hover previews. The legacy "no interlinking" rule is refined to "explicit, resolvable dependencies": relative chronological navigation ("in the next lesson", "as we saw yesterday") remains strictly banned, but precise conceptual references to declared prerequisites and foundational statements are encouraged.
+  2. **Canonical statement system & noun headings:** Labeled blockquotes and `MathStatement` share a unified typed Statement AST (`definition`, `theorem`, `lemma`, `proposition`, `corollary`, `invariant`, `example`, `remark`, `convention`, `warning`). Headings in lesson bodies follow noun-phrase subject grammar ("The Formal Definition of a Limit", "Quorum Intersection"), with formal claims housed in dedicated statement cards rather than bare heading text.
+  3. **Module arc & pedagogical roles:** Manifest modules follow the four-part pedagogical arc: Discussion (motivating problem, informal inquiry, playground) → Core lessons (formal theory, derivations, worked examples, counterexamples) → Project/Lab (self-contained constructive inquiry where exercises carry the exposition) → Epilogue/Summary (invariants/theorems sheet, synthesis, boundary conditions). Lessons in manifests carry explicit roles (`discussion`, `core`, `project`, `lab`, `epilogue`, `assessment`).
+  4. **Typed, numbered exercise taxonomy:** Core lessons conclude with an `ExerciseSet` containing 8–12 typed exercises across Bloom's levels (`verify`, `negate`, `construct`, `describe`, `example-or-impossible`, `invented-definition`, `generalise`, `prove`, `formalise`, `tool`), marked with challenge flags (★) and full collapsible solutions/rubrics.
+  5. **Pilot-first rollout:** The structure is piloted and proven on Calculus "Limits and derivatives" first, followed by Operating Systems "Concurrency and liveness", before scaling across the curriculum.
+- **Rationale:** Aligns LibreUni with canonical textbook rigor and navigation while preserving interactive playgrounds, complete diagnostic solutions, and strict anti-filler obligations.
+- **Sources:** [`docs/agent-rules/COURSE_STRUCTURE.md`](../agent-rules/COURSE_STRUCTURE.md), [`src/components/Ref.astro`](../../src/components/Ref.astro), [`src/components/ExerciseSet.astro`](../../src/components/ExerciseSet.astro), [`src/components/MathStatement.astro`](../../src/components/MathStatement.astro), [`src/plugins/remark-lesson-structure.mjs`](../../src/plugins/remark-lesson-structure.mjs).
+
+## D-0014 — Discriminated Page and Module Kinds, and Verified Build-Time Figures Architecture
+
+- **Status:** accepted · 2026-11-07 · amended by D-0017 (timed exams abolished in favor of PracticeGenerator)
+- **Decision:** LibreUni introduces first-class module kinds, discriminated page kinds, and an exact build-time mathematical figure plotting engine:
+  1. **Discriminated page & module taxonomy:** Course manifests declare module kinds (`chapter`, `practice`, `reference`). Pages declare kinds (`lesson`, `lab`, `problems`, `recap`, `practice`) with a unified loader (`src/lib/courseStructure.mjs`) and discriminated union schema in `src/content.config.ts`. Chapter modules receive sequential numbering ($m = 1, 2, \dots$); non-chapter modules (`practice`, `reference`) have index `null` and do not consume chapter numbers. Sections ($s = 1, 2, \dots$) count only `lesson` and `lab` pages. `problems` and `recap` pages receive labels `$m.\text{P}$` and `$m.\text{R}$` without advancing section counters.
+  2. **Specialized page templates & components:**
+     - `problems`: Chapter problem sets organize 10–20 synthesis, transfer, and challenge (★) problems in `<ProblemSet>` using `<Problem>` and `<ExerciseSolution>`.
+     - `recap`: Hand-condensed summary sheets with method choosers, hypothesis checklists with explicit counterexamples, and common errors. References statements via `<Ref id="...">`; no new `<MathStatement>` definitions.
+     - `practice`: Generative problem workshops with `<PracticeGenerator>` offering randomized parameters, progressive hints, and worked solutions.
+  3. **Universal block registry:** `statementRegistry.mjs` indexes statements (`m.s.i`), exercises (`m.s.i`), problems (`m.P.i`), and figures (`m.s.i`, `m.P.i`, `m.R.i`), enabling `<Ref>` to resolve any entity with interactive hover tooltips.
+  4. **Build-time verified figure engine:** Pure JavaScript math plotting core in `src/lib/plot/` renders responsive, theme-adaptive SVGs at build time with `<Figure>`. Fragile TikZ function plots with Bézier controls or coordinate plots are strictly banned (`LINT-09`). Automated test suite (`tests/figures.test.mjs`) verifies mathematical precision (monotonicity, zero-crossing axes, label non-overlap, viewport bounds, fill order) across checks A1–A9 on every build.
+  5. **Calculus pilot content:** Chapters 1 and 2 of `calculus-intro` refactored with 14 verified figures, 2 problem sets (`limits-derivatives-problems`, `integration-problems`), 2 recap sheets (`limits-derivatives-recap`, `integration-recap`), and comprehensive practice workshop (`calculus-practice`) with algorithmic question randomization, progressive hints, and step-by-step solutions, while preserving exact workload calibration (28h) and 100% statement numbering regression invariants across all active courses.
+- **Rationale:** Resolves fragile TikZ function curves, separates immediate lesson checks from deep chapter synthesis practice, and guarantees mathematical accuracy through automated build-time assertions.
+- **Sources:** [`src/lib/plot/`](../../src/lib/plot/), [`src/lib/courseStructure.mjs`](../../src/lib/courseStructure.mjs), [`src/components/Figure.astro`](../../src/components/Figure.astro), [`src/components/ProblemSet.astro`](../../src/components/ProblemSet.astro), [`src/components/PracticeGenerator.tsx`](../../src/components/PracticeGenerator.tsx), [`tests/figures.test.mjs`](../../tests/figures.test.mjs).
+
+## D-0015 — Prohibition of Prompt and Constraint Parroting in User-Facing Copy
+
+- **Status:** accepted · 2026-11-08
+- **Decision:** Developer instructions, user prompt constraints, architectural rationales, and conversation-level guidance (such as "don't add a timer", "we are not testing students without a teacher", "feature coming later", or "self-testing without an instructor") must never be transcribed, paraphrased, or reflected in public website copy, banners, page headers, badges, or component text. User-facing content must describe educational material positively, objectively, and authoritatively from the learner's perspective. It must never mention user prompts, negative implementation constraints, omitted features, or behind-the-scenes pedagogical intent.
+- **Rationale:** Parroting developer or user conversation into production page copy degrades editorial professionalism, violates the platform's academic tone ("No Bullshit"), and confuses learners by presenting conversational metadata as instructional content.
+- **Sources:** [`docs/agent-rules/GENERAL.md`](../agent-rules/GENERAL.md), [`docs/agent-rules/COURSE_STANDARD.md`](../agent-rules/COURSE_STANDARD.md), [`src/content/lessons/`](../../src/content/lessons/), [`src/pages/lessons/[...slug].astro`](../../src/pages/lessons/[...slug].astro).
+
+## D-0016 — Independent Fill-in Practice and Anti-Pattern Linting
+
+- **Status:** accepted · 2026-11-08
+- **Decision:** Fill-in exercises for mathematical formulas, proofs, or prose questions must use the dedicated `<FillInExercise>` component rather than `<CodeExercise>`. Passing code that consists entirely of comments (e.g. `#`, `//`, `/* ... */`, `--`) to `<CodeExercise>` is strictly forbidden as an anti-pattern; both the component runtime and platform linter (`[LINT-12]`) immediately throw/error on detection. Furthermore, platform and integrity audits flag exercise-design anti-patterns across modules and courses:
+  1. *Answer-length cues:* Flagged when an assessment's correct option is conspicuously longest, or when clustered across a module/course.
+  2. *Uniform single-correct multiple-choice:* Flagged when multiple-choice exercises (`Quiz`) overwhelmingly offer only one correct answer, indicating that a multi-claim classification matrix, derivation, or fill-in exercise should be used instead of single-guess multiple choice.
+- **Rationale:** Ensures learners engage in authentic conceptual retrieval and proof practice without the cognitive mismatch of code syntax highlighting for prose or math formulas. Prevents trivial answer-length shortcuts and forces authors to choose appropriate, diverse exercise types.
+- **Sources:** [`src/components/FillInExercise.tsx`](../../src/components/FillInExercise.tsx), [`src/components/CodeExercise.tsx`](../../src/components/CodeExercise.tsx), [`scripts/lint_platform_consistency.mjs`](../../scripts/lint_platform_consistency.mjs), [`scripts/course_integrity.py`](../../scripts/course_integrity.py), [`tests/code-exercise.test.mjs`](../../tests/code-exercise.test.mjs).
+
+## D-0017 — Autonomous Open Digital Learning Architecture and Prohibition of Physical University Antipatterns
+
+- **Status:** accepted · 2026-11-08
+- **Decision:** LibreUni is an open digital curriculum platform, not a physical university simulation. Learners are autonomous, asynchronous, and non-sequential (hobbyists, working engineers, researchers, weekend explorers, summer learners). All courses, tools, and rules must adhere to the following principles:
+  1. **Strict Prohibition of Institutional Terminology:**
+     - Content must never use administrative university vocabulary: "students", "instructor", "professor", "teaching assistant / TA", "course staff", "office hours", "classmates", "cohort", "semester", "academic year", "fall/spring term", "tuition", "degree", "accreditation".
+     - Workflow copy must never use classroom submission language: "deliverables", "submitting", "submission", "submit", "hand-in", "grading rubric", "points distribution", "partial credit", "earns credit", "passing grade", "oral defense", "human reviewer", "present to a reviewer", "honor code / reporting to dean".
+     - Replace with precise systems and engineering terms: "Engineering contract", "Verification criteria", "Observable invariants", "Self-verification checklist", "Adversarial test cases", "Investigative writeup", "Key derivation steps".
+  2. **Non-Sequential, Non-Chronological Navigation:**
+     - Content must never assume learners follow a rigid linear lecture sequence or academic calendar.
+     - Relative chronological transitions ("as we learned yesterday in class", "in the previous lecture", "before next week") are strictly banned.
+     - Modules and lessons are self-contained reference units that declare conceptual prerequisites via frontmatter and link dependencies explicitly via `<Ref id="..." />`. Any learner may explore any topic in any order.
+  3. **Self-Paced Practice Generators over Timed Exam Pressure:**
+     - Capstone self-check modules must use the `kind: practice` module architecture with interactive algorithmic problem generators (`<PracticeGenerator>`) featuring randomized parameters, progressive hints, concise key answers, and complete worked derivations.
+     - Timed examination simulations (`<ExamAttempt>` with countdown timers, proctoring states, points tallies, and sealed marking schemes) are deprecated and prohibited from core course practice. Self-assessment is self-paced, constructive, and mastery-driven, with zero countdown anxiety or artificial point scoring.
+  4. **Realistic Systems Engineering Domains over Academic Tropes:**
+     - When teaching relational algebra, normalization, SQL, transactions, or systems architecture, courses must model real software and cloud infrastructure domains (compute clusters, container allocations, tenant subscriptions, cache layers, distributed RPCs, e-commerce orders).
+     - The self-referential physical university tropes ("Student(student_id, name)", "Enrollment(student_id, course_code, grade)", "Offering", "Dean", "Semester 2026S") are completely prohibited as classroom simulations.
+  5. **Complete Abolition of Exam Hall Simulator Components:**
+     - `<ExamAttempt>`, `<ExamQuestion>`, and `<MarkingScheme>` are abolished. Course practice modules use `<PracticeGenerator>` with randomized parameters, progressive hints, and step-by-step worked derivations.
+     - The discriminated taxonomy contains exclusively: module kinds `chapter`, `practice`, `reference`; page kinds `lesson`, `lab`, `problems`, `recap`, `practice`.
+- **Rationale:** Institutional university jargon creates a false impression of a brick-and-mortar classroom with human graders, alienating autonomous learners, professionals, and hobbyists who study on their own schedules. Replacing timed exam pressure with infinite algorithmic practice workshops empowers genuine mastery verification.
+- **Sources:** [`docs/agent-rules/BASELINE.md`](../agent-rules/BASELINE.md), [`docs/agent-rules/COURSE_STANDARD.md`](../agent-rules/COURSE_STANDARD.md), [`docs/agent-rules/COURSE_STRUCTURE.md`](../agent-rules/COURSE_STRUCTURE.md), [`src/components/PracticeGenerator.tsx`](../../src/components/PracticeGenerator.tsx), [`src/lib/practiceGenerators.ts`](../../src/lib/practiceGenerators.ts).
+
+## D-0018 — Theme simplification, Software Engineer roadmap, lesson study tools, and AI review queue
+
+- **Status:** accepted · 2026-11-13
+- **Decision:** Finalize the platform UX and roadmap surface for the `refactor_230826` release:
+  1. **Themes:** Retire the `scholar` theme; keep `modern` (default) and `monochrome` across light and dark modes.
+  2. **Career roadmap:** Replace the 3-course `systems-foundations` self-attested checklist (`LearningPathEvidence`) with the 4-stage `Software Engineer` study roadmap (`src/content/careers/software-engineer.json`) covering core languages, skill pillars, canonical books, and LibreUni's 4 active courses.
+  3. **Lesson study tools:** Provide `StudyToolsRail` on lesson pages with browser-local multi-color highlights/notes and a study clock + configurable Pomodoro timer.
+  4. **Math, diagrams, and metrics polish:** Render KaTeX with `htmlAndMathml`, promote single-line `$$...$$` to display math, glue adjacent punctuation to inline math and `<Ref />`, allow 50%–600% diagram zoom without GPU blur caching, enforce minimum table column widths against narrow text wrapping, and replace synthetic K-means clustering on `/development` with category grouping and rank-bounded PCA.
+  5. **AI preview & issue queue:** Track page review issues in [`ISSUE_QUEUE.json`](./ISSUE_QUEUE.json) via [`scripts/ai_dev_workflow.mjs`](../../scripts/ai_dev_workflow.mjs) and `.agents/skills/` (`rapid-ai-preview`, `automated-issue-workflow`).
+- **Sources:** [`src/utils/themes.ts`](../../src/utils/themes.ts), [`src/content/careers/software-engineer.json`](../../src/content/careers/software-engineer.json), [`src/components/StudyToolsRail.tsx`](../../src/components/StudyToolsRail.tsx), [`astro.config.mjs`](../../astro.config.mjs), [`src/pages/development.astro`](../../src/pages/development.astro), [`scripts/ai_dev_workflow.mjs`](../../scripts/ai_dev_workflow.mjs).

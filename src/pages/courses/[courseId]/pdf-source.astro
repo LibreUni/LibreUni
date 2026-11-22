@@ -1,0 +1,625 @@
+---
+import { getCollection, getEntry, render } from 'astro:content';
+import 'katex/dist/katex.min.css';
+import '../../../styles/global.css';
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import CodeExercise from '../../../components/CodeExercise';
+import FillInExercise from '../../../components/FillInExercise';
+import CodeRunner from '../../../components/CodeRunner';
+import SqlRunner from '../../../components/SqlRunner';
+import Math from '../../../components/Math.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import MathProof from '../../../components/MathProof.astro';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import Exercise from '../../../components/Exercise.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Ref from '../../../components/Ref.astro';
+import SummaryTable from '../../../components/SummaryTable.astro';
+import ProblemSet from '../../../components/ProblemSet.astro';
+import Problem from '../../../components/Problem.astro';
+import PracticeGenerator from '../../../components/PracticeGenerator';
+import Figure from '../../../components/Figure.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import TikZ from '../../../components/TikZ.astro';
+import PythonDiagram from '../../../components/PythonDiagram.astro';
+import InteractivePlayground from '../../../components/InteractivePlayground';
+import InteractiveEmbed from '../../../components/InteractiveEmbed.astro';
+import { BookOpen } from 'lucide-react';
+import { getCourseLessons } from '../../../utils/lessons';
+
+export async function getStaticPaths() {
+  const courses = await getCollection('courses');
+  const lessons = await getCollection('lessons');
+
+  return Promise.all(courses.map(async course => {
+    const courseLessons = await getCourseLessons(course.id, lessons);
+
+    return {
+      params: { courseId: course.id },
+      props: { lessons: courseLessons }
+    };
+  }));
+}
+
+const { courseId } = Astro.params;
+const { lessons: allLessons } = Astro.props;
+const course = await getEntry('courses', courseId as any);
+
+// Render all lessons in parallel
+const lessonsWithContent = await Promise.all(allLessons.map(async (lesson) => {
+  const rendered = await render(lesson);
+  return {
+    data: lesson.data,
+    id: lesson.id,
+    Content: rendered.Content
+  };
+}));
+
+interface Module {
+  name: string;
+  lessons: any[];
+}
+
+const modules: Module[] = [];
+let currentModuleName = '';
+let currentModule: Module | null = null;
+
+for (const lesson of lessonsWithContent) {
+  const moduleName = lesson.data.module || 'Overview';
+  if (moduleName !== currentModuleName || !currentModule) {
+    currentModuleName = moduleName;
+    currentModule = { name: moduleName, lessons: [] };
+    modules.push(currentModule);
+  }
+  currentModule.lessons.push(lesson);
+}
+
+const components = {
+  Quiz: Quiz,
+  CaseStudy: CaseStudy,
+  CodeExercise: CodeExercise,
+  FillInExercise: FillInExercise,
+  CodeRunner: CodeRunner,
+  SqlRunner: SqlRunner,
+  Math: Math,
+  MathStatement: MathStatement,
+  MathProof: MathProof,
+  ExerciseSolution: ExerciseSolution,
+  Exercise: Exercise,
+  ExerciseSet: ExerciseSet,
+  Ref: Ref,
+  SummaryTable: SummaryTable,
+  ProblemSet: ProblemSet,
+  Problem: Problem,
+  PracticeGenerator: PracticeGenerator,
+  Figure: Figure,
+  PlantUML: PlantUML,
+  TikZ: TikZ,
+  PythonDiagram: PythonDiagram,
+  InteractivePlayground: InteractivePlayground,
+  InteractiveEmbed: InteractiveEmbed,
+};
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{course.data.title} - PDF</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style is:global>
+      @page {
+        size: A4;
+        margin: 18mm 18mm 20mm;
+      }
+
+      @page :first {
+        margin: 0;
+      }
+
+      body {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        background-color: #f8fafc;
+        margin: 0;
+        padding: 0;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      #pdf-root {
+        background-color: white;
+        color: #0f172a;
+        transition: none !important;
+      }
+
+      #pdf-content {
+        box-sizing: border-box !important;
+        background-color: white !important;
+        color: #0f172a !important;
+        position: relative !important;
+        z-index: 1 !important;
+        width: 100% !important;
+        padding: 0 !important;
+      }
+
+      #pdf-content * {
+        box-sizing: border-box;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+      }
+
+      .page-break-after { page-break-after: always; break-after: page; }
+      .page-break-before { page-break-before: always; break-before: page; }
+      .avoid-break { page-break-inside: avoid; break-inside: avoid; }
+      .print-static-assessment,
+      .print-static-lab {
+        display: none;
+      }
+
+      .interactive-playground-print,
+      .interactive-embed-print { display: none; }
+      .book-only-diagram { display: none; }
+
+      .book-only { display: block; }
+      .screen-only { display: none; }
+
+      /* Prose Styles */
+      .content-article {
+        font-size: 1.1rem;
+        line-height: 1.7;
+      }
+      .content-article h1 { font-size: 2.25rem; font-weight: 900; text-transform: uppercase; margin-top: 2.5rem; margin-bottom: 1.5rem; color: #0f172a; letter-spacing: -0.025em; }
+      .content-article h2 { font-size: 1.5rem; font-weight: 900; text-transform: uppercase; margin-top: 2rem; margin-bottom: 1rem; color: #0f172a; border-bottom: 2px solid #f1f5f9; padding-bottom: 0.5rem; }
+      .content-article h3 { font-size: 1.25rem; font-weight: 800; text-transform: uppercase; margin-top: 1.5rem; margin-bottom: 0.75rem; color: #1e293b; }
+      .content-article p { margin-bottom: 1.25rem; color: #334155; }
+      .content-article ul { list-style-type: disc; margin-left: 1.5rem; margin-bottom: 1.25rem; }
+      .content-article ol { list-style-type: decimal; margin-left: 1.5rem; margin-bottom: 1.25rem; }
+      .content-article li { margin-bottom: 0.5rem; padding-left: 0.5rem; }
+      .content-article strong { font-weight: 900; color: #0f172a; }
+      
+      /* Code Highlighting Fixes */
+      .content-article :not(pre) > code { 
+        font-family: monospace; 
+        background-color: #f1f5f9; 
+        padding: 0.2rem 0.4rem; 
+        border-radius: 0.25rem; 
+        color: var(--primary); 
+        font-weight: 700; 
+      }
+      .content-article :where(pre):not(:where(.not-prose, .not-prose *)) { 
+        padding: 1.5rem; 
+        border-radius: 1rem; 
+        margin-bottom: 2rem; 
+        white-space: pre-wrap !important;
+        word-break: break-all !important;
+        overflow-x: visible !important;
+        font-size: 0.85rem;
+        border: 1px solid #e2e8f0;
+        background-color: #f8fafc !important;
+      }
+      .content-article :where(pre):not(:where(.not-prose, .not-prose *)) code {
+        background-color: transparent !important;
+        padding: 0 !important;
+        color: inherit !important;
+        font-weight: 400 !important;
+      }
+
+      .content-article blockquote { border-left: 4px solid var(--primary); padding-left: 1.5rem; font-style: italic; color: #475569; margin-bottom: 2rem; }
+      .content-article img { border-radius: 1.5rem; max-width: 100%; height: auto !important; margin: 2rem auto; display: block; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1); }
+      .content-article table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; margin: 1.75rem 0; font-size: 0.92rem; }
+      .content-article th,
+      .content-article td { border: 1px solid #cbd5e1; padding: 0.65rem 0.75rem; vertical-align: top; }
+      .content-article th { background: #eff6ff; color: #0f172a; font-weight: 800; }
+
+      /* KaTeX display fix */
+      .katex-display {
+        margin: 1.5em 0 !important;
+        overflow-x: visible !important;
+        overflow-y: hidden !important;
+      }
+
+      @media print {
+        body * { visibility: hidden; }
+        #pdf-root, #pdf-root * { visibility: visible; }
+        html,
+        body {
+          background: white !important;
+          color: #0f172a !important;
+        }
+        #pdf-root { 
+          position: static;
+          left: 0;
+          top: 0;
+          width: auto !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          box-shadow: none !important;
+        }
+        #pdf-content {
+          box-sizing: border-box !important;
+          padding: 0 !important;
+          width: auto !important;
+          max-width: none !important;
+        }
+        .no-print { display: none !important; }
+        .screen-only { display: none !important; }
+        .interactive-playground-screen,
+        .interactive-embed-screen { display: none !important; }
+        .interactive-playground-print,
+        .interactive-embed-print { display: block !important; }
+        .content-article figure {
+          box-sizing: border-box !important;
+          width: auto !important;
+          max-width: 100% !important;
+          margin-left: 0 !important;
+          margin-right: 0 !important;
+        }
+        .interactive-playground {
+          padding: 5mm !important;
+          overflow: visible !important;
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+        .interactive-playground *,
+        .interactive-embed-print * { box-sizing: border-box !important; min-width: 0 !important; }
+        .interactive-playground svg {
+          width: 100% !important;
+          max-width: 100% !important;
+          height: auto !important;
+        }
+        .interactive-playground table { table-layout: fixed; }
+        .book-only-diagram { display: flex !important; }
+        .book-only { display: block !important; }
+        .content-article details:not(.diagram-source):not(.exercise-hint):not(.exercise-solution) {
+          display: block !important;
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+        .content-article details:not(.diagram-source):not(.exercise-hint):not(.exercise-solution) > summary {
+          display: none !important;
+        }
+        .content-article details:not(.diagram-source):not(.exercise-hint):not(.exercise-solution) > :not(summary) {
+          display: block !important;
+          visibility: visible !important;
+        }
+        .content-article details.exercise-hint,
+        .content-article details.exercise-solution {
+          display: block !important;
+          break-inside: avoid;
+          page-break-inside: avoid;
+          margin-top: 4mm !important;
+          margin-bottom: 4mm !important;
+        }
+        .content-article details.exercise-hint > summary,
+        .content-article details.exercise-solution > summary {
+          display: flex !important;
+          align-items: center !important;
+          font-weight: 800 !important;
+          font-size: 8.5pt !important;
+          text-transform: uppercase !important;
+          letter-spacing: 0.08em !important;
+          margin-bottom: 2mm !important;
+        }
+        .content-article details.exercise-hint > summary span:last-child,
+        .content-article details.exercise-solution > summary span:last-child {
+          display: none !important;
+        }
+        .content-article details.exercise-hint > :not(summary),
+        .content-article details.exercise-solution > :not(summary) {
+          display: block !important;
+          visibility: visible !important;
+        }
+        .cover-page {
+          box-sizing: border-box !important;
+          min-height: 297mm !important;
+          height: 297mm !important;
+          padding: 38mm 28mm 30mm !important;
+        }
+        .toc-page {
+          min-height: 0 !important;
+          padding: 0 !important;
+        }
+        .toc-page > h2 {
+          font-size: 25pt !important;
+          margin-bottom: 9mm !important;
+        }
+        .toc-page .space-y-12 > :not([hidden]) ~ :not([hidden]) {
+          margin-top: 5mm !important;
+        }
+        .toc-page .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+          margin-top: 2mm !important;
+        }
+        .toc-page li {
+          font-size: 10.5pt !important;
+        }
+        .module-title-page {
+          box-sizing: border-box !important;
+          min-height: 72mm !important;
+          height: auto !important;
+          margin: 0 0 12mm !important;
+          padding: 20mm 0 12mm !important;
+        }
+        .module-title-page h2 {
+          font-size: 28pt !important;
+          letter-spacing: -0.02em !important;
+          text-transform: none !important;
+        }
+        .lesson-container {
+          break-before: page;
+          page-break-before: always;
+          margin-bottom: 0 !important;
+        }
+        .module-title-page + .lesson-container {
+          break-before: auto;
+          page-break-before: auto;
+        }
+        .lesson-container .content-article > h1:first-child {
+          display: none !important;
+        }
+        .lesson-container > header h3 {
+          font-size: 24pt !important;
+          letter-spacing: -0.02em !important;
+          text-transform: none !important;
+        }
+        .lesson-container > header {
+          margin-bottom: 8mm !important;
+        }
+        .content-article {
+          font-size: 10.5pt !important;
+          line-height: 1.55 !important;
+        }
+        .content-article h1 { font-size: 19pt !important; }
+        .content-article h2 { font-size: 15pt !important; margin-top: 14mm !important; margin-bottom: 4mm !important; text-transform: none !important; }
+        .content-article h3 { font-size: 12pt !important; margin-top: 9mm !important; margin-bottom: 3mm !important; text-transform: none !important; }
+        .content-article h1,
+        .content-article h2,
+        .content-article h3,
+        .content-article h4 {
+          break-after: avoid;
+          page-break-after: avoid;
+        }
+        .content-article p,
+        .content-article li {
+          orphans: 3;
+          widows: 3;
+        }
+        .content-article pre,
+        .content-article table,
+        .content-article blockquote,
+        .content-article img,
+        .quiz-container,
+        .case-study-container,
+        .code-exercise,
+        .code-runner,
+        .diagram-frame,
+        .katex-display,
+        .print-static-assessment,
+        .print-static-lab {
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+        .content-article table,
+        .content-article .prose table {
+          display: table !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          overflow: visible !important;
+          table-layout: fixed !important;
+        }
+        .content-article figure,
+        .content-article .diagram-frame {
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+        .content-article thead { display: table-header-group; }
+        .content-article tr { break-inside: avoid; page-break-inside: avoid; }
+        .content-article li { break-inside: avoid; page-break-inside: avoid; }
+        .content-article th,
+        .content-article td,
+        .content-article .prose th,
+        .content-article .prose td {
+          min-width: 0 !important;
+          overflow-wrap: anywhere !important;
+          word-break: normal !important;
+          hyphens: auto;
+          padding: 2.5mm 2mm !important;
+          font-size: 8.5pt !important;
+        }
+        .content-article strong .katex {
+          font-weight: 400 !important;
+        }
+        .math-statement-header {
+          break-after: avoid;
+          page-break-after: avoid;
+        }
+        .math-statement,
+        .lu-statement {
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+        .content-article pre {
+          white-space: pre-wrap !important;
+          word-break: normal !important;
+          overflow: visible !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          box-shadow: none !important;
+          border-radius: 6px !important;
+        }
+        .diagram-frame {
+          display: block !important;
+          margin: 8mm 0 !important;
+          padding: 5mm !important;
+          border-radius: 8px !important;
+          box-shadow: none !important;
+          background: #f8fafc !important;
+          border-color: #cbd5e1 !important;
+        }
+        .diagram-render {
+          display: block !important;
+          text-align: center !important;
+        }
+        .diagram-toolbar,
+        .diagram-source,
+        .diagram-source-title,
+        .diagram-zoom-hint {
+          display: none !important;
+        }
+        .diagram-render svg,
+        .diagram-render img {
+          display: block !important;
+          margin: 0 auto !important;
+          max-width: 100% !important;
+          max-height: 180mm !important;
+          width: auto !important;
+        }
+        .quiz-container > :not(.print-static-assessment),
+        .case-study-container > :not(.print-static-assessment),
+        .code-exercise > :not(.print-static-assessment),
+        .fill-in-exercise > :not(.print-static-assessment),
+        [data-component="SqlRunner"] > :not(.print-static-assessment),
+        #practice-workshop-container > :not(.print-static-assessment),
+        .code-runner > :not(.print-static-lab),
+        .lu-problem-solve-btn,
+        .lu-chevron {
+          display: none !important;
+        }
+        .print-static-assessment,
+        .print-static-lab {
+          display: block !important;
+          visibility: visible !important;
+          margin: 7mm 0 !important;
+          padding: 5mm !important;
+          border: 1px solid #bfdbfe !important;
+          border-left: 4px solid var(--primary) !important;
+          border-radius: 8px !important;
+          background: #eff6ff !important;
+          color: #0f172a !important;
+          box-shadow: none !important;
+        }
+        .print-static-label,
+        .print-static-subhead {
+          margin-bottom: 3mm;
+          color: #1d4ed8;
+          font-size: 8pt;
+          font-weight: 900;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+        }
+        .print-static-item + .print-static-item {
+          margin-top: 5mm;
+          padding-top: 5mm;
+          border-top: 1px solid #bfdbfe;
+        }
+        .print-static-question,
+        .print-static-scenario,
+        .print-static-answer,
+        .print-static-explanation {
+          margin: 0 0 2.5mm !important;
+          color: #0f172a !important;
+        }
+        .print-static-question {
+          font-weight: 800;
+        }
+        .print-static-explanation,
+        .print-static-scenario {
+          color: #334155 !important;
+        }
+        .print-static-code,
+        .print-static-output {
+          margin: 2.5mm 0 0 !important;
+          padding: 4mm !important;
+          border: 1px solid #cbd5e1 !important;
+          border-radius: 6px !important;
+          background: white !important;
+          color: #0f172a !important;
+          white-space: pre-wrap !important;
+          word-break: normal !important;
+          overflow: visible !important;
+          font-size: 8.2pt !important;
+          line-height: 1.45 !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="max-w-[210mm] mx-auto my-12 shadow-2xl transition-all" id="pdf-root">
+      <div id="pdf-content" class="bg-white p-[25mm]">
+        
+        <!-- Cover Page -->
+        <div class="cover-page h-[247mm] flex flex-col justify-center items-center text-center page-break-after">
+          <div class="w-32 h-32 bg-primary/5 text-primary rounded-[3rem] flex items-center justify-center mb-16 shadow-inner">
+             <BookOpen size={64} strokeWidth={1.5} /> 
+          </div>
+          <h1 class="text-7xl font-black uppercase tracking-tighter mb-8 text-slate-900 leading-[0.9]">{course.data.title}</h1>
+          <p class="text-2xl text-slate-700 max-w-2xl mx-auto mb-20 font-medium leading-relaxed tracking-tight italic">{course.data.description}</p>
+          <div class="h-3 w-40 bg-primary rounded-full mb-20 shadow-lg shadow-primary/20"></div>
+          
+          <div class="mt-auto pt-20">
+            <div class="inline-block px-6 py-2 bg-slate-100 rounded-full font-black text-slate-700 uppercase tracking-[0.3em] text-[10px] mb-4">Official Documentation</div>
+            <p class="text-slate-900 font-extrabold text-lg">{new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}</p>
+          </div>
+        </div>
+
+        <!-- Table of Contents -->
+        <div class="toc-page min-h-[247mm] page-break-after py-12">
+          <h2 class="text-5xl font-black uppercase mb-16 tracking-tighter text-slate-900 border-b-8 border-slate-900 pb-6">Contents</h2>
+          <div class="space-y-12">
+            {modules.map((mod) => (
+              <div>
+                <h3 class="font-black text-primary uppercase tracking-[0.25em] text-xs mb-6 bg-blue-50 inline-block px-4 py-1 rounded-md">{mod.name}</h3>
+                <ul class="space-y-6">
+                  {mod.lessons.map((les) => (
+                    <li class="flex items-baseline gap-4 group">
+                      <span class="font-bold text-slate-800 text-xl tracking-tight">{les.data.title}</span>
+                      <div class="flex-1 border-b-2 border-dotted border-slate-100"></div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <!-- Content -->
+        {modules.map((mod) => (
+          <div class="module-group">
+            <div class="module-title-page page-break-before h-64 flex items-end pb-12 border-b-[12px] border-slate-900 mb-20">
+              <h2 class="text-6xl font-black uppercase tracking-tighter text-slate-900 leading-none">{mod.name}</h2>
+            </div>
+            
+            {mod.lessons.map(({ data, Content }) => (
+              <div class="lesson-container mb-32 last:mb-0">
+                <header class="mb-16">
+                   <div class="flex items-center gap-3 mb-6">
+                     <div class="h-px w-8 bg-primary"></div>
+                     <div class="text-[10px] font-black text-primary uppercase tracking-[0.4em]">Section Detail</div>
+                   </div>
+                   <h3 class="text-5xl font-black uppercase tracking-tighter text-slate-900 mb-8 leading-[0.95]">{data.title}</h3>
+                   <div class="h-2 w-24 bg-primary rounded-full shadow-lg shadow-primary/10"></div>
+                </header>
+                <div class="content-article">
+                  <Content components={components} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <!-- Background Decoration for Screen View -->
+    <div class="fixed inset-0 -z-10 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:24px_24px] opacity-40 no-print"></div>
+
+    <script is:inline>
+      document.querySelectorAll('details:not(.diagram-source)').forEach((details) => {
+        details.open = true;
+      });
+    </script>
+
+  </body>
+</html>

@@ -1,0 +1,195 @@
+---
+title: "Database abstraction: stable contracts over changing storage"
+course: database-systems
+description: Use external views, a logical relational schema, and physical design as separate contracts—and test what a change is allowed to affect.
+prerequisites:
+  - Programming with records, collections, and tests
+  - Sets, predicates, and the idea of a key
+outcomes:
+  - Distinguish an external view, logical schema, and physical design for one application request.
+  - Write a view contract that states grain, authority, duplicate, NULL, and ordering behavior.
+  - Judge an index or layout change with separate correctness and performance evidence.
+omissions:
+  - Storage-engine implementation, replication protocols, and vendor administration are deferred to later systems lessons.
+estimatedMinutes: 420
+assessment: Given a reporting request and a proposed storage change, specify the unaffected contract, identify a boundary that can still change, and design a small equivalence check.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
+
+
+An application asks, “Which services are running across our clusters?” It should not need to know whether the database found those rows through a heap scan, an index, or a partition. It *does* need to know what one output row means, which rows it may see, and whether its requested order is guaranteed.
+
+<MathStatement id="def-abstraction-contract" kind="definition" title="Database abstraction contract">
+An abstraction contract states the meaning and permitted observations of data at one boundary. An external contract is what a client can request and observe; a logical contract is relations, attributes, and constraints; a physical contract is the layout and access methods that implement them.
+</MathStatement>
+
+{/* Source tracking: The separation between user-visible data descriptions and internal representation is synthesized from E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (1970). */}
+
+## One domain, three descriptions
+
+Start with a cluster-allocation domain. The diagram is conceptual: it says a tenant can have many compute allocations and a cluster can host many allocations. It deliberately says nothing about files or indexes.
+
+<PlantUML
+  code={String.raw`
+class Tenant {
+  tenant_id : UUID <<PK>>
+  display_name : text
+}
+class Allocation {
+  tenant_id : UUID <<FK>>
+  cluster_id : UUID <<FK>>
+  status : text
+}
+class Cluster {
+  cluster_id : UUID <<PK>>
+  region : text
+  tier : text
+}
+Tenant "1" -- "0..*" Allocation : owns
+Cluster "1" -- "0..*" Allocation : hosts
+`}
+/>
+
+The same domain acquires a different, sharper meaning at each layer.
+
+| Layer | Example representation | Question it answers | Deliberately not promised |
+| --- | --- | --- | --- |
+| External | `CurrentAllocation(display_name, region, tier)` view | What may a reporting client read? | Base-table names or access path |
+| Logical | `Tenant`, `Cluster`, `Allocation` with keys and foreign keys | What facts exist and how are they related? | Page layout or index choice |
+| Physical | Heap, B-tree on `(tenant_id, cluster_id)`, partitions by region | How are logical rows stored and found? | A different result for the same logical query |
+
+> **Worked example.** The relationship in the diagram becomes `Allocation(tenant_id, cluster_id, status)`. Its grain is **one tenant's allocation on one cluster**. Its primary key can be `(tenant_id, cluster_id)` if a tenant has at most one active allocation per cluster. Both columns are foreign keys. A client-facing view may join the three relations and omit identifiers, but it must preserve that stated grain.
+
+<MathStatement id="inv-physical-independence" kind="invariant" title="Physical data independence">
+Physical data independence means that if only the physical design changes, every permitted logical query and constraint has the same meaning. Cost, lock timing, and an undocumented incidental row order may change; specified semantics may not.
+</MathStatement>
+
+## A view is an interface, not decoration
+
+Suppose a reporting client needs “one row per active allocation.” This is an external contract; it needs more than a column list.
+
+| Contract field | Decision for `CurrentAllocation` |
+| --- | --- |
+| Grain | One active allocation for one tenant on one cluster |
+| Authority | `Allocation.status = 'active'` is the source of truth for active |
+| Duplicates | Impossible if `(tenant_id, cluster_id)` is unique; otherwise report them as a data error |
+| `NULL` | `display_name` may be absent; `tenant_id` and `cluster_id` may not be absent |
+| Ordering | None unless the client explicitly requests `ORDER BY region, display_name` |
+| Freshness and access | Reads see the database's transaction visibility rules and the caller's permissions |
+
+> **Warning.** A join does not choose the grain for you. Joining `Allocation` to a table with one row per telemetry metric event can turn one allocation into many output rows. A correct-looking query can still violate the view's “one row per allocation” promise.
+
+> **Counterexample.** Replacing `Cluster.region` with a nullable free-text column may be a logical-schema change, not merely a physical one. A view that promised a non-null, validated region code now has a broken contract even if every query still parses.
+
+## Declarative request, physical plan
+
+SQL describes a requested result. The DBMS can choose a sequential scan, an index scan, a hash join, a sort, or another operator tree to produce it. Those choices are cost decisions, not promises made by ordinary SQL text.
+
+<MathStatement id="def-logical-result" kind="definition" title="Logical result vs. physical plan">
+The logical result is the rows, values, duplicates, and any explicitly requested ordering prescribed by the query semantics and the database constraints. A plan is one implementation of that result.
+</MathStatement>
+
+> **Worked example.** For a tenant dashboard, the query predicate is `tenant_id = ? AND created_at >= ?`. A composite index on `(tenant_id, created_at, order_id)` may avoid scanning unrelated tenant rows. The proof obligation is two-part: compare query results and constraint outcomes before/after the index, then measure latency, writes, and plan behavior on representative data.
+
+{/* Source tracking: The distinction between declarative query specification and cost-based access-path selection is synthesized from Selinger et al., “Access Path Selection in a Relational Database Management System” (1979). */}
+
+Do not overstate the boundary. Adding an index can raise write cost. Partitioning can complicate uniqueness or cross-partition operations. A query rewrite that is safe for an inner join can be wrong for an outer join. A physical change preserves *logical* behavior only within the documented dialect, transaction, and authorization semantics.
+
+<Quiz client:load
+  title="Logical result versus physical plan"
+  question="A team adds a composite index on (tenant_id, created_at) to accelerate dashboard filtering. The rows and columns returned are identical. Evaluate each claim:"
+  options={[
+    { id: '1', text: 'The physical access path changed while the logical query semantics and result set remain invariant.', isCorrect: true },
+    { id: '2', text: 'Index maintenance increases write and storage costs on subsequent insert, update, and delete operations.', isCorrect: true },
+    { id: '3', text: 'The presence of the index proves query correctness and removes the requirement to verify output grain.', isCorrect: false },
+    { id: '4', text: 'The logical relational contract changed because the query optimizer chose an index scan over a heap scan.', isCorrect: false }
+  ]}
+  explanation="An index is a physical access method that preserves logical query semantics while altering read, write, and storage trade-offs."
+/>
+
+## Constraints make the logical layer enforceable
+
+Keys, foreign keys, `CHECK` constraints, and `UNIQUE` constraints place facts at the database boundary so every client is checked by the same rule.
+
+<MathStatement id="def-referential-integrity" kind="definition" title="Referential integrity constraint">
+Referential integrity means that if `Allocation.tenant_id` is non-null and refers to `Tenant(tenant_id)`, then a matching tenant row must exist when the foreign-key constraint is checked. A deferred foreign key postpones that check; it does not waive it at commit.
+</MathStatement>
+
+> **Worked example.** Two web requests both see one available compute slot and both attempt to allocate a worker. An application-side “count first, then insert” check can race. The schema can at least enforce uniqueness of a tenant's allocation; a capacity rule requires an atomic transaction design, which is a later topic. The abstraction lesson's point is the boundary: a constraint is checked centrally, while a client-only observation is not.
+
+## Change evidence: preserve meaning, measure cost
+
+Use two separate checklists for a physical redesign.
+
+| Correctness evidence | Operational evidence |
+| --- | --- |
+| Representative query results, including duplicates and `NULL` cases | Latency and throughput under realistic read/write mix |
+| Keys, foreign keys, checks, and authorization still hold | Plan changes, memory use, and write amplification |
+| Required ordering and pagination remain explicit | Migration duration, rollback, backup, and recovery behavior |
+| Old and new views agree on a fixed test dataset | Lock waits and error rates during deployment |
+
+> **Warning.** A database rollback can undo rows it controls. It cannot automatically unsend an email or reverse an API call. Connect such effects through an explicit idempotent protocol, such as an outbox, when later transaction material introduces that pattern.
+
+<ExerciseSet>
+
+<Exercise id="ex-predict-order" type="verify" level="recall" title="Physical Indexing and Output Ordering">
+
+The platform database administrator adds an index on `Allocation(cluster_id, tenant_id)`. A report asks for the count of active allocations per cluster but contains no `ORDER BY`. Which observations must be unchanged, and which observation must not be inferred from a successful test run?
+
+<ExerciseSolution hint="Separate the requested result from the way rows were found.">
+
+The count and the set of grouped clusters must be unchanged if the index is correct. The chosen plan, page reads, and emitted row sequence need not be unchanged. Because the query has no `ORDER BY`, a test must not treat the observed output order as part of its contract.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-view-compat" type="construct" level="application" title="Schema Migration and View Grain Preservation">
+
+An existing view exposes `display_name`, `region`, and `tier`. The team wants to split `Cluster` into `Datacenter(region, campus)` and `Cluster(cluster_id, region, tier)`. State a compatible view definition and name one test case that catches a broken migration.
+
+<ExerciseSolution hint="The client should still see the same grain and column meanings. Look for a cluster whose datacenter lookup is missing.">
+
+The compatible view still has one row per active allocation and obtains `campus` by joining `Cluster` to `Datacenter` through the validated region. Test an allocation whose cluster exists but whose datacenter row is accidentally absent after migration: an inner join would silently drop the client row. Compare old and new view results, including this case, rather than comparing table counts alone.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-myschedule-contract" type="formalise" level="application" title="Declarative Client Contract Specification">
+
+A management dashboard wants a view called `MyAllocations`. It must show each authenticated tenant only their active cluster allocations, omit terminated allocations, and display a stable time order. Specify the four contract clauses required before physical optimization.
+
+<ExerciseSolution hint="Use grain, authority, access, and ordering; avoid naming an index.">
+
+One sound contract is: (1) one row per active allocation for the authenticated tenant; (2) `Allocation.status = 'active'` determines inclusion; (3) authorization binds the authenticated tenant to `Allocation.tenant_id` and does not trust a client-supplied identifier; (4) rows are ordered by allocation timestamp and then `cluster_id`. An index might help later, but it is not part of this client contract.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-partition-tradeoff" type="generalise" level="transfer" title="Table Partitioning Correctness and Operational Trade-Offs">
+
+Your team proposes partitioning `Allocation` by `region` because reports usually filter by region. Produce a design note specifying the logical rows and constraints that must remain true, one query differential test, and two operational measurements that could reveal an unfavorable trade-off.
+
+<ExerciseSolution hint="A partition key is physical. Start from the allocation relation's grain and foreign keys, then name costs that are not logical errors.">
+
+The note should preserve one allocation per permitted `(tenant_id, cluster_id)` pair and every checked foreign-key relationship. It can compare the old and new `CurrentAllocation` view over boundary regions, plus test that a tenant cannot read another tenant's allocation. Useful operational measurements include cross-region query cost, insert/delete cost, lock or migration duration, and backup/restore behavior. A slower write path can reject the proposal even when every logical result matches.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+- [E. F. Codd, “A Relational Model of Data for Large Shared Data Banks” (IBM Research, 1970)](https://research.ibm.com/publications/a-relational-model-of-data-for-large-shared-data-banks)
+- [Selinger et al., “Access Path Selection in a Relational Database Management System” (IBM Research, 1979)](https://research.ibm.com/publications/access-path-selection-in-a-relational-database-management-system)
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)

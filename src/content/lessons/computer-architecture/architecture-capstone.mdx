@@ -1,0 +1,229 @@
+---
+title: Architecture Capstone
+course: computer-architecture
+kind: lab
+description: A quantitative design exercise connecting representation, execution, memory, and parallelism.
+prerequisites:
+  - Programming in a systems language
+  - Binary arithmetic and basic digital logic
+outcomes:
+  - Design a processor-backed image pipeline whose representation, ISA, memory, DMA, parallelism, and fault contract are explicit.
+  - Derive arithmetic, traffic, latency, and bottleneck claims and test them with a reproducible experiment.
+  - Defend correctness, ownership, security, and alternatives with invariants, sensitivity analysis, and fault injection.
+omissions:
+  - RTL implementation and electrical device physics are reduced to the abstractions needed to reason about a modern processor.
+estimatedMinutes: 900
+assessment: Design and verify an end-to-end image-pipeline architecture with formal specifications, trace diagrams, correctness proofs, quantitative models, and fault-injection results.
+---
+import Quiz from '../../../components/Quiz';
+import CaseStudy from '../../../components/CaseStudy';
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+
+This capstone integrates representation, instruction-set semantics, datapath/control, pipelining, memory hierarchy, I/O, performance modeling, and parallel execution. The problem is to design a processor-backed image-filter service that accepts frames from a device, applies a configurable convolution and color transform, and emits results under a latency and energy budget. The goal is not to choose a fashionable CPU feature. It is to make a defensible architecture argument in which every abstraction, optimization, and failure mode is explicit.
+
+## System specification
+
+> **Definition.** The capstone service contract requires sustaining 30 frames/s of $1920 \times 1080$ four-channel 8-bit images with 99th-percentile end-to-end frame latency $T_{\mathrm{p99}} \le 25\,\text{ms}$ from frame availability to output completion while enforcing zero out-of-bounds DMA accesses and explicit overflow/saturation semantics.
+
+Assume a sensor produces 1920×1080 frames at 30 frames per second. Pixels arrive as four 8-bit channels; the filter applies a 3×3 kernel to each channel, clamps results to 0–255, and writes an output frame. The system has a 2 GHz 64-bit RISC-style core, 32 KiB 4-way L1 data cache with 64-byte lines, 256 KiB private L2, shared DRAM bandwidth of 20 GB/s, and a DMA-capable input device. These are modeling assumptions, not facts about one real processor; change them if your design justifies it.
+
+The service must sustain the input rate, keep 99th-percentile frame processing below 25 ms after the complete frame is available, reject malformed descriptors, and never allow the device to write outside an owned buffer. The output may be delayed by buffering, but the system must state its queue bound and behavior when input outruns processing. An energy-aware design should report memory traffic and active-core time rather than claim that SIMD is efficient.
+
+<Quiz client:load title="Start with the bottleneck"
+  question="What should a capstone specification identify before choosing a cache or pipeline?"
+  options={["A preferred ISA selected before measuring the intended workload", "A workload, correctness contract, and measurable latency, throughput, or energy budget", "The largest memory capacity available within the component catalog", "The highest clock frequency reported for any candidate processor"]}
+  correctIndex={1}
+  explanation="Hardware choices are meaningful relative to a workload and contract. A budget turns a design narrative into a falsifiable engineering argument."
+/>
+
+## Baseline arithmetic model
+
+A 3×3 convolution performs nine multiplies and eight additions per output channel if implemented directly. A 1920×1080 frame contains 2,073,600 pixels; at four channels this is approximately 74.65 million multiplies and 66.36 million additions per frame, before boundary handling, loads, stores, clamping, address arithmetic, and loop control. At 30 frames per second the direct arithmetic demand is roughly 2.24 billion multiplies and 1.99 billion additions per second.
+
+This count is a first estimate, not a timing result. If the kernel coefficients are fixed, multiplication may become shifts/adds or vector instructions. If the image is tiled, input pixels can be reused across neighboring outputs. If the filter is separable, a 3×3 kernel may be expressed as two 1×3 passes, reducing arithmetic at the cost of an intermediate buffer and additional traffic. A complete proposal compares these transformations against cache and bandwidth effects.
+
+**Worked arithmetic-intensity estimate.** A naive output pixel reads 9 input pixels and writes one output pixel. At four bytes per pixel, ignoring reuse, that is 40 bytes and roughly 68 arithmetic operations, giving 1.7 operations per byte. With 20 GB/s of DRAM bandwidth, the roofline bandwidth ceiling is about 34 GFLOP/s-equivalent operations per second under this simplified count. Tiling can reuse input values from cache and raise effective intensity; it cannot be credited until the tile fits and the access trace is shown.
+
+<CaseStudy client:load
+  title="Connect the claim to falsifiable evidence"
+  scenario="A capstone claims a new prefetcher improves performance by reducing memory stalls, but reports only end-to-end speedup on one input."
+  question="Which evidence package can test the proposed mechanism?"
+  options={["Defined workloads, baseline controls, stall events, coverage, accuracy, and repeated timing", "A larger prefetcher diagram, additional labels, and the fastest timing result", "A vendor comparison, product history, and a list of supported instructions", "A source-code diff, total line count, and one screenshot of execution"]}
+  correctIndex={0}
+  explanation="The mechanism predicts changes in stalls and prefetch quality before end-to-end speedup. Controlled workloads and repeated measurements connect those intermediate effects to the final claim and reveal harmful cases."
+/>
+
+## Representation and ISA choices
+
+> **Example.** Worked trace: for a $3 \times 3$ stencil with signed 8-bit weights $w_{i,j} \in [-127, 127]$ and unsigned 8-bit channels $p_{i,j} \in [0, 255]$, the worst-case magnitude $\sum |w_{i,j}| p_{i,j} = 9 \times 127 \times 255 = 291{,}465$ overflows a signed 16-bit accumulator ($[-32{,}768, 32{,}767]$), requiring at least a 20-bit signed accumulator (typically a 32-bit lane) before final clamping to $[0, 255]$.
+
+Specify whether pixels are stored interleaved RGBA or in separate channel planes. Interleaved layout is convenient when all channels of one pixel are processed together; planar layout can improve SIMD scans of one channel and simplify separable filters. State byte order, alignment, signedness of coefficients, accumulator width, and saturation behavior. A signed 8-bit coefficient multiplied by an unsigned 8-bit pixel can require a signed 32-bit accumulator to avoid intermediate overflow.
+
+The ISA needs loads/stores, integer or vector multiply-add, widening arithmetic, min/max or clamp, pointer increments, branches or masked operations, and a memory-ordering primitive for DMA ownership. If coefficients are programmable, define their encoding and validation. If the vector instruction saturates, verify whether it rounds, truncates, or wraps; using modular arithmetic where saturation is required produces visually subtle but systematic errors.
+
+**Worked overflow bound.** If pixels are at most 255 and kernel coefficients have absolute value at most 127, one channel’s absolute convolution sum is at most $9\cdot255\cdot127=291,465$. That requires 19 magnitude bits plus a sign bit (20 signed bits): signed 19-bit range ends at 262,143. A 32-bit accumulator provides margin for bias, intermediate transforms, and implementation variation. The final result must be rounded and clamped after the full sum, not after each product unless the specification permits that approximation.
+
+## Datapath and pipeline implications
+
+> **Warning.** If a pipelined multiply-accumulate unit has a 4-cycle latency and the inner loop accumulates all 9 taps into a single register, RAW data hazards serialize execution to one tap every 4 cycles; unrolling across multiple independent output pixels or channels is required to hide pipeline latency.
+
+A scalar core may load one pixel at a time, perform arithmetic, and store output. A vector core handles multiple pixels or channels per instruction, but boundary pixels, alignment, tails, and coefficient broadcast must be designed. A pipelined multiply-add has latency greater than one cycle, so independent accumulators or software scheduling are needed to maintain throughput. A dependent single accumulator can underutilize the pipeline even if the arithmetic unit accepts one operation per cycle.
+
+| Implementation Alternative | Issue Width & Arithmetic Units | Unrolling / Latency Hiding | Cycles per RGBA Pixel | Clock Target to Meet 30 fps |
+| :--- | :--- | :--- | :---: | :---: |
+| **Scalar In-Order Core** | 1-way issue; 1 pipelined MAC (latency 4) | Single accumulator (RAW stalls serialize taps) | 36 cycles (9 taps $\times$ 4 cycles) | $\ge 2.24\,\text{GHz}$ (exceeds scalar envelope) |
+| **Scalar Unrolled Core** | 1-way issue; 1 pipelined MAC (latency 4) | 4 interleaved channel accumulators (R, G, B, A) | 9 cycles (fully hides MAC latency) | $\ge 560\,\text{MHz}$ (within thermal envelope) |
+| **SIMD Vector Core** | 4-way SIMD vector unit; 128-bit vector MAC | 16-way SIMD vector taps across 4 pixels | 2.25 cycles | $\ge 140\,\text{MHz}$ (low-power edge envelope) |
+| **Dedicated Hardware Stencil** | 9-multiplier parallel 2D convolver pipeline | Hardwired streaming systolic array | 1 cycle / pixel | $62.2\,\text{MHz}$ (ultra-low power ASIC/FPGA) |
+
+Branch handling matters at image boundaries. A branch per pixel for clamping or bounds can cause mispredictions and front-end pressure. Vector min/max or masked loads can make the inner loop regular. Separate a prologue, aligned steady-state kernel, and epilogue when the ISA and workload justify it; the code-size and maintenance cost belongs in the comparison.
+
+## Memory hierarchy and tiling
+
+> **Example.** For a tile of $w = 64, h = 32$ four-byte RGBA pixels, the input Halo footprint is $4 \times (64+2)(32+2) = 8{,}976$ bytes and the output tile is $4 \times 64 \times 32 = 8{,}192$ bytes, totaling $17{,}168$ bytes—comfortably fitting within the 32 KiB L1 data cache while leaving ways free for stack and coefficient reads.
+
+The frame is far larger than L1 and L2, so a naive traversal may be bandwidth-bound. A tile should include enough neighboring rows for the 3×3 stencil and fit the chosen cache level with output and coefficient data. For a tile of width $w$ and height $h$, the input footprint is approximately $(w+2)(h+2)$ pixels and output footprint $wh$ pixels, adjusted for channels and layout. Choose $w,h$ so the footprint plus other active data fits with a safety margin; associativity conflicts can invalidate a capacity-only calculation.
+
+Row-major layout favors a row-wise inner loop. A line of 64 bytes contains 16 four-byte RGBA pixels, so sequential access can use most fetched data. A column stride of 1920 pixels is 7680 bytes, causing poor spatial locality and potentially repeated set conflicts. Tiling changes the reuse distance: neighboring output pixels reuse input rows before eviction.
+
+**Design comparison.** A row streaming design minimizes temporary storage but may reload rows for each output channel. A channel-plane tiled design improves vector reuse and coefficient broadcast but may require a format conversion. A separable design cuts arithmetic but writes and rereads an intermediate image. Measure bytes moved at each hierarchy level; “fewer operations” is not enough if traffic doubles.
+
+## DMA and buffering
+
+> **Warning.** Never allow the filter kernel to read an input frame buffer before checking the device completion status and executing the required memory/cache synchronization barrier, and never recycle an output buffer to the DMA ring while the display or output engine still holds in-flight read ownership.
+
+The input device writes into a ring of owned frame buffers. The driver validates descriptor addresses and lengths, maps them through an IOMMU if present, publishes ownership with the required memory barrier, and receives a completion with generation and length. The processing core must not read a buffer until completion is ordered and validated. After processing, ownership returns only after all CPU writes are visible to the output device or host.
+
+| Buffer Ring Slot | Buffer State | Current Writer | Current Reader | Memory / Cache Synchronization Action | Ownership Transfer Event |
+| :---: | :--- | :--- | :--- | :--- | :--- |
+| Slot 0 | `CAPTURING` | Camera DMA Engine | None (CPU access trapped) | Driver issues acquire fence before publishing descriptor | Camera asserts frame interrupt on completion |
+| Slot 1 | `PROCESSING` | CPU Filter Kernel | CPU Filter Kernel | CPU performs cache line prefetch; processes $64\times 32$ tiles | Kernel completes output frame checksum |
+| Slot 2 | `TRANSMITTING` | None (writes blocked) | Display DMA Engine | CPU issues `sfence` / write-back dirty lines to RAM | Display engine signals VSYNC completion |
+| Slot 3 | `FREE` | None | None | OS resets buffer generation tag; clears stale descriptors | Driver enqueues slot back to Camera receive ring |
+
+Double buffering permits one frame to arrive while another is processed; triple buffering absorbs jitter but increases memory. If processing time occasionally exceeds the frame period, the queue grows. A bounded system must choose drop-oldest, drop-newest, backpressure, or degraded-quality behavior. The policy is an architecture requirement because it affects memory capacity, latency, and user-visible correctness.
+
+## Performance budget
+
+> **Definition.** Under the stage-budget decomposition $T_{\mathrm{frame}} = T_{\mathrm{DMA\_in}} + T_{\mathrm{queue}} + T_{\mathrm{compute}} + T_{\mathrm{memory\_stall}} + T_{\mathrm{DMA\_out}}$, meeting the 30 fps throughput constraint requires $\mathrm{E}[T_{\mathrm{stage}}] \le 33.3\,\text{ms}$ per pipeline stage, while meeting the tail constraint requires $P(T_{\mathrm{frame}} \le 25\,\text{ms}) \ge 0.99$.
+
+At 30 frames per second, the average frame budget is 33.3 ms, but the p99 requirement is 25 ms after availability. If one core handles 2 billion useful operations per second and the model requires 4.2 billion weighted operations per second, the design needs vectorization, multiple cores, lower arithmetic, or a hardware accelerator. Estimate instruction count and CPI separately from arithmetic count. Memory stalls and DMA wait time belong in the end-to-end timeline.
+
+| Pipeline Stage | Quantitative Budget ($T_{\mathrm{stage}}$) | Limiting Resource Ceiling | Architecture Mitigations for Tail Latency (p99) |
+| :--- | :---: | :--- | :--- |
+| **Camera DMA Ingest** | $1.2\,\text{ms}$ | PCIe Gen3 $\times 1$ ($985\,\text{MB/s}$) | Dedicated continuous physical frames; no IOMMU page faults |
+| **L1/L2 Cache Prefetch** | $0.8\,\text{ms}$ | L2 $\to$ L1 cache bandwidth ($64\,\text{B/cycle}$) | Hardware stream prefetcher tuned to row stride |
+| **2D Stencil Convolution** | $14.5\,\text{ms}$ | Vector MAC throughput ($4\,\text{ops/cycle}$) | Dual 4-way vector accumulators; loop boundary peel |
+| **Output Cache Write-back** | $1.5\,\text{ms}$ | L2 write-back bandwidth | Streaming non-temporal stores (`movntdq`) bypass L1 |
+| **Display DMA Egress** | $1.2\,\text{ms}$ | Display engine memory channel | High-priority QoS traffic class on memory arbiter |
+| **Total Frame Latency** | **$19.2\,\text{ms}$** | **Headroom: $5.8\,\text{ms}$ vs $25\,\text{ms}$ SLA** | **Deterministic margin guarantees $P(T \le 25\,\text{ms}) \ge 0.99$** |
+
+Use a stage budget: input completion, cache warm-up, compute, output write-back, and scheduling. For a vector design, calculate lanes per instruction and tail fraction. For a multicore design, account for partitioning, synchronization, shared-cache traffic, and load imbalance. A design that meets mean time but not p99 must identify the source of tail variation—page faults, queueing, interrupts, contention, or device behavior.
+
+## Reliability and security
+
+> **Warning.** Multiplying untrusted descriptor `width * height * 4` in 32-bit unsigned arithmetic can wrap around and pass a buffer-size check while causing the filter loop or DMA engine to read or write past the allocated frame buffer.
+
+Validate every descriptor length against the allocated buffer, prevent integer overflow in stride and frame-size calculations, and reject unsupported dimensions before DMA. Device completion is untrusted input: a malformed length or status must not become an unchecked loop bound. Memory mappings must be revoked after device reset, and stale completions must be rejected by generation.
+
+| Failure Mode / Threat Vector | Trigger Condition | System Impact | Hardware & Architectural Verification Invariant |
+| :--- | :--- | :--- | :--- |
+| **Descriptor Integer Overflow** | Untrusted camera reports $W \times H \times 4 > 2^{32}-1$ | DMA writes outside allocated frame into kernel memory | Reject descriptor if $W > 4096 \lor H > 2160$ before DMA setup |
+| **Stale DMA Overwrite** | Host reallocates frame buffer before DMA engine quiesces | Active DMA corrupts newly assigned tenant process memory | Enforce generation counters; poll device status bit before reuse |
+| **Frame Dropping Under Jitter** | Processing exceeds 33.3 ms during transient background load | Ring buffer overflows; camera DMA drops subsequent frames | Triple-buffering absorbs 1-frame jitter; fallback to drop-oldest |
+| **Speculative Cache Snooping** | Secret camera data left resident in shared LLC | Cross-tenant Flush+Reload side channel leaks frame bytes | Explicit cache line clear / way-partitioning before core release |
+
+If the image contains sensitive data, cache timing, DMA isolation, and buffer clearing become part of the threat model. A faster vector implementation that leaves pixels in a shared cache or recycled buffer may have a different security posture. State what confidentiality is required and which layers enforce it.
+
+## Architecture specification package
+
+> **Remark.** Every architectural diagram and specification table must pair quantitative estimates (operations, bytes transferred, cycle bounds) with explicit correctness and ownership invariants.
+
+Produce a block diagram and a sequence diagram from device arrival through output completion. Specify pixel representation, ISA operations, accumulator width, pipeline schedule, cache mapping, tile dimensions, DMA ownership, queue policy, exception behavior, and security assumptions. Give a baseline and at least two alternatives, with a table of arithmetic work, estimated bytes moved, memory ceilings, compute ceilings, area/energy implications, and unverified assumptions.
+
+Include a correctness argument for one output pixel, an invariant for buffer ownership, an AMAT or roofline calculation, and an experiment plan. The experiment must identify what would falsify the claim that the design is compute-bound, cache-bound, bandwidth-bound, or synchronization-bound. Report how you would measure p99 latency and how you would inject a delayed or malformed device completion.
+
+## Verification criteria
+
+> **Remark.** Architectural designs are evaluated on falsifiable engineering rigor: a slower design with a sound overflow proof, verified DMA ownership, and a discriminating Roofline/AMAT experiment is superior to an unverified speedup claim.
+
+A rigorous design specification is precise about boundaries and uncertainty. It derives rather than asserts arithmetic cost, connects data layout to cache lines, distinguishes architectural guarantees from microarchitectural assumptions, handles tail and overflow cases, and proposes measurements that could disprove its own model. A diagram without invariants is incomplete; a benchmark without workload and measurement boundaries is weak evidence; a speedup claim without a baseline is not a result.
+
+<ExerciseSet>
+
+<Exercise id="ex-arch-cap-l1-tile-reuse" type="verify" level="application" title="L1 Tile Working-Set Footprint and Compulsory DRAM Traffic">
+
+Verify that a $64 \times 32$ RGBA output tile with a 1-pixel halo fits inside the 32 KiB 4-way L1 data cache and calculate the compulsory DRAM traffic per output pixel compared to an untiled naive kernel.
+
+<ExerciseSolution hint="Include the 1-pixel border on all four sides: $(64 + 2) \times (32 + 2)$ input pixels plus $64 \times 32$ output pixels, at 4 bytes per RGBA pixel.">
+
+1. **Input tile with halo:** $(64 + 2) \times (32 + 2) = 66 \times 34 = 2{,}244$ pixels $\times 4\text{ B} = 8{,}976\text{ B}$.
+2. **Output tile:** $64 \times 32 = 2{,}048$ pixels $\times 4\text{ B} = 8{,}192\text{ B}$.
+3. **Total working set:** $8{,}976 + 8{,}192 = 17{,}168\text{ B} \approx 16.77\text{ KiB} < 32\text{ KiB}$, leaving nearly half of L1 capacity for stack frames, filter coefficients, and set-associativity conflict headroom.
+4. **Traffic reduction:** Without reuse, each output pixel reads $9 \times 4 = 36\text{ B}$ and writes $4\text{ B}$ ($40\text{ B/pixel}$). With L1 tiling, each output pixel amortizes to $\frac{8{,}976 + 8{,}192}{2{,}048} \approx 8.38\text{ B/pixel}$, reducing external memory traffic by $4.77\times$.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-cap-accumulator-overflow" type="verify" level="application" title="Stencil Accumulator Width and Saturation Ordering">
+
+Suppose the $3 \times 3$ convolution kernel uses signed 8-bit weights $w_{i,j} \in [-128, 127]$ and unsigned 8-bit pixels $p_{i,j} \in [0, 255]$. Determine the exact minimum signed two's-complement accumulator width required to prevent intermediate overflow before final clamping to $[0, 255]$, and construct a 9-tap counterexample showing why per-tap clamping violates exact convolution semantics.
+
+<ExerciseSolution hint="Compute the worst-case negative sum $9 \times (-128) \times 255$ and compare against signed $k$-bit bounds $[-2^{k-1}, 2^{k-1}-1]$.">
+
+1. **Minimum accumulator width:** The extreme negative sum is $9 \times (-128) \times 255 = -293{,}760$, and the extreme positive sum is $9 \times 127 \times 255 = +291{,}465$. A signed 19-bit integer covers $[-262{,}144, +262{,}143]$, which overflows both bounds. A signed 20-bit integer covers $[-524{,}288, +524{,}287]$, so **20 signed bits** is the exact mathematical minimum (implemented in hardware with a standard 32-bit lane).
+2. **Per-tap saturation counterexample:** Suppose 8 taps yield $+255 \times 1 = +255$ each and the 9th tap yields $-1800$ (e.g., $w = -8, p = 225$). Exact accumulation gives $8(255) - 1800 = 240 \in [0, 255]$. Clamping to $[0, 255]$ after every tap instead saturates at $255$ across taps $2\dots 8$ and then drops to $\max(0, 255 - 1800) = 0$, introducing a $240$-unit error.
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-cap-mac-unrolling-schedule" type="construct" level="application" title="Pipeline RAW Hazard Hiding via Accumulator Unrolling">
+
+Consider a 2 GHz core whose pipelined 4-channel MAC instruction completes all four RGBA lanes of one stencil tap with initiation interval $1\text{ cycle}$ and latency $4\text{ cycles}$. A naive loop updates one pixel accumulator across all 9 taps ($9 \times 4 = 36\text{ cycles/pixel}$). Show how unrolling across $k = 4$ independent output pixels removes RAW stalls to achieve $9\text{ cycles/pixel}$, and calculate the resulting compute-only frame time for a $1920 \times 1080$ image.
+
+<ExerciseSolution hint="Interleave tap $t$ across four independent pixel accumulators $A_0, A_1, A_2, A_3$ before issuing tap $t+1$ to $A_0$.">
+
+1. **Hazard elimination:** With $k = 4$ independent pixel accumulators, the loop schedules `MAC A0, tap_t`, `MAC A1, tap_t`, `MAC A2, tap_t`, `MAC A3, tap_t` in consecutive cycles $0, 1, 2, 3$. By cycle $4$, the 4-cycle latency of `A0` has completed, so `MAC A0, tap_{t+1}` executes with zero RAW stalls.
+2. **Amortized cycle rate:** Four pixels complete all 9 taps in $4 \times 9 = 36$ cycles (plus negligible 3-cycle drain), giving $9\text{ cycles/pixel}$.
+3. **Compute-only frame time:** A $1920 \times 1080$ frame has $2{,}073{,}600$ pixels. At $9\text{ cycles/pixel}$, compute requires $2{,}073{,}600 \times 9 = 18{,}662{,}400$ cycles. At $2\text{ GHz}$ ($2 \times 10^9\text{ cycles/s}$), compute takes $\frac{18{,}662{,}400}{2 \times 10^9} = 9.33\text{ ms}$, leaving $15.67\text{ ms}$ of headroom within the $25\text{ ms}$ p99 budget (compared to $37.32\text{ ms}$ without unrolling).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-cap-dma-descriptor-overflow" type="verify" level="transfer" title="DMA Descriptor Integer Overflow and Generation-Counter Race">
+
+A camera driver allocates an $8{,}294{,}400\text{-byte}$ frame buffer (`1920 * 1080 * 4`) and validates an incoming descriptor in 32-bit unsigned arithmetic with `uint32_t bytes = width * height * 4; if (bytes <= buf_capacity) accept();`. Construct a concrete `(width, height)` input pair that bypasses this check via wraparound, and write both the overflow-safe validation invariant and the generation-tag check required before recycling a DMA slot.
+
+<ExerciseSolution hint="Choose factors of $2^{32} = 4{,}294{,}967{,}296$ (for instance powers of two whose product times 4 wraps modulo $2^{32}$ into $[0, 8{,}294{,}400]$).">
+
+1. **Overflow exploit vector:** Let `width = 65536` ($2^{16}$) and `height = 16384` ($2^{14}$). In 32-bit unsigned arithmetic, $65{,}536 \times 16{,}384 \times 4 = 2^{32} \equiv 0 \pmod{2^{32}}$. Since $0 \le 8{,}294{,}400$, the naive check accepts the descriptor while the DMA loop attempts to transfer $4\text{ GiB}$ past the buffer. (Similarly, `width = 32768, height = 32769` wraps to `131,072` bytes $\le 8{,}294{,}400$.)
+2. **Safe validation invariant:** Reject zero dimensions and enforce explicit architectural bounds plus division-checked 64-bit bounds before multiplying:
+   `width > 0 && height > 0 && width <= 4096 && height <= 2160 && (uint64_t)width * height <= buf_capacity / 4`.
+3. **Buffer recycling invariant:** Never return a slot to `FREE` until an MMIO status read confirms the DMA engine is idle on that descriptor and its returned generation token matches the slot's expected generation counter (incremented monotonically on each reuse).
+
+</ExerciseSolution>
+</Exercise>
+
+<Exercise id="ex-arch-cap-roofline-falsification" type="generalise" level="synthesis" title="Falsifying Memory-Bandwidth vs. Compute Bottlenecks">
+
+Compare the untiled naive stencil ($68\text{ ops/pixel}$, $40\text{ B/pixel}$, intensity $1.7\text{ ops/B}$) and the $64 \times 32$ L1-tiled stencil ($68\text{ ops/pixel}$, $8.38\text{ B/pixel}$ DRAM traffic) on a $2\text{ GHz}$ core with a $20\text{ GB/s}$ DRAM ceiling and a $16\text{ Gops/s}$ SIMD compute ceiling. Determine which roofline bound constrains each variant, and design a single controlled experiment that falsifies the hypothesis that the tiled pipeline is DRAM-bandwidth-bound.
+
+<ExerciseSolution hint="Compute the roofline ridge point ($16\text{ Gops/s} \div 20\text{ GB/s}$) and test sensitivity to core clock scaling versus DRAM bandwidth scaling.">
+
+1. **Roofline classification:** The machine ridge point is $\frac{16\text{ Gops/s}}{20\text{ GB/s}} = 0.8\text{ ops/B}$.
+   - **Untiled kernel ($1.7\text{ ops/B}$):** Memory roofline ceiling is $1.7 \times 20 = 34\text{ Gops/s} > 16\text{ Gops/s}$ theoretically if L1/L2 had infinite conflict-free streaming, though in practice poor row-strided reuse drops effective intensity below $0.8\text{ ops/B}$ and stalls on DRAM bandwidth.
+   - **L1-tiled kernel ($\frac{68}{8.38} \approx 8.11\text{ ops/B}$):** Exceeds the $0.8\text{ ops/B}$ ridge point by over $10\times$ (DRAM ceiling $8.11 \times 20 \approx 162.3\text{ Gops/s}$), placing the tiled kernel squarely under the **$16\text{ Gops/s}$ compute ceiling**.
+2. **Falsification experiment:** Hold input resolution, tile size ($64 \times 32$), and DRAM clock fixed while stepping CPU core frequency from $2.0\text{ GHz}$ down to $1.0\text{ GHz}$ (and measuring DRAM CAS byte counters and L2 miss stalls). If frame time doubles while total DRAM bytes stay constant at $\approx 17.4\text{ MB/frame}$, compute is the bottleneck; conversely, if frame time stays nearly invariant under core clock halving while L2/DRAM stall cycles remain high, the hypothesis of compute-boundedness is falsified and the bottleneck lies in memory stalls or cache conflicts.
+
+</ExerciseSolution>
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* [MIT 6.004 Computation Structures: learning objectives and lecture notes](https://ocw.mit.edu/courses/6-004-computation-structures-spring-2009/9eb784caa9feb81f6ec09da09a427384_MIT6_004s09_syll_objectives.pdf)
+* [UC Berkeley CS 61C: memory hierarchy and AMAT](https://notes.cs61c.org/content/caches-intro/amat/)
+* [Cornell CS 3410: Computer System Organization and Programming](https://www.cs.cornell.edu/courses/cs3410/2015sp/)

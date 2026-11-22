@@ -1,0 +1,233 @@
+---
+title: Replication and Partitioning
+course: database-systems
+description: Design replica, partition, failover, and migration boundaries from workload and failure evidence.
+prerequisites:
+  - Indexes, query plans, transactions, recovery, and distributed-data consistency contracts
+  - Hashing, range order, workload skew, and basic availability terminology
+  - Tenant ownership and relational key design
+outcomes:
+  - Compare synchronous and asynchronous replication by acknowledged-write durability, read freshness, and failover loss risk.
+  - Explain why failover needs a fencing/epoch rule rather than merely a new primary process.
+  - Choose a partition key from query, maintenance, skew, and cross-partition-constraint evidence.
+  - Trace a safe tenant or range migration with dual-write/redirect or cutover boundaries and reconciliation evidence.
+omissions:
+  - Consensus implementation, automatic rebalancer algorithms, global secondary-index internals, and cloud-service administration are outside scope.
+  - Partition pruning is demonstrated as a query-planning property, not as a substitute for distributed sharding design.
+estimatedMinutes: 420
+assessment: Given a multi-tenant workload and a failover/migration incident, select replication and partition boundaries, identify a split-brain or pruning counterexample, and specify the evidence required before cutover.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import Quiz from '../../../components/Quiz';
+
+
+A replica that is one minute behind can be an excellent reporting target and a dangerous authorization target. A partitioned table can make retention cheap and still leave a tenant-hotspot unsolved. Replication and partitioning change where data lives and when it becomes visible; neither silently preserves every single-node guarantee.
+
+{/* Source tracking: Replication behavior and partitioning concepts are synthesized from PostgreSQL documentation; leadership/fencing terminology is cross-checked against the Raft paper. Workload matrices and migration traces are original. */}
+
+## Replication changes the meaning of acknowledgement
+
+> **Definition.** Replication copies committed state or log records to other nodes. A write's durability claim depends on which copies must acknowledge before the client is told success and which failures are in scope.
+
+| Mode | Client acknowledgement | Read behavior | Primary risk |
+| --- | --- | --- | --- |
+| asynchronous | local durable primary commit | replicas can lag | acknowledged tail can be lost on failover |
+| synchronous to one or more standbys | required standby acknowledgement as configured | some reads may still be stale | higher latency / reduced write availability |
+| logical/event projection | source commit before consumer applies event | explicit lag and replay boundary | duplicate or delayed consumer work |
+
+A replica should report both replication position and lag relative to a named source. “Healthy” cannot mean only that its process is running. A read-after-write API must either route to a sufficiently caught-up replica, route to the writer, wait with a bound, or return a clearly stale contract.
+
+### Prediction — a false zero-loss claim
+
+A primary acknowledges a write locally, then crashes before its asynchronous replica receives it. The replica is promoted. What happened to the client-observed write?
+
+<ExerciseSolution>
+It can be lost despite the former primary's acknowledgement. The deployment promised local durable commit, not durable replication to the promoted node. Calling this “zero data loss” confuses storage durability with a failover durability contract. Synchronous acknowledgement, durable client retry records, or a revised product guarantee changes the claim and its latency/availability cost.
+</ExerciseSolution>
+
+## Promotion needs fencing against stale writers
+
+> **Invariant.** At most one authority may accept writes for a replication epoch. A promoted leader must reject requests carrying an old lease, term, or fencing token, and clients must stop reaching the former leader.
+
+<PlantUML code={`@startuml
+participant "client" as C
+participant "old primary, epoch 17" as O
+participant "new primary, epoch 18" as N
+participant "routing control" as R
+R -> N : promote with epoch 18
+R -> C : route writes to epoch 18
+C -> O : delayed write with epoch 17
+O -> O : reject / fenced
+C -> N : retry with epoch 18
+note right of N
+Promotion without fencing can
+permit two write authorities.
+end note
+@enduml`} />
+
+Failover is not finished when a process starts accepting traffic. Fencing prevents an isolated former primary from continuing to accept writes that later conflict with the new authority. The precise technique may be leases, terms, a strongly consistent configuration store, or a database-specific mechanism; the required property is refusal of stale authority.
+
+### Application — read your own write
+
+A client creates an order, then reads it from an asynchronous replica. Give two correct API behaviors.
+
+<ExerciseSolution>
+Route the immediate read to the primary/source of truth, or attach a required log position/version and wait until the chosen replica confirms it has replayed that position within a timeout. Returning “not found” from a lagging replica as if the order never existed violates read-your-writes. The API can instead return an explicitly stale result if the product contract permits it.
+</ExerciseSolution>
+
+<Quiz client:load
+  title="Why promotion is not enough"
+  question="A standby replica is promoted to primary after network failure and accepts writes. The former primary remains online and receives delayed requests. Evaluate which mechanisms prevent split-brain data corruption:"
+  options={[
+    {
+      id: "claim-fencing-token",
+      text: "Fencing tokens or epoch terms reject writes from the demoted primary by checking monotonically increasing leadership numbers.",
+      isCorrect: true,
+      feedback: "Correct. Every write request carries the current leadership epoch; requests carrying stale epoch numbers are rejected."
+    },
+    {
+      id: "claim-lease-revocation",
+      text: "Lease expiration guarantees that an isolated former primary cannot commit writes once its allocated time lease elapses.",
+      isCorrect: true,
+      feedback: "Correct. Time-bounded leader leases ensure the old primary stops serving writes before a new leader can be safely established."
+    },
+    {
+      id: "claim-disk-capacity",
+      text: "The promoted replica storage volume absorbs delayed client writes naturally without requiring routing protocol changes.",
+      isCorrect: false,
+      feedback: "Incorrect. Disk capacity does not prevent two reachable nodes from independently accepting divergent, conflicting writes."
+    },
+    {
+      id: "claim-read-your-writes",
+      text: "Configuring read-your-writes client session guarantees revokes the old primary authority to commit concurrent writes.",
+      isCorrect: false,
+      feedback: "Incorrect. Read-your-writes controls read routing; it does not fence disconnected primary nodes from accepting rogue writes."
+    }
+  ]}
+  explanation="Promoting a new leader does not inherently disable the old leader. Split-brain prevention requires fencing tokens, generation epochs, or hardware STONITH to revoke write authority from stale nodes."
+/>
+
+## A partition key is a workload and operations decision
+
+> **Worked example.** Time partitions make dropping expired events cheap and can prune a query with a time predicate. They do not make a tenant-only query prune partitions, and they can concentrate today's write hotspot in one partition.
+
+| Candidate key | Serves | Breaks or complicates | Evidence to collect |
+| --- | --- | --- | --- |
+| time range | retention, time-bounded scans | current-write hotspot; tenant-only query | date filters, retention cadence, ingest skew |
+| tenant hash | tenant isolation and balanced ownership | cross-tenant reporting; tenant moves | tenant-size distribution, joins, reporting scope |
+| geography | residency / latency boundary | global users and moving customers | legal domain, traffic origin, disaster plan |
+| product/category | localized catalog access | uneven popularity and changing classification | hot-key distribution, reclassification rate |
+
+A partition is not automatically a shard. Local table partitions can remain on one database node; a shard adds independent placement, failure, and coordination boundaries. Global uniqueness and foreign keys become harder when the key omits the partition owner. Put tenant identity into keys where tenant isolation is a requirement, rather than assuming an application filter is always present.
+
+<PlantUML code={`@startuml
+rectangle "orders_2026_08\nrange: August" as A
+rectangle "orders_2026_09\nrange: September" as B
+rectangle "orders_2026_10\nrange: October" as C
+rectangle "query: created_at in September" as Q
+Q --> B : prune to one partition
+note bottom of A
+A query only on tenant_id
+cannot infer this range.
+end note
+@enduml`} />
+
+### Prediction — pruning counterexample
+
+A table is partitioned monthly. A query filters only **tenant_id = 42** and lacks a time predicate. How many partitions can the planner discard from partition bounds alone?
+
+<ExerciseSolution>
+None merely from month bounds: tenant identity gives no constraint on the partition key. An index can still help each partition, but the query may need to inspect all of them. Add an appropriate time predicate, choose a tenant-aligned partition/shard design when the workload warrants it, or maintain a separate routing structure with a documented correctness boundary.
+</ExerciseSolution>
+
+## Migration is a state transition, not a copy command
+
+> **Warning.** Copying a tenant to a new shard and immediately switching traffic risks missing writes, duplicate events, and split reads. A migration needs a source of truth, an ordered cutover boundary, and reconciliation before deleting the old copy.
+
+| Phase | Required evidence |
+| --- | --- |
+| prepare | destination schema/version accepts the tenant; ownership routing is versioned |
+| copy | snapshot position and checksum/count evidence are recorded |
+| catch up | ordered changes after the snapshot replay idempotently |
+| cut over | writes are fenced or redirected at one durable ownership epoch |
+| verify | key counts, sampled hashes, invariants, and lag converge |
+| retire | old copy is retained until rollback window and audit evidence expire |
+
+### Transfer — choose the cutover test
+
+Tenant 42 is moving to a new shard while orders continue to arrive. What single test is insufficient, and what must replace it?
+
+<ExerciseSolution hint="A matching row count cannot prove every key/version and in-flight write moved exactly once.">
+A final row count alone is insufficient: it misses mismatched values, duplicate outbox events, and writes after the snapshot. Record a migration epoch, fence or route writes through that epoch, replay changes after a known position idempotently, then verify key sets, checksums or sampled hashes, and domain invariants before retirement. Keep a rollback decision rule rather than deleting the old copy on optimism.
+</ExerciseSolution>
+
+<ExerciseSet>
+
+<Exercise id="ex-rep-split-brain-fencing" type="verify" level="application" title="Split-Brain Prevention and Epoch-Based Leader Fencing">
+
+In a high-availability primary-replica setup, a network partition isolates the active primary from the cluster monitor. The monitor promotes a standby to primary at epoch 2. Verify how a client request carrying epoch 1 sent to the old primary is safely rejected to prevent split-brain writes.
+
+<ExerciseSolution hint="Examine monotonically increasing epoch tokens and lease validation.">
+
+Each mutation request carries the coordinator's current leadership epoch. If a request with epoch 1 arrives at the old primary, it either encounters an expired time-bounded leader lease or, upon attempting to append to persistent storage / consensus log, is rejected by storage fencing mechanisms that demand epoch $\ge 2$. Because the cluster consensus quorum has already advanced to epoch 2, the stale primary cannot commit the transaction.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rep-read-your-writes-lag" type="describe" level="recall" title="Read-Your-Writes Consistency under Asynchronous Replication Lag">
+
+Describe why a user who creates an account and is immediately redirected to a read replica may receive an HTTP 404 (Not Found) error under asynchronous replication, and propose two routing architectures that guarantee read-your-writes consistency.
+
+<ExerciseSolution hint="Asynchronous replication decouples primary commit from replica log replay.">
+
+Under asynchronous replication, the primary confirms commits to the client before the WAL stream has been replayed on standby read replicas. If the client's subsequent read query routes to a replica lagging behind the commit LSN, the new account tuple is not yet visible.
+Architectural solutions:
+1. Primary read routing: Route read requests immediately following user mutations to the primary database for a bounded duration (e.g. 5 seconds).
+2. Session-level LSN wait: Record the primary's commit LSN in the client's session cookie; the read router forwards queries only to replicas that have confirmed replay past that recorded LSN.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rep-partition-key-tradeoff" type="construct" level="application" title="Workload-Driven Partition Key Selection: Time Range vs. Tenant Hash">
+
+A SaaS platform with 50,000 tenants processes 50,000,000 order records per month. Contrast the operational trade-offs of range partitioning by `created_at` (monthly) versus hash partitioning by `tenant_id` (32 partitions) across query pruning and data retention workflows.
+
+<ExerciseSolution hint="Analyze WHERE clause pruning and DROP TABLE efficiency.">
+
+1. Range by `created_at`: Ideal for data lifecycle retention; dropping an expired month is an $O(1)$ metadata operation (`DROP TABLE orders_2025_01`) with zero vacuum overhead. However, queries filtering only by `tenant_id` must scan all partitions, and all current-day writes concentrate into a single active partition.
+2. Hash by `tenant_id`: Perfect for tenant isolation and query pruning on tenant-specific lookups; writes distribute evenly across all 32 partitions. However, dropping expired historical data requires expensive row-level `DELETE` scans across all 32 partitions.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-rep-live-tenant-cutover-transfer" type="generalise" level="transfer" title="Zero-Downtime Live Shard Migration and Cutover Protocol">
+
+Design a zero-downtime shard migration protocol to transfer a high-throughput tenant from an overloaded database shard $A$ to a newly provisioned shard $B$. Detail the six sequential phases and evidence required before retiring shard $A$.
+
+<ExerciseSolution hint="Follow prepare, copy, catch up, cut over, verify, and retire phases with epoch fencing.">
+
+1. Prepare: Verify destination shard $B$ schema matches $A$, and initialize tenant routing configuration with epoch 1.
+2. Initial copy: Take a consistent point-in-time snapshot of tenant rows on shard $A$ at LSN $L_0$ and copy data to shard $B$.
+3. Catch up: Enable CDC (change data capture) or logical replication to stream and apply all mutation records from $L_0$ forward onto shard $B$.
+4. Cutover: Set tenant routing to read-only or brief pause; advance routing epoch to 2 pointing to shard $B$. Drain in-flight writes on $A$.
+5. Verify: Execute reconciliation queries comparing row counts, cryptographic column checksums, and key sets between $A$ and $B$.
+6. Retire: Route all traffic to shard $B$ under epoch 2. Retain frozen tenant data on shard $A$ in read-only mode for 7 days before issuing drop.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* [PostgreSQL: High Availability, Load Balancing, and Replication](https://www.postgresql.org/docs/current/high-availability.html)
+* [PostgreSQL: Table Partitioning](https://www.postgresql.org/docs/current/ddl-partitioning.html)
+* [In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf)

@@ -1,0 +1,260 @@
+---
+import { getCollection, type CollectionEntry } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import { getCourseLessons, type OrderedLesson } from '../../utils/lessons';
+import { BookOpen, FlaskConical, PencilRuler, NotebookText, Sparkles } from 'lucide-react';
+
+export async function getStaticPaths() {
+  const courses = await getCollection('courses');
+  const lessons = await getCollection('lessons');
+
+  return Promise.all(courses.map(async (course) => ({
+    params: { courseId: course.id },
+    props: { course, lessons: await getCourseLessons(course.id, lessons) },
+  })));
+}
+
+interface Props {
+  course: CollectionEntry<'courses'>;
+  lessons: OrderedLesson[];
+}
+
+const { course, lessons } = Astro.props;
+const modules = lessons.reduce<{
+  title: string;
+  moduleKind: string;
+  moduleIndex: number | null;
+  lessons: OrderedLesson[];
+}>((groups, lesson) => {
+  const title = lesson.data.module ?? 'Overview';
+  const moduleKind = lesson.data.moduleKind || 'chapter';
+  const moduleIndex = lesson.data.moduleIndex ?? null;
+  const current = groups.at(-1);
+  if (!current || current.title !== title) {
+    groups.push({ title, moduleKind, moduleIndex, lessons: [] });
+  }
+  groups.at(-1)!.lessons.push(lesson);
+  return groups;
+}, []);
+
+const isMath = course.id.startsWith('calculus') || course.id.includes('math');
+const category = isMath ? 'Mathematics' : 'Computer Science';
+const categoryClass = isMath ? 'math' : 'cs';
+const lessonSlugs = lessons.map((lesson) => lesson.id);
+const progressLessonSlugs = lessons
+  .filter((lesson) => ['lesson', 'lab', 'problems', 'practice'].includes(lesson.data.kind || 'lesson'))
+  .map((lesson) => lesson.id);
+const firstLesson = lessons[0];
+const formatMinutes = (minutes: number) => {
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (!hours) return `${minutes} min`;
+  return remainder ? `${hours} h ${remainder} min` : `${hours} h`;
+};
+---
+
+<Layout title={`${course.data.title} - LibreUni`} description={course.data.description}>
+  <main class="flex-1 bg-light-bg dark:bg-dark-bg">
+    <section class="relative overflow-hidden border-b border-light-border bg-light-bg dark:border-dark-border dark:bg-dark-bg">
+      <div class={`course-category-stripe course-category-${categoryClass} absolute inset-x-0 top-0 h-16`}>
+        <div class="mx-auto flex h-full max-w-7xl items-center px-6 md:px-8">
+          <p class="text-xs font-black uppercase tracking-[0.25em] text-primary-foreground">{category}</p>
+        </div>
+      </div>
+      <div class="relative mx-auto max-w-7xl px-6 pb-12 pt-24 md:px-8 md:pb-16 md:pt-28">
+        <div class="mt-4 grid gap-10 md:grid-cols-[1fr_auto] md:items-end">
+          <div>
+            <h1 class="max-w-4xl text-5xl font-black leading-none tracking-tight text-light-text dark:text-dark-text md:text-7xl">{course.data.title}</h1>
+            <p class="mt-6 max-w-3xl text-lg font-medium leading-relaxed text-light-muted dark:text-dark-muted">{course.data.description}</p>
+          </div>
+          <div class="min-w-40 rounded-2xl border border-light-border bg-light-surface p-5 text-right dark:border-dark-border dark:bg-dark-surface">
+            <p id="course-progress-value" class="text-4xl font-black tabular-nums text-light-text dark:text-dark-text">0%</p>
+            <p class="mt-1 text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Course progress</p>
+            <progress id="course-progress" class="course-progress mt-4 w-full" value="0" max="100">0%</progress>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mx-auto grid max-w-7xl gap-12 px-6 py-12 md:px-8 lg:grid-cols-[minmax(0,1fr)_18rem] lg:py-16">
+      <div>
+        <section aria-labelledby="prerequisites-heading" class="mb-12 rounded-2xl border border-primary/20 bg-primary/5 p-6 dark:border-primary/30 dark:bg-primary/10">
+          <div class="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <p class="text-xs font-black uppercase tracking-[0.2em] text-primary">Before you start</p>
+              <h2 id="prerequisites-heading" class="mt-2 text-2xl font-black tracking-tight text-light-text dark:text-dark-text">Prerequisites</h2>
+            </div>
+            <p class="text-sm font-black text-light-text dark:text-dark-text">{course.data.workloadHours} planned hours</p>
+          </div>
+          <div class="mt-5 grid gap-6 md:grid-cols-2">
+            <div>
+              <h3 class="text-xs font-black uppercase tracking-widest text-light-text dark:text-dark-text">Required</h3>
+              <ul class="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-light-muted dark:text-dark-muted">
+                {course.data.prerequisites.required.map((item) => <li>{item}</li>)}
+              </ul>
+            </div>
+            <div>
+              <h3 class="text-xs font-black uppercase tracking-widest text-light-text dark:text-dark-text">Recommended</h3>
+              <ul class="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-light-muted dark:text-dark-muted">
+                {course.data.prerequisites.recommended.map((item) => <li>{item}</li>)}
+              </ul>
+            </div>
+          </div>
+        </section>
+        <section aria-labelledby="overview-heading">
+          <p class="text-xs font-black uppercase tracking-[0.25em] text-primary">Course overview</p>
+          <h2 id="overview-heading" class="mt-3 text-3xl font-black tracking-tight text-light-text dark:text-dark-text">Course outline</h2>
+          <p class="mt-4 max-w-3xl text-base leading-relaxed text-light-muted dark:text-dark-muted">{course.data.overview ?? 'Follow the modules in order for a guided path, or open any lesson directly. Each module groups a connected set of concepts.'}</p>
+        </section>
+
+        <section class="mt-12" aria-labelledby="map-heading">
+          <div class="flex items-baseline justify-between gap-4">
+            <h2 id="map-heading" class="text-2xl font-black tracking-tight text-light-text dark:text-dark-text">Modules</h2>
+            <span class="text-xs font-bold text-light-muted dark:text-dark-muted">{modules.length} modules · {lessons.length} lessons</span>
+          </div>
+          <ol class="mt-6 space-y-4">
+            {modules.map((module, index) => {
+              const isPractice = module.moduleKind === 'practice';
+              const chapterLessons = isPractice ? module.lessons : module.lessons.filter((l) => l.data.kind !== 'recap');
+              const recapLesson = isPractice ? null : module.lessons.find((l) => l.data.kind === 'recap');
+
+              if (isPractice) {
+                return (
+                  <li class="my-6 list-none rounded-2xl border-2 border-primary/30 bg-primary/5 p-6 dark:border-primary/40 dark:bg-primary/10">
+                    <div class="flex flex-wrap items-center justify-between gap-4">
+                      <div class="flex items-center gap-3">
+                        <div class="rounded-xl bg-primary/20 p-2.5 text-primary">
+                          <Sparkles size={24} />
+                        </div>
+                        <div>
+                          <p class="text-xs font-black uppercase tracking-widest text-primary">Course Practice</p>
+                          <h3 class="text-xl font-black text-light-text dark:text-dark-text">{module.title}</h3>
+                        </div>
+                      </div>
+                      <div class="flex flex-wrap items-center gap-3">
+                        {module.lessons.map((practiceLesson) => (
+                          <a
+                            href={`${import.meta.env.BASE_URL}lessons/${practiceLesson.id}`}
+                            data-lesson-progress={practiceLesson.id}
+                            class="btn-primary !rounded-xl !px-5 !py-2.5 text-sm font-bold"
+                          >
+                            Open {practiceLesson.data.title}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  </li>
+                );
+              }
+
+              return (
+                <li class="relative rounded-2xl border border-light-border bg-light-surface p-5 dark:border-dark-border dark:bg-dark-surface">
+                  {index < modules.length - 1 && <div class="absolute -bottom-5 left-8 h-5 border-l-2 border-light-border dark:border-dark-border" aria-hidden="true"></div>}
+                  <div class="flex items-baseline justify-between gap-4">
+                    <h3 class="text-lg font-black text-light-text dark:text-dark-text">
+                      {module.moduleIndex !== null && (
+                        <span class="mr-3 text-primary">{String(module.moduleIndex).padStart(2, '0')}</span>
+                      )}
+                      {module.title}
+                    </h3>
+                    <div class="flex items-center gap-3 text-right text-xs font-bold text-light-muted dark:text-dark-muted">
+                      {recapLesson && (
+                        <a
+                          href={`${import.meta.env.BASE_URL}lessons/${recapLesson.id}`}
+                          class="inline-flex items-center gap-1 rounded-md border border-light-border dark:border-dark-border px-2 py-0.5 text-[11px] font-bold text-primary hover:bg-primary/5 transition-colors"
+                        >
+                          <NotebookText size={12} /> Recap
+                        </a>
+                      )}
+                      <span>
+                        {chapterLessons.length} {chapterLessons.length === 1 ? 'topic' : 'topics'}
+                        {course.data.workloadHours && ` · ${formatMinutes(module.lessons.reduce((sum, lesson) => sum + (lesson.data.estimatedMinutes ?? 0), 0))}`}
+                      </span>
+                    </div>
+                  </div>
+                  <ul class="mt-4 divide-y divide-light-border dark:divide-dark-border">
+                    {chapterLessons.map((lesson) => {
+                      const kind = lesson.data.kind || 'lesson';
+                      return (
+                        <li>
+                          <a href={`${import.meta.env.BASE_URL}lessons/${lesson.id}`} data-lesson-progress={lesson.id} class="group flex min-h-12 items-center justify-between gap-4 py-3 text-sm font-bold text-light-text transition-colors hover:text-primary dark:text-dark-text">
+                            <span class="flex items-center gap-2.5">
+                              <span class="text-primary/70 shrink-0" aria-hidden="true">
+                                {kind === 'lesson' && <BookOpen size={15} />}
+                                {kind === 'lab' && <FlaskConical size={15} />}
+                                {kind === 'problems' && <PencilRuler size={15} />}
+                                {kind === 'recap' && <NotebookText size={15} />}
+                                {kind === 'practice' && <Sparkles size={15} />}
+                              </span>
+                              <span>{lesson.data.title}</span>
+                            </span>
+                            <span class="ml-auto flex shrink-0 items-center gap-3">
+                              {course.data.workloadHours && lesson.data.estimatedMinutes && <span class="text-xs font-semibold tabular-nums text-light-muted dark:text-dark-muted">{formatMinutes(lesson.data.estimatedMinutes)}</span>}
+                              <span class="lesson-complete hidden text-xs font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Complete</span>
+                            </span>
+                          </a>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      </div>
+
+      <aside class="h-fit rounded-2xl border border-light-border bg-light-surface p-6 dark:border-dark-border dark:bg-dark-surface lg:sticky lg:top-24">
+        <div class="mb-6 flex items-center justify-between gap-4">
+          <span class="text-xs font-black uppercase tracking-widest text-light-muted dark:text-dark-muted">Workload</span>
+          <span class="text-right text-2xl font-black tabular-nums text-light-text dark:text-dark-text">
+            {course.data.workloadHours ?? course.data.ects}
+            <span class="block text-xs uppercase tracking-widest text-light-muted dark:text-dark-muted">{course.data.workloadHours ? 'planned hours' : 'ECTS'}</span>
+          </span>
+        </div>
+        {course.data.workloadHours && <p class="-mt-3 mb-6 text-xs leading-relaxed text-light-muted dark:text-dark-muted">Estimated reading, traces, implementation, tests, measurement, and capstone work. LibreUni does not award academic credit.</p>}
+        <p class="text-xs font-black uppercase tracking-[0.2em] text-light-muted dark:text-dark-muted">Start learning</p>
+        {firstLesson ? (
+          <a id="resume-course" class="btn-primary mt-4 w-full !rounded-xl !px-5 !py-3 text-sm" href={`${import.meta.env.BASE_URL}lessons/${firstLesson.id}`}>Start course</a>
+        ) : <p class="mt-4 text-sm font-medium text-light-muted dark:text-dark-muted">Lessons are being prepared.</p>}
+        <a class="btn-secondary mt-3 w-full !rounded-xl !px-5 !py-3 text-sm" href={`${import.meta.env.BASE_URL}courses/${course.id}.pdf`} target="_blank" rel="noopener" aria-label={`Open ${course.data.title} as a PDF`}>Open PDF</a>
+      </aside>
+    </section>
+  </main>
+</Layout>
+
+<script is:inline define:vars={{ courseId: course.id, lessonSlugs, progressLessonSlugs, baseUrl: import.meta.env.BASE_URL }}>
+  const refreshCourseProgress = () => {
+    const completed = progressLessonSlugs.filter((slug) => localStorage.getItem(`completed-${slug}`) === 'true');
+    const percentage = progressLessonSlugs.length ? Math.round((completed.length / progressLessonSlugs.length) * 100) : 0;
+    const progress = document.getElementById('course-progress');
+    const value = document.getElementById('course-progress-value');
+    if (progress instanceof HTMLProgressElement) progress.value = percentage;
+    if (value) value.textContent = `${percentage}%`;
+    document.querySelectorAll('[data-lesson-progress]').forEach((link) => {
+      const complete = localStorage.getItem(`completed-${link.getAttribute('data-lesson-progress')}`) === 'true';
+      link.querySelector('.lesson-complete')?.classList.toggle('hidden', !complete);
+    });
+  };
+
+  refreshCourseProgress();
+  const lastVisited = localStorage.getItem(`last-visited-${courseId}`);
+  if (lastVisited && lessonSlugs.includes(lastVisited)) {
+    const resume = document.getElementById('resume-course');
+    if (resume instanceof HTMLAnchorElement) {
+      const renderedLink = document.querySelector(`[data-lesson-progress="${lastVisited}"]`);
+      resume.href = renderedLink?.getAttribute('href') || `${baseUrl}lessons/${lastVisited}.html`;
+      resume.textContent = 'Resume course';
+    }
+  }
+  window.addEventListener('storage', (event) => {
+    if (event.key?.startsWith('completed-')) refreshCourseProgress();
+  });
+</script>
+
+<style>
+  .course-progress { accent-color: rgb(var(--primary-rgb)); }
+  .course-progress::-webkit-progress-bar { background: rgb(var(--light-border-rgb)); border-radius: 999px; }
+  .course-progress::-webkit-progress-value { background: rgb(var(--primary-rgb)); border-radius: 999px; }
+  :global(.dark) .course-progress::-webkit-progress-bar { background: rgb(var(--dark-border-rgb)); }
+</style>

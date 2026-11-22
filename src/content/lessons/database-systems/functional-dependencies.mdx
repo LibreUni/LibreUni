@@ -1,0 +1,206 @@
+---
+title: "Functional dependencies: state what determines a fact"
+course: database-systems
+description: Use functional dependencies, closure, and minimal covers to expose keys and update anomalies from domain rules—not from a lucky sample.
+prerequisites:
+  - Relation grain, candidate keys, and constraints
+  - Sets, subset reasoning, and proof by a short derivation
+outcomes:
+  - State a functional dependency as a claim about every legal instance and distinguish it from a sampled correlation.
+  - Compute an attribute closure and use it to test whether an attribute set is a superkey or candidate key.
+  - Simplify a small dependency set while preserving its implications.
+omissions:
+  - Multivalued dependencies, join dependencies, and automated dependency discovery are outside this course foundation.
+estimatedMinutes: 480
+assessment: Given a relation, business rules, and a proposed determinant, compute a closure, justify a candidate key, and repair one dependency claim that is unsupported by the domain.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import FunctionalDependencyPlayground from '../../../components/playgrounds/FunctionalDependencyPlayground';
+import MathProof from '../../../components/MathProof.astro';
+import MathStatement from '../../../components/MathStatement.astro';
+import Ref from '../../../components/Ref.astro';
+
+
+A functional dependency is a design claim: once you know one fact, another fact is forced. It is not an observation that happened to hold in three rows of a spreadsheet. That distinction lets us ask whether a relation stores one fact once or repeats it under many keys.
+
+<MathStatement id="fd-definition" kind="definition" title="Functional dependency">
+
+For a relation schema $R$ and attribute sets $X, Y \subseteq R$, the functional dependency
+
+$$
+X \to Y
+$$
+
+holds when every **legal** instance of $R$ has this property: any two tuples that agree on $X$ also agree on $Y$. $X$ is the determinant; $Y$ is determined by it.
+</MathStatement>
+
+{/* Source tracking: Functional-dependency definitions, closure, and normal-form use are synthesized from the schema-refinement chapters of Ramakrishnan and Gehrke, *Database Management Systems*. */}
+
+## Begin with a domain rule, not a table pattern
+
+> **Definition.** A domain rule describes which future instances are legal. It is the evidence for a functional dependency; a repeated pattern in a current export is not.
+
+Assume a cloud platform assigns exactly one node IP and one network port to each service instance identified by `(cluster_id, service_name, instance_id)`.
+
+$$
+(cluster\_id, service\_name, instance\_id) \to (node\_ip, port)
+$$
+
+> **Worked example.** In `Instance(cluster_id, service_name, instance_id, node_ip, port)`, the stated scheduling rule makes `(cluster_id, service_name, instance_id)` determine `node_ip` and `port`. It does **not** say that `port` determines `node_ip`: different instances can use the same port number across different nodes.
+
+> **Counterexample.** A sample in which every row has a different `service_fqdn` does not prove $service\_fqdn \to service\_id$. The domain name may be unmapped, aliased, or dynamically routed unless the infrastructure configuration declares and enforces it as a unique identifier. Dependencies come from the legal domain, ideally backed by a key or explicit policy.
+
+### Prediction: spot the unsupported dependency
+
+The first three rows of a telemetry table all show `datacenter = 'us-east'` and `operator = 'ops-team-a'`. May you infer $datacenter \to operator$? What extra domain rule would make it valid?
+
+<ExerciseSolution hint="A dependency must survive every future legal row, not merely the current sample.">
+
+No. Another service or cluster can be maintained by another operator in the same datacenter. The dependency would be valid only under a much stronger rule such as “the platform assigns exactly one operator to every cluster in every datacenter,” which is not the intended domain.
+</ExerciseSolution>
+
+## Compute closure as a trace
+
+Attribute closure answers: starting with attributes $X$, what attributes can the dependency set force? Let
+
+$$
+F = \{A \to B,\; B \to C,\; CD \to E\}.
+$$
+
+To calculate $AD^+$, begin with $\{A,D\}$ and add only a right side whose left side is already present.
+
+| Step | Available attributes | Dependency enabled | New attribute |
+| --- | --- | --- | --- |
+| Start | $A,D$ | — | — |
+| 1 | $A,D$ | $A \to B$ | $B$ |
+| 2 | $A,B,D$ | $B \to C$ | $C$ |
+| 3 | $A,B,C,D$ | $CD \to E$ | $E$ |
+
+So $AD^+ = \{A,B,C,D,E\}$. The order of enabled steps can vary; the final closure cannot, provided you keep applying dependencies until none adds an attribute.
+
+<MathProof id="fd-closure-trace" for="fd-definition" title="Why the trace is justified" collapsible>
+
+Each step preserves equality on the starting attributes. If two tuples agree on `A`, $A \to B$ forces agreement on `B`; agreement on `B` forces `C`; agreement on both `C` and `D` forces `E`. Thus any two tuples agreeing on `A,D` agree on every attribute in the closure.
+</MathProof>
+
+### Try the closure tool
+
+Choose seed attributes, fire each dependency only when its determinant is available, and compare your trace to the displayed closure. Use `A,D` after trying a smaller seed such as `A`.
+
+<FunctionalDependencyPlayground client:load />
+
+> **Invariant.** $X$ is a superkey for schema $R$ exactly when $X^+$ contains every attribute of $R$ under the assumed dependency set. It is a candidate key only if no proper subset of $X$ is also a superkey.
+
+### Apply closure to a real key question
+
+Let `TaskAllocation(task_id, service_name, cluster_id, node_ip, port)` have the dependency
+
+$$
+(service\_name, cluster\_id) \to (node\_ip, port).
+$$
+
+Is `(task_id, service_name, cluster_id)` a candidate key under this dependency set? Show the closure and the minimality check.
+
+<ExerciseSolution hint="The proposed attributes already include three columns; use the dependency to add the remaining two, then try removing one attribute at a time.">
+
+Its closure starts with `task_id, service_name, cluster_id` and adds `node_ip, port`, so it is a superkey. Removing `task_id` cannot identify which individual task allocation is meant. Removing `service_name` or `cluster_id` prevents the given dependency from identifying the assigned node and port. Under the stated dependency set, it is a candidate key. A different domain rule, such as an immutable UUID, can produce an additional candidate key.
+</ExerciseSolution>
+
+## Derive dependencies without hand-waving
+
+Three sound inference rules are enough for many small derivations.
+
+| Rule | Form | Example |
+| --- | --- | --- |
+| Reflexivity | If $Y \subseteq X$, then $X \to Y$ | $AB \to A$ |
+| Augmentation | If $X \to Y$, then $XZ \to YZ$ | $A \to B$ implies $AD \to BD$ |
+| Transitivity | If $X \to Y$ and $Y \to Z$, then $X \to Z$ | $A \to B$, $B \to C$ implies $A \to C$ |
+
+> **Worked example.** From $A \to B$ and $B \to C$, derive $A \to C$ by transitivity. With $A \to B$, derive $AD \to BD$ by augmentation. In the earlier closure, these steps explain why `A,D` can eventually enable $CD \to E$—first it gains `B`, then `C`.
+
+> **Warning.** Do not reverse a dependency. $course\_code \to title$ does not imply $title \to course\_code$ unless the domain makes titles unique. Direction records a claim about equality, not a visual arrow between columns.
+
+### Check a derivation
+
+Given $F = \{A \to B, B \to C, CD \to E\}$, can $D \to E$ be derived? Can $AD \to E$ be derived?
+
+<ExerciseSolution hint="Compute the two closures separately. A dependency can fire only when all determinant attributes are available.">
+
+$D^+ = \{D\}$, so $D \to E$ cannot be derived. $AD^+$ gains `B` from $A \to B$, then `C` from $B \to C$, so it contains `C,D` and gains `E` from $CD \to E$. Therefore $AD \to E$ is derivable.
+</ExerciseSolution>
+
+## Reduce a dependency set before using it
+
+A minimal cover gives a compact equivalent set of dependencies. It is a tool for reasoning, not a claim that the compact version is easier for every reader to understand.
+
+> **Example.** Start with
+
+$$
+F = \{A \to BC,\; B \to C,\; AB \to C\}.
+$$
+
+Split the right side: $A \to B$ and $A \to C$. Then $A \to C$ follows from $A \to B$ and $B \to C$, so remove it. `AB → C` follows from $B \to C$ because `B` is already part of `AB`, so remove it too. A minimal cover is $\{A \to B, B \to C\}$.
+
+<ExerciseSet>
+
+<Exercise id="ex-fd-closure-derivation" type="construct" level="application" title="Attribute Closure Computation">
+
+Given schema $R(A, B, C, D, E)$ and functional dependency set $F = \{A \to B, B \to C, CD \to E\}$, compute the attribute closures $D^+$ and $(AD)^+$. Conclude which of the dependencies $D \to E$ or $AD \to E$ is logically implied by $F$.
+
+<ExerciseSolution hint="Apply Armstrong's axioms or the attribute closure algorithm iteratively until no new attributes can be added.">
+
+$D^+ = \{D\}$ because no dependency in $F$ has determinant subset $\{D\}$; therefore $D \to E$ is not implied. For $(AD)^+$: start with $\{A, D\}$; $A \to B$ adds $B$, yielding $\{A, B, D\}$; $B \to C$ adds $C$, yielding $\{A, B, C, D\}$; $CD \to E$ adds $E$, yielding $\{A, B, C, D, E\}$. Since $E \in (AD)^+$, $AD \to E$ is logically implied by $F$.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-fd-soundness-check" type="verify" level="recall" title="Armstrong Axiom Soundness and Reversal Fallacy">
+
+An engineer observes that in the current service catalog snapshot every `display_name` is associated with exactly one `service_id`. Explain why inferring $display\_name \to service\_id$ from this snapshot is unsound under <Ref id="fd-definition" />.
+
+<ExerciseSolution hint="Functional dependencies express invariant constraints across all legal instances, not coincidental properties of a single snapshot.">
+
+A functional dependency is a semantic assertion that must hold across all legal instances admitted by the domain. Observing unique display names in one snapshot does not preclude registering distinct services under the same human-readable label (e.g. `Edge Proxy`) in future regional or versioned deployments. Inferring $display\_name \to service\_id$ confuses temporary instance data with an invariant domain constraint.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-fd-minimal-cover" type="construct" level="application" title="Canonical Minimal Cover Derivation">
+
+Compute a canonical minimal cover for $F = \{A \to BC,\; B \to C,\; AB \to C\}$. Show each reduction step: right-hand side decomposition, extraneous attribute elimination, and redundant dependency removal.
+
+<ExerciseSolution hint="Decompose into singleton right sides, test determinants for extraneous attributes, then test each FD for redundancy.">
+
+1. Decompose right-hand sides: $\{A \to B, A \to C, B \to C, AB \to C\}$.
+2. Check extraneous attributes: In $AB \to C$, since $B \to C$ holds, $A$ is extraneous; the dependency reduces to $B \to C$ (a duplicate).
+3. Check redundant dependencies: In $\{A \to B, A \to C, B \to C\}$, computing $A^+$ under $\{A \to B, B \to C\}$ yields $\{A, B, C\}$, showing $A \to C$ is transitive and redundant.
+The minimal cover is $\{A \to B, B \to C\}$.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-fd-domain-policy-transfer" type="generalise" level="transfer" title="Multi-Region Service Endpoint Dependency Redesign">
+
+A routing table currently claims $(service\_name, environment) \to host\_ip$. The platform introduces multi-region deployments (e.g. production traffic in `us-east` on `10.0.1.5` and in `eu-west` on `10.0.2.8`). Provide a counterexample instance refuting the dependency, specify a revised relation schema with grain 'one regional service endpoint', and state its valid functional dependency.
+
+<ExerciseSolution hint="A single service now has multiple regional deployments. The determinant must incorporate the region.">
+
+Counterexample tuples: `(auth-svc, prod, us-east, 10.0.1.5)` and `(auth-svc, prod, eu-west, 10.0.2.8)`. Both share $(service\_name, environment)$ but differ in $host\_ip$, violating the functional dependency.
+Revised schema: $RegionalEndpoint(service\_name, environment, region, host\_ip)$ with grain 'one regional endpoint for a deployed service'. Assuming a service has exactly one primary ingress host per region in an environment, the valid dependency is $(service\_name, environment, region) \to host\_ip$.
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+- [Ramakrishnan and Gehrke, *Database Management Systems*: schema-refinement chapters in the open-access contents](https://pages.cs.wisc.edu/~dbbook/openAccess/secondEdition/dbbook.toc.html)
+- [Ramakrishnan and Gehrke: Functional Dependencies slides](https://pages.cs.wisc.edu/~dbbook/openAccess/thirdEdition/slides/slides3ed-english/Ch19_FDs-95.pdf)
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)

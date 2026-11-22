@@ -1,0 +1,366 @@
+---
+title: Database Capstone
+course: database-systems
+kind: lab
+description: Design, test, measure, and defend a multi-tenant order system whose guarantees survive contention, failure, replication, and hostile access.
+prerequisites:
+  - Relational design, SQL, functional dependencies, normalization, and query planning
+  - Indexes, transactions, concurrency control, recovery, distributed-data trade-offs, and database security
+  - Ability to write tests, read execution plans, construct traces, and explain assumptions in a design review
+outcomes:
+  - Produce a coherent schema, query portfolio, transaction/state model, and operational plan for a multi-tenant system.
+  - Demonstrate each material invariant with a constraint, transaction trace, or a named procedural enforcement boundary.
+  - Measure a workload claim with reproducible data, plans, failure injection, and counterexample tests.
+  - Defend limits, trade-offs, and incident recovery behavior rather than presenting a feature checklist.
+omissions:
+  - The capstone does not require production deployment, payment-card handling, or a full DBMS implementation.
+  - Cloud-product configuration and formal distributed-consensus proofs may support a design only when their stated assumptions are testable.
+estimatedMinutes: 1200
+assessment: Construct and verify a runnable multi-tenant order-system design that preserves stated invariants under adversarial queries, concurrent requests, a crash/recovery drill, and one replica or migration failure.
+---
+import ExerciseSolution from '../../../components/ExerciseSolution.astro';
+import ExerciseSet from '../../../components/ExerciseSet.astro';
+import Exercise from '../../../components/Exercise.astro';
+import Ref from '../../../components/Ref.astro';
+import PlantUML from '../../../components/PlantUML.astro';
+import CaseStudy from '../../../components/CaseStudy';
+import Quiz from '../../../components/Quiz';
+
+
+Build a database-backed marketplace for independent merchants. A merchant owns catalog items and warehouses; customers place orders; an order records immutable line prices; inventory is reserved before fulfillment; a provider sends duplicate and out-of-order payment webhooks. The target is not a collection of SQL snippets. It is an argument that the following facts survive normal operation and stated failures:
+
+- a tenant cannot access another tenant's orders, products, inventory, or audit records;
+- each order line retains the price accepted at checkout;
+- inventory never becomes negative and one reservation is not counted twice;
+- payment and fulfillment states advance only through legal, idempotent transitions; and
+- an acknowledged order can be recovered, investigated, and measured.
+
+{/* Source tracking: PostgreSQL SQL, constraint, recovery, replication, and security behavior is synthesized from official PostgreSQL documentation. General data-system project expectations are calibrated against CMU 15-445/645 materials. The capstone domain, verification criteria, and artifacts are original. */}
+
+## Establish the data contract before selecting tables
+
+> **Invariant.** Every protected fact has one owner, one enforcement point, and one failure/reconciliation story. “The ORM handles it” does not identify any of those.
+
+<PlantUML code={`@startuml
+rectangle "tenant" as T
+rectangle "store" as S
+rectangle "product\ncurrent catalog state" as P
+rectangle "warehouse_stock" as W
+rectangle "orders" as O
+rectangle "order_line\nimmutable unit_price" as L
+rectangle "payment_event\nidempotency key + state" as E
+T --> S : owns
+S --> P : sells
+S --> W : stocks
+S --> O : receives
+O --> L : contains
+P --> L : price snapshot is copied
+O --> E : payment history
+note right of L
+Order history must not change
+when catalog price changes.
+end note
+@enduml`} />
+
+Write a one-page domain contract before DDL. It must name entity identity, tenant ownership, deletion policy, money representation, time zone, legal state transitions, service-level targets, and values that can be stale. For example, use integer minor units or an exact numeric representation for money; state whether a product may be soft-deleted after being ordered; and distinguish a current catalog price from a historical purchase price.
+
+### Prediction — find the missing fact
+
+A draft schema stores order total and a foreign key to the current product price. A merchant changes a price after checkout. What report can now become false?
+
+<ExerciseSolution>
+Historical revenue and line-item invoices can change retroactively if they derive accepted price from the mutable product row. Store the accepted unit price and currency on each order line, or reference an immutable price version. If an order total is stored for performance, declare whether it is derived or atomically maintained and test it against the line sum.
+</ExerciseSolution>
+
+## Make invalid relationships unrepresentable
+
+> **Example.** Tenant-scoped composite keys make it impossible to attach a tenant-12 order line to a tenant-13 order when the foreign key includes both tenant identity and order identity.
+
+```sql
+CREATE TABLE orders (
+  tenant_id      bigint NOT NULL,
+  order_id       bigint GENERATED ALWAYS AS IDENTITY,
+  customer_id    bigint NOT NULL,
+  status         text NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, order_id),
+  CHECK (status IN ('pending', 'paid', 'cancelled', 'fulfilled'))
+);
+
+CREATE TABLE order_line (
+  tenant_id       bigint NOT NULL,
+  order_id        bigint NOT NULL,
+  line_no         integer NOT NULL,
+  product_id      bigint NOT NULL,
+  quantity        integer NOT NULL CHECK (quantity > 0),
+  unit_price_minor bigint NOT NULL CHECK (unit_price_minor >= 0),
+  PRIMARY KEY (tenant_id, order_id, line_no),
+  FOREIGN KEY (tenant_id, order_id)
+    REFERENCES orders (tenant_id, order_id)
+);
+
+CREATE TABLE warehouse_stock (
+  tenant_id   bigint NOT NULL,
+  warehouse_id bigint NOT NULL,
+  product_id  bigint NOT NULL,
+  on_hand     integer NOT NULL CHECK (on_hand >= 0),
+  PRIMARY KEY (tenant_id, warehouse_id, product_id)
+);
+```
+
+The code is a starting artifact, not the full schema. Add product/customer ownership foreign keys, a tenant-scoped SKU uniqueness rule, state-transition enforcement, webhook-event uniqueness, and deletion policy. A row-local CHECK cannot safely enforce an aggregate rule over arbitrary sibling rows; identify the transaction or summary relation that carries that responsibility.
+
+### Application — prove one key choice
+
+Give a counterexample that the composite order-line foreign key rejects but a foreign key on **order_id** alone could accept in a system where order identifiers are tenant-local.
+
+<ExerciseSolution hint="Construct the same order number in two tenants.">
+Let tenant 12 and tenant 13 both have order ID 9. A line with tenant 12 and order ID 9 must reference tenant 12's order, not whichever row an unconstrained ID lookup finds. The composite foreign key enforces that pair. A global surrogate ID can also work, but it does not remove the need to enforce tenant ownership on every related object and access path.
+</ExerciseSolution>
+
+## Design a short, recoverable order transaction
+
+> **Definition.** The order transaction is the point where the system turns a customer request into durable local facts: order identity, immutable prices, inventory reservation, idempotency key, and an outbox event. It must not hold database locks while calling a payment provider.
+
+<PlantUML code={`@startuml
+participant "checkout client" as C
+participant "order transaction" as T
+database "orders + stock + outbox" as D
+participant "payment worker" as W
+participant "provider" as P
+C -> T : request with idempotency key
+T -> D : validate tenant; reserve stock; insert order/outbox
+T -> D : COMMIT
+W -> D : claim committed outbox record
+W -> P : authorize with same key
+P -> W : webhook may repeat or reorder
+W -> D : legal monotonic state transition
+@enduml`} />
+
+The reservation must protect its own invariant. A conditional update of one stock row can reject a request whose quantity exceeds available stock; an aggregate reservation across warehouses needs a defined lock/serialization boundary. Store the client idempotency key under a uniqueness rule so retries converge on one order. The provider call is external: use the durable outbox and a webhook event ID to deduplicate it.
+
+### Worked trace — competing last-unit requests
+
+1. T1 conditionally reserves the last unit and commits.
+2. T2 executes the same conditional update after T1; its affected-row count is zero.
+3. T2 records or returns a rejection without creating a successful order state.
+4. A committed outbox worker can retry provider communication with the same idempotency key.
+
+> **Remark (Essential evidence retained in concurrency verification).** Keep initial fixture state, transaction timestamps/order, statement outcomes, isolation setting, locks or serialization errors, final rows, and emitted outbox IDs. A final stock value alone cannot distinguish a correct rejection from a lost update.
+
+<CaseStudy client:load
+  title="Structuring the checkout and payment boundary"
+  scenario="During flash-sale contention, a checkout service begins a database transaction, locks the `warehouse_stock` row with `SELECT ... FOR UPDATE`, makes a synchronous 400 ms HTTPS call to an external payment gateway, and then commits the order."
+  question="Evaluate the architectural trade-offs of holding stock locks across external payment gateway invocations:"
+  options={[
+    {
+      id: "claim-lock-convoy",
+      text: "Synchronous external HTTPS calls inflate lock holding durations, exhausting connection pools and causing throughput collapse under Little's Law.",
+      isCorrect: true,
+      feedback: "Correct. Holding database locks during network I/O serializes transactions and rapidly exhausts server connection pools."
+    },
+    {
+      id: "claim-outbox-decoupling",
+      text: "Persisting the stock reservation and outbox event in a short local transaction decouples database lock holding from network latency.",
+      isCorrect: true,
+      feedback: "Correct. A local transaction completes in milliseconds, allowing asynchronous workers to handle external provider interactions safely."
+    },
+    {
+      id: "claim-auto-rollback",
+      text: "Holding the row lock across the HTTPS call allows PostgreSQL to roll back external gateway charges if local commit fails.",
+      isCorrect: false,
+      feedback: "Incorrect. Database rollback cannot undo external network side effects; distributed reversals require explicit compensation."
+    },
+    {
+      id: "claim-replica-writes",
+      text: "Routing inventory updates to asynchronous read replicas prevents write contention on the primary database during checkout.",
+      isCorrect: false,
+      feedback: "Incorrect. Standard read replicas are read-only; mutations must execute on the primary write authority."
+    }
+  ]}
+  explanation="Holding database locks during remote HTTP calls exhausts connection pools and creates severe lock convoys. Decouple local reservations from external calls using transactional outboxes and idempotent workers."
+  tradeoffs={[
+    { label: "Short Local Transaction + Transactional Outbox", pros: "Sub-millisecond lock hold time; survives worker crashes via idempotent retry.", cons: "Requires explicit compensating reservation release if payment ultimately fails." },
+    { label: "Synchronous Remote Call Inside DB Transaction", pros: "Apparent sequential code simplicity in a single handler.", cons: "Catastrophic lock convoy under contention and unrecoverable split-brain if commit fails after provider charge." }
+  ]}
+/>
+
+## Measure the workload and physical design
+
+> **Warning.** An index, partition, or replica is a workload claim. Do not add one because it is familiar; name the query, cardinality, write cost, and changed-workload counterexample.
+
+| Workload | Candidate evidence | Required counterexample |
+| --- | --- | --- |
+| tenant order history | plan for tenant/time range; index on tenant then time | tenant with 90% of all orders |
+| stock lookup/reservation | primary key or narrow tenant/warehouse/product path | concurrent requests for same SKU |
+| daily revenue | grain-first aggregate and calendar left join | day with zero sales, duplicate lines |
+| webhook processing | uniqueness lookup on provider event ID | duplicate and out-of-order event |
+| retention | time partition/pruning plan and drop policy | tenant-only query that cannot prune |
+
+Seed enough data to expose selectivity, skew, and cache behavior. Record database version, schema/index definition, data generator distribution, concurrency level, warm-up, query text, plan, estimated and actual rows, and latency distribution. A single low elapsed time is not a benchmark and a single plan screenshot is not a physical-design argument.
+
+### Transfer — reject a seductive index
+
+A proposal adds a wide covering index on every order column to speed a nightly export. The table receives continuous inserts and status updates. What evidence would justify or reject it?
+
+<ExerciseSolution>
+Compare the export plan and buffer/I/O behavior with and without the index, then measure insert/update throughput, index size, vacuum/replication cost, and cache pressure under representative concurrency. If the export reads most rows once nightly, a sequential or partition-aware plan may dominate. The index earns its cost only when measured read benefit exceeds the continuing maintenance cost for the stated workload.
+</ExerciseSolution>
+
+## Rehearse recovery, replication, and security
+
+> **Definition.** A production guarantee is incomplete without an operational test: a backup must restore, a failover must fence stale writers, and a least-privilege policy must reject a real adversarial request.
+
+| Drill | Pass evidence |
+| --- | --- |
+| bad migration | isolated point-in-time restore, invariant checks, measured RPO/RTO |
+| primary loss | promotion path, client fencing/epoch behavior, acknowledged-write loss statement |
+| replica lag | read-after-write behavior and stale-result contract |
+| leaked runtime credential | revocation/rotation time, narrowed replacement role, audit review |
+| tenant attack | altered tenant ID, direct runtime-role query, composite-FK and policy rejection |
+| negative inventory alert | freeze affected workflow, trace first invariant break, reconcile from order/audit facts |
+
+Write an incident runbook for each drill: detection, containment, evidence preservation, integrity check, recovery action, client communication boundary, and regression test. A replica is not a backup after a bad delete; a backup is not security control if its archive role is broadly shared.
+
+### Synthesis analysis prompt
+
+Choose one intentional relaxation: asynchronous search indexing, a delayed analytics aggregate, time partitioning, a cross-service saga, or a readable replica. State the invariant it does **not** preserve immediately, the visible state it permits, the repair/reconciliation process, and the test that detects a broken implementation.
+
+<ExerciseSolution hint="A strong answer names one bounded fact that may lag and a separate fact that still cannot be violated.">
+A satisfactory analysis distinguishes the relaxed projection from the authoritative transaction. For example, search may lag after an order commit, but the order row and tenant authorization remain authoritative; an idempotent event consumer replays missed work and a watermark/lag alert detects delay. Do not call the relaxation safe without an observable bound, source of truth, and repair path.
+</ExerciseSolution>
+
+## System specification and verification checklist
+
+> **Remark.** Implementation artifacts are evidence containers: a diagram alone, a fast query alone, or a backup policy alone cannot establish the system contract.
+
+A complete implementation package runs from an empty database and includes:
+
+1. domain contract, ER/domain diagram, DDL, migration plan, and seed fixture;
+2. query portfolio with declared result grain, expected outputs, adversarial NULL/duplicate/tenant tests, and representative plans;
+3. transaction/schedule dossier for inventory, idempotency, webhook order, and one aggregate invariant;
+4. physical-design and benchmark report with workload assumptions and a rejected alternative;
+5. recovery, replication, security, and incident-runbook evidence; and
+6. a concise design analysis that identifies one limit the system intentionally accepts.
+
+| Criterion | Invariant standard | Observable verification evidence |
+| --- | --- | --- |
+| semantic and tenant correctness | strict tenant isolation across all tables | executable constraints, counterexamples, and tested ownership |
+| query/physical reasoning | plans reflect intended index usage and grain | measured plans plus write-cost and skew evidence |
+| concurrency and recovery | ACID isolation and crash recovery | traces, failure injection, safe retries, restore drill |
+| security and operations | least-privilege roles and audit trail | least privilege, attack tests, audit/rotation/runbooks |
+| clarity of trade-offs | explicit failure boundaries and non-goals | rejected alternatives and explicit assumptions |
+
+<Quiz client:load
+  title="Capstone invariant verification"
+  question="Which combination of mechanisms prevents both cross-tenant order leakage and duplicate payment state transitions in the marketplace capstone?"
+  options={[
+    {
+      id: "claim-composite-rls",
+      text: "Composite tenant-aware foreign keys combined with Row-Level Security policies on least-privilege roles enforce strict cross-tenant data isolation.",
+      isCorrect: true,
+      feedback: "Correct. Structural composite keys prevent referencing foreign tenant parents, while RLS filters all runtime table scans."
+    },
+    {
+      id: "claim-idempotent-events",
+      text: "A unique constraint on provider_event_id combined with monotonic order state machine checks prevents duplicate webhook processing.",
+      isCorrect: true,
+      feedback: "Correct. Duplicate webhook payloads are rejected by the uniqueness constraint, ensuring payment state transitions occur exactly once."
+    },
+    {
+      id: "claim-app-filter-only",
+      text: "Application-tier WHERE clause filters alone provide sufficient multi-tenant isolation without requiring database-level constraints or policies.",
+      isCorrect: false,
+      feedback: "Incorrect. Relying solely on application-level filtering is vulnerable to developer omissions, background jobs, and direct reporting queries."
+    },
+    {
+      id: "claim-replica-isolation",
+      text: "Routing payment webhooks and tenant authorization queries to asynchronous read replicas guarantees strict serializable state transitions.",
+      isCorrect: false,
+      feedback: "Incorrect. Replicas lag behind primary commits and cannot accept mutation transactions or guarantee read-your-writes consistency."
+    }
+  ]}
+  explanation="Defense-in-depth tenant isolation combines structural composite foreign keys with non-bypassable RLS policies on least-privilege runtime roles, while idempotent webhook processing requires uniqueness constraints and monotonic state machines."
+/>
+
+<ExerciseSet>
+
+<Exercise id="ex-cap-multi-tenant-isolation-proof" type="verify" level="application" title="Multi-Tenant Foreign Key and RLS Defense-in-Depth">
+
+In the marketplace schema, a malicious tenant attempts to attach an order line referencing product ID `prod-99` belonging to a rival merchant. Verify how the combination of composite foreign keys `FOREIGN KEY (tenant_id, product_id) REFERENCES Product(tenant_id, product_id)` and PostgreSQL Row-Level Security prevents unauthorized reference even if application-level tenant filters are bypassed.
+
+<ExerciseSolution hint="Analyze relational constraint checks during foreign key evaluation under active RLS policies.">
+
+Even if an attacker manipulates the application API to insert an order line with a foreign `product_id`, the composite foreign key forces the database engine to locate a parent tuple matching `(attacker_tenant_id, prod-99)` in `Product`. Because `prod-99` belongs to a different tenant, no such tuple exists within the attacker's tenant key domain, causing immediate referential integrity rejection (`violates foreign key constraint`). Furthermore, active RLS policies on `Product` render the rival tenant's row completely invisible to the attacker's database session.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cap-concurrency-trace-verification" type="describe" level="recall" title="Idempotent Payment Webhook Processing and Inventory Invariants">
+
+Describe the database mechanisms required to guarantee that duplicate delivery of a payment gateway webhook (arriving concurrently across two webhook worker processes) cannot result in double-crediting an order or releasing reserved inventory twice.
+
+<ExerciseSolution hint="Combine database unique constraints with atomic conditional status transitions.">
+
+1. Unique constraint: Webhooks record their arrival in `processed_webhooks` keyed on `UNIQUE (provider_event_id)`. The first worker commits the insert; the concurrent duplicate worker fails immediately with a unique key violation (`23505`) and safely halts execution.
+2. Monotonic state transition: Order status is advanced using guarded conditional updates: `UPDATE orders SET status = 'paid' WHERE id = $1 AND status = 'pending';`. If the status is already `paid`, 0 rows are affected, preventing re-execution of inventory fulfillment triggers.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cap-physical-partitioning-design" type="construct" level="application" title="High-Volume Order Partitioning and Pruning Strategy">
+
+An enterprise marketplace accumulates 20,000,000 order records monthly. Construct a PostgreSQL table partitioning scheme for `orders` partitioned by month, and specify the indexing strategy that enables fast customer point lookups while retaining single-partition query pruning for monthly reports.
+
+<ExerciseSolution hint="Range partition by created_at; include created_at in the composite primary key.">
+
+```sql
+CREATE TABLE orders (
+  tenant_id UUID NOT NULL,
+  order_id BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  customer_id BIGINT NOT NULL,
+  total_cents BIGINT NOT NULL,
+  PRIMARY KEY (tenant_id, order_id, created_at)
+) PARTITION BY RANGE (created_at);
+
+-- Monthly partition
+CREATE TABLE orders_2026_03 PARTITION OF orders
+  FOR VALUES FROM ('2026-03-01 00:00:00+00') TO ('2026-04-01 00:00:00+00');
+
+-- Local index for customer point lookups
+CREATE INDEX idx_orders_customer ON orders (tenant_id, customer_id, created_at DESC);
+```
+Queries filtering by `created_at` prune away 11 out of 12 monthly partitions. Lookups by customer leverage the local B-tree index across partitions.
+
+</ExerciseSolution>
+
+</Exercise>
+
+<Exercise id="ex-cap-disaster-recovery-defense-transfer" type="generalise" level="transfer" title="End-to-End Architectural Defense: RPO/RTO Failure Runbook">
+
+An automated failover promoter initiates promotion of a replica after network partition, but the old primary resumes accepting writes. Specify the runbook protocol and fencing mechanisms to guarantee zero split-brain data corruption and satisfy an RTO under 15 minutes.
+
+<ExerciseSolution hint="Use STONITH/fencing tokens and verify client connection pool draining before acknowledging failover.">
+
+1. Fencing and STONITH: Before promoting the standby, the cluster consensus coordinator issues a shoot-the-other-node-in-the-head (STONITH) or revokes the storage controller lease of the old primary. The old primary's storage access is immediately terminated, ensuring it cannot commit in-flight writes.
+2. Promotion with Epoch: The standby promotes with generation epoch $E+1$.
+3. DNS / Virtual IP Re-route: Connection routers update endpoint targets to the new primary at epoch $E+1$.
+4. Pool validation: Connection pools close stale idle sockets; client drivers attempting to connect with epoch $E$ receive connection-refused errors.
+5. Post-failover audit: Compare the promoted primary's WAL position against archive storage to verify zero lost committed transactions ($\text{RPO} = 0$).
+
+</ExerciseSolution>
+
+</Exercise>
+
+</ExerciseSet>
+
+## References & Further Reading
+
+* [PostgreSQL Documentation](https://www.postgresql.org/docs/current/)
+* [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)
+* [PostgreSQL: Backup and Restore](https://www.postgresql.org/docs/current/backup.html)
+* [PostgreSQL: Row Security Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
+* [CMU 15-445/645 Database Systems](https://15445.courses.cs.cmu.edu/spring2026/)

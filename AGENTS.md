@@ -1,79 +1,33 @@
-# LibreUni Agent Instructions
+# LibreUni agent router
 
-First stop for agents in this repo. Read before editing files, generating lesson content, researching sources, or changing UI.
+This is the repository entrypoint for every coding host. Codex, OpenCode, Gemini, Antigravity, Copilot, and human contributors follow the same workflow. Host adapters must point here and must not add competing policy.
 
-## Startup
+## Every task
 
-1. Read `docs/RULES.md` before any content or code change.
-2. Task involves research, sources, or lesson writing → read `docs/SKILLS/SOURCING.md`.
-3. Changes layout, styling, interaction, a11y, or visual design → read `docs/UX.md`.
-4. Adds or changes PlantUML → read `docs/PUML.md`.
-5. Before finishing → run the narrowest useful validation.
+1. Read [`docs/agent-rules/BASELINE.md`](docs/agent-rules/BASELINE.md).
+2. Use [`docs/agent-rules/TASKS.md`](docs/agent-rules/TASKS.md) to read the task pack for every affected surface.
+3. Inspect the relevant files and existing changes before editing. Preserve unrelated dirty-worktree changes.
+4. For non-trivial work, read the relevant durable context under [`docs/agent-context/`](docs/agent-context/README.md). Treat it as a verified index, never as a substitute for inspecting source.
+5. Make the scoped change directly in the repository. Use [`docs/agent-rules/VALIDATION.md`](docs/agent-rules/VALIDATION.md) to select and run the narrowest useful checks.
+6. Re-read the changed files, report evidence actually gathered, and update durable context only for stable, source-backed facts or decisions.
 
-## Content Rules
+## Routing contract
 
-- Lessons are hand-authored (no scripts/generation). Self-contained, university level.
-- No lesson numbers in filenames, headers, or text.
-- Structure: theory → example → exercise.
-- Banned filler: "welcome", "let's dive in", "in this lesson", "as you have learned before", "congratulations on finishing", "you have completed", "next up", "previously", "before we move on", "let's explore", "let's take a look at".
-- Interactive React components in MDX must use `client:load` (e.g. `<Quiz client:load />`).
-- Canonical component props — use exactly these, no aliases:
-  - `<Quiz>`: `question`, `options`, `correctIndex`, `explanation`, `questions`, `title`
-  - `<CodeRunner>`: `code`, `output`, `language`, `title`
-  - `<CodeExercise>`: `code` (use `[!blank!]` for gaps), `answers`, `explanation`, `title`
-  - `<CaseStudy>`: `scenario`, `question`, `options`, `correctIndex`, `explanation`, `title`
-- Lesson order/modules are set in `apps/main/src/data/course-manifests/<course-id>.yml`, not in frontmatter.
-- Course quality badges are generated (`python3 scripts/course_stats.py --write-quality`). Override via `apps/main/src/data/course-quality-overrides.json`.
-- Banned: fake source-tracking comments to bypass `course_stats.py` checks. Every citation must be genuine.
+- **Course, module, lesson, manifest, assessment, or course component:** read [`GENERAL.md`](docs/agent-rules/GENERAL.md), then mandatory [`COURSE_STANDARD.md`](docs/agent-rules/COURSE_STANDARD.md), [`COURSE_STRUCTURE.md`](docs/agent-rules/COURSE_STRUCTURE.md), and [`COURSE_WORK.md`](docs/agent-rules/COURSE_WORK.md). Add the packs selected by `TASKS.md`, including pedagogy, integrity, repair, components, research, UI, and PlantUML where applicable.
+- **Research, factual material, explanations, or citations:** read [`RESEARCH.md`](docs/agent-rules/RESEARCH.md).
+- **Layout, styling, interaction, accessibility, or visual design:** read [`UI.md`](docs/agent-rules/UI.md).
+- **PlantUML:** read [`PLANTUML.md`](docs/agent-rules/PLANTUML.md).
+- **Agent-process or host-adapter documentation:** read [`HOSTS.md`](docs/agent-rules/HOSTS.md).
+- **Build scripts, CI, tests, deployment, or validation tooling:** read [`VALIDATION.md`](docs/agent-rules/VALIDATION.md), plus the subject documentation for the affected system.
 
-## Commands
+When several categories apply, read their combined packs. No host, agent role, skill, or automation may bypass a task pack.
 
-```bash
-npm install
-npm run dev              # dev server on :4321
-npm run build:all        # build only (skips UX tests)
-npm run build            # full: build + UX tests + copy report
-npm test                 # full gate: build → e2e → ux → lighthouse
-npm run test:e2e         # build + Playwright smoke tests (chromium + mobile)
-npm run test:ux          # build + UX report (contrast, spacing, overflow)
-npm run test:visual      # build + capture screenshots to reports/visual/
-npm run test:lighthouse  # build + Lighthouse CI budgets
-npm run test:report      # open last Playwright HTML report
-# focused validation:
-python3 scripts/course_stats.py                     # lesson stats & quality
-python3 scripts/course_stats.py --write-quality     # regenerate catalog badges
-python3 scripts/course_stats.py <course-id>         # stats for one course
-npm run build:all && npm run test:e2e:run           # quick e2e after build
-npm run build:all && npm run test:ux:run            # quick ux after build
-```
+## Collaboration and durable context
 
-## Architecture Notes
+[`docs/agent-rules/ROLES.md`](docs/agent-rules/ROLES.md) defines optional responsibilities for collaboration. [`docs/agent-rules/SKILLS.md`](docs/agent-rules/SKILLS.md) defines how host-provided skills fit into the repository contract. Neither introduces a required agent runtime or persistent personas. Do not delegate merely because a role exists; use parallel work only when scopes are independent and handoffs are explicit.
 
-- **Single workspace app** under `apps/main/`. Few other apps may exist but main is the active one.
-- **Build quirk**: `apps/main` build uses `node --max-old-space-size=8192` and runs `tools/fix-static-paths.mjs` on the output (rewrites absolute paths to relative for file-served deployments).
-- **Math rendering**: KaTeX configured with `output: 'mathml'` (faster, no JS hydration for math).
-- **Build caches**: `puml-cache/`, `python-diagram-cache/`, `tikz-cache/` under `apps/main/src/`. Delete to force rerender.
-- **Test server**: Playwright/Lighthouse use `tools/serve-test-apps.mjs` (serves built `dist/` folders), not the Astro dev server.
-- **CI**: `.github/workflows/quality.yml` runs `npm test` on push/PR to main.
-- **Dockerfile**: multi-stage build with Nginx for deployment.
+[`docs/agent-context/README.md`](docs/agent-context/README.md) governs persistent repository memory. It may contain only concise, reviewed, non-sensitive facts that remain useful across tasks. Do not put prompts, transcripts, credentials, speculative notes, or ordinary task logs there.
 
-## Project Map
+## Change and commit policy
 
-- `apps/main/src/content/lessons/` — MDX lessons by course slug
-- `apps/main/src/content/courses/` — JSON course metadata
-- `apps/main/src/data/course-manifests/` — YAML lesson order & module grouping
-- `apps/main/src/data/course-quality-overrides.json` — manual quality badge overrides
-- `apps/main/src/components/` — React components (Quiz, CodeRunner, CodeExercise, CaseStudy, etc.)
-- `docs/` — rules, sourcing, UX, PlantUML, testing references
-- `scripts/` — content validation and stats
-- `tools/` — monorepo build/test helpers
-- `tests/e2e/`, `tests/ux/`, `tests/visual/` — Playwright test suites
-- `GEMINI.md`, `CODEX.md` — agent config files (both point back here)
-
-## Finish Criteria
-
-- Confirm relevant docs above were followed.
-- Run the validation that matches the risk of the change, or explain why not.
-- For UI/styling changes: run `npm run test:visual`, inspect `reports/visual/` for overlap, clipping, contrast, responsive issues; fix before handoff.
-- Do not bypass MDX, type, build, a11y, or UX failures.
-- Keep changes scoped to the user's request.
+Make requested repository changes directly. Keep changes scoped; do not stage, commit, push, open issues, or alter unrelated work unless asked. When committing, use `[Verb] Short description`.
