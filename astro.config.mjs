@@ -235,6 +235,109 @@ function glueInlinePunctuationRehypePlugin() {
   };
 }
 
+function serveDevReportsPlugin() {
+  const mimeTypes = {
+    '.html': 'text/html; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.svg': 'image/svg+xml; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.woff2': 'font/woff2',
+  };
+  const placeholderHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UX Report Pending - LibreUni</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, sans-serif; }
+    body { margin: 0; padding: 2rem; line-height: 1.6; }
+    .box { max-width: 40rem; border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 12px; padding: 1.5rem; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: 0.15rem 0.35rem; border-radius: 4px; background: rgba(148, 163, 184, 0.2); }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>UX report not generated yet</h1>
+    <p>Run <code>npm run check:ux</code> or <code>npm run build</code> to generate <code>reports/ux/index.html</code>, then reload this frame.</p>
+  </div>
+</body>
+</html>`;
+
+  const resolveInDir = (baseDir, urlPath) => {
+    let cleanPath = String(urlPath || '/').split('?')[0].split('#')[0];
+    try {
+      cleanPath = decodeURIComponent(cleanPath);
+    } catch {
+      return null;
+    }
+    if (!cleanPath || cleanPath === '/') cleanPath = '/index.html';
+    const rel = cleanPath.replace(/^\/+/, '');
+    const candidate = path.resolve(baseDir, rel);
+    if (candidate !== baseDir && !candidate.startsWith(`${baseDir}${path.sep}`)) {
+      return null;
+    }
+    return candidate;
+  };
+
+  const createHandler = (dirs) => (req, res, next) => {
+    const rawUrl = String(req.url || '/');
+    const urlPath = rawUrl.split('?')[0].split('#')[0];
+    let invalidPath = false;
+
+    for (const baseDir of dirs) {
+      let candidate = resolveInDir(baseDir, urlPath);
+      if (candidate === null) {
+        invalidPath = true;
+        break;
+      }
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+        candidate = path.join(candidate, 'index.html');
+      }
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        const ext = path.extname(candidate);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', mimeTypes[ext] ?? 'application/octet-stream');
+        res.setHeader('Cache-Control', 'no-store');
+        fs.createReadStream(candidate).pipe(res);
+        return;
+      }
+    }
+
+    if (invalidPath) {
+      res.statusCode = 403;
+      res.end('Forbidden');
+      return;
+    }
+
+    if (!urlPath || urlPath === '/' || urlPath === '/index.html') {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(placeholderHtml);
+      return;
+    }
+
+    next();
+  };
+
+  return {
+    name: 'libreuni-serve-dev-ux-reports',
+    configureServer(server) {
+      server.middlewares.use('/development/ux', createHandler([path.resolve('./reports/ux')]));
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(
+        '/development/ux',
+        createHandler([path.resolve('./dist/development/ux'), path.resolve('./reports/ux')]),
+      );
+    },
+  };
+}
+
 // https://astro.build/config
 export default defineConfig({
   base: '/',
@@ -253,7 +356,7 @@ export default defineConfig({
     concurrency: 40, // Kill it with metal (Aggressive parallel generation)
   },
   vite: {
-    plugins: [tailwindcss()],
+    plugins: [tailwindcss(), serveDevReportsPlugin()],
     ssr: {
       noExternal: ['lucide-react']
     },
