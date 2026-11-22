@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowRight, Check, RefreshCw, X } from 'lucide-react';
+import { ArrowRight, Check, HelpCircle, RefreshCw, X } from 'lucide-react';
 import MathText from './MathText';
 
 interface Option {
@@ -91,41 +91,60 @@ export default function Quiz({
   const classifiedCount = orderedOptions.filter(
     (option) => judgements[option.id] !== undefined,
   ).length;
-  const allClassified = classifiedCount === orderedOptions.length;
-  const canSubmit = allClassified || Object.values(judgements).some((v) => v !== undefined);
+  const unansweredCount = orderedOptions.length - classifiedCount;
 
   const correctCount = orderedOptions.filter(
-    (option) => judgements[option.id] === option.isCorrect,
+    (option) => judgements[option.id] !== undefined && judgements[option.id] === option.isCorrect,
   ).length;
   const missedSupported = orderedOptions.filter(
-    (option) => option.isCorrect && judgements[option.id] !== true,
+    (option) => option.isCorrect && judgements[option.id] === false,
   );
   const acceptedUnsupported = orderedOptions.filter(
     (option) => !option.isCorrect && judgements[option.id] === true,
   );
+  const wrongCount = missedSupported.length + acceptedUnsupported.length;
   const acceptedCount = orderedOptions.filter(
     (option) => judgements[option.id] === true,
   ).length;
-  const completeReasoning =
-    allClassified && missedSupported.length === 0 && acceptedUnsupported.length === 0;
+  const completeReasoning = unansweredCount === 0 && wrongCount === 0;
+
+  const mismatchParts: string[] = [];
+  if (missedSupported.length > 0) {
+    mismatchParts.push(
+      `marked ${missedSupported.length} correct option${missedSupported.length === 1 ? '' : 's'} as incorrect`,
+    );
+  }
+  if (acceptedUnsupported.length > 0) {
+    mismatchParts.push(
+      `selected ${acceptedUnsupported.length} incorrect distractor${acceptedUnsupported.length === 1 ? '' : 's'}`,
+    );
+  }
+  if (unansweredCount > 0) {
+    mismatchParts.push(`left ${unansweredCount} as “I don't know”`);
+  }
+  const mismatchSummary =
+    mismatchParts.length === 1
+      ? mismatchParts[0]
+      : mismatchParts.length === 2
+        ? `${mismatchParts[0]} and ${mismatchParts[1]}`
+        : `${mismatchParts.slice(0, -1).join(', ')}, and ${mismatchParts.at(-1)}`;
 
   const setOptionEvaluation = (optionId: string, isCorrect: boolean) => {
-    setJudgements((prev) => ({ ...prev, [optionId]: isCorrect }));
+    setJudgements((prev) => {
+      const next = { ...prev };
+      if (next[optionId] === isCorrect) {
+        delete next[optionId];
+      } else {
+        next[optionId] = isCorrect;
+      }
+      return next;
+    });
     if (submitted) {
       setSubmitted(false);
     }
   };
 
   const submitVerification = () => {
-    setJudgements((prev) => {
-      const next = { ...prev };
-      for (const opt of orderedOptions) {
-        if (next[opt.id] === undefined) {
-          next[opt.id] = false;
-        }
-      }
-      return next;
-    });
     setSubmitted(true);
   };
 
@@ -176,7 +195,8 @@ export default function Quiz({
         <p className="label-caps m-0 text-primary dark:text-blue-400">{title || 'Verification Check'}</p>
         <div className="flex items-center gap-3">
           <span className="text-xs font-medium tabular-nums text-light-muted dark:text-dark-muted">
-            {classifiedCount} / {orderedOptions.length} evaluated
+            {classifiedCount} / {orderedOptions.length} answered
+            {submitted && unansweredCount > 0 ? ` · ${unansweredCount} “I don't know”` : ''}
           </span>
           {quizQuestions.length > 1 && (
             <span className="text-xs font-semibold tabular-nums text-light-muted dark:text-dark-muted">
@@ -190,14 +210,15 @@ export default function Quiz({
         <MathText>{currentQuestion.question}</MathText>
       </h3>
       <p className="mb-4 text-xs font-medium text-light-muted dark:text-dark-muted">
-        Evaluate each candidate option independently as correct or incorrect before verifying.
+        Classify each option as correct or incorrect, or leave uncertain options unanswered (“I don't know”) and verify at any time.
       </p>
 
       <div className="quiz-phase-container grid gap-2.5">
         {orderedOptions.map((option, idx) => {
           const choice = judgements[option.id];
-          const isCorrectChoice = submitted && choice === option.isCorrect;
-          const isWrongChoice = submitted && choice !== option.isCorrect;
+          const isUnanswered = submitted && choice === undefined;
+          const isCorrectChoice = submitted && choice !== undefined && choice === option.isCorrect;
+          const isWrongChoice = submitted && choice !== undefined && choice !== option.isCorrect;
 
           let rowBorder =
             'border-light-border bg-light-bg/70 dark:border-dark-border dark:bg-dark-bg/50';
@@ -205,6 +226,8 @@ export default function Quiz({
             rowBorder = 'border-emerald-500/35 bg-emerald-500/[0.04]';
           } else if (isWrongChoice) {
             rowBorder = 'border-rose-500/35 bg-rose-500/[0.04]';
+          } else if (isUnanswered) {
+            rowBorder = 'border-amber-500/35 bg-amber-500/[0.04]';
           } else if (choice !== undefined) {
             rowBorder = 'border-primary/35 bg-primary/[0.03]';
           }
@@ -258,16 +281,20 @@ export default function Quiz({
 
               {submitted && (
                 <div className="mt-2.5 flex items-start gap-2 border-t border-light-border/60 pt-2 text-xs leading-relaxed dark:border-dark-border/60">
-                  {isCorrectChoice ? (
+                  {isUnanswered ? (
+                    <HelpCircle className="mt-0.5 shrink-0 text-amber-700 dark:text-amber-400" size={14} />
+                  ) : isCorrectChoice ? (
                     <Check className="mt-0.5 shrink-0 text-emerald-700 dark:text-emerald-400" size={14} />
                   ) : (
                     <X className="mt-0.5 shrink-0 text-rose-700 dark:text-rose-400" size={14} />
                   )}
                   <div className="text-light-muted dark:text-dark-muted">
                     <span className="font-semibold text-light-text dark:text-dark-text">
-                      {option.isCorrect
-                        ? 'Correct option.'
-                        : 'Incorrect distractor.'}
+                      {isUnanswered
+                        ? `Unanswered (I don't know) — ${option.isCorrect ? 'Correct option.' : 'Incorrect distractor.'}`
+                        : option.isCorrect
+                          ? 'Correct option.'
+                          : 'Incorrect distractor.'}
                     </span>{' '}
                     {option.feedback && <MathText>{option.feedback}</MathText>}
                   </div>
@@ -280,7 +307,6 @@ export default function Quiz({
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <button
             type="button"
-            disabled={!canSubmit}
             onClick={submitVerification}
             className="assessment-action-primary"
           >
@@ -315,14 +341,29 @@ export default function Quiz({
                 <>
                   <strong>All options evaluated accurately.</strong> You identified every correct option and rejected every incorrect distractor.
                 </>
-              ) : acceptedCount === 0 && missedSupported.length > 0 ? (
+              ) : classifiedCount === 0 ? (
+                <>
+                  <strong>All options left as “I don't know” (0 of {orderedOptions.length} answered).</strong>{' '}
+                  Review the reference classification and explanation for each option below.
+                </>
+              ) : wrongCount === 0 && unansweredCount > 0 ? (
+                <>
+                  <strong>
+                    {correctCount} of {orderedOptions.length} evaluated accurately ({unansweredCount} marked “I don't know”).
+                  </strong>{' '}
+                  Review the unanswered {unansweredCount === 1 ? 'option' : 'options'} below.
+                </>
+              ) : acceptedCount === 0 && unansweredCount === 0 && missedSupported.length > 0 ? (
                 <>
                   <strong>No correct option selected.</strong> Identify which option is substantiated by the concept or model.
                 </>
               ) : (
                 <>
-                  <strong>Evaluation mismatch ({correctCount} of {orderedOptions.length} aligned).</strong>{' '}
-                  You missed {missedSupported.length} correct option{missedSupported.length === 1 ? '' : 's'} and selected {acceptedUnsupported.length} incorrect distractor{acceptedUnsupported.length === 1 ? '' : 's'}.
+                  <strong>
+                    Evaluation mismatch ({correctCount} of {orderedOptions.length} aligned
+                    {unansweredCount > 0 ? `, ${unansweredCount} “I don't know”` : ''}).
+                  </strong>{' '}
+                  You {mismatchSummary}.
                 </>
               )}
             </div>

@@ -112,22 +112,43 @@ test.describe('Theme & Interactive States Contrast Matrix', () => {
           const verifyBtn = quiz.locator('button:has-text("Verify answers")');
           await expect(verifyBtn).toBeVisible();
 
-          // 1. Initial State: Verify answers MUST be disabled with visible, legible contrast (>= 3.0:1)
-          await expect(verifyBtn).toBeDisabled();
-          const disabledDetails = await verifyBtn.evaluate((el) => window.__inspectElementColors(el));
-          const disabledContrast = calculateContrast(disabledDetails.color, disabledDetails.bgLayers);
+          // 1. Initial State: Verify answers is always unlocked with >= 4.5:1 contrast
+          await expect(verifyBtn).toBeEnabled();
+          const initialVerifyDetails = await verifyBtn.evaluate((el) => window.__inspectElementColors(el));
+          const initialVerifyContrast = calculateContrast(initialVerifyDetails.color, initialVerifyDetails.bgLayers);
 
           expect(
-            disabledContrast.contrast,
-            `Disabled 'Verify answers' button in ${themeLabel} has illegible contrast ${disabledContrast.contrast.toFixed(2)}:1 (< 3.0:1). Text: ${disabledContrast.textHex}, Bg: ${disabledContrast.bgHex}`,
-          ).toBeGreaterThanOrEqual(3.0);
+            initialVerifyContrast.contrast,
+            `Initial 'Verify answers' button in ${themeLabel} has contrast ${initialVerifyContrast.contrast.toFixed(2)}:1 (< 4.5:1). Text: ${initialVerifyContrast.textHex}, Bg: ${initialVerifyContrast.bgHex}`,
+          ).toBeGreaterThanOrEqual(4.5);
 
-          if (mode === 'light') {
+          // 2. Immediate "I don't know" verification without prior selection
+          await verifyBtn.click();
+          await page.waitForTimeout(100);
+
+          const initialFeedback = quiz.locator('.feedback-diagnostic').first();
+          await expect(initialFeedback).toBeVisible();
+          await expect(initialFeedback).toContainText("I don't know");
+          const initialFbText = initialFeedback.locator('p, div, span, strong').first();
+          if (await initialFbText.isVisible()) {
+            const fbDetails = await initialFbText.evaluate((el) => window.__inspectElementColors(el));
+            const fbContrast = calculateContrast(fbDetails.color, fbDetails.bgLayers);
             expect(
-              disabledContrast.bgLuminance,
-              `Disabled 'Verify answers' in ${themeLabel} has dark background (luminance ${disabledContrast.bgLuminance.toFixed(3)}) on light page! Bg: ${disabledContrast.bgHex}`,
-            ).toBeGreaterThan(0.35);
+              fbContrast.contrast,
+              `Unanswered Quiz feedback banner in ${themeLabel} has contrast ${fbContrast.contrast.toFixed(2)}:1 (< 4.5:1). Text: ${fbContrast.textHex}, Bg: ${fbContrast.bgHex}`,
+            ).toBeGreaterThanOrEqual(4.5);
           }
+
+          const resetBtn = quiz.locator('button:has-text("Reset")');
+          await expect(resetBtn).toBeVisible();
+          const resetDetails = await resetBtn.evaluate((el) => window.__inspectElementColors(el));
+          const resetContrast = calculateContrast(resetDetails.color, resetDetails.bgLayers);
+          expect(
+            resetContrast.contrast,
+            `Quiz 'Reset' button in ${themeLabel} has contrast ${resetContrast.contrast.toFixed(2)}:1 (< 3.5:1). Text: ${resetContrast.textHex}, Bg: ${resetContrast.bgHex}`,
+          ).toBeGreaterThanOrEqual(3.5);
+          await resetBtn.click();
+          await page.waitForTimeout(60);
 
           // Check candidate choice buttons
           const candidateCorrect = quiz.locator('button:has-text("Correct")').first();
@@ -138,7 +159,7 @@ test.describe('Theme & Interactive States Contrast Matrix', () => {
             `Candidate 'Correct' button in ${themeLabel} has contrast ${candContrast.contrast.toFixed(2)}:1 (< 3.5:1). Text: ${candContrast.textHex}, Bg: ${candContrast.bgHex}`,
           ).toBeGreaterThanOrEqual(3.5);
 
-          // 2. Selection State: Select an option and check enabled Verify answers button (>= 4.5:1)
+          // 3. Selection State: Select an option and check enabled Verify answers button (>= 4.5:1)
           await candidateCorrect.click();
           await page.waitForTimeout(100);
 
@@ -151,18 +172,7 @@ test.describe('Theme & Interactive States Contrast Matrix', () => {
             `Enabled 'Verify answers' button in ${themeLabel} has contrast ${enabledContrast.contrast.toFixed(2)}:1 (< 4.5:1). Text: ${enabledContrast.textHex}, Bg: ${enabledContrast.bgHex}`,
           ).toBeGreaterThanOrEqual(4.5);
 
-          // Reset button contrast
-          const resetBtn = quiz.locator('button:has-text("Reset")');
-          if (await resetBtn.isVisible()) {
-            const resetDetails = await resetBtn.evaluate((el) => window.__inspectElementColors(el));
-            const resetContrast = calculateContrast(resetDetails.color, resetDetails.bgLayers);
-            expect(
-              resetContrast.contrast,
-              `Quiz 'Reset' button in ${themeLabel} has contrast ${resetContrast.contrast.toFixed(2)}:1 (< 3.5:1). Text: ${resetContrast.textHex}, Bg: ${resetContrast.bgHex}`,
-            ).toBeGreaterThanOrEqual(3.5);
-          }
-
-          // 3. Submitted State: Submit and check feedback banner contrast
+          // 4. Submitted State: Submit partial selection and check feedback banner contrast
           await verifyBtn.click();
           await page.waitForTimeout(100);
 
