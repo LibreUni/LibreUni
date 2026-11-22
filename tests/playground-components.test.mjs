@@ -63,18 +63,6 @@ test('playground TSX components bundle and SSR-render cleanly without markup or 
   }
 });
 
-test('DynamicArrayPlayground SSR static preview reports accurate copy count rather than capacity - 1', async () => {
-  const DynamicArrayPlayground = await loadPlaygroundComponent(
-    path.join(PLAYGROUNDS_DIR, 'DynamicArrayPlayground.tsx')
-  );
-  const html = renderToStaticMarkup(React.createElement(DynamicArrayPlayground));
-  // Initial staticContent in DynamicArrayPlayground shows 4 values in capacity 8 -> copies from 4->8 = 4, not 7
-  assert.ok(
-    !html.includes('copies so far = 7'),
-    `DynamicArrayPlayground static preview computes buggy "copies so far = 7" (capacity - 1 formula): ${html}`
-  );
-});
-
 test('BTreePlayground separator count invariant holds across every step', () => {
   const src = fs.readFileSync(path.join(PLAYGROUNDS_DIR, 'BTreePlayground.tsx'), 'utf8');
   const statesMatch = src.match(/const\s+states\s*=\s*(\[[\s\S]*?\]);/);

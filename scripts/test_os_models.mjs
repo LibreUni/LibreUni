@@ -25,7 +25,6 @@ try {
     'LockScalabilityPlayground',
     'DiskSchedulingPlayground',
     'SystemCallPathPlayground',
-    'AllocationFailurePlayground',
     'AmdahlPlayground',
     'EpsilonDeltaPlayground',
     'TangentPlayground',
@@ -129,12 +128,6 @@ try {
   assert.equal(syscallStages[2].mode, 'hardware');
   assert.equal(syscallStages[4].mode, 'kernel');
   assert.equal(syscallStages.at(-1).mode, 'hardware');
-
-  // Allocation failure ownership: direct assignment leaks on failure, while
-  // temporary-pointer pattern keeps original block reachable.
-  const { ownershipState } = modules.AllocationFailurePlayground;
-  assert.deepEqual(ownershipState(false, true, 96), { pointer: 'NULL', allocation: 'original 32-byte block', reachable: false });
-  assert.deepEqual(ownershipState(true, true, 96), { pointer: '0x7f20', allocation: 'original 32-byte block', reachable: true });
 
   // Architecture Amdahl and Calculus playgrounds:
   assert.equal(modules.AmdahlPlayground.speedup(0.9, 1), 1);

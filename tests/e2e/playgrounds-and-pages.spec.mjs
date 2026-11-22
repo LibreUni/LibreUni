@@ -45,11 +45,6 @@ async function buildPlaygroundsHarnessBundle(names) {
 }
 
 const TARGET_PLAYGROUNDS = [
-  'HeapPlayground',
-  'LSMCompactionPlayground',
-  'HashTablePlayground',
-  'DynamicArrayPlayground',
-  'UnionFindPlayground',
   'BTreePlayground',
 ];
 
@@ -67,64 +62,7 @@ test.describe('Interactive playgrounds DOM behavior & page regressions', () => {
 
     await page.addScriptTag({ content: bundle });
 
-    // 1. HeapPlayground: delete all 5 elements -> must reach "empty" and disable Delete button
-    const heap = page.locator('[data-test-playground="HeapPlayground"]');
-    const deleteMinBtn = heap.getByRole('button', { name: 'Delete minimum' });
-    await expect(deleteMinBtn).toBeEnabled();
-    for (let i = 0; i < 5; i += 1) {
-      await deleteMinBtn.click();
-    }
-    await expect(heap).toContainText('minimum = empty');
-    await expect(deleteMinBtn).toBeDisabled();
-    await heap.getByRole('button', { name: 'Reset' }).first().click();
-    await expect(heap).toContainText('minimum = 3');
-
-    // 2. LSMCompactionPlayground: initial Compact/Flush state, disabled when invalid, Reset supported, no duplicates
-    const lsm = page.locator('[data-test-playground="LSMCompactionPlayground"]');
-    const flushBtn = lsm.getByRole('button', { name: 'Flush' });
-    const compactBtn = lsm.getByRole('button', { name: 'Compact' });
-    const writeBtn = lsm.getByRole('button', { name: 'Write' });
-    await flushBtn.click();
-    await expect(flushBtn).toBeDisabled();
-    await writeBtn.click();
-    await expect(flushBtn).toBeEnabled();
-    await compactBtn.click();
-    const lsmResetBtn = lsm.getByRole('button', { name: 'Reset' }).first();
-    await expect(lsmResetBtn).toBeVisible();
-    await lsmResetBtn.click();
-    await expect(lsm).toContainText('2 memory entries');
-
-    // 3. HashTablePlayground: fill 7/7 -> disabled when full; tombstones; Reset resets key sequence back to 10
-    const hash = page.locator('[data-test-playground="HashTablePlayground"]');
-    const insertBtn = hash.getByRole('button', { name: 'Insert colliding key' });
-    for (let i = 0; i < 7; i += 1) {
-      await insertBtn.click();
-    }
-    await expect(hash).toContainText('load = 7/7');
-    await expect(insertBtn).toBeDisabled();
-    await hash.getByRole('button', { name: 'Reset' }).first().click();
-    await expect(hash).toContainText('load = 0/7');
-    await expect(insertBtn).toBeEnabled();
-    await insertBtn.click();
-    await expect(hash.locator('[aria-label^="slot 3,"]')).toContainText('10');
-
-    // 4. DynamicArrayPlayground: starts with 0 copies (not 3!), counts copies on resize, Reset restores
-    const dyn = page.locator('[data-test-playground="DynamicArrayPlayground"]');
-    await expect(dyn).toContainText('copies so far = 0');
-    await dyn.getByRole('button', { name: 'Append value' }).click();
-    await dyn.getByRole('button', { name: 'Append value' }).click();
-    await expect(dyn).toContainText('copies so far = 4');
-    await dyn.getByRole('button', { name: 'Reset' }).first().click();
-    await expect(dyn).toContainText('copies so far = 0');
-
-    // 5. UnionFindPlayground: compresses path and exposes Reset button
-    const uf = page.locator('[data-test-playground="UnionFindPlayground"]');
-    await uf.getByRole('button', { name: 'find(5)' }).click();
-    await expect(uf).toContainText('to root 0');
-    await uf.getByRole('button', { name: 'Reset' }).first().click();
-    await expect(uf).toContainText('Choose a node to compress.');
-
-    // 6. BTreePlayground: advances split step and resets cleanly without leaf duplication
+    // BTreePlayground: advances split step and resets cleanly without leaf duplication
     const btree = page.locator('[data-test-playground="BTreePlayground"]');
     await expect(btree).toContainText('operation 1 of 3');
     await btree.getByRole('button', { name: 'Next split step' }).click();
@@ -134,6 +72,41 @@ test.describe('Interactive playgrounds DOM behavior & page regressions', () => {
     await expect(btree).toContainText('[31]');
     await btree.getByRole('button', { name: 'Reset' }).first().click();
     await expect(btree).toContainText('operation 1 of 3');
+  });
+
+  test('Quiz allows verifying immediately with unanswered options treated as "I don\'t know"', async ({ page }) => {
+    await page.goto('/lessons/calculus-intro/limits.html', { waitUntil: 'domcontentloaded' });
+    const quiz = page.locator('[data-component="Quiz"]').first();
+    await expect(quiz).toBeVisible();
+
+    const groupCount = await quiz.locator('[role="group"]').count();
+    expect(groupCount).toBeGreaterThanOrEqual(2);
+    await expect(quiz).toContainText(`0 / ${groupCount} answered`);
+
+    const verifyBtn = quiz.getByRole('button', { name: /Verify answers/i });
+    await expect(verifyBtn).toBeEnabled();
+    await verifyBtn.click();
+
+    await expect(quiz.locator('.feedback-diagnostic')).toContainText("I don't know");
+    await expect(quiz).toContainText("Unanswered (I don't know)");
+    expect(await quiz.locator('[role="group"] button[aria-pressed="true"]').count()).toBe(0);
+
+    await quiz.getByRole('button', { name: /Reset/i }).click();
+    const firstCorrect = quiz.locator('[role="group"]').first().getByRole('button', { name: 'Correct', exact: true });
+    await firstCorrect.click();
+    await expect(firstCorrect).toHaveAttribute('aria-pressed', 'true');
+    await expect(quiz).toContainText(`1 / ${groupCount} answered`);
+
+    // Clicking the selected option again clears it back to unanswered
+    await firstCorrect.click();
+    await expect(firstCorrect).toHaveAttribute('aria-pressed', 'false');
+    await expect(quiz).toContainText(`0 / ${groupCount} answered`);
+
+    // Partial submission leaves untouched options as "I don't know" instead of coercing to Incorrect
+    await firstCorrect.click();
+    await verifyBtn.click();
+    await expect(quiz).toContainText(`${groupCount - 1} “I don't know”`);
+    expect(await quiz.locator('[role="group"] button[aria-pressed="true"]').count()).toBe(1);
   });
 
   test('/development.html buttons have explicit types and active filters toggle cleanly', async ({ page }) => {

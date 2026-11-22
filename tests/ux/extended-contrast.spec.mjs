@@ -9,14 +9,13 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const PLAYGROUNDS = [
   'RelationalAlgebraPlayground',
   'BTreePlayground',
-  'HashTablePlayground',
-  'HeapPlayground',
-  'DynamicArrayPlayground',
-  'TreeRotationPlayground',
-  'RoundRobinPlayground',
-  'AutomatonTracePlayground',
-  'LSMCompactionPlayground',
-  'UnionFindPlayground',
+  'JoinPredicatePlayground',
+  'CacheHierarchyPlayground',
+  'PipelineHazardPlayground',
+  'SchedulerPlayground',
+  'CrashConsistencyPlayground',
+  'EpsilonDeltaPlayground',
+  'RiemannPlayground',
 ];
 
 async function buildBundle(names) {
@@ -91,11 +90,6 @@ test.describe('Extended WCAG AA contrast for playgrounds, development, and statu
           }, PLAYGROUNDS);
           await page.addScriptTag({ content: bundle });
 
-          // Trigger tombstone 'T' state in HashTablePlayground so dark amber badge is measured
-          const hashHost = page.locator('#m-HashTablePlayground');
-          await hashHost.getByRole('button', { name: 'Insert colliding key' }).click();
-          await hashHost.locator('[aria-label^="slot 3,"]').click();
-
           const samples = await page.evaluate(() => {
             function bgLayers(el) {
               const out = [];
@@ -134,7 +128,7 @@ test.describe('Extended WCAG AA contrast for playgrounds, development, and statu
 
             const items = [];
             for (const el of document.querySelectorAll(
-              '#m-RelationalAlgebraPlayground button, #m-BTreePlayground .font-mono, #m-HashTablePlayground button, #m-HashTablePlayground span, #m-HeapPlayground span, #m-DynamicArrayPlayground div, #m-LSMCompactionPlayground strong'
+              '#m-RelationalAlgebraPlayground button, #m-BTreePlayground .font-mono, #m-JoinPredicatePlayground button, #m-CacheHierarchyPlayground button, #m-SchedulerPlayground button, #m-CrashConsistencyPlayground button'
             )) {
               const txt = el.textContent?.trim();
               if (!txt || txt.length > 24) continue;
