@@ -21,7 +21,7 @@ Required preparation:
 - discrete reasoning with sets, predicates, relations, implication, simple proofs, and basic data structures; and
 - the ability to read a short program or trace and state its invariant.
 
-Recommended preparation, not an enrollment blocker:
+Recommended preparation (optional):
 
 - asymptotic notation, trees, hashing, and basic probability.
 
@@ -39,11 +39,11 @@ The sequencing and ceiling were checked against primary university course source
 - [UC Berkeley CS 186](https://cs186berkeley.net/sp20/) couples SQL, files and buffers, B+ trees, relational algebra, joins, query optimization, transactions, database design, recovery, and distributed transactions to projects and discussion problems.
 - [PostgreSQL documentation](https://www.postgresql.org/docs/current/index.html) is used only for explicitly labelled implementation examples and current SQL/reference behavior; the course does not generalize a vendor choice into theory.
 
-LibreUni exercises, tables, diagrams, simulations, and grading criteria are original. They may point to source materials, but do not reproduce another course's assignments or solutions.
+LibreUni exercises, tables, diagrams, simulations, and verification criteria are original. They may point to source materials, but do not reproduce another course's assignments or solutions.
 
 ## Workload and sequence
 
-The planned workload is 10,800 minutes (180 hours). Metadata records a provisional workload-equivalence estimate of 7 ECTS; LibreUni awards no academic credit. `estimatedMinutes` counts reading, prediction, worked traces, independent practice, design notes, measurements, and review—not page-scroll time.
+The planned workload is 10,800 minutes (180 hours). Metadata records a separate workload-equivalence reference estimate of 7 ECTS; LibreUni awards no academic credit. `estimatedMinutes` counts reading, prediction, worked traces, independent practice, design notes, measurements, and review—not page-scroll time.
 
 | Module | Lesson | Minutes | Evidence produced |
 | --- | --- | ---: | --- |
@@ -65,8 +65,8 @@ The planned workload is 10,800 minutes (180 hours). Metadata records a provision
 | Data at scale and synthesis | Distributed data | 420 | consistency-model choice tied to a failure model |
 |  | Replication and partitioning | 420 | quorum, failover, and migration design critique |
 |  | Database security | 420 | authorization/data-flow threat analysis and least-privilege schema |
-|  | Database capstone | 1,200 | defended data-system design, workload experiment, and incident runbook |
-|  | Database assessment | 900 | unseen integrated problem set and oral/written design defense |
+|  | Database capstone | 1,200 | verified data-system design, workload experiment, and incident runbook |
+|  | Database assessment | 900 | unseen integrated problem set and written design verification |
 
 ## Interaction and visual contract
 
@@ -97,7 +97,7 @@ Every lesson distributes four forms of work:
 3. transfer after a constraint, distribution, failure, or adversary changes; and
 4. synthesis through a design decision backed by invariant, result, cost, or failure evidence.
 
-Multiple-choice checks are limited to sharply diagnosable misconceptions. Their options are parallel in form and length, and feedback identifies the missing semantic condition. SQL, algebra, closure, schedule, and recovery practice requires an independently constructed artifact before a reference solution is shown. The capstone and final assessment require evidence and a defense; a page cannot certify system design or authorship automatically.
+Multiple-choice checks are limited to sharply diagnosable misconceptions. Their options are parallel in form and length, and feedback identifies the missing semantic condition. SQL, algebra, closure, schedule, and recovery practice requires an independently constructed artifact before a reference solution is shown. The capstone and final assessment require reproducible evidence and explicit trade-off justification; a page cannot certify system design or authorship automatically.
 
 ## Deliberate boundaries
 
@@ -109,7 +109,7 @@ Multiple-choice checks are limited to sharply diagnosable misconceptions. Their 
 
 ## Release gate
 
-The rebuild is incomplete until every manifest lesson has a specific entry contract, outcome, omission, local teaching artifact, distributed practice, disclosed solution or grading criterion, and sources; the course integrity report has no generic-template or uncovered-heading findings left unexplained; and representative lessons from each module are inspected in desktop/mobile and light/dark forms, including print/static representations of interactions.
+The rebuild is incomplete until every manifest lesson has a specific entry contract, outcome, omission, local teaching artifact, distributed practice, disclosed solution or verification criterion, and sources; the course integrity report has no generic-template or uncovered-heading findings left unexplained; and representative lessons from each module are inspected in desktop/mobile and light/dark forms, including print/static representations of interactions.
 
 ## Review evidence (2026-09-14)
 

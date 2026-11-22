@@ -19,7 +19,7 @@ The scope was checked against [MIT 6.004 Computation Structures](https://ocw.mit
 | datapath, control, pipelining, hazards | single/multicycle control and timed refinement | stage schedule, forwarding/stall/flush invariant |
 | caches, virtual memory, storage and I/O | AMAT, mapping, TLBs, DMA ownership | address decomposition, fault trace, descriptor protocol |
 | performance and parallelism | CPI, Amdahl, roofline, SIMD, OoO | sensitivity analysis and falsifiable experiment |
-| synthesis and assessment | binary lab, capstone, review, integrated assessment | defended design with proof, measurement, and fault injection |
+| synthesis and assessment | binary lab, capstone, review, integrated assessment | verified design with proof, measurement, and fault injection |
 
 Institution-dependent extensions include branch predictor microarchitecture, coherence protocol details, and device virtualization. Advanced extensions and deliberate omissions are RTL synthesis, electrical device physics, full compiler backend implementation, GPU microarchitecture, and production-specific ISA manuals; those would require a separate 150–200 hour specialization.
 
@@ -40,7 +40,7 @@ The remaining prose and trace exercises must not be called visually complete mer
 
 ## Workload interpretation
 
-The manifest's 20 lessons sum to 11,220 minutes (187 planned hours), including independent problems, the binary-design lab, performance investigation, capstone, review, and integrated assessment. These are author estimates, not measured learner completion times or awarded credit. Large allocations must be checked against the actual assignment burden in an academic review; changing minutes does not add teaching depth.
+The manifest's 20 lessons sum to 11,220 minutes (187 planned hours), including independent problems, the binary-design lab, performance investigation, capstone, review, and integrated assessment. Metadata records a separate workload-equivalence reference estimate of 7.5 ECTS; LibreUni awards no academic credit. These are author estimates, not measured learner completion times or awarded credit. Large allocations must be checked against the actual assignment burden in an academic review; changing minutes does not add teaching depth.
 
 ## Correctness repairs and executable evidence
 

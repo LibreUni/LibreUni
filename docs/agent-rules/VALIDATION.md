@@ -21,7 +21,7 @@ Runs the required pull-request and push gate:
 
 - `npm run check:content` first verifies the router/package/CI contract, then runs lesson structure, course smoke, integrity unit, PlantUML diagnostics, and strict course-integrity checks.
 - `npm run test:models`, included in the content gate, runs the architecture, OS, and database model regressions against the implementations used by their playgrounds.
-- Active-course validators cover every manifest lesson's authoring and rendered output. Retired source under `archive/curriculum/` is not an active collection. The former data-structures component-count quotas are retired with that course; actual rendering and model behavior, not artifact counts, are release evidence.
+- Active-course validators cover every manifest lesson's authoring and rendered output. The former data-structures component-count quotas are retired with that course; actual rendering and model behavior, not artifact counts, are release evidence.
 - The contract check treats each course manifest as an exact ordered index: missing targets, duplicate slugs, and unlisted lesson files fail instead of silently falling into an `Overview` module. Adopted curriculum workloads may add a source-backed sum assertion.
 - `npm run check:build` builds the production site and validates rendered lessons, course visuals, and PDFs.
 - `npm run check:e2e` runs desktop and mobile Playwright smoke and accessibility checks.
@@ -66,6 +66,7 @@ Mathematical figures and page contracts are verified on every test run:
   - Generates standalone SVGs and contact sheet in `reports/figures/index.html`.
 - **Platform consistency lint rules (`scripts/lint_platform_consistency.mjs` & `scripts/lint_extended.mjs`):**
   - `LINT-00`: Validates frontmatter by page `kind` (`lesson`, `lab`, `problems`, `recap`, `practice`).
+  - `LINT-04`: Emits an advisory warning (not a hard error) when a `lesson` or `lab` has 0 interactive components or 0 `<ExerciseSolution>` blocks, keeping validation consistent with `COURSE_COMPONENTS.md`'s no-widget-quota principle.
   - `LINT-08`: Forbids hardcoded `number=` attributes on `<Exercise>`, `<Problem>`, and `<Figure>`.
   - `LINT-09`: Forbids fragile function plots in `<TikZ>` using `plot`, `controls`, or coordinate curves (both `code={...}` and children syntaxes).
   - `LINT-10`: Enforces that `<MathStatement>` is declared solely on `lesson` and `lab` pages.

@@ -13,7 +13,7 @@ The course must be competitive with the strongest openly available university co
 - advanced extensions; and
 - deliberate LibreUni omissions.
 
-The target is durable conceptual mastery, not apparent completeness: mathematical maturity includes proofs and abstraction; programming maturity includes independent implementation of nontrivial systems; the assessment ceiling includes demanding final-exam problems; and the expected study time is 150–200 hours. This is not a bootcamp, reference sheet, interview-cram guide, or overview.
+The target is durable conceptual mastery, not apparent completeness: mathematical maturity includes proofs and abstraction; programming maturity includes independent implementation of nontrivial systems; the assessment ceiling includes demanding synthesis and transfer problems; and the expected study time is 150–200 hours. This is not a bootcamp, reference sheet, interview-cram guide, or overview.
 
 Do not maximize lesson count, heading count, word count, topic coverage, component count, or repository metrics. A clean mechanical audit is necessary but never establishes educational quality.
 

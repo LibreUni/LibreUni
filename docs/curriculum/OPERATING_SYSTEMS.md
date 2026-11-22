@@ -43,7 +43,7 @@ LibreUni lab briefs are original. They may point to upstream code and documentat
 
 ## Workload and sequence
 
-The planned workload is 11,370 minutes (189.5 hours). Metadata records a provisional workload-equivalence estimate of 7.5 ECTS; LibreUni awards no academic credit. `estimatedMinutes` includes reading, prediction, simulation, trace work, implementation, tests, design notes, and reflection—not page-scroll time.
+The planned workload is 11,370 minutes (189.5 hours). Metadata records a separate workload-equivalence reference estimate of 7.5 ECTS; LibreUni awards no academic credit. `estimatedMinutes` includes reading, prediction, simulation, trace work, implementation, tests, design notes, and reflection—not page-scroll time.
 
 | Module | Lesson | Minutes | Primary evidence produced |
 | --- | --- | ---: | --- |
@@ -74,7 +74,7 @@ The planned workload is 11,370 minutes (189.5 hours). Metadata records a provisi
 |  | Containers and resource control | 330 | namespace/cgroup threat and overload analysis |
 |  | Multicore scalability and observability | 360 | contention diagnosis from traces and counters |
 |  | Comparative kernel design | 300 | mechanism comparison with explicit workload assumptions |
-|  | Operating-systems capstone | 1,260 | defended kernel change, evaluation, failure analysis, and handoff |
+|  | Operating-systems capstone | 1,260 | verified kernel change, evaluation, failure analysis, and handoff |
 
 ## Cumulative implementation spine
 
@@ -102,10 +102,10 @@ upstream xv6-riscv-rev5 @ 7d7adbb1
     │
     ├── filesystem lab: persistent feature + crash-state matrix
     │
-    └── capstone: one substantial kernel change, measured and defended
+    └── capstone: one substantial kernel change, measured and verified
 ```
 
-Published solutions stop at traces, rubrics, test oracles, and small isolated examples. They do not disclose complete repository patches for the cumulative labs.
+Published solutions stop at traces, verification checklists, test oracles, and small isolated examples. They do not disclose complete repository patches for the cumulative labs.
 
 ## Interaction and visual contract
 

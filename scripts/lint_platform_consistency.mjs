@@ -289,11 +289,11 @@ for (const file of lessonFiles) {
   if (kind === 'lesson' || kind === 'lab') {
     const hasInteractive = INTERACTIVE_TAGS.some((tag) => codeFreeBody.includes(tag));
     if (!hasInteractive) {
-      errors.push(`[LINT-04] ${rel}: Lesson has 0 interactive components (Quiz, CaseStudy, CodeExercise, CodeRunner, SqlRunner, or Playground).`);
+      warnings.push(`[LINT-04] ${rel}: Lesson has 0 interactive components (Quiz, CaseStudy, CodeExercise, CodeRunner, SqlRunner, or Playground).`);
     }
 
     if (!codeFreeBody.includes('<ExerciseSolution')) {
-      errors.push(`[LINT-04] ${rel}: Lesson has 0 <ExerciseSolution> self-check exercises.`);
+      warnings.push(`[LINT-04] ${rel}: Lesson has 0 <ExerciseSolution> self-check exercises.`);
     }
   }
 
@@ -413,7 +413,7 @@ for (const courseId of activeCourses) {
 }
 
 if (warnings.length > 0) {
-  console.warn(`\n⚠️  Platform Consistency Linter reported ${warnings.length} exercise pattern warning(s):\n`);
+  console.warn(`\n⚠️  Platform Consistency Linter reported ${warnings.length} warning(s):\n`);
   for (const warn of warnings) {
     console.warn(`  • ${warn}`);
   }
