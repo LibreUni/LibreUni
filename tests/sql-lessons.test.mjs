@@ -66,8 +66,8 @@ test('sql-lab Task 1 query output matches its documented Markdown oracle table',
   const schemaMatch = text.match(/<SqlRunner[\s\S]*?schema=\{`([\s\S]*?)`\}/);
   assert.ok(schemaMatch, 'sql-lab.mdx should include <SqlRunner schema={...}>');
 
-  // Parse oracle table immediately preceding the Task 1 discussion ("Only DB101 remains")
-  const anchorIdx = text.indexOf('Only DB101 remains.');
+  // Parse oracle table immediately preceding the Task 1 discussion ("Only S101 remains")
+  const anchorIdx = text.indexOf('Only S101 remains.');
   assert.ok(anchorIdx > 0, 'Expected Task 1 oracle table section in sql-lab.mdx');
   const section = text.slice(Math.max(0, anchorIdx - 600), anchorIdx);
   const tableLines = section
@@ -81,7 +81,7 @@ test('sql-lab Task 1 query output matches its documented Markdown oracle table',
     headerCells.every((c) => c.length > 0),
     `sql-lab.mdx Task 1 oracle table header has empty cell(s): ${tableLines[0]}`
   );
-  assert.deepEqual(headerCells, ['offering_id', 'code', 'active_allocations', 'is_full']);
+  assert.deepEqual(headerCells, ['pool_id', 'service_code', 'active_allocations', 'is_full']);
 
   const oracleRows = tableLines.slice(1).map((line) =>
     line
@@ -97,15 +97,15 @@ test('sql-lab Task 1 query output matches its documented Markdown oracle table',
     // Run the full 4-column Task 1 query described in sql-lab Task 1
     const res = executeQuery(
       db,
-      `SELECT o.offering_id, o.code, COUNT(a.client_id) AS active_allocations,
-              CASE WHEN COUNT(a.client_id) >= o.capacity THEN 'true' ELSE 'false' END AS is_full_text,
-              COUNT(a.client_id) >= o.capacity AS is_full_bool
-       FROM offering AS o
+      `SELECT p.pool_id, p.service_code, COUNT(a.client_id) AS active_allocations,
+              CASE WHEN COUNT(a.client_id) >= p.capacity THEN 'true' ELSE 'false' END AS is_full_text,
+              COUNT(a.client_id) >= p.capacity AS is_full_bool
+       FROM service_pool AS p
        LEFT JOIN allocation AS a
-         ON a.offering_id = o.offering_id AND a.status = 'active'
-       WHERE o.region = 'us-east-1'
-       GROUP BY o.offering_id, o.code, o.capacity
-       ORDER BY o.offering_id`
+         ON a.pool_id = p.pool_id AND a.status = 'active'
+       WHERE p.region = 'us-east-1'
+       GROUP BY p.pool_id, p.service_code, p.capacity
+       ORDER BY p.pool_id`
     );
     // Notice SQLite renders `>=` as 0/1 while CASE renders 'false'/'true'.
     // Ensure documented oracle values match what SQLite produces (0/1 or matching SQLite query).

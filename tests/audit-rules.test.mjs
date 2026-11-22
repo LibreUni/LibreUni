@@ -33,7 +33,7 @@ test('LINT-16 extension rejects GFM table header rows with empty cells except to
 | Expected \`Task 1\` result |  |  |
 | --- | --- | --- |
 | \`id\` | \`code\` | \`count\` |
-| 10 | DB101 | 1 |
+| 10 | S101 | 1 |
 `,
   });
   assert.ok(bad.some((e) => /\[LINT-16\].*empty column cell/.test(e)), `Expected empty header error, got: ${bad}`);
@@ -55,7 +55,7 @@ test('LINT-16 extension rejects GFM table header rows with empty cells except to
     body: `
 | \`id\` | \`code\` | \`note\` |
 | --- | --- | --- |
-| 10 | DB101 |  |
+| 10 | S101 |  |
 `,
   });
   assert.deepEqual(good, []);

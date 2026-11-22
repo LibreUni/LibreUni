@@ -62,6 +62,7 @@ const BANNED_D0017_PATTERNS = [
   { regex: /\bRegistration\s+split\b/g, label: 'Registration split' },
   { regex: /\benrollments?\b/gi, label: 'enrollment(s)' },
   { regex: /\bcourse_code\b/g, label: 'course_code' },
+  { regex: /\boffering_id\b/g, label: 'offering_id' },
   { regex: /\boffice\s+hours\b/gi, label: 'office hours' },
   { regex: /\bteaching\s+assistants?\b/gi, label: 'teaching assistant(s)' },
   { regex: /\bgrading\s+rubrics?\b/gi, label: 'grading rubric(s)' },
