@@ -579,7 +579,7 @@ const PATH_RULES = [
   { pattern: /^src\/content\/lessons\//, category: 'course' },
   { pattern: /^src\/data\/course-manifests\//, category: 'course' },
   { pattern: /^src\/content\/courses\//, category: 'course' },
-  { pattern: /^docs\/curriculum\/|^docs\/refactor\//, category: 'course' },
+  { pattern: /^docs\/curriculum\//, category: 'course' },
   { pattern: /\.puml$/, category: 'plantuml' },
   { pattern: /^src\/components\//, category: 'component' },
   { pattern: /\.(css|astro)$|^tailwind\.config|^src\/styles\//, category: 'ui' },

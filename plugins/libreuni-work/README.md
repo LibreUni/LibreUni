@@ -20,23 +20,16 @@ Routing follows `docs/agent-rules/TASKS.md`: course and lesson paths route to `G
 The bundle is installed into the DSH profile, not run from the repository:
 
 ```text
-plugin_manager(action: "install_bundle", target: "/home/edf/Documents/GitSynced/LibreUni/plugins/libreuni-work")
+plugin_manager(action: "install_bundle", target: "<path-to-libreuni-repo>/plugins/libreuni-work")
 ```
 
 A local directory installs as a pnpm `link:`, so the workspace copy above is what runs. After editing `index.js`, restart the host so the new module generation loads.
 
-### Known environment blockers (2026-11-07)
-
-Two local issues had to be worked around; neither is caused by this plugin.
-
-1. **pnpm workspace root.** The `web` profile declares `packages: ['.']` in `pnpm-workspace.yaml`, so pnpm 9 refuses `pnpm add` without `--workspace-root`. Both the global install (`~/.local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/index.js`) and the copy the host actually loads from the npx cache (`~/.npm/_npx/b86ed90107c62dab/.../dsh-plugin-manager/lib/index.js`) were patched to pass it; each has a `lib/index.js.pre-libreuni-bak` backup. A DSH upgrade replaces these files and drops the patch.
-2. **Approval prompts.** The GUI approval path did not deliver prompts in this session, so tool calls requiring approval fail instead of asking.
-
 ## Self-check
 
 ```bash
-node plugins/libreuni-work/test.mjs          # pure routing, parsing, and argument-hygiene checks
-node plugins/libreuni-work/dev/drive.mjs     # drives all three tools against this repo with a local fs/shell stand-in
+node plugins/libreuni-work/test.mjs                            # pure routing, parsing, and argument-hygiene checks
+DSH_CORDIS_PATH=/path/to/cordis/lib/index.js node plugins/libreuni-work/dev/drive.mjs
 ```
 
 `dev/` is development-only tooling and is not part of the installed runtime.

@@ -2,7 +2,20 @@
 // so tool logic is exercised end to end without the Host. Run: node plugins/libreuni-work/dev/drive.mjs
 import fs from 'node:fs/promises'
 import { execFile } from 'node:child_process'
-import { Context } from '/home/edf/.local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/cordis/lib/index.js'
+import { pathToFileURL } from 'node:url'
+
+async function loadCordisContext() {
+  if (process.env.DSH_CORDIS_PATH) {
+    return (await import(pathToFileURL(process.env.DSH_CORDIS_PATH).href)).Context
+  }
+  try {
+    return (await import('cordis')).Context
+  } catch {
+    throw new Error('Could not resolve cordis. Install `cordis` or set DSH_CORDIS_PATH to its entry module.')
+  }
+}
+
+const Context = await loadCordisContext()
 
 const cwd = process.cwd()
 const ctx = new Context()
