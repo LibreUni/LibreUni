@@ -5,6 +5,7 @@ import unittest
 
 from scripts.course_integrity import (
     ACTIVE_COMPONENT_RE,
+    MANIFESTS_DIR,
     PASSIVE_COMPONENT_RE,
     artifact_in_section,
     GENERIC_DIAGRAM_LABELS,
@@ -13,6 +14,7 @@ from scripts.course_integrity import (
     is_code_all_comments,
     heading_sections,
     paragraph_blocks,
+    parse_manifest_modules_fallback,
     plantuml_fingerprint,
     strip_frontmatter,
 )
@@ -213,6 +215,43 @@ class CourseIntegrityTests(unittest.TestCase):
         self.assertEqual(len(eval_multi), 1)
         self.assertFalse(eval_multi[0]["isSingleCorrect"])
         self.assertEqual(eval_multi[0]["correctCount"], 2)
+
+    def test_manifest_fallback_parser_matches_all_course_manifests(self):
+        try:
+            import yaml
+        except ModuleNotFoundError:
+            yaml = None
+
+        manifests = sorted(MANIFESTS_DIR.glob("*.yml"))
+        self.assertTrue(manifests)
+        for manifest_path in manifests:
+            text = manifest_path.read_text(encoding="utf-8")
+            actual = parse_manifest_modules_fallback(text)
+            self.assertTrue(actual, f"No modules parsed for {manifest_path.name}")
+            self.assertTrue(all(m.get("title") and isinstance(m.get("lessons"), list) for m in actual))
+            if yaml is not None:
+                expected = yaml.safe_load(text).get("modules", []) or []
+                self.assertEqual(actual, expected, f"Mismatch for {manifest_path.name}")
+
+    def test_manifest_fallback_parser_handles_comments_and_quotes(self):
+        sample = """
+# Leading comment
+modules:
+  - title: "First: Module" # trailing comment
+    lessons:
+      - 'intro-1'
+      - intro-2 # inline comment
+  - title: Second
+    kind: practice
+    lessons: [cap-1, "cap-2"]
+"""
+        self.assertEqual(
+            parse_manifest_modules_fallback(sample),
+            [
+                {"title": "First: Module", "lessons": ["intro-1", "intro-2"]},
+                {"title": "Second", "kind": "practice", "lessons": ["cap-1", "cap-2"]},
+            ],
+        )
 
 
 if __name__ == "__main__":

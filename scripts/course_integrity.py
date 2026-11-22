@@ -17,7 +17,11 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-import yaml
+
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - exercised in environments without PyYAML
+    yaml = None
 
 ROOT = Path(__file__).resolve().parents[1]
 LESSONS_DIR = ROOT / "src" / "content" / "lessons"
@@ -229,13 +233,111 @@ def assessment_length_cues(body: str) -> list[dict]:
     return [a for a in evaluate_assessments(body) if a["isLengthCue"]]
 
 
+def _strip_yaml_comment(line: str) -> str:
+    """Strip unquoted YAML `# ...` comments from a single line."""
+    quote = None
+    escaped = False
+    for idx, ch in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if quote:
+            if quote == '"' and ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in {'"', "'"}:
+            quote = ch
+        elif ch == "#" and (idx == 0 or line[idx - 1].isspace()):
+            return line[:idx]
+    return line
+
+
+def _unquote_yaml_scalar(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        return text[1:-1]
+    return text
+
+
+def parse_manifest_modules_fallback(text: str) -> list[dict]:
+    """Parse `modules:` from a course manifest YAML file using Python stdlib only."""
+    modules: list[dict] = []
+    in_modules = False
+    module_indent: int | None = None
+    current: dict | None = None
+    in_lessons = False
+    lessons_indent: int | None = None
+
+    for raw_line in text.splitlines():
+        cleaned = _strip_yaml_comment(raw_line).rstrip()
+        if not cleaned.strip():
+            continue
+        indent = len(cleaned) - len(cleaned.lstrip(" "))
+        stripped = cleaned.strip()
+
+        if not in_modules:
+            if indent == 0 and stripped == "modules:":
+                in_modules = True
+            continue
+
+        if indent == 0 and not stripped.startswith("-"):
+            break
+
+        if stripped.startswith("- ") and (module_indent is None or indent == module_indent):
+            if current is not None:
+                modules.append(current)
+            module_indent = indent
+            current = {"lessons": []}
+            in_lessons = False
+            lessons_indent = None
+            entry_body = stripped[2:].strip()
+            if ":" in entry_body:
+                key, val = entry_body.split(":", 1)
+                current[key.strip()] = _unquote_yaml_scalar(val)
+            continue
+
+        if current is None:
+            continue
+
+        if in_lessons and stripped.startswith("- ") and (lessons_indent is None or indent >= lessons_indent):
+            lessons_indent = indent if lessons_indent is None else min(lessons_indent, indent)
+            current.setdefault("lessons", []).append(_unquote_yaml_scalar(stripped[2:]))
+            continue
+
+        if ":" in stripped:
+            in_lessons = False
+            lessons_indent = None
+            key, val = stripped.split(":", 1)
+            key = key.strip()
+            val = val.strip()
+            if key == "lessons":
+                if val.startswith("[") and val.endswith("]"):
+                    items = [_unquote_yaml_scalar(part) for part in val[1:-1].split(",")]
+                    current["lessons"] = [item for item in items if item]
+                elif not val:
+                    current["lessons"] = []
+                    in_lessons = True
+                    lessons_indent = indent
+            else:
+                current[key] = _unquote_yaml_scalar(val)
+
+    if current is not None:
+        modules.append(current)
+    return modules
+
+
 def load_course_modules(course_id: str) -> list[dict]:
     manifest_path = MANIFESTS_DIR / f"{course_id}.yml"
     if not manifest_path.exists():
         return []
+    text = manifest_path.read_text(encoding="utf-8")
     try:
-        data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        return data.get("modules", []) or []
+        if yaml is not None:
+            data = yaml.safe_load(text)
+            return data.get("modules", []) or []
+        return parse_manifest_modules_fallback(text)
     except Exception:
         return []
 
