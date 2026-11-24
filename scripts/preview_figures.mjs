@@ -71,7 +71,7 @@ async function run() {
 <head>
   <meta charset="utf-8">
   <title>Figure Contact Sheet · LibreUni</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.19.1/dist/katex.min.css">
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2rem; background: #f8fafc; color: #0f172a; }
     h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
