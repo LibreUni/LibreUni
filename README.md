@@ -124,7 +124,6 @@ npm run check:required
 |---|---|---|
 | `quality.yml` | Push/PR on main | Named content → build → e2e → UX gates; Lighthouse, badges, and Pages deploy on `main` pushes |
 | `scheduled.yml` | Weekly Sunday | Dead link check, dependency audit (opens issues on failure) |
-| `dependabot.yml` | Monthly | Auto PRs for npm and Actions dependency updates |
 
 ## 🚢 Deployment
 
